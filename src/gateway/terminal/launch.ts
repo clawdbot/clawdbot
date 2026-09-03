@@ -138,24 +138,22 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   });
   const restartRestrictions = createRestrictions();
   const commitRestrictions = createRestrictions();
-  const preserveTerminalConfig = (config: OpenClawConfig, owner: OpenClawConfig) => {
+  const preserveRestartTerminalConfig = (config: OpenClawConfig, owner: OpenClawConfig) => {
     const { terminal: _ignored, ...gateway } = config.gateway ?? {};
-    const terminal = owner.gateway?.terminal;
     return {
       ...config,
       gateway: {
         ...gateway,
-        ...(terminal === undefined ? {} : { terminal }),
+        terminal: { ...owner.gateway?.terminal, shell: config.gateway?.terminal?.shell },
       },
     };
   };
-  const resolveForConfig = (config: OpenClawConfig, agentId?: string) => {
-    const terminalConfig = config.gateway?.terminal;
+  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) => {
     return resolveTerminalLaunch({
       config,
       enabled: isTerminalConfigEnabled(config),
       agentId,
-      configuredShell: terminalConfig?.shell,
+      configuredShell: shellConfig.gateway?.terminal?.shell,
     });
   };
   const accumulateRestrictions = (
@@ -181,7 +179,13 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
 
   return {
     resolve: (agentId) => {
-      const active = resolveForConfig(activeConfig, agentId);
+      // A committed shell change affects future opens even while unrelated
+      // restart debt keeps admission and workspace restrictions in force.
+      const active = resolveForConfig(
+        activeConfig,
+        agentId,
+        appliedConfigWhileRestartPending ?? activeConfig,
+      );
       if (!active.ok) {
         return active;
       }
@@ -221,13 +225,8 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       }
       // No-op/hot plans may arrive with restart-only terminal fields that an
       // earlier reload mode ignored. Advance agent policy, but preserve the
-      // terminal subtree already owned by the active or pending process.
-      if (hasPendingRestart) {
-        preparedConfig = preserveTerminalConfig(config, activeConfig);
-        accumulateRestrictions(preparedConfig, commitRestrictions);
-        return;
-      }
-      preparedConfig = preserveTerminalConfig(config, activeConfig);
+      // enabled/detach policy already owned by the active or pending process.
+      preparedConfig = preserveRestartTerminalConfig(config, activeConfig);
       accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {

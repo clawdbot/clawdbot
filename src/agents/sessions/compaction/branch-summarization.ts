@@ -7,13 +7,13 @@ import type { Model } from "../../../llm/types.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary as generateBranchSummaryCore,
-  openClawAgentCoreRuntime,
   prepareBranchEntries,
   type BranchPreparation,
   type BranchSummaryDetails,
   type FileOperations,
 } from "../../runtime/index.js";
 import type { SessionEntry, ReadonlySessionManager } from "../session-manager.js";
+import { createCompactionRuntime, type SessionModelUsageSink } from "./runtime.js";
 
 export type { BranchPreparation, BranchSummaryDetails, FileOperations };
 export { prepareBranchEntries };
@@ -39,6 +39,7 @@ export interface GenerateBranchSummaryOptions {
   customInstructions?: string;
   replaceInstructions?: boolean;
   reserveTokens?: number;
+  usageSink?: SessionModelUsageSink;
 }
 
 /** Collects entries that differ between two session branches for summarization. */
@@ -61,9 +62,10 @@ export async function generateBranchSummary(
   entries: SessionEntry[],
   options: GenerateBranchSummaryOptions,
 ): Promise<BranchSummaryResult> {
+  const { usageSink, ...summaryOptions } = options;
   const result = await generateBranchSummaryCore(entries, {
-    runtime: openClawAgentCoreRuntime,
-    ...options,
+    runtime: createCompactionRuntime(usageSink),
+    ...summaryOptions,
   });
   if (result.ok) {
     return result.value;

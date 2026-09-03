@@ -4,7 +4,7 @@ import {
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile } from "typebox/compile";
+import { Compile } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type LocalRefResolution =
@@ -152,60 +152,7 @@ function resolveLocalAnchor(
   if (schema.$anchor === anchor || schema.$dynamicAnchor === anchor) {
     return schema;
   }
-  for (const key of schemaMapKeywords) {
-    const value = schema[key];
-    if (!isRecord(value)) {
-      continue;
-    }
-    for (const entry of Object.values(value)) {
-      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
-      if (resolved !== undefined) {
-        return resolved;
-      }
-    }
-  }
-  if (isRecord(schema.dependencies)) {
-    for (const entry of Object.values(schema.dependencies)) {
-      if (isStringArray(entry)) {
-        continue;
-      }
-      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
-      if (resolved !== undefined) {
-        return resolved;
-      }
-    }
-  }
-  for (const key of schemaValueKeywords) {
-    const value = schema[key];
-    if (typeof value === "boolean" || isRecord(value)) {
-      const resolved = resolveLocalAnchor(value as JsonSchemaValue, anchor, false);
-      if (resolved !== undefined) {
-        return resolved;
-      }
-      continue;
-    }
-    if (key === "items" && Array.isArray(value)) {
-      for (const entry of value) {
-        const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
-        if (resolved !== undefined) {
-          return resolved;
-        }
-      }
-    }
-  }
-  for (const key of schemaArrayKeywords) {
-    const value = schema[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
-      if (resolved !== undefined) {
-        return resolved;
-      }
-    }
-  }
-  return undefined;
+  return visitSchemaChildren(schema, (child) => resolveLocalAnchor(child, anchor, false));
 }
 
 function resolveLocalRef(
@@ -320,60 +267,12 @@ function resolveSchemaResourceRef(
       }
     }
 
-    for (const key of schemaMapKeywords) {
-      const value = current[key];
-      if (!isRecord(value)) {
-        continue;
-      }
-      for (const entry of Object.values(value)) {
-        const resolved = visit(entry as JsonSchemaValue, currentBaseId);
-        if (resolved.found) {
-          return resolved;
-        }
-      }
-    }
-    if (isRecord(current.dependencies)) {
-      for (const entry of Object.values(current.dependencies)) {
-        if (isStringArray(entry)) {
-          continue;
-        }
-        const resolved = visit(entry as JsonSchemaValue, currentBaseId);
-        if (resolved.found) {
-          return resolved;
-        }
-      }
-    }
-    for (const key of schemaValueKeywords) {
-      const value = current[key];
-      if (typeof value === "boolean" || isRecord(value)) {
-        const resolved = visit(value as JsonSchemaValue, currentBaseId);
-        if (resolved.found) {
-          return resolved;
-        }
-        continue;
-      }
-      if (key === "items" && Array.isArray(value)) {
-        for (const entry of value) {
-          const resolved = visit(entry as JsonSchemaValue, currentBaseId);
-          if (resolved.found) {
-            return resolved;
-          }
-        }
-      }
-    }
-    for (const key of schemaArrayKeywords) {
-      const value = current[key];
-      if (!Array.isArray(value)) {
-        continue;
-      }
-      for (const entry of value) {
-        const resolved = visit(entry as JsonSchemaValue, currentBaseId);
-        if (resolved.found) {
-          return resolved;
-        }
-      }
-    }
-    return { found: false };
+    return (
+      visitSchemaChildren(current, (child) => {
+        const resolved = visit(child, currentBaseId);
+        return resolved.found ? resolved : undefined;
+      }) ?? { found: false }
+    );
   };
 
   return visit(schema, undefined);
@@ -391,6 +290,66 @@ function resolveSchemaRef(
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function visitSchemaChildren<T>(
+  schema: Record<string, unknown>,
+  visit: (child: JsonSchemaValue) => T | undefined,
+): T | undefined {
+  // Materialize each map before descending; stop before reading later groups on a match.
+  for (const key of schemaMapKeywords) {
+    const value = schema[key];
+    if (!isRecord(value)) {
+      continue;
+    }
+    for (const entry of Object.values(value)) {
+      const resolved = visit(entry as JsonSchemaValue);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+  }
+  if (isRecord(schema.dependencies)) {
+    for (const entry of Object.values(schema.dependencies)) {
+      if (!isStringArray(entry)) {
+        const resolved = visit(entry as JsonSchemaValue);
+        if (resolved !== undefined) {
+          return resolved;
+        }
+      }
+    }
+  }
+  for (const key of schemaValueKeywords) {
+    const value = schema[key];
+    if (typeof value === "boolean" || isRecord(value)) {
+      const resolved = visit(value as JsonSchemaValue);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+      continue;
+    }
+    if (key === "items" && Array.isArray(value)) {
+      for (const entry of value) {
+        const resolved = visit(entry as JsonSchemaValue);
+        if (resolved !== undefined) {
+          return resolved;
+        }
+      }
+    }
+  }
+  for (const key of schemaArrayKeywords) {
+    const value = schema[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      const resolved = visit(entry as JsonSchemaValue);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+  }
+  return undefined;
 }
 
 function hasDuplicateJsonValues(values: unknown[]): boolean {
@@ -960,43 +919,10 @@ function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): nu
   }
   seen.add(schema);
   let count = 1;
-  for (const key of schemaMapKeywords) {
-    const value = schema[key];
-    if (!isRecord(value)) {
-      continue;
-    }
-    for (const entry of Object.values(value)) {
-      count += countSchemaNodes(entry as JsonSchemaValue, seen);
-    }
-  }
-  if (isRecord(schema.dependencies)) {
-    for (const entry of Object.values(schema.dependencies)) {
-      if (!isStringArray(entry)) {
-        count += countSchemaNodes(entry as JsonSchemaValue, seen);
-      }
-    }
-  }
-  for (const key of schemaValueKeywords) {
-    const value = schema[key];
-    if (typeof value === "boolean" || isRecord(value)) {
-      count += countSchemaNodes(value as JsonSchemaValue, seen);
-      continue;
-    }
-    if (key === "items" && Array.isArray(value)) {
-      for (const entry of value) {
-        count += countSchemaNodes(entry as JsonSchemaValue, seen);
-      }
-    }
-  }
-  for (const key of schemaArrayKeywords) {
-    const value = schema[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      count += countSchemaNodes(entry as JsonSchemaValue, seen);
-    }
-  }
+  visitSchemaChildren(schema, (child) => {
+    count += countSchemaNodes(child, seen);
+    return undefined;
+  });
   return count;
 }
 

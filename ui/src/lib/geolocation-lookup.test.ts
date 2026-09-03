@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lookupClientGeolocation } from "./geolocation-lookup.ts";
-import { setAvatarGatewayOrigin } from "./identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, status: ok ? 200 : 503, json: async () => body } as Response;

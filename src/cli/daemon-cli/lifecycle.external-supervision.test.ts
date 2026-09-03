@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
 
 const service = {
   readCommand: vi.fn(),
@@ -76,13 +77,14 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: vi.fn(),
   stopSystemdService: vi.fn(),
 }));
-
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
+  formatGatewayRestartFailure,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart: vi.fn(),
   renderGatewayPortHealthDiagnostics: vi.fn(() => []),
@@ -118,13 +120,7 @@ async function expectRestartError(promise: Promise<unknown>): Promise<Error> {
 
 describe("external gateway supervision lifecycle", () => {
   let runDaemonStart: (opts?: { json?: boolean }) => Promise<void>;
-  let runDaemonRestart: (opts?: {
-    json?: boolean;
-    force?: boolean;
-    safe?: boolean;
-    skipDeferral?: boolean;
-    wait?: string;
-  }) => Promise<boolean>;
+  let runDaemonRestart: typeof import("./lifecycle.js").runDaemonRestart;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
   let runDaemonUninstall: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -414,12 +410,18 @@ describe("external gateway supervision lifecycle", () => {
     ["start", () => runDaemonStart({ json: true })],
     ["stop", () => runDaemonStop({ json: true })],
     ["uninstall", () => runDaemonUninstall({ json: true })],
+    ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
   ])("blocks native %s lifecycle access", async (_action, run) => {
     await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
 
     expect(runServiceStart).not.toHaveBeenCalled();
+    expect(runServiceRestart).not.toHaveBeenCalled();
     expect(runServiceStop).not.toHaveBeenCalled();
     expect(runServiceUninstall).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
+    expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 });

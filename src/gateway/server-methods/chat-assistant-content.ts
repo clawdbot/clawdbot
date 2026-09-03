@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  appendReplyMediaFailureWarning,
+  getReplyPayloadMetadata,
   readPairingQrReplyChannelData,
+  stripReplyMediaFailureFallback,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -10,110 +12,15 @@ import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
-  cleanupManagedOutgoingMediaRecords,
+  buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
+  prepareOutgoingMediaFromReplyPayload,
 } from "../managed-image-attachments.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
-import { hasRegisteredChatRunForSessionKey } from "./session-active-runs.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
-const chatHistoryManagedMediaCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
-
-function collectReplyMediaEntries(payload: ReplyPayload) {
-  const attachmentByReference = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
-  for (const attachment of payload.attachments ?? []) {
-    const reference = (
-      attachment.path ??
-      attachment.url ??
-      attachment.mediaUrl ??
-      attachment.filePath
-    )?.trim();
-    if (reference && !attachmentByReference.has(reference)) {
-      attachmentByReference.set(reference, attachment);
-    }
-  }
-  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
-  return [
-    ...(payload.mediaUrls ?? []).map((url, index) => ({
-      url,
-      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
-    })),
-    ...(typeof payload.mediaUrl === "string"
-      ? [
-          {
-            url: payload.mediaUrl,
-            attachment:
-              attachmentByReference.get(payload.mediaUrl.trim()) ??
-              payload.attachments?.[mediaUrlCount],
-          },
-        ]
-      : []),
-  ];
-}
-
-function resolveAlignedReplyMedia(
-  payload: ReplyPayload,
-  metadataSource: ReplyPayload = payload,
-): {
-  mediaUrls: string[];
-  attachments?: NonNullable<ReplyPayload["attachments"]>;
-} {
-  const metadataByUrl = new Map<string, NonNullable<ReplyPayload["attachments"]>[number]>();
-  for (const entry of collectReplyMediaEntries(metadataSource)) {
-    const key = entry.url.trim();
-    if (key && entry.attachment && !metadataByUrl.has(key)) {
-      metadataByUrl.set(key, entry.attachment);
-    }
-  }
-  const seen = new Set<string>();
-  const mediaUrls: string[] = [];
-  const attachments: NonNullable<ReplyPayload["attachments"]> = [];
-  let hasMetadata = false;
-  for (const entry of collectReplyMediaEntries(payload)) {
-    const key = entry.url.trim();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    mediaUrls.push(entry.url);
-    const attachment = metadataByUrl.get(key) ?? entry.attachment ?? {};
-    attachments.push(attachment);
-    hasMetadata ||= Object.keys(attachment).length > 0;
-  }
-  return { mediaUrls, ...(hasMetadata ? { attachments } : {}) };
-}
-
-function splitReplyMediaByTrust(
-  media: ReturnType<typeof resolveAlignedReplyMedia>,
-  payloadTrusted: boolean,
-) {
-  // One payload per trust class is the authorization boundary. Class order follows
-  // first occurrence; interleaved entries are intentionally coalesced within their class.
-  const groups = new Map<
-    boolean,
-    {
-      mediaUrls: string[];
-      attachments: NonNullable<ReplyPayload["attachments"]>;
-      sourceIndexes: number[];
-    }
-  >();
-  for (const [index, url] of media.mediaUrls.entries()) {
-    const attachment = media.attachments?.[index] ?? {};
-    const trusted = attachment.trustedLocalMedia ?? payloadTrusted;
-    const group = groups.get(trusted) ?? { mediaUrls: [], attachments: [], sourceIndexes: [] };
-    group.mediaUrls.push(url);
-    group.attachments.push(attachment);
-    group.sourceIndexes.push(index);
-    groups.set(trusted, group);
-  }
-  return [...groups].map(([trustedLocalMedia, group]) =>
-    Object.assign(group, { trustedLocalMedia }),
-  );
-}
 
 /** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
 export function combineNonStreamingReplyParts(parts: readonly string[]): string {
@@ -232,6 +139,14 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   ).length;
   const plan = createOutboundPayloadPlan(params.payloads);
   if (plan.length === 0) {
+    const failureBlocks = params.payloads.flatMap((payload) =>
+      (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+        buildManagedMediaFailureBlock,
+      ),
+    );
+    if (failureBlocks.length > 0) {
+      return failureBlocks;
+    }
     return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
   }
 
@@ -242,10 +157,14 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
-    let managedMediaPrepareFailed = false;
-    const text = sanitizeAssistantDisplayText(payload.text, {
-      preserveBoundaries: preserveTextBoundaries,
-    });
+    const metadataSource = params.payloads[entry.sourceIndex] ?? payload;
+    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const text = sanitizeAssistantDisplayText(
+      stripReplyMediaFailureFallback(payload.text, mediaFailures),
+      {
+        preserveBoundaries: preserveTextBoundaries,
+      },
+    );
     if (text) {
       const previousBlock = content.at(-1);
       if (previousBlock?.type === "text" && typeof previousBlock.text === "string") {
@@ -269,42 +188,25 @@ export async function buildAssistantDisplayContentFromReplyPayloads(params: {
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
     }
-    const media = resolveAlignedReplyMedia(payload, params.payloads[entry.sourceIndex] ?? payload);
-    const preparedMedia: Array<{ sourceIndex: number; blocks: AssistantDisplayContentBlock[] }> =
-      [];
-    for (const mediaGroup of splitReplyMediaByTrust(media, payload.trustedLocalMedia === true)) {
-      for (const [groupIndex, mediaUrl] of mediaGroup.mediaUrls.entries()) {
-        const mediaBlocks = await createManagedOutgoingMediaBlocks({
-          sessionKey: params.sessionKey,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          mediaUrls: [mediaUrl],
-          attachments: [mediaGroup.attachments[groupIndex] ?? {}],
-          localRoots: params.managedMediaLocalRoots,
-          allowLocalNonImage: mediaGroup.trustedLocalMedia,
-          continueOnPrepareError: true,
-          onPrepareError: (error) => {
-            managedMediaPrepareFailed = true;
-            params.onManagedMediaPrepareError?.(error.message);
-          },
-        });
-        if (payload.audioAsVoice === true) {
-          for (const block of mediaBlocks) {
-            if (block.type === "audio") {
-              block.isVoiceNote = true;
-            }
-          }
+    const mediaBlocks = await createManagedOutgoingMediaBlocks({
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
+      localRoots: params.managedMediaLocalRoots,
+      continueOnPrepareError: true,
+      onPrepareError: (error) => {
+        params.onManagedMediaPrepareError?.(error.message);
+      },
+    });
+    if (payload.audioAsVoice === true) {
+      for (const block of mediaBlocks) {
+        if (block.type === "audio") {
+          block.isVoiceNote = true;
         }
-        preparedMedia.push({
-          sourceIndex: mediaGroup.sourceIndexes[groupIndex] ?? groupIndex,
-          blocks: mediaBlocks,
-        });
       }
     }
-    preparedMedia.sort((left, right) => left.sourceIndex - right.sourceIndex);
-    content.push(...preparedMedia.flatMap((preparedEntry) => preparedEntry.blocks));
-    if (managedMediaPrepareFailed) {
-      content.push({ type: "text", text: appendReplyMediaFailureWarning(undefined) });
-    }
+    content.push(...mediaBlocks);
+    content.push(...mediaFailures.map(buildManagedMediaFailureBlock));
   }
 
   if (content.length > 0) {
@@ -338,12 +240,11 @@ export function replaceAssistantContentTextBlocks(
       typeof block.text === "string" &&
       transcriptTextIndex < transcriptTextBlocks.length
     ) {
-      merged.push(
-        expectDefined(
-          transcriptTextBlocks[transcriptTextIndex++],
-          "transcript text blocks entry at transcript text index++",
-        ),
+      const replacement = expectDefined(
+        transcriptTextBlocks[transcriptTextIndex++],
+        "transcript text blocks entry at transcript text index++",
       );
+      merged.push(replacement);
       continue;
     }
     merged.push(block);
@@ -373,10 +274,21 @@ export function stripManagedOutgoingAssistantContentBlocks(
     return undefined;
   }
   const filtered = content.filter((block) => {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    const attachment =
+      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      !attachment
+    ) {
       return true;
     }
-    return !(isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl));
+    return !(
+      isManagedOutgoingMediaUrl(block.url) ||
+      isManagedOutgoingMediaUrl(block.openUrl) ||
+      isManagedOutgoingMediaUrl(attachment?.url)
+    );
   });
   return filtered.length > 0 ? filtered : undefined;
 }
@@ -429,45 +341,10 @@ export function hasManagedOutgoingAssistantContent(
   return Boolean(
     content?.some(
       (block) =>
-        (block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
-        (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
+        ((block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+          (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
+        (block?.type === "attachment" &&
+          isManagedOutgoingMediaUrl(asOptionalRecord(block.attachment)?.url)),
     ),
   );
-}
-
-export function scheduleChatHistoryManagedMediaCleanup(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
-}) {
-  const cleanupKey = params.agentId
-    ? `agent:${params.agentId}:${params.sessionKey}`
-    : params.sessionKey;
-  if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
-    return;
-  }
-  const pending = cleanupManagedOutgoingMediaRecords({
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    hasActiveSessionRun: (sessionKey, agentId) =>
-      hasRegisteredChatRunForSessionKey({
-        context: params.context,
-        sessionKey,
-        agentId,
-        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey),
-      }),
-  })
-    .then(() => undefined)
-    .catch((error: unknown) => {
-      params.context.logGateway.debug(
-        `chat.history managed media cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
-      );
-    })
-    .finally(() => {
-      if (chatHistoryManagedMediaCleanupState.get(cleanupKey) === pending) {
-        chatHistoryManagedMediaCleanupState.delete(cleanupKey);
-      }
-    });
-  chatHistoryManagedMediaCleanupState.set(cleanupKey, pending);
 }

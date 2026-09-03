@@ -8,7 +8,11 @@ import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runti
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
-import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import {
+  isOpenAIGptLiveModel,
+  resolveOpenAIQuicksilverVoice,
+  type OpenAIGptLiveVoice,
+} from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
 const OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS = 1_800;
@@ -16,6 +20,8 @@ const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
+const OPENAI_CHATGPT_QUICKSILVER_CALL_URL =
+  "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas";
 const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
@@ -35,21 +41,6 @@ function redactOpenAIRealtimeErrorDetail(text: string, auth: OpenAIQuicksilverAu
   return redactSensitiveText(redacted, { mode: "tools" });
 }
 
-const OPENAI_QUICKSILVER_VOICES = [
-  "alloy",
-  "ash",
-  "ballad",
-  "cedar",
-  "coral",
-  "echo",
-  "marin",
-  "sage",
-  "shimmer",
-  "verse",
-] as const;
-
-type OpenAIQuicksilverVoice = (typeof OPENAI_QUICKSILVER_VOICES)[number];
-
 export type OpenAIQuicksilverAuth =
   | { type: "api-key"; token: string }
   | { type: "oauth"; token: string; accountId: string };
@@ -68,7 +59,7 @@ export type OpenAIQuicksilverInitialItem = {
 type OpenAIQuicksilverSession = {
   model: string;
   instructions: string;
-  audio: { output: { voice: OpenAIQuicksilverVoice } };
+  audio: { output: { voice: OpenAIGptLiveVoice } };
   delegation: { type: "client" };
   initial_items?: Array<{
     type: "message";
@@ -151,16 +142,6 @@ class OpenAIQuicksilverCallError extends Error {
     super(message);
     this.name = "OpenAIQuicksilverCallError";
   }
-}
-
-export function resolveOpenAIQuicksilverVoice(value: unknown): OpenAIQuicksilverVoice {
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (OPENAI_QUICKSILVER_VOICES.includes(normalized as OpenAIQuicksilverVoice)) {
-      return normalized as OpenAIQuicksilverVoice;
-    }
-  }
-  return "marin";
 }
 
 export function buildOpenAIQuicksilverSession(params: {
@@ -396,13 +377,18 @@ function decodeOpenAIQuicksilverCallId(params: {
   return callId;
 }
 
-function describeOpenAIQuicksilverCallError(status: number, detail: string): string {
+function describeOpenAIQuicksilverCallError(
+  status: number,
+  detail: string,
+  auth: OpenAIQuicksilverAuth,
+): string {
   const normalized = detail.toLowerCase();
   if (status === 403) {
-    return "GPT-Live rejected the session (403). This overloaded response most often means the voice or model is invalid for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha. Account access may also be unavailable; verify the selected ChatGPT OAuth profile and chatgpt-account-id.";
+    return "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.";
   }
   if (
     status === 400 &&
+    auth.type === "api-key" &&
     (normalized.includes("model_not_found") ||
       normalized.includes("does not exist or you do not have access"))
   ) {
@@ -413,7 +399,7 @@ function describeOpenAIQuicksilverCallError(status: number, detail: string): str
     normalized.includes("session.model") &&
     normalized.includes("not allowed")
   ) {
-    return "The GPT-Live model value is not permitted on /v1/live. Accepted values are gpt-live-1-codex and gpt-live-1-boulder-alpha.";
+    return "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.";
   }
   return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
 }
@@ -447,27 +433,32 @@ export async function createOpenAIQuicksilverCall(params: {
   if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
     throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
   }
-  const authHeaders = isGptLive
-    ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
-    : openAIRealtimeAuthHeaders({
-        auth: params.auth,
-        requestIds: params.requestIds,
-        baseUrl: OPENAI_REALTIME_CALL_URL,
-        includeQuicksilverAlpha: false,
-      });
-  const multipart = buildOpenAIQuicksilverMultipartBody({
-    sdp: params.sdp,
-    session: params.session,
+  const chatGptCall = isGptLive && params.auth.type === "oauth";
+  const callUrl = chatGptCall
+    ? OPENAI_CHATGPT_QUICKSILVER_CALL_URL
+    : isGptLive
+      ? OPENAI_QUICKSILVER_CALL_URL
+      : OPENAI_REALTIME_CALL_URL;
+  const authHeaders = openAIRealtimeAuthHeaders({
+    auth: params.auth,
+    requestIds: params.requestIds,
+    baseUrl: callUrl,
+    includeQuicksilverAlpha: isGptLive,
   });
-  const callUrl = isGptLive ? OPENAI_QUICKSILVER_CALL_URL : OPENAI_REALTIME_CALL_URL;
+  // ChatGPT call creation uses Codex's backend JSON contract; Platform uses multipart.
+  // Both return a call id whose sideband remains on the public /v1/live endpoint.
+  const payload = { sdp: params.sdp, session: params.session };
+  const requestBody = chatGptCall
+    ? { body: JSON.stringify(payload), contentType: "application/json" }
+    : buildOpenAIQuicksilverMultipartBody(payload);
 
   const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
     headers: {
       ...authHeaders,
-      "Content-Type": multipart.contentType,
+      "Content-Type": requestBody.contentType,
     },
-    body: multipart.body,
+    body: requestBody.body,
     signal: params.signal,
   });
   if (!response.ok) {
@@ -487,7 +478,7 @@ export async function createOpenAIQuicksilverCall(params: {
         );
     throw new OpenAIQuicksilverCallError(
       isGptLive
-        ? describeOpenAIQuicksilverCallError(response.status, detail)
+        ? describeOpenAIQuicksilverCallError(response.status, detail, params.auth)
         : `OpenAI Realtime call creation failed (${response.status})${detail ? `: ${detail}` : ""}`,
       response.status,
     );
@@ -519,7 +510,7 @@ export async function createOpenAIQuicksilverCall(params: {
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
     openAiSessionId: response.headers.get("openai-session-id"),
-    callUrl: OPENAI_QUICKSILVER_CALL_URL,
+    callUrl,
   });
   return {
     kind: "gpt-live",

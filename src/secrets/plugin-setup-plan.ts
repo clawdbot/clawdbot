@@ -1,7 +1,7 @@
 /** Shared plan construction for plugin-owned SecretRef setup commands. */
 import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
 import type { PluginIntegrationSecretProviderConfig, SecretRef } from "../config/types.secrets.js";
-import { toDotPath } from "../shared/dot-path.js";
+import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
 import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
@@ -18,14 +18,6 @@ type PluginSecretRefConfigTargetMapping = {
 
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
-function parseDotPath(pathname: string): string[] {
-  return pathname
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-}
 
 export function assertValidPluginSecretProviderAlias(value: string): void {
   if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value)) {
@@ -89,18 +81,21 @@ function createPluginConfigSecretTarget(params: {
   if (params.agentId && !isValidAgentId(params.agentId)) {
     throw new Error(`Invalid ${params.productName} setup agent id: ${params.agentId}`);
   }
-  const pathSegments = parseDotPath(params.path);
-  const normalizedPath = toDotPath(pathSegments);
-  if (
-    pathSegments.length === 0 ||
-    normalizedPath !== params.path ||
-    pathSegments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment))
-  ) {
+  let parsedPath: Array<string | number>;
+  try {
+    parsedPath = parseConcreteConfigPathTokens(params.path);
+  } catch {
+    throw new Error(`Invalid --target config path: ${params.path}`);
+  }
+  const pathSegments = parsedPath.map(String);
+  const normalizedPath = formatConcreteConfigPath(parsedPath);
+  if (normalizedPath !== params.path) {
     throw new Error(`Invalid --target config path: ${params.path}`);
   }
   const resolved = resolveSecretPlanTargetByPathCore({
     configFile: params.agentId ? "auth-profile-store" : "openclaw.json",
     pathSegments,
+    pathTokens: parsedPath,
   });
   if (!resolved) {
     throw new Error(

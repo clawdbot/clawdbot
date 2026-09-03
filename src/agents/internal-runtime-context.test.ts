@@ -11,13 +11,16 @@ import {
   hasInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
   relocateCurrentRuntimeContextCarrierToTail,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
+
+// Preface of carriers persisted before the stable system prompt explained the markers.
+const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 
 type TestMessage = { role: string; content: string; customType?: string };
 
@@ -109,7 +112,7 @@ describe("internal runtime context codec", () => {
   });
 
   it.each([
-    ["current turn", OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER],
+    ["current turn", LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER],
     [
       "previous current turn",
       "OpenClaw runtime context for the immediately preceding user message.",
@@ -130,11 +133,24 @@ describe("internal runtime context codec", () => {
     expect(hasInternalRuntimeContext(preface)).toBe(true);
     expect(stripInternalRuntimeContext(preface)).toBe("");
     expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+    expect(
+      stripInternalRuntimeContext(
+        ` \t${header}\r\n ${OPENCLAW_RUNTIME_CONTEXT_NOTICE} \r\n\r\nVisible reply`,
+      ),
+    ).toBe("Visible reply");
+  });
+
+  it.each([
+    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_END}`, "Visible reply"],
+    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate`, "Visible reply"],
+    [" \tVisible reply\r\n\r\n", " \tVisible reply\r\n\r\n"],
+  ])("preserves delimiter cleanup and ordinary whitespace in %j", (text, expected) => {
+    expect(stripInternalRuntimeContext(text)).toBe(expected);
   });
 
   it("preserves text when the runtime-context header or notice does not match", () => {
     for (const input of [
-      [OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
+      [LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
       ["OpenClaw runtime context for another message.", OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n"),
     ]) {
       expect(hasInternalRuntimeContext(input)).toBe(false);

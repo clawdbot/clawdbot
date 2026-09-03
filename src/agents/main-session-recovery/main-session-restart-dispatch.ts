@@ -283,7 +283,7 @@ async function settleAcceptedRestartRecovery(params: {
   return true;
 }
 
-type MainSessionResumeResult = "resumed" | "skipped" | "failed";
+type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
 
 async function rollbackRestartRecoveryReservation(params: {
   kind: "abandon_reservation" | "cancel_reservation";
@@ -356,6 +356,7 @@ export async function resumeMainSession(params: {
   const deliveryContext = resolveRestartRecoveryDeliveryContext({
     cfg: params.cfg,
     entry: params.entry,
+    includeSessionDeliveryFallback: true,
     sessionKey: params.sessionKey,
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
@@ -622,12 +623,13 @@ export async function resumeMainSession(params: {
     if (params.shouldContinue?.() === false) {
       return "skipped";
     }
+    const resumeResult = terminalStatus ? "settled" : "started";
     log.info(
-      `resumed interrupted main session: ${params.sessionKey}${
+      `${resumeResult} interrupted main session: ${params.sessionKey}${
         sanitizedPendingText ? " (with pending payload)" : ""
       }`,
     );
-    return "resumed";
+    return resumeResult;
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
     const canRestoreAcceptedFailure = !preStartAbortAttempted || preStartAbortConfirmed;
@@ -671,8 +673,8 @@ export async function resumeMainSession(params: {
           if (!settled) {
             log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
           } else if (params.shouldContinue?.() !== false) {
-            log.info(`settled completed restart recovery for ${params.sessionKey}`);
-            return "resumed";
+            log.info(`observed terminal restart recovery for ${params.sessionKey}`);
+            return "settled";
           }
         }
       }

@@ -24,6 +24,7 @@ type ParsedWorkflow = {
   jobs?: Record<
     string,
     {
+      environment?: string;
       needs?: string | string[];
       outputs?: Record<string, string>;
       permissions?: Record<string, string>;
@@ -318,36 +319,52 @@ function runFocusedValidatorLogProbe(outcome: "flagged" | "legacy" | "unrelated"
   };
   writeFileSync(join(trustedRoot, "authorized-beta-focused-policy.json"), JSON.stringify(policy));
   writeFileSync(artifactPath, JSON.stringify(evidence));
+  const apiResponses = [
+    ...runs.map((run) => [`repos/openclaw/openclaw/actions/runs/${run.id}`, run] as const),
+    ...jobs.map((job) => [`repos/openclaw/openclaw/actions/jobs/${job.id}`, job] as const),
+    [
+      `repos/openclaw/openclaw/git/ref/tags/${producerRef}`,
+      { object: { type: "commit", sha: producerSha } },
+    ] as const,
+  ];
   writeFileSync(
     join(trustedRoot, "gh"),
     [
-      "#!/usr/bin/env node",
-      'import { appendFileSync, writeFileSync } from "node:fs";',
-      'import { join } from "node:path";',
-      "const [command, route, ...args] = process.argv.slice(2);",
-      `const runs = ${JSON.stringify(Object.fromEntries(runs.map((run) => [run.id, run])))};`,
-      `const jobs = ${JSON.stringify(Object.fromEntries(jobs.map((job) => [job.id, job])))};`,
-      'if (command === "run" && route === "download") {',
-      '  const directory = args[args.indexOf("--dir") + 1];',
-      `  writeFileSync(join(directory, "full-release-execution-plan.json"), JSON.stringify(${JSON.stringify(plan)}));`,
-      '} else if (command === "api" && route.endsWith("/logs")) {',
-      `  appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
-      `  const firstFocusedLog = route.endsWith("/${focused.ciTargetLogJobId}/logs");`,
-      `  if (firstFocusedLog && args.includes("--allow-escape-sequences") && ${JSON.stringify(outcome)} !== "flagged") {`,
-      `    process.stderr.write(${JSON.stringify(outcome)} === "legacy" ? "unknown flag: --allow-escape-sequences\\r\\n\\r\\nUsage: gh api <endpoint> [flags]\\r\\n" : "error: unknown flag: --allow-escape-sequences\\n");`,
-      "    process.exit(1);",
-      "  }",
-      `  process.stdout.write("\\u001b[32m${policy.reviewedHeadSha}\\u001b[0m");`,
-      '} else if (command === "api" && route.includes("/git/ref/tags/")) {',
-      `  process.stdout.write(JSON.stringify({ object: { type: "commit", sha: ${JSON.stringify(producerSha)} } }));`,
-      '} else if (command === "api") {',
-      '  const id = route.slice(route.lastIndexOf("/") + 1);',
-      '  const value = route.includes("/actions/runs/") ? runs[id] : jobs[id];',
-      "  if (!value) throw new Error(`unexpected GitHub API route: ${route}`);",
-      "  process.stdout.write(JSON.stringify(value));",
-      "} else {",
-      "  throw new Error(`unexpected gh invocation: ${JSON.stringify(process.argv.slice(2))}`);",
-      "}",
+      "#!/bin/sh",
+      'command="$1"; route="$2"; shift 2',
+      'if [ "$command" = run ] && [ "$route" = download ]; then',
+      '  while [ "$1" != --dir ]; do shift; done',
+      `  printf '%s' '${JSON.stringify(plan)}' > "$2/full-release-execution-plan.json"`,
+      "  exit 0",
+      "fi",
+      'if [ "$command" = api ] && [ "${route%/logs}" != "$route" ]; then',
+      '  if [ "$1" = --allow-escape-sequences ]; then',
+      `    printf '["api","%s","--allow-escape-sequences"]\\n' "$route" >> '${callsPath}'`,
+      `    if [ "$route" = 'repos/openclaw/openclaw/actions/jobs/${focused.ciTargetLogJobId}/logs' ] && [ '${outcome}' != flagged ]; then`,
+      `      if [ '${outcome}' = legacy ]; then`,
+      "        printf 'unknown flag: --allow-escape-sequences\\r\\n\\r\\nUsage: gh api <endpoint> [flags]\\r\\n' >&2",
+      "      else",
+      "        printf 'error: unknown flag: --allow-escape-sequences\\n' >&2",
+      "      fi",
+      "      exit 1",
+      "    fi",
+      "  else",
+      `    printf '["api","%s"]\\n' "$route" >> '${callsPath}'`,
+      "  fi",
+      `  printf '\\033[32m${policy.reviewedHeadSha}\\033[0m'`,
+      "  exit 0",
+      "fi",
+      'if [ "$command" = api ]; then',
+      '  case "$route" in',
+      ...apiResponses.map(
+        ([route, response]) => `    '${route}') printf '%s' '${JSON.stringify(response)}' ;;`,
+      ),
+      "    *) printf 'unexpected GitHub API route: %s\\n' \"$route\" >&2; exit 1 ;;",
+      "  esac",
+      "  exit 0",
+      "fi",
+      'printf \'unexpected gh invocation: %s %s\\n\' "$command" "$route" >&2',
+      "exit 1",
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -517,7 +534,7 @@ function resolveFocusedProducer(
         "}",
         namedStep(
           workflow,
-          isDockerBoundary ? "resolve_build_provenance" : "resolve_release_target",
+          isDockerBoundary ? "publish" : "resolve_release_target",
           isDockerBoundary
             ? "Revalidate focused evidence producer after Docker approval"
             : "Resolve focused release evidence run",
@@ -610,16 +627,16 @@ describe("authorized beta focused evidence", () => {
     expect(resolveFocusedProducer({ ...options, boundary: "docker" }).result.status).not.toBe(0);
   });
 
-  it("gates every Docker build on post-approval focused evidence revalidation", () => {
+  it("gates Docker registry access on post-approval focused evidence revalidation", () => {
     const docker = parse(
       readFileSync(".github/workflows/docker-release.yml", "utf8"),
     ) as ParsedWorkflow;
-    const gate = docker.jobs?.resolve_build_provenance;
+    const gate = docker.jobs?.publish;
     if (!gate) {
-      throw new Error("Docker build provenance gate is missing");
+      throw new Error("Docker publication gate is missing");
     }
 
-    expect(gate.needs).toContain("approve_docker_publish");
+    expect(gate.environment).toBe("docker-release");
     expect(gate.permissions).toMatchObject({
       actions: "read",
       attestations: "read",
@@ -631,14 +648,14 @@ describe("authorized beta focused evidence", () => {
     );
     const download = names.indexOf("Download focused release evidence after Docker approval");
     const verification = names.indexOf("Verify focused release evidence after Docker approval");
-    const provenance = names.indexOf("Resolve shared build provenance");
+    const credentials = names.indexOf("Log in to GHCR");
     expect(revalidation).toBeGreaterThan(-1);
     expect(revalidation).toBeLessThan(download);
     expect(download).toBeLessThan(verification);
-    expect(verification).toBeLessThan(provenance);
+    expect(verification).toBeLessThan(credentials);
     const verifyStep = namedStep(
       docker,
-      "resolve_build_provenance",
+      "publish",
       "Verify focused release evidence after Docker approval",
     );
     expect(verifyStep.run).toContain("verify-authorized-beta-focused-candidate.mjs");
@@ -646,10 +663,6 @@ describe("authorized beta focused evidence", () => {
     expect(verifyStep.run?.indexOf("gh attestation verify")).toBeLessThan(
       verifyStep.run?.indexOf("verify-authorized-beta-focused-candidate.mjs") ?? -1,
     );
-
-    for (const jobName of ["build-amd64", "build-arm64"]) {
-      expect(docker.jobs?.[jobName]?.needs).toContain("resolve_build_provenance");
-    }
   });
 
   it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {
@@ -1215,7 +1228,7 @@ describe("authorized beta focused evidence", () => {
       expect(source).toContain("inputs.release_evidence_mode == 'full-release-validation'");
       expect(source).toContain("validate-full-release-validation-evidence.mjs");
     }
-    const parentSource = readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8");
+    const parentSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
     expect(parentSource).toContain('proof_label="authorized beta focused validation"');
     expect(parentSource).toContain('proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"');
     expect(parentSource).toContain(
@@ -1226,14 +1239,17 @@ describe("authorized beta focused evidence", () => {
     if (!parentWorkflow || !npmWorkflow) {
       throw new Error("release workflows missing");
     }
-    const downloadedTooling = namedStep(
+    const toolingCheckout = namedStep(
       parentWorkflow,
       "resolve_release_target",
-      "Download trusted release validation tooling",
-    ).run;
-    for (const path of VALIDATOR_CLOSURE) {
-      expect(downloadedTooling).toContain(path);
-    }
+      "Checkout trusted release validation tooling",
+    );
+    expect(toolingCheckout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-validation-tooling",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts",
+    });
     const resolveSteps = parentWorkflow.jobs?.resolve_release_target?.steps ?? [];
     const resolveStepNames = resolveSteps.map((step) => step.name);
     expect(resolveStepNames).not.toContain("Install focused release verifier dependency");

@@ -2,6 +2,7 @@ import { resolveConversationCapabilityProfile } from "../../agents/conversation-
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { logWarn } from "../../logger.js";
 import {
@@ -15,6 +16,7 @@ import {
 function resolveWorkerCapabilityProfile(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
 }) {
   const turn = params.turn;
   const sandboxSessionKey =
@@ -55,12 +57,19 @@ function resolveWorkerCapabilityProfile(params: {
     senderIsOwner: turn.senderIsOwner,
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
+    modelHasVision: turn.modelHasVision,
     workspaceDir: turn.workspaceDir,
     cwd: turn.cwd,
     isCanonicalWorkspace: turn.isCanonicalWorkspace,
     promptMode: turn.promptMode,
     skillsSnapshot: turn.skillsSnapshot,
-    sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
+    sandboxToolPolicy: sandbox.sandboxed
+      ? resolveSandboxToolPolicyForAgent(turn.config, sandbox.classificationAgentId, {
+          containedToolNames: params.availableOptionalToolNames?.includes("computer")
+            ? ["computer"]
+            : [],
+        })
+      : undefined,
     runtimeToolAllowlist: turn.toolsAllow,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: turn.runtimePluginToolGrant,
@@ -75,7 +84,7 @@ export function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
   availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
-  githubPublicationAvailable?: boolean;
+  portalAvailable?: boolean;
 }): WorkerToolAuthority {
   const turn = params.turn;
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
@@ -84,9 +93,13 @@ export function resolveWorkerToolAuthority(params: {
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     [
       ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-      ...(params.availableOptionalToolNames ?? []),
-      ...WORKER_SESSION_TOOL_NAMES.filter(
-        (name) => name !== "github_publish" || params.githubPublicationAvailable === true,
+      ...(params.availableOptionalToolNames ?? []).filter(
+        (name) => name !== "computer" || turn.modelHasVision !== false,
+      ),
+      ...WORKER_SESSION_TOOL_NAMES.filter((name) =>
+        name === "skill_workshop"
+          ? turn.skillLibraryAuthoring !== undefined
+          : name !== "portal" || params.portalAvailable === true,
       ),
     ].map((name) => ({ name })),
     turn.toolsAllow,

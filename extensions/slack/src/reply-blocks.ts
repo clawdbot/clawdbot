@@ -4,7 +4,11 @@ import {
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 // Slack plugin module implements reply blocks behavior.
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveAskUserQuestionOptionIndices,
+  type AskUserQuestionOptionIndices,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveSlackAuthoredTextPlacement,
@@ -33,6 +37,7 @@ import {
   SLACK_APPROVAL_SELECT_ACTION_ID,
   SLACK_CALLBACK_BUTTON_ACTION_ID,
   SLACK_CALLBACK_SELECT_ACTION_ID,
+  SLACK_QUESTION_BUTTON_ACTION_ID,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
@@ -116,7 +121,7 @@ export function resolveSlackReplyDeliveryMessages(params: {
     });
   }
   if (outsideText) {
-    messages.push({ text: outsideText });
+    messages.push({ text: outsideText, authoredTextPlacement: "outside-blocks" });
   }
   return messages;
 }
@@ -325,21 +330,22 @@ function renderNativePresentation(
 function appendPresentationPart(
   segments: SlackReplyBlockSegment[],
   presentation: MessagePresentation,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
 ): void {
   const currentBlocks = readLastBlockSegment(segments);
-  const currentRendered = renderNativePresentation(
-    presentation,
-    resolvePresentationRenderOptions(segments, "current"),
-  );
+  const currentRendered = renderNativePresentation(presentation, {
+    ...resolvePresentationRenderOptions(segments, "current"),
+    questionOptionIndices,
+  });
   if (currentRendered && currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS) {
     appendBlockSegment(segments, currentRendered);
     return;
   }
 
-  const freshRendered = renderNativePresentation(
-    presentation,
-    resolvePresentationRenderOptions(segments, "new-message"),
-  );
+  const freshRendered = renderNativePresentation(presentation, {
+    ...resolvePresentationRenderOptions(segments, "new-message"),
+    questionOptionIndices,
+  });
   if (freshRendered) {
     appendBlockSegment(segments, freshRendered, true);
     return;
@@ -356,6 +362,7 @@ function appendPresentationPart(
 const SLACK_BUTTON_CONTROL_ACTION_IDS = [
   SLACK_APPROVAL_BUTTON_ACTION_ID,
   SLACK_CALLBACK_BUTTON_ACTION_ID,
+  SLACK_QUESTION_BUTTON_ACTION_ID,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
 ] as const;
@@ -459,19 +466,24 @@ export function resolveSlackReplyBlockResolution(
   }
 
   const presentation = normalizeMessagePresentation(payload.presentation);
+  const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   const presentationBlockOffset = readAllNativeBlocks(segments).length;
   if (presentation?.title) {
-    appendPresentationPart(segments, { title: presentation.title, blocks: [] });
+    appendPresentationPart(
+      segments,
+      { title: presentation.title, blocks: [] },
+      questionOptionIndices,
+    );
   }
   for (const block of presentation?.blocks ?? []) {
-    appendPresentationPart(segments, { blocks: [block] });
+    appendPresentationPart(segments, { blocks: [block] }, questionOptionIndices);
   }
   const renderedPresentationBlocks = readAllNativeBlocks(segments).slice(presentationBlockOffset);
 
-  const interactiveBlocks = buildSlackInteractiveBlocks(
-    payload.interactive,
-    resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
-  );
+  const interactiveBlocks = buildSlackInteractiveBlocks(payload.interactive, {
+    ...resolveSlackBlockOffsets(readAllNativeBlocks(segments)),
+    questionOptionIndices,
+  });
   // Compare final Slack rows, not source payloads: fallbacks and transport
   // limits can prevent an apparent source mirror from rendering at all.
   appendBlockSegment(

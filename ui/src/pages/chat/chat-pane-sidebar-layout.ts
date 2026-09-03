@@ -59,7 +59,10 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
 
-function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
+function ensureLazyElement(
+  key: LazyElementKey,
+  requestUpdate: () => void,
+): TemplateResult | null | undefined {
   const element = LAZY_SIDEBAR_ELEMENTS[key];
   if (!element) {
     return undefined;
@@ -76,7 +79,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
   }
   runtime.listeners.add(requestUpdate);
   if (runtime.pending) {
-    return undefined;
+    return null;
   }
   runtime.pending = ensureCustomElementDefined(tagName, loadModule)
     .catch((error: unknown) => {
@@ -91,7 +94,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
       runtime.listeners.forEach((listener) => listener());
       runtime.listeners.clear();
     });
-  return undefined;
+  return null;
 }
 
 /**
@@ -104,7 +107,6 @@ export function sidebarRegionCallbacks(params: {
   layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
-  hideBoard: () => void;
   forgetDiscussionUrl: () => void;
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
@@ -116,8 +118,8 @@ export function sidebarRegionCallbacks(params: {
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
-      if (slot === "chat") {
-        params.hideBoard();
+      if (slot === "dashboard") {
+        params.setPanelOpen(false);
         return;
       }
       if (slot === "discussion") {
@@ -147,19 +149,28 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const regionError = panelOpen ? ensureLazyElement("region", params.requestUpdate) : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    const error = ensureLazyElement(panel.slot, params.requestUpdate);
-    if (error !== undefined) {
+    const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
+    if (lazyState !== undefined) {
       panelTemplates ??= { ...params.panelTemplates };
-      panelTemplates[panel.slot] = error;
+      panelTemplates[panel.slot] =
+        lazyState ?? panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading;
     }
   }
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
   const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const activePanelId = params.layout.columns[0]?.activePanelId;
+  const activePanelSlot = params.layout.columns[0]?.panels.find(
+    (panel) => panel.id === activePanelId,
+  )?.slot;
+  const regionLoading = panelDefinitions.find(
+    (definition) => definition.slot === activePanelSlot,
+  )?.loading;
   return html`<div
     class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
     params.layout.expanded
@@ -167,10 +178,12 @@ export function renderSidebarRegion(params: {
       : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
   >
     ${regionError !== undefined
-      ? null
+      ? regionError === null
+        ? (regionLoading ?? null)
+        : null
       : html`<openclaw-chat-sidebar-region
           .layout=${params.layout}
-          .panelDefinitions=${params.panelDefinitions ?? sidebarPanelDefinitions()}
+          .panelDefinitions=${panelDefinitions}
           .panelTemplates=${panelTemplates ?? params.panelTemplates}
           .panelActions=${params.panelActions}
           .availableSlots=${params.availableSlots}
@@ -189,21 +202,18 @@ export function resolveSidebarLayoutForBoard(params: {
   paneWidth: number;
 }): SidebarLayout {
   let layout = params.layout;
-  const chatSide =
-    params.board.hasBoard &&
-    params.board.face === "dashboard" &&
-    (params.board.dock === "left" || params.board.dock === "right")
-      ? params.board.dock
-      : null;
-  if (!chatSide) {
-    layout = closeSlot(layout, "chat");
+  if (!params.board.hasBoard) {
+    layout = closeSlot(layout, "dashboard");
+    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  }
+  if (params.board.face !== "dashboard") {
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
   const selectedPanelId = layout.columns[0]?.activePanelId;
-  layout = openSlot(layout, "chat");
-  // Board projection must guarantee the chat tab exists without stealing the
-  // user's selected side-panel tab on every render.
+  layout = openSlot(layout, "dashboard");
+  // Route projection guarantees the dashboard exists without stealing a
+  // side-panel tab the user selected after arriving.
   if (selectedPanelId) {
     layout = activatePanel(layout, selectedPanelId);
   }

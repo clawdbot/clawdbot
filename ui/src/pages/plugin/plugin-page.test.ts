@@ -100,6 +100,7 @@ function externalPluginConfig(
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: false,
+    communityInvite: false,
     terminalEnabled: false,
     pluginFrameGrants,
   };

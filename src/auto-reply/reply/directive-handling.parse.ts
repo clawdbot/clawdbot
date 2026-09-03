@@ -2,7 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
-import { extractModelDirective } from "../model.js";
+import { extractModelDirective, type ModelSelectionScope } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
@@ -98,7 +98,8 @@ export type InlineDirectives = {
   rawModelProfile?: string;
   rawModelRuntime?: string;
   modelDirectiveSource?: "alias" | "model";
-  modelSessionOnly: boolean;
+  modelScope?: ModelSelectionScope;
+  modelScopeConflict: boolean;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -173,7 +174,7 @@ export function parseInlineSessionDirectives(
   const queue = parseScopedDirective("queue", extractQueueDirective);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: hasAnyDirective ? cleaned : body.trim(),
+    cleaned,
     ...(nativeCommand && hasAnyDirective
       ? {
           nativeCommand: {
@@ -222,7 +223,8 @@ export function parseInlineSessionDirectives(
     rawModelProfile: model.rawProfile,
     rawModelRuntime: model.rawRuntime,
     modelDirectiveSource: model.source,
-    modelSessionOnly: model.sessionOnly,
+    modelScope: model.scope,
+    modelScopeConflict: model.scopeConflict,
     hasQueueDirective: queue.hasDirective,
     queueMode: queue.queueMode,
     queueReset: queue.queueReset,

@@ -16,95 +16,12 @@ vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
-import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("matrix scenario environment", () => {
-  it("drops actor sync cursors and observers at a scenario boundary", async () => {
-    let configReadCount = 0;
-    const gateway = {
-      baseUrl: "http://127.0.0.1:12345",
-      runtimeEnv: {},
-      tempRoot: "/tmp/matrix-qa",
-      workspaceDir: "/tmp/matrix-qa/workspace",
-      call: vi.fn(async (method: string) => {
-        if (method === "config.get") {
-          configReadCount += 1;
-          const phase = (configReadCount - 1) % 3;
-          if (phase === 0) {
-            return { config: {} };
-          }
-          if (phase === 1) {
-            return { hash: "config-hash" };
-          }
-          return {
-            appliedConfigHash: "config-hash",
-            configRevisionHash: "config-hash",
-            hash: "config-hash",
-          };
-        }
-        if (method === "config.patch") {
-          return { hash: "config-hash", noop: true, ok: true };
-        }
-        if (method === "channels.status") {
-          return {
-            channelAccounts: {
-              matrix: [
-                {
-                  accountId: "sut",
-                  connected: true,
-                  healthState: "healthy",
-                  lastStartAt: 100,
-                  restartPending: false,
-                  running: true,
-                },
-              ],
-            },
-          };
-        }
-        throw new Error(`unexpected gateway method ${method}`);
-      }),
-    };
-    const environment = createMatrixQaScenarioEnvironment({
-      accountId: "sut",
-      harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
-      observedEvents: [],
-      provisioning: {
-        driver: { accessToken: "fixture", userId: "@driver:test" },
-        observer: { accessToken: "fixture", userId: "@observer:test" },
-        roomId: "!room:test",
-        sut: { accessToken: "fixture", userId: "@sut:test" },
-        topology: { rooms: [] },
-      } as never,
-    });
-    const input = {
-      config: { matrixRequireCanary: true },
-      gateway,
-      outputDir: "/tmp/matrix-qa/output",
-      scenarioId: "matrix-observer-reset",
-      scenarioTitle: "Matrix observer reset",
-      timeoutMs: 8_000,
-      waitForConfigRestartSettle: vi.fn(),
-    };
-    const first = await environment.prepareFlow(input);
-    const syncState: MatrixQaScenarioContext["syncState"] = first.scenarioContext.syncState;
-    syncState.driver = "s1";
-    syncState.observer = "s2";
-    first.scenarioContext.syncStreams!.driver = { prime: vi.fn() } as never;
-    first.scenarioContext.syncStreams!.observer = { prime: vi.fn() } as never;
-
-    const second = await environment.prepareFlow(input);
-
-    expect(second.scenarioContext.syncState).toEqual({});
-    expect(second.scenarioContext.syncStreams).toEqual({});
-    expect(second.scenarioContext.timeoutMs).toBe(8_000);
-    expect(input.waitForConfigRestartSettle).not.toHaveBeenCalled();
-    expect(runMatrixQaCanary).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
-  });
-
   it("restores ordered override-heavy config to defaults from fresh current config", async () => {
     buildMatrixQaConfig.mockClear();
     const execApprovalOverrides = {
@@ -321,6 +238,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -429,7 +350,7 @@ describe("matrix scenario environment", () => {
     );
   });
 
-  it("shares the preparation deadline across revision and fresh account readiness", async () => {
+  it("shares the preparation deadline but renews action-time config patch deadlines", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const callOrder: string[] = [];
@@ -449,6 +370,9 @@ describe("matrix scenario environment", () => {
           opts?: { deadlineMs?: number; timeoutMs?: number },
         ) => {
           callOrder.push(method);
+          if (opts?.deadlineMs !== undefined && opts.deadlineMs <= Date.now()) {
+            throw new Error("gateway RPC deadline expired");
+          }
           if (method === "config.get") {
             configReadCount += 1;
             if (configReadCount === 1) {
@@ -506,6 +430,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -559,6 +487,17 @@ describe("matrix scenario environment", () => {
       "exec.approval.request",
       { id: "approval-1" },
       { expectFinal: false, timeoutMs: 1_000 },
+    );
+
+    // The setup deadline has expired, but the eight-second action window has not.
+    vi.setSystemTime(61_000);
+    await expect(
+      scenarioContext.patchGatewayConfig({ channels: { matrix: { enabled: true } } }),
+    ).resolves.toBeUndefined();
+    expect(gateway.call).toHaveBeenLastCalledWith(
+      "config.patch",
+      expect.objectContaining({ baseHash: "patched-config-hash" }),
+      { deadlineMs: 69_000, timeoutMs: 60_000 },
     );
   });
 
@@ -626,6 +565,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -705,6 +648,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -806,6 +753,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",
@@ -915,6 +866,10 @@ describe("matrix scenario environment", () => {
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
+        observationAccounts: {
+          driver: { accessToken: "driver-room-observation" },
+          observer: { accessToken: "observer-room-observation" },
+        },
         driver: { accessToken: "fixture", userId: "@driver:test" },
         observer: { accessToken: "fixture", userId: "@observer:test" },
         roomId: "!room:test",

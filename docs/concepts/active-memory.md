@@ -61,10 +61,13 @@ This does not merge transcripts, change session keys or delivery routes, widen
 workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
-eligible replies; timeout, unavailable search, and empty results all continue
-the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
-not automatically receive private transcript authorization. `openclaw doctor`
+eligible replies. An intentional no-intent skip or an unavailable search adds a
+short hidden outcome note instead of recalled transcript context. This tells
+the main model that recall did not run or could not finish without exposing
+provider errors. Timeout and empty results keep their existing behavior.
+OpenClaw's built-in memory provider supports this protected transcript-recall
+path. Other memory providers keep their own recall behavior but do not
+automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
 ## Advanced Active Memory quick start
@@ -132,17 +135,20 @@ flowchart LR
   U["User Message"] --> D["Deterministic Trigger Recall"]
   D -->|strong trusted match| I["Inject Bounded Hidden Context"]
   D -->|weak or empty| H["Check Recall Intent"]
-  H -->|no| M["Main Reply"]
+  H -->|no| O["Inject Bounded Recall Outcome"]
   H -->|yes| R["Active Memory Deep Recall Sub-Agent"]
   R -->|NONE| M
+  R -->|unavailable| O
   R -->|relevant summary| I
+  O --> M["Main Reply"]
   I --> M
 ```
 
 The deep-recall sub-agent can call only the configured memory recall tools (see
 [Memory tools](#memory-tools)). If the connection between the query and
-available memory is weak, it returns `NONE` and the main reply proceeds
-without extra context.
+available memory is weak, it returns `NONE` and the main reply proceeds without
+extra context. Intentional no-intent skips and unavailable recall add only a
+fixed, bounded outcome note.
 
 Active memory is a conversational enrichment feature, not a platform-wide
 inference feature:
@@ -622,17 +628,18 @@ To export those transcripts as JSONL artifacts for debugging:
 }
 ```
 
-Exported transcript artifacts go under the target agent's sessions folder, in
-a separate directory from active runtime state:
+Exported transcript artifacts go under the OpenClaw state directory, in a
+plugin-owned, per-agent directory separate from active runtime state:
 
 ```text
-agents/<agent>/sessions/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
+<state-dir>/plugins/active-memory/transcripts/agents/<encoded-agent>/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
 ```
 
-Change the relative artifact subdirectory with `config.transcriptDir`. Use this
-carefully: exports can accumulate quickly on busy sessions, `full` query mode
-duplicates a lot of conversation context, and these artifacts contain hidden
-prompt context plus recalled memories.
+Agent ids are URI-encoded in this path: for example, `support/agent` becomes
+`support%2Fagent`. Change the final artifact subdirectory with
+`config.transcriptDir`. Use this carefully: exports can accumulate quickly on busy
+sessions, `full` query mode duplicates a lot of conversation context, and these
+artifacts contain hidden prompt context plus recalled memories.
 
 ## Configuration
 
@@ -659,7 +666,7 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.maxSummaryChars`     | `number`                                                                                             | Maximum characters in the active-memory summary (range 40-1000; default 220)                                                                                                                                                                      |
 | `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                                                                                             |
 | `config.persistTranscripts`  | `boolean`                                                                                            | Exports blocking sub-agent transcripts as JSONL artifacts before removing their temporary SQLite session rows                                                                                                                                     |
-| `config.transcriptDir`       | `string`                                                                                             | Relative transcript-artifact directory under the agent sessions folder (default `"active-memory"`)                                                                                                                                                |
+| `config.transcriptDir`       | `string`                                                                                             | Relative artifact directory under the plugin-owned per-agent transcript directory (default `"active-memory"`)                                                                                                                                     |
 | `config.modelFallback`       | `string`                                                                                             | Optional model used only as the last step in the [model fallback chain](#model-fallback-policy)                                                                                                                                                   |
 
 Useful tuning fields:

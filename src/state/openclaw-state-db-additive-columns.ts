@@ -37,8 +37,10 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
   { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
   { columnName: "worktree", dataType: "INTEGER", tableName: "session_groups" },
-  { columnName: "workspace_dir", dataType: "TEXT", tableName: "installed_plugin_index" },
   { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
+  { columnName: "device_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
+  { columnName: "user_profile_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
+  { columnName: "preferences_json", dataType: "TEXT", tableName: "web_push_subscriptions" },
   {
     columnName: "claim_released_time",
     dataType: "INTEGER",
@@ -55,7 +57,11 @@ function isFirstUseAdditiveStateColumn({
     (tableName === "skill_workshop_proposals" && columnName === "claim_released_time") ||
     (tableName === "worker_session_placement_moves" &&
       (columnName === "abandon_source" || columnName === "target_machine_class")) ||
-    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree"))
+    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
+    (tableName === "web_push_subscriptions" &&
+      (columnName === "device_id" ||
+        columnName === "user_profile_id" ||
+        columnName === "preferences_json"))
   );
 }
 

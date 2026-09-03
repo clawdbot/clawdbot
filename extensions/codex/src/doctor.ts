@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
-import { getHealthCheck, type HealthCheck, type HealthFinding } from "openclaw/plugin-sdk/health";
+import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -32,6 +32,7 @@ type CodexManagedDoctorDependencies = {
 };
 
 type CodexManagedDoctorRegistrationHost = {
+  readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
   readonly pluginRoot: string;
 };
@@ -207,7 +208,8 @@ export function registerCodexManagedAppServerDoctorChecks(
   host: CodexManagedDoctorRegistrationHost,
   deps?: CodexManagedDoctorDependencies,
 ): void {
-  if (getHealthCheck(CODEX_MANAGED_APP_SERVER_CHECK_ID)) {
+  // Lookup and registration must use the same host registry across artifact loaders.
+  if (host.getHealthCheck(CODEX_MANAGED_APP_SERVER_CHECK_ID)) {
     return;
   }
   host.registerHealthCheck(

@@ -125,15 +125,3 @@ export function countSessionToolOverrides(
     (overrides?.webSearch !== undefined ? 1 : 0)
   );
 }
-
-export function sessionToolOverrideNames(
-  overrides: SessionToolOverrides | null | undefined,
-  webSearchLabel: string,
-): string[] {
-  return [
-    ...Object.keys(overrides?.mcpServers ?? {}),
-    ...Object.keys(overrides?.skills ?? {}),
-    ...Object.keys(overrides?.mcpToolsDeny ?? {}),
-    ...(overrides?.webSearch !== undefined ? [webSearchLabel] : []),
-  ].toSorted((left, right) => left.localeCompare(right));
-}

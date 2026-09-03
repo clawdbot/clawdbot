@@ -15,7 +15,6 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
@@ -296,8 +295,49 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({
       status: "error",
       error: "gateway closed (1006): transport close",
+      retryableTransportError: true,
     });
-    expect(isRecoverableAgentWaitError(result.error)).toBe(true);
+  });
+
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+    "UND_ERR_SOCKET",
+  ])("records %s recovery only when the wait RPC rejects", async (code) => {
+    const error = `connect ${code} 127.0.0.1:443`;
+    callGatewayMock.mockResolvedValueOnce({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+    const terminal = await waitForAgentRun({ runId: "run-terminal", timeoutMs: 500 });
+    expect(terminal).toMatchObject({ status: "error", error });
+    expect(terminal).not.toHaveProperty("retryableTransportError");
+
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    await expect(waitForAgentRun({ runId: "run-disconnected", timeoutMs: 500 })).resolves.toEqual({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+  });
+
+  it.each([
+    undefined,
+    "",
+    "gateway timeout",
+    "gateway request timeout for agent.wait",
+    "ENOENT: no such file",
+    "getaddrinfo ENOTFOUND gateway.example.com",
+  ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
+    expect(result).not.toHaveProperty("retryableTransportError");
   });
 
   it("preserves pending agent.wait status", async () => {
@@ -873,31 +913,5 @@ describe("waitForAgentRunsToDrain", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("isRecoverableAgentWaitError", () => {
-  it.each([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-    "EPIPE",
-    "EHOSTUNREACH",
-    "ENETUNREACH",
-    "EAI_AGAIN",
-    "UND_ERR_SOCKET",
-  ])("recovers from %s connection failures", (code) => {
-    expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
-  });
-
-  it.each([
-    undefined,
-    "",
-    "gateway timeout",
-    "gateway request timeout for agent.wait",
-    "ENOENT: no such file",
-    "getaddrinfo ENOTFOUND gateway.example.com",
-  ])("does not recover from %s", (error) => {
-    expect(isRecoverableAgentWaitError(error)).toBe(false);
   });
 });

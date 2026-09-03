@@ -4,6 +4,7 @@ import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { renderBrowserPanelTabs } from "./browser-panel-tabs.ts";
 
@@ -88,6 +89,13 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   const hasView = Boolean(controller.view);
   return html`
     <div class="bp-toolbar">
+      ${controller.operations.route
+        ? html`<span
+            class="bp-profile"
+            title=${t("browser.profile", { profile: controller.operations.route.profile })}
+            >${controller.operations.route.profile}</span
+          >`
+        : nothing}
       ${embedded
         ? html`<button
             class="bp-icon"
@@ -273,9 +281,12 @@ function renderViewportContent(controller: BrowserPanelController) {
       `,
     });
   }
+  if (!controller.view && controller.unavailableTabText) {
+    return html`<div class="bp-status" role="status">${controller.unavailableTabText}</div>`;
+  }
   if (!controller.view) {
     return controller.loading
-      ? html`<div class="bp-status"><span>${t("browser.loading")}</span></div>`
+      ? renderPanelLoadingSkeleton("browser", t("browser.loading"))
       : renderPanelEmptyState({
           icon: icons.globe,
           heading: t("chat.sidePanel.browser"),
@@ -300,8 +311,9 @@ function renderViewportContent(controller: BrowserPanelController) {
         @click=${(event: MouseEvent) => controller.handleStageClick(event)}
         @pointerdown=${(event: PointerEvent) => controller.handleOverlayPointerDown(event)}
         @pointermove=${(event: PointerEvent) => controller.handleOverlayPointerMove(event)}
-        @pointerup=${() => controller.handleOverlayPointerUp()}
-        @pointercancel=${() => controller.handleOverlayPointerUp()}
+        @pointerup=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @pointercancel=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
+        @lostpointercapture=${(event: PointerEvent) => controller.handleOverlayPointerUp(event)}
       ></canvas>
       ${renderInspectTooltip(controller)}
     </div>
@@ -321,11 +333,12 @@ function renderViewport(controller: BrowserPanelController) {
       tabindex="0"
       @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
       @keydown=${(event: KeyboardEvent) => controller.handleViewportKeydown(event)}
+      aria-busy=${controller.loading ? "true" : "false"}
     >
-      ${controller.loading && controller.view
-        ? html`<span class="bp-loading">${t("browser.loading")}</span>`
-        : nothing}
       ${renderViewportContent(controller)}
+      ${controller.loading && controller.view
+        ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
+        : nothing}
     </wa-tab-panel>
   `;
 }

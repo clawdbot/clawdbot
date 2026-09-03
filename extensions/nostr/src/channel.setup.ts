@@ -89,7 +89,6 @@ export const nostrSetupPlugin: ChannelPlugin<ResolvedNostrAccount> = {
     createNostrSetupAdapter({
       resolveAccountId: (cfg, accountId) =>
         accountId?.trim() || resolveDefaultSetupNostrAccountId(cfg),
-      validatePrivateKey: (privateKey) => /^(?:nsec1|NSEC1)|^[0-9a-fA-F]{64}$/u.test(privateKey),
     }),
   ),
   setupWizard: nostrSetupWizard,

@@ -1,3 +1,4 @@
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuChannelConfigSchema, FeishuConfigSchema } from "./config-schema.js";
@@ -449,6 +450,26 @@ describe("FeishuConfigSchema TTS overrides", () => {
 });
 
 describe("FeishuConfigSchema actions", () => {
+  it("accepts opt-in stickers at channel and account scope without changing defaults", () => {
+    expect(FeishuConfigSchema.parse({}).actions?.sticker).toBeUndefined();
+    const result = FeishuConfigSchema.parse({
+      actions: { sticker: true },
+      accounts: { work: { actions: { sticker: false } } },
+    });
+    expect(result.actions?.sticker).toBe(true);
+    expect(result.accounts?.work?.actions?.sticker).toBe(false);
+    expect(FeishuConfigSchema.safeParse({ actions: { sticker: "true" } }).success).toBe(false);
+    expect(FeishuChannelConfigSchema.schema).toMatchObject({
+      properties: {
+        actions: { properties: { sticker: { type: "boolean" } } },
+        accounts: {
+          additionalProperties: {
+            properties: { actions: { properties: { sticker: { type: "boolean" } } } },
+          },
+        },
+      },
+    });
+  });
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
       actions: { reactions: false },
@@ -466,6 +487,93 @@ describe("FeishuConfigSchema actions", () => {
     });
     expect(result.accounts?.main?.actions?.reactions).toBe(false);
   });
+});
+
+describe("FeishuConfigSchema stickerSets", () => {
+  const entry = { file_received: ["thumbs up", "赞", "👍"] };
+
+  function expectCatalogValidation(value: Record<string, unknown>, accepted: boolean) {
+    expect(FeishuConfigSchema.safeParse(value).success, "Zod validation").toBe(accepted);
+    const result = validateJsonSchemaValue({
+      schema: FeishuChannelConfigSchema.schema,
+      cacheKey: "feishu-sticker-catalog-test",
+      value,
+      applyDefaults: true,
+    });
+    expect(result.ok, "exported JSON Schema validation").toBe(accepted);
+    if (result.ok) {
+      expect(result.value).toMatchObject(value);
+    }
+  }
+
+  it("accepts bounded bot catalogs only at channel scope", () => {
+    const stickerSets = {
+      "bot-without-prefix": entry,
+      ["a".repeat(128)]: Object.fromEntries(
+        Array.from({ length: 256 }, (_, index) => [
+          `file_${index}`.padEnd(512, "界"),
+          Array.from({ length: 8 }, () => "赞".repeat(64)),
+        ]),
+      ),
+      ...Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`bot_${index}`, {}])),
+    };
+    expectCatalogValidation({ stickerSets }, true);
+    expect(FeishuConfigSchema.parse({ stickerSets }).stickerSets).toEqual(stickerSets);
+    expect(FeishuConfigSchema.parse({}).stickerSets).toBeUndefined();
+    expectCatalogValidation({ accounts: { work: { stickerSets } } }, false);
+  });
+
+  it.each([
+    ["too many bots", Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`bot_${i}`, {}]))],
+    ["empty app ID", { "": entry }],
+    ["padded app ID", { " bot ": entry }],
+    ["long app ID", { ["a".repeat(129)]: entry }],
+    [
+      "too many entries",
+      { bot: Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`file_${i}`, ["yes"]])) },
+    ],
+    ["old array shape", { bot: [{ fileKey: "file_received", keywords: ["yes"] }] }],
+    ["empty keywords", { bot: { file_received: [] } }],
+    ["too many keywords", { bot: { file_received: Array(9).fill("yes") } }],
+    ["blank keyword", { bot: { file_received: ["  "] } }],
+    ["padded keyword", { bot: { file_received: [" yes "] } }],
+    ["long keyword", { bot: { file_received: ["x".repeat(65)] } }],
+    ["non-string keyword", { bot: { file_received: [12] } }],
+    ["padded key", { bot: { " file_received ": ["yes"] } }],
+    ["long key", { bot: { ["x".repeat(513)]: ["yes"] } }],
+    ["path key", { bot: { "../sticker": ["yes"] } }],
+    ["control key", { bot: { "file\u0000key": ["yes"] } }],
+    ["unpaired surrogate key", { bot: { "\ud800": ["yes"] } }],
+    ["unpaired surrogate keyword", { bot: { file_received: ["\udfff"] } }],
+    ["unpaired surrogate app ID", { "\ud800": entry }],
+  ])("rejects %s", (_name, stickerSets) => {
+    expectCatalogValidation({ stickerSets }, false);
+  });
+
+  it.each(["👍", "e\u0301", "👋🏽", "👩‍💻"])(
+    "uses Unicode scalar bounds consistently for %s",
+    (unit) => {
+      const bounded = (limit: number) => Array.from(unit.repeat(limit)).slice(0, limit).join("");
+      const appId = bounded(128);
+      const fileKey = bounded(512);
+      const keyword = bounded(64);
+      expectCatalogValidation({ stickerSets: { [appId]: { [fileKey]: [keyword] } } }, true);
+      expectCatalogValidation({ stickerSets: { [appId + "x"]: entry } }, false);
+      expectCatalogValidation({ stickerSets: { bot: { [fileKey + "x"]: ["yes"] } } }, false);
+      expectCatalogValidation({ stickerSets: { bot: { file_received: [keyword + "x"] } } }, false);
+    },
+  );
+
+  it.each([" ", "\n", "\t", "\u00a0", "\u2028", "\ufeff"])(
+    "rejects stored padding %j",
+    (padding) => {
+      for (const padded of [`${padding}value`, `value${padding}`]) {
+        expectCatalogValidation({ stickerSets: { [padded]: entry } }, false);
+        expectCatalogValidation({ stickerSets: { bot: { [padded]: ["yes"] } } }, false);
+        expectCatalogValidation({ stickerSets: { bot: { file_received: [padded] } } }, false);
+      }
+    },
+  );
 });
 
 describe("FeishuConfigSchema defaultAccount", () => {

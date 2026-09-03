@@ -49,7 +49,7 @@ export type PreparedProviderStaticCatalog = Readonly<{
 }>;
 
 /** Options for resolving plugin providers that can contribute model catalog entries. */
-type ResolveRuntimePluginDiscoveryProvidersParams = {
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -61,6 +61,16 @@ type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
+
+export type ProviderDiscoveryPlan =
+  | { kind: "entries"; providers: ProviderPlugin[] }
+  | { kind: "runtime"; providers: ProviderPlugin[]; pluginIds: string[] | undefined };
+
+export async function planRuntimePluginDiscovery(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderDiscoveryPlan> {
+  return (await loadProviderRuntime()).planPluginDiscoveryRuntime(params);
+}
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(
@@ -146,6 +156,7 @@ export function normalizePluginDiscoveryResult(params: {
 
 export async function runProviderCatalog(params: {
   provider: ProviderPlugin;
+  providerIds?: readonly string[];
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -175,10 +186,19 @@ export async function runProviderCatalog(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
+    if (
+      params.providerIds !== undefined &&
+      !params.providerIds.some(
+        (providerId) => normalizeProviderId(providerId) === normalizeProviderId(outcome.provider),
+      )
+    ) {
+      continue;
+    }
     params.reportCatalogOutcome?.(outcome);
   }
   return result;

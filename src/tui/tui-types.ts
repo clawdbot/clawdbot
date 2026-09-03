@@ -17,6 +17,8 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Overrides timeoutMs only for the message sent automatically at startup. */
+  initialMessageTimeoutMs?: number;
   /**
    * Internal CLI guard: after the standalone TUI returns, force the child
    * process out if imported runtime handles keep the event loop alive.
@@ -37,7 +39,7 @@ export type TuiHistoryRunOutcome =
   | { state: "failed"; errorMessage: string };
 
 export type TuiHistoryLoadResult =
-  | { loaded: true; runOutcome: TuiHistoryRunOutcome }
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome; activeRunIds?: string[] }
   | { loaded: false };
 
 export type ChatEvent = {

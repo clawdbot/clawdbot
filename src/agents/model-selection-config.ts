@@ -9,6 +9,7 @@ export function resolveDefaultModelForAgent(
   params: {
     cfg: OpenClawConfig;
     agentId?: string;
+    allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef {
@@ -17,6 +18,7 @@ export function resolveDefaultModelForAgent(
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
   });

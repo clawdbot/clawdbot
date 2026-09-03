@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyDelegationCapability, resolveDelegationCapability } from "./delegation-capability.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -157,5 +158,17 @@ describe("delegation capability", () => {
     );
     expect(cronExecute).toHaveBeenCalledTimes(2);
     expect(imageExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves plugin ownership metadata through the report-only wrapper", () => {
+    const cron = createTool("cron");
+    setPluginToolMeta(cron, { pluginId: "scheduler" } as never);
+
+    const [wrapped] = applyDelegationCapability([cron], "report_only");
+
+    // The effective cron-creator allowlist reads meta off the returned tool, so
+    // a wrapper that drops it would silently unown the plugin's tool.
+    expect(wrapped).not.toBe(cron);
+    expect(getPluginToolMeta(wrapped as AnyAgentTool)).toEqual({ pluginId: "scheduler" });
   });
 });

@@ -10,29 +10,6 @@ const LINUX_CA_BUNDLE_PATHS = [
 export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
 
-function resolveLinuxSystemCaBundle(
-  params: {
-    platform?: NodeJS.Platform;
-    accessSync?: AccessSyncFn;
-  } = {},
-): string | undefined {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "linux") {
-    return undefined;
-  }
-
-  const accessSync = params.accessSync ?? fs.accessSync.bind(fs);
-  for (const candidate of LINUX_CA_BUNDLE_PATHS) {
-    try {
-      accessSync(candidate, fs.constants.R_OK);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
 /**
  * Version manager path markers (Linux subset), mirroring VERSION_MANAGER_MARKERS
  * in src/daemon/runtime-paths.ts. Not imported directly because bootstrap code
@@ -54,16 +31,6 @@ const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
   "/.nvs/",
 ];
 
-function isNodeVersionManagerRuntime(
-  env: EnvMap = process.env as EnvMap,
-  execPath: string = process.execPath,
-): boolean {
-  if (env.NVM_DIR?.trim()) {
-    return true;
-  }
-  return VERSION_MANAGER_PATH_MARKERS.some((marker) => execPath.includes(marker));
-}
-
 export function resolveAutoNodeExtraCaCerts(
   params: {
     env?: EnvMap;
@@ -72,19 +39,32 @@ export function resolveAutoNodeExtraCaCerts(
     accessSync?: AccessSyncFn;
   } = {},
 ): string | undefined {
-  const env = params.env ?? (process.env as EnvMap);
+  const env = params.env ?? process.env;
   if (env.NODE_EXTRA_CA_CERTS?.trim()) {
     return undefined;
   }
 
   const platform = params.platform ?? process.platform;
   const execPath = params.execPath ?? process.execPath;
-  if (platform !== "linux" || !isNodeVersionManagerRuntime(env, execPath)) {
+  if (platform !== "linux") {
     return undefined;
   }
 
-  return resolveLinuxSystemCaBundle({
-    platform,
-    accessSync: params.accessSync,
-  });
+  const isVersionManagerRuntime =
+    Boolean(env.NVM_DIR?.trim()) ||
+    VERSION_MANAGER_PATH_MARKERS.some((marker) => execPath.includes(marker));
+  if (!isVersionManagerRuntime) {
+    return undefined;
+  }
+
+  const accessSync = params.accessSync ?? fs.accessSync.bind(fs);
+  for (const candidate of LINUX_CA_BUNDLE_PATHS) {
+    try {
+      accessSync(candidate, fs.constants.R_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }

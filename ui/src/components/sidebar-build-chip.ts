@@ -5,7 +5,6 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import "../styles/sidebar-footer-update.css";
 import {
   formatBuildChipText,
   formatSettingsBuildLabel,

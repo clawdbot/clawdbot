@@ -1,3 +1,4 @@
+import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 /**
  * Low-level Docker command helpers for sandbox runtimes.
@@ -386,9 +387,7 @@ export function buildSandboxCreateArgs(params: {
       `Suspicious configured sandbox environment variables: ${envSanitization.warnings.join(", ")}`,
     );
   }
-  for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
-    args.push("--env", `${key}=${value}`);
-  }
+  const env = markOpenClawExecEnv(envSanitization.allowed);
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
   }
@@ -440,7 +439,7 @@ export function buildSandboxCreateArgs(params: {
       args.push("-v", bind);
     }
   }
-  return args;
+  return { argv: args, env };
 }
 
 function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
@@ -482,7 +481,7 @@ async function createSandboxContainer(params: {
   const createCfg = podmanPolicy?.cfg ?? cfg;
   await ensureContainerImage(engine, cfg.image);
 
-  const args = buildSandboxCreateArgs({
+  const { argv: args, env } = buildSandboxCreateArgs({
     name,
     cfg: createCfg,
     scopeKey,
@@ -524,9 +523,10 @@ async function createSandboxContainer(params: {
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
   });
-  args.push(cfg.image, "sleep", "infinity");
-
-  await execContainer(engine, args);
+  await withContainerEnvFile(env, async (envFile) => {
+    args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
+    await execContainer(engine, args);
+  });
   await execContainer(engine, ["start", name]);
 
   if (cfg.setupCommand?.trim()) {

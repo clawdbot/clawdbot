@@ -3,7 +3,9 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { requestChatSessionSnapshot } from "./chat-history.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { requestChatSessionSnapshot } from "./chat-history-request.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -179,13 +181,27 @@ class SessionPrefetcher {
     if (!this.isCurrent(snapshot)) {
       return;
     }
+    // Refresh presented snapshots through their LRU owner before background writes
+    // so a full cache evicts stale entries instead of visible conversation panes.
+    for (const sessionKey of snapshot.openSessionKeys) {
+      const presented = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, { sessionKey });
+      if (presented && this.cache.size === MAX_CACHED_CHAT_SESSIONS) {
+        this.snapshotStore.write(
+          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
+          presented,
+        );
+      }
+    }
     const selection = this.selectCandidates(snapshot);
     if (selection.deferMs !== null) {
       this.schedule(selection.deferMs);
     }
     await Promise.all(
       selection.candidates.map(async (candidate) => {
-        if (!this.isCurrent(snapshot) || this.isOpen(candidate.snapshotKey, this.snapshot)) {
+        if (
+          !this.isCurrent(snapshot, candidate.snapshotKey) ||
+          this.isOpen(candidate.snapshotKey, this.snapshot)
+        ) {
           return;
         }
         this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
@@ -195,7 +211,7 @@ class SessionPrefetcher {
           });
           if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
             existing = await this.snapshotStore.read(candidate.snapshotKey);
-            if (!this.isCurrent(snapshot)) {
+            if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
               return;
             }
             if (existing) {
@@ -211,10 +227,10 @@ class SessionPrefetcher {
             client,
             candidate.snapshotKey,
             this,
-            () => this.isCurrent(snapshot),
+            () => this.isCurrent(snapshot, candidate.snapshotKey),
             existing?.deltaCursor,
           );
-          if (!this.isCurrent(snapshot)) {
+          if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
             return;
           }
           if (result.kind === "reset") {
@@ -229,9 +245,9 @@ class SessionPrefetcher {
               existing = withoutCursor;
             }
             result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, () =>
-              this.isCurrent(snapshot),
+              this.isCurrent(snapshot, candidate.snapshotKey),
             );
-            if (!this.isCurrent(snapshot)) {
+            if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
               return;
             }
           }
@@ -264,7 +280,9 @@ class SessionPrefetcher {
             }
             cached = {
               ...updated,
-              deltaCursor: result.deltaCursor,
+              // Prefetch does not own transient run replay. Keep the prior cursor
+              // so the opening pane can consume the same authoritative snapshot.
+              ...(result.inFlightRun ? {} : { deltaCursor: result.deltaCursor }),
               ...(Object.hasOwn(result.sessionInfo, "activeLeafEntryId")
                 ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
                 : {}),
@@ -297,13 +315,19 @@ class SessionPrefetcher {
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
       ),
     );
-    const rows = [...(snapshot.rows ?? [])].toSorted(
+    const maxPrefetchedSessions = Math.max(0, MAX_CACHED_CHAT_SESSIONS - openKeys.size);
+    const rows = (snapshot.rows ?? []).toSorted(
       (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
     );
     const candidates: SessionPrefetchCandidate[] = [];
     const seen = new Set<string>();
     let deferMs: number | null = null;
     for (const row of rows) {
+      // The presented pane owns transient run adoption and replay. Background
+      // prefetch only warms durable history, so it must not consume active state.
+      if (isSessionRunActive(row)) {
+        continue;
+      }
       const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
         sessionKey: row.key,
         agentId: row.agentId,
@@ -312,6 +336,10 @@ class SessionPrefetcher {
         continue;
       }
       seen.add(snapshotKey);
+      // Warming older rows must never evict hotter or presented snapshots.
+      if (seen.size > maxPrefetchedSessions) {
+        break;
+      }
       const activityAt = sessionActivityAt(row);
       const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
       if (savedAt !== null && savedAt >= activityAt) {
@@ -331,12 +359,20 @@ class SessionPrefetcher {
     return { candidates, deferMs };
   }
 
-  private isCurrent(snapshot: SessionPrefetchSnapshot): boolean {
+  private isCurrent(snapshot: SessionPrefetchSnapshot, snapshotKey?: string): boolean {
     return (
       this.connected &&
       document.visibilityState !== "hidden" &&
       this.snapshot?.client === snapshot.client &&
-      this.snapshot.listRevision === snapshot.listRevision
+      this.snapshot.listRevision === snapshot.listRevision &&
+      (snapshotKey === undefined ||
+        this.snapshot.rows?.some(
+          (row) =>
+            resolveChatSnapshotKey(this.snapshot!.snapshotHost, {
+              sessionKey: row.key,
+              agentId: row.agentId,
+            }) === snapshotKey,
+        ) === true)
     );
   }
 
@@ -420,7 +456,10 @@ class SessionPrefetchController implements ReactiveController {
       this.clearSubscriptions();
       this.context = context;
       if (context) {
-        this.subscriptions = [context.gateway.subscribe(this.sync)];
+        this.subscriptions = [
+          context.gateway.subscribe(this.sync),
+          context.sessions.subscribe(this.sync),
+        ];
       }
     }
     if (!context) {

@@ -4,6 +4,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -16,13 +17,11 @@ export function collectKnownSessionRows(
 ): Map<string, GatewaySessionRow> {
   const rows = new Map<string, GatewaySessionRow>();
   for (const row of [...Object.values(childRowsByParent).flat(), ...rootRows]) {
-    const previous = [...rows.keys()].find((key) => areUiSessionKeysEquivalent(key, row.key));
-    if (previous) {
-      rows.delete(previous);
-    }
-    rows.set(row.key, row);
+    const key = normalizeDefaultMainSessionAliasForUi(row.key) || row.key;
+    rows.delete(key);
+    rows.set(key, row);
   }
-  return rows;
+  return new Map([...rows.values()].map((row) => [row.key, row]));
 }
 
 export async function fetchSessionLineage(params: {
@@ -45,9 +44,11 @@ export async function fetchSessionLineage(params: {
     // malformed cycle cannot leave direct child routes spinning forever.
     for (let depth = 0; depth < MAX_SESSION_LINEAGE_DEPTH && !visited.has(currentKey); depth += 1) {
       visited.add(currentKey);
-      let row = [...params.knownRows.values()].find((candidate) =>
-        areUiSessionKeysEquivalent(candidate.key, currentKey),
-      );
+      let row =
+        params.knownRows.get(currentKey) ??
+        [...params.knownRows.values()].find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, currentKey),
+        );
       if (!row) {
         const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
           "sessions.describe",

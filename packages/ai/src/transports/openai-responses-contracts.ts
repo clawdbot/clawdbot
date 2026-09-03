@@ -17,6 +17,7 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -127,8 +128,9 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
-export type OpenAIResponsesCompactionReplayState = ProviderReplayState &
-  (
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
+  compactedWindow?: OpenAIResponsesCompactedWindow;
+} & (
     | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
     | {
         type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;

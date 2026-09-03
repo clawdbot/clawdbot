@@ -456,9 +456,11 @@ function hasAuthProfileCredentialSource(params: {
   state: UsageAuthState;
   providerIds: string[];
 }): boolean {
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(params.state.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  const store = (params.state.store ??=
+    params.state.getStore?.() ??
+    ensureAuthProfileStoreWithoutExternalProfiles(params.state.agentDir, {
+      allowKeychainPrompt: false,
+    }));
   for (const provider of params.providerIds) {
     const order = resolveAuthProfileOrder({
       cfg: params.state.cfg,
@@ -549,10 +551,8 @@ export async function resolveProviderAuths(params: {
             providerIds: credentialProviderIds,
           }));
       const state: UsageAuthState = {
-        ...stateBase,
+        ...authProfileSourceState,
         allowAuthProfileStore,
-        getStore: params.getStore,
-        store: params.store,
       };
       const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
 

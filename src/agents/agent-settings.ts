@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
-import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
+import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
@@ -46,30 +46,19 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const configuredEnabled = compactionCfg?.enabled;
 
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
-  let maxReserveTokens: number | undefined;
-
-  // Cap the floor to a safe fraction of the context window so that
-  // small-context models (e.g. Ollama with 16 K tokens) are not starved of
-  // prompt budget.  Without this cap the default floor of 20 000 can exceed
-  // the entire context window, causing every prompt to be classified as an
-  // overflow and triggering an infinite compaction loop.
   const contextTokenBudget = toPositiveInt(params.contextTokenBudget);
-  if (contextTokenBudget !== undefined) {
-    const minPromptBudget = Math.min(
-      MIN_PROMPT_BUDGET_TOKENS,
-      Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
-    );
-    maxReserveTokens = Math.max(0, contextTokenBudget - minPromptBudget);
-    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserveTokens);
-  }
-
-  let targetReserveTokens = Math.max(currentReserveTokens, reserveTokensFloor);
-  if (maxReserveTokens !== undefined) {
-    // Cap the effective value too: the harness default or explicit config can otherwise
-    // undo the floor cap and make shouldCompact() true from the first token.
-    targetReserveTokens = Math.min(targetReserveTokens, maxReserveTokens);
-  }
+  const requestedReserveTokens = Math.max(
+    currentReserveTokens,
+    DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
+  );
+  // Cap the final effective reserve, not only its floor; otherwise small models compact at token one.
+  const targetReserveTokens =
+    contextTokenBudget === undefined
+      ? requestedReserveTokens
+      : resolveEffectiveCompactionReserveTokens({
+          contextTokenBudget,
+          reserveTokens: requestedReserveTokens,
+        });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};

@@ -11,10 +11,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { buildModelAliasIndex, modelKey, type ModelRef } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
@@ -32,6 +34,7 @@ const DEFAULT_MAX_TOKENS = 4096;
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
+type CustomAliasManifestPlugin = Pick<PluginManifestRecord, "modelIdNormalization">;
 
 /** Result of best-effort image-input inference for custom model ids. */
 type CustomModelImageInputInference = {
@@ -179,8 +182,8 @@ export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic"
 /** Config mutation result for a custom API setup pass. */
 export type CustomApiResult = {
   config: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
+  providerId: string;
+  modelId: string;
   providerIdRenamedFrom?: string;
 };
 
@@ -196,6 +199,7 @@ type ApplyCustomApiConfigParams = {
   supportsImageInput?: boolean;
   target?: OnboardingAgentTarget;
   setAsPrimary?: boolean;
+  manifestPlugins?: readonly CustomAliasManifestPlugin[];
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -296,11 +300,22 @@ function resolveUniqueEndpointId(params: {
   return { providerId: candidate, renamed: true };
 }
 
+function configuredAliasModelKey(
+  ref: ModelRef,
+  manifestPlugins: readonly CustomAliasManifestPlugin[],
+): string {
+  return modelKey(
+    ref.provider,
+    normalizeConfiguredProviderCatalogModelId(ref.provider, ref.model, { manifestPlugins }),
+  );
+}
+
 /** Returns a human-readable alias collision error for a custom model ref. */
 export function resolveCustomModelAliasError(params: {
   raw: string;
   cfg: OpenClawConfig;
-  modelRef: string;
+  modelRef: ModelRef;
+  manifestPlugins: readonly CustomAliasManifestPlugin[];
   agentId?: string;
 }): string | undefined {
   const trimmed = params.raw.trim();
@@ -317,6 +332,8 @@ export function resolveCustomModelAliasError(params: {
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
     agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
+    allowPluginNormalization: false,
   });
   const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);
@@ -324,7 +341,10 @@ export function resolveCustomModelAliasError(params: {
     return undefined;
   }
   const existingKey = modelKey(existing.ref.provider, existing.ref.model);
-  if (existingKey === params.modelRef) {
+  if (
+    configuredAliasModelKey(existing.ref, params.manifestPlugins) ===
+    configuredAliasModelKey(params.modelRef, params.manifestPlugins)
+  ) {
     return undefined;
   }
   return `Alias ${normalized} already points to ${existingKey}.`;
@@ -594,13 +614,14 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   });
   const providerId = providerIdResult.providerId;
   const providers = params.config.models?.providers ?? {};
-
   const modelRef = modelKey(providerId, modelId);
+
   const alias = normalizeOptionalString(params.alias) ?? "";
   const aliasError = resolveCustomModelAliasError({
     raw: alias,
     cfg: params.config,
-    modelRef,
+    modelRef: { provider: providerId, model: modelId },
+    manifestPlugins: params.manifestPlugins ?? [],
     agentId: params.target?.agentId,
   });
   if (aliasError) {

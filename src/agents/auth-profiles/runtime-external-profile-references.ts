@@ -16,15 +16,12 @@ export function setRuntimeExternalCliProfileIds(
   runtimeStore.runtimeExternalCliProfileIds = ids.length > 0 ? ids : undefined;
 }
 
-export function getRuntimeLocalProfileIds(store: AuthProfileStore): readonly string[] {
+function getRuntimeLocalProfileIds(store: AuthProfileStore): readonly string[] {
   const runtimeStore: RuntimeAuthProfileStore = store;
   return runtimeStore.runtimeLocalProfileIds ?? [];
 }
 
-export function setRuntimeLocalProfileIds(
-  store: AuthProfileStore,
-  profileIds: Iterable<string>,
-): void {
+function setRuntimeLocalProfileIds(store: AuthProfileStore, profileIds: Iterable<string>): void {
   const ids = [...new Set(profileIds)].filter((profileId) => store.profiles[profileId]).toSorted();
   const runtimeStore: RuntimeAuthProfileStore = store;
   runtimeStore.runtimeLocalProfileIds = ids.length > 0 ? ids : undefined;

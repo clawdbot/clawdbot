@@ -191,6 +191,23 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   },
 ];
 
+describe("markdownToStory paragraph boundaries", () => {
+  it.each(["#", "#tag", "##tag", "####### heading", "# "])(
+    "preserves non-heading %j as ordinary text",
+    (markdown) => {
+      expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);
+    },
+  );
+
+  it("continues past a hashtag and still separates the next heading", () => {
+    expect(markdownToStory("intro\n#tag\n## Heading\ntail")).toEqual([
+      { inline: ["intro", { break: null }, "#tag"] },
+      { block: { header: { tag: "h2", content: ["Heading"] } } },
+      { inline: ["tail"] },
+    ]);
+  });
+});
+
 describe("markdownToStory list rendering", () => {
   it.each(listRenderingFixtures)("$name", ({ markdown, before, after }) => {
     expect(before).not.toEqual(after);

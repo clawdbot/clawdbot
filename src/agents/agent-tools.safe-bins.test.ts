@@ -141,9 +141,7 @@ vi.mock("./bash-tools.exec-host-shared.js", async () => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
-  copyPluginToolMeta: vi.fn((_from, to) => to),
   resolvePluginTools: () => [],
-  getPluginToolMeta: () => undefined,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({

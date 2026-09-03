@@ -72,7 +72,10 @@ describe("qa suite", () => {
       closeWebSessions: step("web sessions"),
       cleanupTransportBeforeGatewayStop: step("transport before gateway", transportFailure),
       cleanupTransportAfterGatewayStop: step("transport after gateway"),
-      stopGateway: step("gateway"),
+      stopGateway: async () => {
+        await step("gateway")();
+        return { process: "confirmed-stopped", errors: [] };
+      },
       disposeAgentHarnesses: step("agent harnesses"),
       stopProvider: step("provider", providerFailure),
       finishLab: step("lab"),
@@ -181,27 +184,26 @@ describe("qa suite", () => {
     expect((thrown as Error).message).not.toContain("evidence=");
   });
 
-  it("does not release transport credentials when gateway teardown fails", async () => {
-    const calls: string[] = [];
-    const gatewayFailure = new Error("gateway remained alive");
-    const step = (name: string, error?: Error) => async () => {
-      calls.push(name);
-      if (error) {
-        throw error;
-      }
-    };
-
-    const failures = await runQaFlowSuiteCleanupPlan({
-      cleanupTransportBeforeGatewayStop: step("transport before gateway"),
-      cleanupTransportAfterGatewayStop: step("transport after gateway"),
-      stopGateway: step("gateway", gatewayFailure),
-      disposeAgentHarnesses: step("agent harnesses"),
-      finishLab: step("lab"),
-    });
-
-    expect(calls).toEqual(["transport before gateway", "gateway", "agent harnesses", "lab"]);
-    expect(failures).toEqual([{ phase: "gateway stop", error: gatewayFailure }]);
-  });
+  it.each(["never-spawned", "confirmed-stopped", "unconfirmed"] as const)(
+    "gates after-stop cleanup on %s, independently of diagnostic errors",
+    async (process) => {
+      const diagnostic = new Error("cleanup diagnostic failed");
+      const release = vi.fn(async () => {});
+      const finishLab = vi.fn(async () => {});
+      const failures = await runQaFlowSuiteCleanupPlan({
+        cleanupTransportBeforeGatewayStop: async () => {},
+        cleanupTransportAfterGatewayStop: release,
+        stopGateway: async () => ({ process, errors: [diagnostic] }),
+        disposeAgentHarnesses: async () => {},
+        finishLab,
+      });
+      expect(release).toHaveBeenCalledTimes(process === "unconfirmed" ? 0 : 1);
+      expect(failures).toEqual([
+        { phase: "gateway stop", error: expect.objectContaining({ errors: [diagnostic] }) },
+      ]);
+      expect(finishLab).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
@@ -724,16 +726,19 @@ describe("qa suite", () => {
         };
       };
       const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
-      const smokeArtifactPath = summary.run?.channelDriverSmokePath;
-      if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
+      const providerReadinessArtifactPath = summary.run?.channelDriverSmokePath;
+      if (
+        typeof capabilityMatrixPath !== "string" ||
+        typeof providerReadinessArtifactPath !== "string"
+      ) {
         throw new Error("Crabline generation artifact paths missing from QA summary.");
       }
       const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
       expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-channel-driver-artifacts");
       expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
       expect(path.basename(capabilityMatrixPath)).toBe("crabline-channel-driver-capabilities.json");
-      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
-      expect(path.basename(smokeArtifactPath)).toBe("crabline-provider-readiness.json");
+      expect(path.dirname(providerReadinessArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(providerReadinessArtifactPath)).toBe("crabline-provider-readiness.json");
       await expect(
         fs.access(path.join(outputDir, "crabline-channel-driver-capabilities.json")),
       ).rejects.toMatchObject({ code: "ENOENT" });
@@ -749,10 +754,13 @@ describe("qa suite", () => {
       expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
-      const smoke = JSON.parse(
-        await fs.readFile(path.resolve(outputDir, smokeArtifactPath), "utf8"),
+      const readiness = JSON.parse(
+        await fs.readFile(path.resolve(outputDir, providerReadinessArtifactPath), "utf8"),
       ) as { providerReadiness?: { result?: { ok?: boolean; provider?: string } } };
-      expect(smoke.providerReadiness?.result).toMatchObject({ ok: true, provider: "telegram" });
+      expect(readiness.providerReadiness?.result).toMatchObject({
+        ok: true,
+        provider: "telegram",
+      });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
         entries?: Array<{
           execution?: {
@@ -765,7 +773,11 @@ describe("qa suite", () => {
       expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
         expect.arrayContaining([
           { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
-          { kind: "channel-driver-smoke", path: smokeArtifactPath, source: "qa-suite" },
+          {
+            kind: "channel-driver-smoke",
+            path: providerReadinessArtifactPath,
+            source: "qa-suite",
+          },
         ]),
       );
       expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({

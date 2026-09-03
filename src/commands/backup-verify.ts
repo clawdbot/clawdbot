@@ -16,8 +16,10 @@ import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js"
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { resolveUserPath } from "../utils.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
@@ -30,7 +32,6 @@ import {
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
-const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 type BackupVerifyOptions = {
   archive: string;
@@ -46,6 +47,11 @@ type BackupVerifyResult = {
   assetCount: number;
   entryCount: number;
   symlinkCount: number;
+};
+
+type PreparedBackupArchive = {
+  result: BackupVerifyResult;
+  hardlinkTargets: ReadonlyMap<string, string>;
 };
 
 type ArchiveEntry = {
@@ -64,6 +70,7 @@ type NormalizedArchiveEntry = {
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & {
   stateAssetRoot: string;
+  agentId?: string;
 };
 
 type ExpectedSqliteRole = "agent" | "global";
@@ -119,32 +126,6 @@ async function extractManifest(params: {
     throw content;
   }
   return content.toString("utf8");
-}
-
-function verifyHardlinkTargetsAgainstArchiveRoot(
-  hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
-  archiveRoot: string,
-  entries: Set<string>,
-): void {
-  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
-  for (const target of hardlinkTargets) {
-    // Older backup archives may store hardlink linkpath values relative to the
-    // archive root instead of including the root segment. Accept that form only
-    // when it resolves to a real entry inside this archive.
-    const normalizedTarget = isArchivePathWithin(target.normalized, normalizedRoot)
-      ? target.normalized
-      : path.posix.join(normalizedRoot, target.normalized);
-    if (!isArchivePathWithin(normalizedTarget, normalizedRoot)) {
-      throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${normalizedTarget}`,
-      );
-    }
-    if (!entries.has(normalizedTarget)) {
-      throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${normalizedTarget}`,
-      );
-    }
-  }
 }
 
 function formatResult(result: BackupVerifyResult): string {
@@ -240,7 +221,7 @@ function isSqliteSnapshotRelativePath(relativePath: string): boolean {
 
 function resolveSqliteSnapshotSidecarDatabasePath(relativePath: string): string | undefined {
   const portablePath = resolvePortableArchivePathKey(relativePath);
-  for (const suffix of SQLITE_SNAPSHOT_SIDECAR_SUFFIXES) {
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     if (portablePath.endsWith(suffix)) {
       const databasePath = relativePath.slice(0, -suffix.length);
       return isSqliteSnapshotRelativePath(databasePath) ? databasePath : undefined;
@@ -272,76 +253,94 @@ function listSqliteSnapshotEntries(
   manifest: BackupManifest,
   entries: NormalizedArchiveEntry[],
 ): SqliteSnapshotEntry[] {
-  const declaredStateAssetRoots = manifest.assets
-    .filter((asset) => asset.kind === "state")
-    .map((asset) => normalizeArchivePath(asset.archivePath, "Backup manifest state asset path"));
-  for (const root of declaredStateAssetRoots) {
-    const portableRoot = resolvePortableArchivePathKey(root);
-    for (const entry of entries) {
-      const isExactStateEntry = isArchivePathWithin(entry.normalized, root);
-      const isPortableStateEntry = isArchivePathWithin(
-        resolvePortableArchivePathKey(entry.normalized),
-        portableRoot,
-      );
-      if (isPortableStateEntry && !isExactStateEntry) {
-        throw new Error(`Backup contains a case-mangled state asset path: ${entry.normalized}`);
-      }
-    }
-  }
-
-  const hasSqliteCandidate = entries.some((entry) =>
-    declaredStateAssetRoots.some((root) => {
-      if (!isArchivePathWithin(entry.normalized, root)) {
-        return false;
-      }
-      const relativePath = path.posix.relative(root, entry.normalized);
-      return (
-        isSqliteSnapshotRelativePath(relativePath) ||
-        resolveSqliteSnapshotSidecarDatabasePath(relativePath) !== undefined
-      );
-    }),
-  );
-  if (!hasSqliteCandidate) {
-    return [];
-  }
-
-  const stateAssetRoot = resolveCanonicalStateAssetRoot(manifest);
-  if (!stateAssetRoot) {
-    return [];
-  }
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const roots = [
+    ...(manifest.paths?.stateDir
+      ? [
+          {
+            kind: "state" as const,
+            archiveRoot: buildBackupArchivePath(archiveRoot, manifest.paths.stateDir),
+          },
+        ]
+      : manifest.assets
+          .filter((asset) => asset.kind === "state")
+          .map((asset) => ({
+            kind: "state" as const,
+            archiveRoot: normalizeArchivePath(
+              asset.archivePath,
+              "Backup manifest state asset path",
+            ),
+          }))),
+    ...(manifest.paths?.agentRoots ?? []).map(({ agentId, sourcePath }) => ({
+      kind: "agent" as const,
+      archiveRoot: buildBackupArchivePath(archiveRoot, sourcePath),
+      agentId,
+    })),
+  ]
+    .map((root) =>
+      Object.assign(root, {
+        portableArchiveRoot: resolvePortableArchivePathKey(root.archiveRoot),
+      }),
+    )
+    .toSorted((left, right) => right.archiveRoot.length - left.archiveRoot.length);
+  const sqliteEntries: SqliteSnapshotEntry[] = [];
 
   for (const entry of entries) {
-    if (!isArchivePathWithin(entry.normalized, stateAssetRoot)) {
+    const portableEntryPath = resolvePortableArchivePathKey(entry.normalized);
+    const portableRoot = roots.find((root) =>
+      isArchivePathWithin(portableEntryPath, root.portableArchiveRoot),
+    );
+    const sqliteRoot = roots.find((root) =>
+      isArchivePathWithin(entry.normalized, root.archiveRoot),
+    );
+    if (portableRoot && portableRoot !== sqliteRoot) {
+      throw new Error(
+        `Backup contains a case-mangled ${portableRoot.kind} asset path: ${entry.normalized}`,
+      );
+    }
+    if (!sqliteRoot) {
       continue;
     }
-    const relativePath = path.posix.relative(stateAssetRoot, entry.normalized);
+
+    const relativePath = path.posix.relative(sqliteRoot.archiveRoot, entry.normalized);
     assertCanonicalSqlitePathCasing(relativePath, entry.normalized);
+    if (
+      sqliteRoot.kind === "agent" &&
+      resolvePortableArchivePathKey(relativePath) === "openclaw-agent.sqlite" &&
+      relativePath !== "openclaw-agent.sqlite"
+    ) {
+      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+    }
     if (resolveSqliteSnapshotSidecarDatabasePath(relativePath)) {
       throw new Error(`Backup contains a SQLite snapshot sidecar: ${entry.normalized}`);
     }
-  }
-
-  return entries.flatMap((entry) => {
-    if (!isArchivePathWithin(entry.normalized, stateAssetRoot)) {
-      return [];
-    }
-    const relativePath = path.posix.relative(stateAssetRoot, entry.normalized);
     // Only state-owned database snapshots should be opened during verification.
     // Package content, excluded reindex artifacts, and noncanonical symlinks are
     // preserved or skipped by backup creation without becoming SQLite snapshots.
     if (!isSqliteSnapshotRelativePath(relativePath)) {
-      return [];
+      continue;
     }
-    const candidate = { ...entry, stateAssetRoot };
-    if (!resolveExpectedSqliteRole(candidate) && !isRegularArchiveFile(entry.type)) {
-      return [];
+    const candidate: SqliteSnapshotEntry = {
+      ...entry,
+      stateAssetRoot: sqliteRoot.archiveRoot,
+      ...(sqliteRoot.kind === "agent" ? { agentId: sqliteRoot.agentId } : {}),
+    };
+    if (resolveExpectedSqliteRole(candidate) || isRegularArchiveFile(entry.type)) {
+      sqliteEntries.push(candidate);
     }
-    return [candidate];
-  });
+  }
+
+  if (sqliteEntries.length > 0) {
+    resolveCanonicalStateAssetRoot(manifest);
+  }
+  return sqliteEntries;
 }
 
 function resolveExpectedSqliteRole(entry: SqliteSnapshotEntry): ExpectedSqliteRole | undefined {
   const relativePath = path.posix.relative(entry.stateAssetRoot, entry.normalized);
+  if (entry.agentId) {
+    return relativePath === "openclaw-agent.sqlite" ? "agent" : undefined;
+  }
   return resolveExpectedSqliteRoleFromRelativePath(relativePath);
 }
 
@@ -530,7 +529,14 @@ async function verifySqliteSnapshots(params: {
         database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
         await loadSqliteVecExtension({ db: database });
         assertSqliteIntegrity(database, entry.normalized);
-        assertExpectedSqliteRole(database, entry.normalized, expectedRole);
+        if (entry.agentId) {
+          assertOpenClawAgentDatabaseOwner(database, {
+            agentId: entry.agentId,
+            pathname: entry.normalized,
+          });
+        } else {
+          assertExpectedSqliteRole(database, entry.normalized, expectedRole);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(
@@ -546,7 +552,7 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupVerifyResult> {
+async function verifyResolvedBackupArchive(archivePath: string): Promise<PreparedBackupArchive> {
   let archiveStat;
   try {
     archiveStat = await fs.stat(archivePath);
@@ -586,19 +592,11 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
     ...(entry.size !== undefined ? { size: entry.size } : {}),
     ...(entry.type ? { type: entry.type } : {}),
   }));
-  const hardlinkTargets = rawEntries
-    .filter((entry) => entry.type === "Link" && entry.linkpath)
-    .map((entry) => ({
-      entryPath: entry.path,
-      normalized: normalizeArchivePath(
-        entry.linkpath ?? "",
-        `Archive hardlink target for ${entry.path}`,
-      ),
-    }));
   const symbolicLinks = rawEntries
     .filter((entry) => entry.type === "SymbolicLink")
     .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
-  const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
+  const rawEntryPaths = new Map(entries.map((entry) => [entry.normalized, entry.raw]));
+  const normalizedEntrySet = new Set(rawEntryPaths.keys());
 
   const manifestMatches = entries.filter((entry) => isRootBackupManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
@@ -622,13 +620,34 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseBackupManifest(manifestRaw);
   verifyBackupManifestEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveRoot(
-    hardlinkTargets,
-    manifest.archiveRoot,
-    normalizedEntrySet,
-  );
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const hardlinkTargets = new Map<string, string>();
+  for (const entry of rawEntries) {
+    if (entry.type === "Link") {
+      const target = normalizeArchivePath(
+        entry.linkpath ?? "",
+        `Archive hardlink target for ${entry.path}`,
+      );
+      // Older backups omit the archive root. Resolve once, retaining the actual
+      // entry spelling: normalization is a lookup key, not a filename rewrite.
+      const resolved = isArchivePathWithin(target, archiveRoot)
+        ? target
+        : path.posix.join(archiveRoot, target);
+      const rawTarget = rawEntryPaths.get(resolved);
+      if (!rawTarget) {
+        throw new Error(
+          `Archive hardlink target is missing from archive entries: ${entry.path} -> ${resolved}`,
+        );
+      }
+      hardlinkTargets.set(entry.path, rawTarget);
+    }
+  }
   for (const link of symbolicLinks) {
-    assertArchiveSymbolicLinkTarget({ ...link, archiveRoot: manifest.archiveRoot });
+    assertArchiveSymbolicLinkTarget({
+      ...link,
+      archiveRoot: manifest.archiveRoot,
+      assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+    });
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 
@@ -643,16 +662,21 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
     symlinkCount: symbolicLinks.length,
   };
 
-  return result;
+  return { result, hardlinkTargets };
 }
 
-/** Verify a backup archive and return its normalized, integrity-checked inventory. */
-export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+/** Verify an archive and prepare the exact hardlink targets needed by extraction. */
+export async function prepareBackupArchive(archive: string): Promise<PreparedBackupArchive> {
   const archivePath = resolveUserPath(archive);
   return await verifyResolvedBackupArchive(archivePath).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);
     throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
   });
+}
+
+/** Verify a backup archive without exposing extraction metadata in CLI output. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  return (await prepareBackupArchive(archive)).result;
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */

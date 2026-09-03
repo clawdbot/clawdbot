@@ -1,19 +1,23 @@
 // Scans plugin manifest metadata without importing runtime entrypoints.
-import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { hasNodeErrorCode, isNotFoundPathError } from "../infra/path-guards.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  readPluginCacheDirectory,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
 
 // Plugin manifest files are small metadata descriptors. Bound reads to prevent
 // a corrupted or hostile manifest from exhausting memory during metadata scan.
@@ -35,31 +39,21 @@ type CandidateDir = {
 };
 
 const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
-let manifestMetadataCache = new WeakMap<NodeJS.ProcessEnv, PluginManifestMetadataRecord[]>();
-
-function clearManifestMetadataCache(): void {
-  manifestMetadataCache = new WeakMap();
-}
-
-// Manifest metadata is process-stable; install/reload owners refresh it only
-// through the shared plugin metadata lifecycle boundary.
-registerPluginMetadataProcessMemoLifecycleClear(clearManifestMetadataCache);
-
 function listChildPluginDirs(
   root: string | undefined,
   rank: number,
   startOrder: number,
   origin: string,
 ): CandidateDir[] {
-  if (!root || !fs.existsSync(root)) {
+  if (!root || !pluginCacheExistsSync(root)) {
     return [];
   }
   const dirs: CandidateDir[] = [];
   let order = startOrder;
   try {
-    const entries = fs
-      .readdirSync(root, { withFileTypes: true })
-      .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    const entries = readPluginCacheDirectory(root).toSorted((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
     for (const entry of entries) {
       if (entry.isDirectory()) {
         dirs.push({ pluginDir: path.join(root, entry.name), rank, order: order++, origin });
@@ -72,39 +66,43 @@ function listChildPluginDirs(
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
-  let raw: string;
-  try {
-    const { buffer } = readRegularFileSync({
-      filePath,
-      maxBytes: PLUGIN_MANIFEST_METADATA_MAX_BYTES,
-    });
-    raw = buffer.toString("utf-8");
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
+  const file = readPluginCacheFile({
+    rootDir: path.dirname(filePath),
+    relativePath: path.basename(filePath),
+    rejectHardlinks: false,
+    maxBytes: PLUGIN_MANIFEST_METADATA_MAX_BYTES,
+  });
+  const warn = (message: string) => {
+    if (!file.metadataScanWarningEmitted) {
+      file.metadataScanWarningEmitted = true;
+      log.warn(message);
+    }
+  };
+  if (!file.ok) {
+    if (file.failure.reason === "path") {
       return undefined;
     }
-    if (hasNodeErrorCode(error, "too-large")) {
-      log.warn(
+    if ((pluginCacheStatSync(filePath)?.size ?? 0) > PLUGIN_MANIFEST_METADATA_MAX_BYTES) {
+      warn(
         `Ignoring oversized plugin manifest at ${filePath}: file exceeds the ${PLUGIN_MANIFEST_METADATA_MAX_BYTES}-byte limit`,
       );
     } else {
-      log.warn(`Ignoring unreadable plugin manifest at ${filePath}: ${String(error)}`);
+      warn(
+        `Ignoring unreadable plugin manifest at ${filePath}: ${formatErrorMessage(file.failure.error ?? file.failure.reason)}`,
+      );
     }
     return undefined;
   }
-
-  let parsed: unknown;
-  try {
-    parsed = parseJsonWithJson5Fallback(raw);
-  } catch (error) {
-    log.warn(
-      `Ignoring invalid plugin manifest at ${filePath}: failed to parse plugin manifest: ${String(error)}`,
+  const result = parsePluginCacheJson(file, { json5: true });
+  if (!result.ok) {
+    warn(
+      `Ignoring invalid plugin manifest at ${filePath}: failed to parse plugin manifest: ${formatErrorMessage(result.error)}`,
     );
     return undefined;
   }
-
+  const parsed = result.value;
   if (!isRecord(parsed)) {
-    log.warn(`Ignoring invalid plugin manifest at ${filePath}: plugin manifest must be an object`);
+    warn(`Ignoring invalid plugin manifest at ${filePath}: plugin manifest must be an object`);
     return undefined;
   }
   return parsed;
@@ -139,9 +137,9 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
 
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
-    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
-    fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(path.join(packageRoot, "extensions"))
+    pluginCacheExistsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    pluginCacheExistsSync(path.join(packageRoot, "src")) &&
+    pluginCacheExistsSync(path.join(packageRoot, "extensions"))
   );
 }
 
@@ -175,7 +173,7 @@ function listSourceCheckoutPluginDirs(startOrder: number): CandidateDir[] {
 function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
   const byPath = new Map<string, CandidateDir>();
   for (const candidate of candidates) {
-    const key = resolveRealpathOrAbsolute(candidate.pluginDir);
+    const key = pluginCacheRealpathSync(candidate.pluginDir) ?? path.resolve(candidate.pluginDir);
     const existing = byPath.get(key);
     if (!existing || candidate.rank < existing.rank || candidate.order < existing.order) {
       byPath.set(key, candidate);
@@ -190,9 +188,17 @@ function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
 export function listOpenClawPluginManifestMetadata(
   env: NodeJS.ProcessEnv = process.env,
 ): PluginManifestMetadataRecord[] {
-  const cached = manifestMetadataCache.get(env);
-  if (cached) {
-    return cached.slice();
+  const snapshot = getGatewayPluginMetadataSnapshot();
+  if (snapshot) {
+    return [
+      ...snapshot.plugins,
+      ...(snapshot.bundledManifestRegistry?.plugins ?? []).filter(
+        (plugin) => !snapshot.byPluginId.has(plugin.id),
+      ),
+    ].flatMap((plugin) => {
+      const manifest = readManifestObject(plugin.rootDir);
+      return manifest ? [{ pluginDir: plugin.rootDir, manifest, origin: plugin.origin }] : [];
+    });
   }
   const candidates: CandidateDir[] = [];
   let order = 0;
@@ -223,6 +229,5 @@ export function listOpenClawPluginManifestMetadata(
     }
     records.push({ pluginDir: candidate.pluginDir, manifest, origin: candidate.origin });
   }
-  manifestMetadataCache.set(env, records);
   return records.slice();
 }

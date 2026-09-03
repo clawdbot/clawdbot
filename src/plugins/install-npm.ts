@@ -39,6 +39,7 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
@@ -58,6 +59,7 @@ export async function installPluginFromNpmSpec(
     expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -280,6 +282,7 @@ export async function installPluginFromNpmSpec(
       skipPolicyPreflight: true,
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       npmResolution,
       ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),

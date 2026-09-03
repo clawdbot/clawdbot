@@ -13,7 +13,6 @@ import {
 } from "../cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
-  capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
@@ -148,46 +147,53 @@ export function enrichChatHistoryCompactionMarkers(
 function resolveChatHistoryMessageGroup(
   messages: unknown[],
   index: number,
-): { start: number; end: number } {
+  messageCost: (message: unknown) => number,
+): { start: number; end: number; cost: number } {
   const seq = readChatHistoryMessageSeq(messages[index]);
-  if (seq === undefined) {
-    return { start: index, end: index + 1 };
-  }
   let start = index;
   let end = index + 1;
+  let cost = messageCost(messages[index]);
+  if (seq === undefined) {
+    return { start, end, cost };
+  }
   while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
     start -= 1;
+    cost += messageCost(messages[start]);
   }
   while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
+    cost += messageCost(messages[end]);
     end += 1;
   }
-  return { start, end };
+  return { start, end, cost };
 }
 
 export function capChatHistoryAroundMessage(params: {
   messages: unknown[];
   messageId: string;
-  fits: (messages: unknown[]) => boolean;
-}): unknown[] | undefined {
+  maxCost: number;
+  messageCost?: (message: unknown) => number;
+}): unknown[] {
   const anchorIndex = params.messages.findIndex(
     (message) => readChatHistoryMessageId(message) === params.messageId,
   );
   if (anchorIndex === -1) {
-    return undefined;
+    return [];
   }
-  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex);
-  if (!params.fits(params.messages.slice(anchorGroup.start, anchorGroup.end))) {
+  const messageCost = params.messageCost ?? (() => 1);
+  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
+  if (!(anchorGroup.cost <= params.maxCost)) {
     return [params.messages[anchorIndex]];
   }
 
-  let { start, end } = anchorGroup;
+  let { start, end, cost } = anchorGroup;
   let canGrowOlder = start > 0;
   let canGrowNewer = end < params.messages.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1);
-      if (params.fits(params.messages.slice(olderGroup.start, end))) {
+      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1, messageCost);
+      if (cost + olderGroup.cost <= params.maxCost) {
         start = olderGroup.start;
+        cost += olderGroup.cost;
       } else {
         canGrowOlder = false;
       }
@@ -195,9 +201,10 @@ export function capChatHistoryAroundMessage(params: {
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end);
-      if (params.fits(params.messages.slice(start, newerGroup.end))) {
+      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end, messageCost);
+      if (cost + newerGroup.cost <= params.maxCost) {
         end = newerGroup.end;
+        cost += newerGroup.cost;
       } else {
         canGrowNewer = false;
       }
@@ -318,11 +325,11 @@ export async function readChatHistoryPage(params: {
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
-      ? (capChatHistoryAroundMessage({
+      ? capChatHistoryAroundMessage({
           messages: projected,
           messageId,
-          fits: (messages) => messages.length <= max,
-        }) ?? capOffsetChatHistoryProjectedMessages(projected, max))
+          maxCost: max,
+        })
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
@@ -407,6 +414,13 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    // Import snapshots are terminal, but a missing display anchor is not a tail request.
+    if (
+      messageId &&
+      !displayMessages.some((message) => readChatHistoryMessageId(message) === messageId)
+    ) {
+      return { messages: [] };
+    }
     return {
       activeLeafEntryId,
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),

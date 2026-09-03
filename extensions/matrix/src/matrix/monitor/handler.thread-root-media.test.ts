@@ -55,7 +55,6 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       getMemberDisplayName: async () => "Gum",
       startupMs: Date.now() - 120_000,
       startupGraceMs: 60_000,
-      textLimit: 4000,
       mediaMaxBytes: 5 * 1024 * 1024,
       replyToMode: "first",
     });

@@ -9,22 +9,16 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const proofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "connect-machine",
-);
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "connect-machine"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "connect-machine"), fileName),
   });
 }
 
@@ -37,7 +31,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: proofArtifactDir,
+              dir: path.join(suite.artifactDir, "connect-machine"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -173,6 +167,34 @@ suite.define(() => {
       await retry.click();
       await dialog.getByText(`npx openclaw connect ${joinUrl}`, { exact: true }).waitFor();
       expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(2);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("redacts sensitive connection-link failures before rendering them", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["device.pair.setupCode"],
+    });
+    const secret = "e2e-pairing-bearer-secret";
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator("#new-session-where-trigger").click();
+      await page.getByRole("button", { name: "Connect a machine…" }).click();
+      await gateway.waitForRequest("device.pair.setupCode");
+      await gateway.rejectDeferred("device.pair.setupCode", {
+        message: `pairing failed: Authorization: Bearer ${secret}`,
+      });
+
+      const alert = page
+        .locator('openclaw-modal-dialog[label="Connect a machine"]')
+        .getByRole("alert");
+      await alert.waitFor();
+      expect(await alert.textContent()).toContain("Authorization: [redacted]");
+      expect(await alert.textContent()).not.toContain(secret);
     } finally {
       await context.close();
     }

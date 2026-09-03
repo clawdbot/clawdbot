@@ -267,13 +267,21 @@ describe("runNodeDaemonInstall", () => {
 
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
-    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node"'],
+    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
   ])("rejects %s before building an install plan", async (_name, opts, error) => {
     await runNodeDaemonInstall(opts);
 
     expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.service.install).not.toHaveBeenCalled();
+  });
+
+  it("forwards Bun as the explicit node-service runtime", async () => {
+    await runNodeDaemonInstall({ runtime: "bun", force: true });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "bun" }),
+    );
   });
 
   it("does not build or install a service in Nix daemon mode", async () => {

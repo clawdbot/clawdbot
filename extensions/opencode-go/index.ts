@@ -14,7 +14,7 @@ import {
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { createOpencodeGoWrapper } from "./stream.js";
+import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
 type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
@@ -95,6 +95,9 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
         if (!auth) {
           return null;
@@ -116,6 +119,8 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
     wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      createOpencodeGoAttributionWrapper(ctx.streamFn, ctx.sourceApi),
     isModernModelRef: () => true,
   },
   register(api) {

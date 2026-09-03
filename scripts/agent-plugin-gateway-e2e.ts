@@ -363,7 +363,7 @@ async function main(): Promise<void> {
 
     install = spawnCaptured(
       process.execPath,
-      [devRunnerPath, "plugins", "install", fixtureDir, "--force"],
+      [devRunnerPath, "plugins", "install", fixtureDir, "--force", "--accept-capabilities"],
       { cwd: repoRoot, env: childEnv, label: "plugin install" },
     );
     await waitForExit(install);

@@ -191,10 +191,14 @@ describe("registerTelegramNativeCommands", () => {
     expect(registered).toEqual([
       { command: "custom_two", description: "Custom two unchanged" },
       { command: "custom_one", description: "Custom one unchanged" },
-      ...native.filter((command) => !command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
       { command: "alpha", description: "Alpha unchanged" },
       { command: "zeta", description: "Zeta unchanged" },
-      ...native.filter((command) => command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
   });
 

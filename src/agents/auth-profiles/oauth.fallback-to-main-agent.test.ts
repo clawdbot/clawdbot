@@ -42,7 +42,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
+vi.mock("../../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
@@ -50,7 +50,7 @@ afterAll(() => {
   vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
-  vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.doUnmock("../../plugins/provider-external-auth.js");
   vi.resetModules();
 });
 

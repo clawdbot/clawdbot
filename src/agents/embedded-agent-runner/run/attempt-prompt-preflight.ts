@@ -1,6 +1,7 @@
 /**
  * Reports prompt pressure and owns explicit mid-turn recovery routing.
  */
+import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
@@ -8,17 +9,18 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
-  estimateLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -58,6 +60,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
   request: MidTurnPrecheckRequest;
   sessionAgentId: string;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   prePromptMessageCount: number;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
 }): {
@@ -87,6 +90,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     });
     const truncationResult = truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
+      projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
       sessionFile: attempt.sessionFile,
@@ -158,8 +162,11 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 }
 
 export async function prepareEmbeddedAttemptPromptPreflight(input: {
-  attempt: AttemptPromptPreflightParams;
+  appendOnlyRuntimeContext?: boolean;
+  attempt: AttemptPromptPreflightParams &
+    Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
   activeContextEngine?: Pick<AttemptContextEngine, "info">;
+  compactionReplayEnabled: boolean;
   contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
@@ -177,13 +184,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   const { attempt } = input;
   let contextBudgetStatus = input.state.contextBudgetStatus;
   const { skipPromptSubmission } = input.state;
-  const boundaryOptions =
-    input.timezone || !input.includeBoundaryTimestamp
-      ? {
-          ...(input.timezone ? { timezone: input.timezone } : {}),
-          ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-        }
-      : undefined;
+  const boundaryOptions = {
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+  };
   const unwindowedLlmBoundaryMessagesForPrecheck =
     input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
     input.unwindowedContextEngineMessagesForPrecheck
@@ -192,17 +197,42 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
           boundaryOptions,
         )
       : undefined;
-  const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
-    messages: input.hookMessagesForCurrentPrompt,
-    systemPrompt: input.systemPrompt,
-    prompt: input.promptForPrecheck,
-  });
   let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt> | null = null;
+  if (!skipPromptSubmission) {
+    try {
+      preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+        messages: input.hookMessagesForCurrentPrompt,
+        unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck,
+        systemPrompt: input.systemPrompt,
+        prompt: input.promptForPrecheck,
+        contextTokenBudget: input.contextTokenBudget,
+        reserveTokens: input.reserveTokens,
+        toolResultMaxChars: input.toolResultMaxChars,
+        replay: {
+          model: attempt.model,
+          sessionId: attempt.sessionId,
+          authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+          enabled: input.compactionReplayEnabled,
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof CompactionReplayRefreshRequiredError)) {
+        throw error;
+      }
+      return {
+        ...input.state,
+        promptError: error,
+        promptErrorSource: "precheck",
+        skipPromptSubmission: true,
+      };
+    }
+  }
   const shouldSkipPrecheck =
     skipPromptSubmission ||
     (input.contextEngineAssemblySucceeded &&
       input.activeContextEngine?.info.ownsCompaction &&
-      input.contextEnginePromptAuthority !== "preassembly_may_overflow");
+      input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
+      !preemptiveCompaction?.compactionReplay);
 
   if (shouldSkipPrecheck && !skipPromptSubmission) {
     log.info(
@@ -210,23 +240,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     );
   }
 
-  if (!shouldSkipPrecheck) {
-    preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-      messages: input.hookMessagesForCurrentPrompt,
-      ...(unwindowedLlmBoundaryMessagesForPrecheck
-        ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-        : {}),
-      systemPrompt: input.systemPrompt,
-      prompt: input.promptForPrecheck,
-      contextTokenBudget: input.contextTokenBudget,
-      reserveTokens: input.reserveTokens,
-      toolResultMaxChars: input.toolResultMaxChars,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: llmBoundaryTokenPressure,
-        source: "llm_boundary_normalized_prompt",
-        renderedChars: input.promptForPrecheck.length,
-      },
-    });
+  if (shouldSkipPrecheck) {
+    preemptiveCompaction = null;
   }
   if (preemptiveCompaction) {
     contextBudgetStatus = buildPrePromptContextBudgetStatus({
@@ -259,6 +274,22 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
       }),
     );
+    const checkpointPressure = preemptiveCompaction.compactionReplay;
+    if (checkpointPressure && checkpointPressure.route !== "fits") {
+      // Only the actual canonical window can require recovery; the raw-history
+      // maximum above remains diagnostic even when it exceeds this window.
+      return {
+        ...input.state,
+        contextBudgetStatus,
+        preflightRecovery: {
+          route: checkpointPressure.route,
+          ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
+        },
+        promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+        promptErrorSource: "precheck",
+        skipPromptSubmission: true,
+      };
+    }
     if (preemptiveCompaction.route !== "fits") {
       // This pressure estimate is diagnostic only; it never compacts or discards history.
       // Real compaction runs through explicit preflight or provider-overflow recovery.

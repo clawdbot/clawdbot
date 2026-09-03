@@ -288,6 +288,22 @@ describe("isDeliveredMessagingToolResult", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["suppressed", false],
+    ["dry_run", false],
+    ["failed", false],
+    ["sent", true],
+    ["partial_failed", true],
+  ] as const)("maps plugin deliveryStatus %s to delivered=%s", (deliveryStatus, delivered) => {
+    expect(
+      isDeliveredMessagingToolResult({
+        toolName: "message",
+        args: { action: "send", to: "channel-1" },
+        result: { ok: true, deliveryStatus },
+      }),
+    ).toBe(delivered);
+  });
+
   it("rejects successful plugin broadcast wrappers around suppressed sends", () => {
     expect(
       isDeliveredMessagingToolResult({

@@ -368,10 +368,9 @@ async function executeFireAndForgetA2AFrom(
   expect(requireDetails(result).status).toBe("accepted");
   expect(recordParticipantMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      actor: { type: "agent", id: "main" },
+      identity: { type: "agent", id: "main" },
       agentId: "other",
       sessionKey: targetSessionKey,
-      source: "agent",
     }),
   );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
@@ -1171,6 +1170,7 @@ describe("sessions_send gating", () => {
       expect(requireDetails(result)).toMatchObject({
         status: "accepted",
         sessionKey: targetSessionKey,
+        targetDisposition: "queued",
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });

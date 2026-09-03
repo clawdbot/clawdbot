@@ -17,7 +17,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -29,7 +31,6 @@ import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   type DreamNarrativeRequest,
   type DreamNarrativeOutcome,
-  readRecentDreamDiaryEntries,
   type NarrativePhaseData,
   runDreamNarrative,
 } from "./dreaming-narrative.js";
@@ -40,12 +41,16 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
   readSessionIngestionState,
+  resolveAdmissionPolicy,
   scanSessionIngestionSource,
+  sessionExclusionReason,
   sessionIngestionSourceFromCorpus,
   sessionIngestionStateKeyFromCorpus,
   SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
@@ -53,6 +58,8 @@ import {
   SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   trimTrackedSessionScopes,
   writeSessionIngestionState,
+  type SessionAdmissionPolicy,
+  type SessionEntryOrigin,
   type SessionIngestionMessage,
   type SessionIngestionSource,
   type SessionIngestionState,
@@ -97,6 +104,7 @@ type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingCon
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  admissionPolicy?: SessionAdmissionPolicy;
 };
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_SCORE = 0.62;
@@ -186,8 +194,6 @@ type DailySnippetChunk = {
   snippet: string;
   identitySnippet?: string;
 };
-
-const REM_REFLECTION_TAG_BLACKLIST = new Set(["assistant", "user", "system", "subagent", "the"]);
 
 function buildDailyChunkSnippet(heading: string | null, chunkLines: string[]): string {
   const body = chunkLines.join(" ").trim();
@@ -503,7 +509,9 @@ export function filterRecallEntriesWithinLookback(params: {
 
 type DailyIngestionBatch = {
   day: string;
-  results: Array<MemorySearchResult & { identitySnippet?: string }>;
+  results: Array<
+    MemorySearchResult & { identitySnippet?: string; sessionOrigin?: SessionEntryOrigin }
+  >;
 };
 
 type DailyMemoryFile = {
@@ -597,6 +605,7 @@ async function collectSessionIngestionBatches(params: {
   nowMs: number;
   timezone?: string;
   state: SessionIngestionState;
+  admissionPolicy?: SessionAdmissionPolicy;
 }) {
   if (!params.cfg) {
     const nextState = { version: 3 as const, files: {}, seenMessages: {} };
@@ -620,6 +629,9 @@ async function collectSessionIngestionBatches(params: {
   const sources: SessionIngestionSource[] = [];
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
+    const forgottenSessionIds = new Set(
+      listMemorySessionTombstones({ agentId }).map((tombstone) => tombstone.sessionId),
+    );
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,
     })) {
@@ -634,6 +646,24 @@ async function collectSessionIngestionBatches(params: {
         entry.artifactKind !== "active-session" ||
         isCheckpointSessionTranscriptPath(entry.sessionFile)
       ) {
+        continue;
+      }
+      const excludedReason = sessionExclusionReason(
+        source,
+        params.admissionPolicy,
+        forgottenSessionIds,
+      );
+      if (excludedReason) {
+        // Record exclusion before reading transcript content; the empty
+        // fingerprint makes removing the policy re-admit this session.
+        nextFiles[source.stateKey] = {
+          mtimeMs: entry.updatedAtMs ?? 0,
+          size: 0,
+          contentHash: "",
+          lineCount: 0,
+          lastContentLine: 0,
+          excludedReason,
+        };
         continue;
       }
       sources.push(source);
@@ -731,33 +761,37 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  admissionPolicy?: SessionAdmissionPolicy;
 }): Promise<void> {
-  const state = await readSessionIngestionState(params.workspaceDir);
-  const collected = await collectSessionIngestionBatches({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    primaryWorkspaceDir: params.primaryWorkspaceDir,
-    lookbackDays: params.lookbackDays,
-    nowMs: params.nowMs,
-    timezone: params.timezone,
-    state,
-  });
-  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
-  for (const batch of collected.batches) {
-    await recordShortTermRecalls({
+  await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const state = await readSessionIngestionState(params.workspaceDir);
+    const collected = await collectSessionIngestionBatches({
       workspaceDir: params.workspaceDir,
-      query: `__dreaming_sessions__:${batch.day}`,
-      results: batch.results,
-      signalType: "daily",
-      dedupeByQueryPerDay: true,
-      dayBucket: ingestionDayBucket,
+      cfg: params.cfg,
+      primaryWorkspaceDir: params.primaryWorkspaceDir,
+      lookbackDays: params.lookbackDays,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      state,
+      admissionPolicy: params.admissionPolicy,
     });
-  }
-  if (collected.changed) {
-    await writeSessionIngestionState(params.workspaceDir, collected.nextState);
-  }
+    const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
+    for (const batch of collected.batches) {
+      await recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: `__dreaming_sessions__:${batch.day}`,
+        results: batch.results,
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: ingestionDayBucket,
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+    }
+    if (collected.changed) {
+      await writeSessionIngestionState(params.workspaceDir, collected.nextState);
+    }
+  });
 }
 
 type DailyIngestionCollectionResult = {
@@ -911,34 +945,36 @@ async function ingestDailyMemorySignals(params: {
   nowMs: number;
   timezone?: string;
 }): Promise<void> {
-  const state = await readDailyIngestionState(params.workspaceDir);
-  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
-  const collected = await collectDailyIngestionBatches({
-    workspaceDir: params.workspaceDir,
-    lookbackDays: params.lookbackDays,
-    limit: params.limit,
-    nowMs: params.nowMs,
-    ingestionDreamingDay: ingestionDayBucket,
-    state,
-  });
-  for (const batch of collected.batches) {
-    await recordShortTermRecalls({
+  await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const state = await readDailyIngestionState(params.workspaceDir);
+    const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
+    const collected = await collectDailyIngestionBatches({
       workspaceDir: params.workspaceDir,
-      query: `__dreaming_daily__:${batch.day}`,
-      results: batch.results,
-      signalType: "daily",
-      // The ingestion checkpoint already prevents duplicate unchanged files.
-      // File days remain the recurrence buckets; later changed-file ingestions
-      // still add a signal instead of being mistaken for the original pass.
-      dedupeByQueryPerDay: false,
-      dayBucket: batch.day,
+      lookbackDays: params.lookbackDays,
+      limit: params.limit,
       nowMs: params.nowMs,
-      timezone: params.timezone,
+      ingestionDreamingDay: ingestionDayBucket,
+      state,
     });
-  }
-  if (collected.changed) {
-    await writeDailyIngestionState(params.workspaceDir, collected.nextState);
-  }
+    for (const batch of collected.batches) {
+      await recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: `__dreaming_daily__:${batch.day}`,
+        results: batch.results,
+        signalType: "daily",
+        // The ingestion checkpoint already prevents duplicate unchanged files.
+        // File days remain the recurrence buckets; later changed-file ingestions
+        // still add a signal instead of being mistaken for the original pass.
+        dedupeByQueryPerDay: false,
+        dayBucket: batch.day,
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+    }
+    if (collected.changed) {
+      await writeDailyIngestionState(params.workspaceDir, collected.nextState);
+    }
+  });
 }
 
 export async function seedHistoricalDailyMemorySignals(params: {
@@ -960,102 +996,104 @@ export async function seedHistoricalDailyMemorySignals(params: {
       skippedPaths: [],
     };
   }
-  const provenanceEntries = await listMemoryArtifactProvenance({
-    workspaceDir: params.workspaceDir,
-  });
-  const provenanceByPath = new Map(
-    provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
-  );
-
-  const resolved = normalizedPaths
-    .map((filePath) => {
-      const fileName = path.basename(filePath);
-      const file = parseDailyMemoryFileName(fileName);
-      if (!file) {
-        return { filePath, fileName, relativePath: "", file: null as DailyMemoryFile | null };
-      }
-      return {
-        filePath,
-        fileName,
-        relativePath: resolveWorkspaceMemoryRelativePath(params.workspaceDir, filePath),
-        file,
-      };
-    })
-    .toSorted((a, b) => {
-      if (a.file && b.file) {
-        return compareDailyMemoryFilesByNewestDay(a.file, b.file);
-      }
-      if (a.file) {
-        return -1;
-      }
-      if (b.file) {
-        return 1;
-      }
-      return a.filePath.localeCompare(b.filePath);
-    });
-
-  const valid = resolved.filter(
-    (
-      entry,
-    ): entry is {
-      filePath: string;
-      fileName: string;
-      relativePath: string;
-      file: DailyMemoryFile;
-    } => Boolean(entry.file),
-  );
-  const skippedPaths = resolved.filter((entry) => !entry.file).map((entry) => entry.filePath);
-  const totalCap = Math.max(20, params.limit * 4);
-  const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
-  let importedSignalCount = 0;
-  let importedFileCount = 0;
-
-  for (const entry of valid) {
-    if (importedSignalCount >= totalCap) {
-      break;
-    }
-    const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
-      if (extractErrorCode(err) === "ENOENT") {
-        skippedPaths.push(entry.filePath);
-        return "";
-      }
-      throw err;
-    });
-    if (!raw) {
-      continue;
-    }
-    const recordedProvenance = provenanceByPath.get(entry.relativePath);
-    // Same owner-controlled default as live daily ingestion above: workspace
-    // notes are 'agent' unless the flush explicitly recorded a downgrade.
-    const results = buildDailyIngestionResults({
-      raw,
-      path: entry.relativePath,
-      limit: Math.min(perFileCap, totalCap - importedSignalCount),
-      defaultObservedAt: params.nowMs,
-      ...(recordedProvenance ? { recorded: recordedProvenance } : {}),
-    });
-    if (results.length === 0) {
-      continue;
-    }
-    await recordShortTermRecalls({
+  return await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const provenanceEntries = await listMemoryArtifactProvenance({
       workspaceDir: params.workspaceDir,
-      query: `__dreaming_daily__:${entry.file.day}`,
-      results,
-      signalType: "daily",
-      dedupeByQueryPerDay: true,
-      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
-      nowMs: params.nowMs,
-      timezone: params.timezone,
     });
-    importedSignalCount += results.length;
-    importedFileCount += 1;
-  }
+    const provenanceByPath = new Map(
+      provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
+    );
 
-  return {
-    importedFileCount,
-    importedSignalCount,
-    skippedPaths,
-  };
+    const resolved = normalizedPaths
+      .map((filePath) => {
+        const fileName = path.basename(filePath);
+        const file = parseDailyMemoryFileName(fileName);
+        if (!file) {
+          return { filePath, fileName, relativePath: "", file: null as DailyMemoryFile | null };
+        }
+        return {
+          filePath,
+          fileName,
+          relativePath: resolveWorkspaceMemoryRelativePath(params.workspaceDir, filePath),
+          file,
+        };
+      })
+      .toSorted((a, b) => {
+        if (a.file && b.file) {
+          return compareDailyMemoryFilesByNewestDay(a.file, b.file);
+        }
+        if (a.file) {
+          return -1;
+        }
+        if (b.file) {
+          return 1;
+        }
+        return a.filePath.localeCompare(b.filePath);
+      });
+
+    const valid = resolved.filter(
+      (
+        entry,
+      ): entry is {
+        filePath: string;
+        fileName: string;
+        relativePath: string;
+        file: DailyMemoryFile;
+      } => Boolean(entry.file),
+    );
+    const skippedPaths = resolved.filter((entry) => !entry.file).map((entry) => entry.filePath);
+    const totalCap = Math.max(20, params.limit * 4);
+    const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, valid.length)));
+    let importedSignalCount = 0;
+    let importedFileCount = 0;
+
+    for (const entry of valid) {
+      if (importedSignalCount >= totalCap) {
+        break;
+      }
+      const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
+        if (extractErrorCode(err) === "ENOENT") {
+          skippedPaths.push(entry.filePath);
+          return "";
+        }
+        throw err;
+      });
+      if (!raw) {
+        continue;
+      }
+      const recordedProvenance = provenanceByPath.get(entry.relativePath);
+      // Same owner-controlled default as live daily ingestion above: workspace
+      // notes are 'agent' unless the flush explicitly recorded a downgrade.
+      const results = buildDailyIngestionResults({
+        raw,
+        path: entry.relativePath,
+        limit: Math.min(perFileCap, totalCap - importedSignalCount),
+        defaultObservedAt: params.nowMs,
+        ...(recordedProvenance ? { recorded: recordedProvenance } : {}),
+      });
+      if (results.length === 0) {
+        continue;
+      }
+      await recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: `__dreaming_daily__:${entry.file.day}`,
+        results,
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+      importedSignalCount += results.length;
+      importedFileCount += 1;
+    }
+
+    return {
+      importedFileCount,
+      importedSignalCount,
+      skippedPaths,
+    };
+  });
 }
 
 function entryAverageScore(entry: ShortTermRecallEntry): number {
@@ -1070,8 +1108,11 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
 
 // Use the shared CJK-aware similarity helper so close-but-not-identical CJK
 // snippets do not slip past the dedupe threshold via the old ASCII-only path.
-function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): ShortTermRecallEntry[] {
-  const deduped: ShortTermRecallEntry[] = [];
+function dedupeEntries(
+  entries: ShortTermRecallEntry[],
+  threshold: number,
+): Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> {
+  const deduped: Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> = [];
   for (const entry of entries) {
     const duplicate = deduped.find(
       (candidate) =>
@@ -1079,6 +1120,8 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
         snippetSimilarity(candidate.snippet, entry.snippet) >= threshold,
     );
     if (duplicate) {
+      // Merged tags also become narrative input, so retain their source keys.
+      duplicate.sourceEntryKeys.push(entry.key);
       if (entry.recallCount > duplicate.recallCount) {
         duplicate.recallCount = entry.recallCount;
       }
@@ -1095,7 +1138,7 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
           : duplicate.lastRecalledAt;
       continue;
     }
-    deduped.push({ ...entry });
+    deduped.push({ ...entry, sourceEntryKeys: [entry.key] });
   }
   return deduped;
 }
@@ -1121,15 +1164,15 @@ function isEntryCoveredByRecentDiary(
   });
 }
 
-function prioritizeLightEntriesByDiaryCoverage(
-  entries: ShortTermRecallEntry[],
+function prioritizeLightEntriesByDiaryCoverage<T extends ShortTermRecallEntry>(
+  entries: T[],
   recentDiaryEntries: readonly string[],
-): ShortTermRecallEntry[] {
+): T[] {
   if (recentDiaryEntries.length === 0) {
     return entries;
   }
-  const fresh: ShortTermRecallEntry[] = [];
-  const covered: ShortTermRecallEntry[] = [];
+  const fresh: T[] = [];
+  const covered: T[] = [];
   for (const entry of entries) {
     if (isEntryCoveredByRecentDiary(entry, recentDiaryEntries)) {
       covered.push(entry);
@@ -1216,8 +1259,9 @@ function buildRemReflections(
 ): string[] {
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
-    for (const tag of entry.conceptTags) {
-      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase())) {
+    // Stored spellings may normalize to one topic; each memory contributes only once.
+    for (const tag of new Set(entry.conceptTags.map(normalizeConceptToken))) {
+      if (!tag) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
@@ -1309,6 +1353,7 @@ async function ingestDreamingPhaseSignals(
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    admissionPolicy: params.admissionPolicy,
   });
   return nowMs;
 }
@@ -1317,62 +1362,72 @@ async function runLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
 ): Promise<DreamNarrativeOutcome> {
   const nowMs = await ingestDreamingPhaseSignals(params);
-  const recentEntries = (
-    await filterLiveShortTermRecallEntries({
-      workspaceDir: params.workspaceDir,
-      entries: await filterFreshLightDreamingEntries({
+  // Freeze source selection through publication so forget cannot finish
+  // between reading a candidate and writing its quote into a phase report.
+  const prepared = await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const recentEntries = (
+      await filterLiveShortTermRecallEntries({
         workspaceDir: params.workspaceDir,
-        nowMs,
-        entries: filterRecallEntriesWithinLookback({
-          entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        entries: await filterFreshLightDreamingEntries({
+          workspaceDir: params.workspaceDir,
           nowMs,
-          lookbackDays: params.config.lookbackDays,
+          entries: filterRecallEntriesWithinLookback({
+            entries: await readShortTermRecallEntries({
+              workspaceDir: params.workspaceDir,
+              nowMs,
+            }),
+            nowMs,
+            lookbackDays: params.config.lookbackDays,
+          }),
         }),
+      })
+    ).filter((entry) => !isPromotionOriginBlocked(entry));
+    const rankedEntries = dedupeEntries(
+      recentEntries.toSorted((a, b) => {
+        const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+        if (byTime !== 0) {
+          return byTime;
+        }
+        return b.recallCount - a.recallCount;
       }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
-  const rankedEntries = dedupeEntries(
-    recentEntries.toSorted((a, b) => {
-      const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
-      if (byTime !== 0) {
-        return byTime;
-      }
-      return b.recallCount - a.recallCount;
-    }),
-    params.config.dedupeSimilarity,
-  );
-  const recentDiaryEntries = await readRecentDreamDiaryEntries({
-    workspaceDir: params.workspaceDir,
-    limit: LIGHT_DIARY_HISTORY_LIMIT,
-  });
-  const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
-  const capped = entries.slice(0, params.config.limit);
-  const bodyLines = buildLightDreamingBody(capped);
-  await writeDailyDreamingPhaseBlock({
-    workspaceDir: params.workspaceDir,
-    phase: "light",
-    bodyLines,
-    nowMs,
-    timezone: params.config.timezone,
-    storage: params.config.storage,
-  });
-  await recordDreamingPhaseSignals({
-    workspaceDir: params.workspaceDir,
-    phase: "light",
-    keys: capped.map((entry) => entry.key),
-    nowMs,
-  });
-  if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
-    params.logger.info(
-      `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
+      params.config.dedupeSimilarity,
     );
-  }
+    const recentDiaryEntries = await readRecentDreamDiaryEntries({
+      workspaceDir: params.workspaceDir,
+      limit: LIGHT_DIARY_HISTORY_LIMIT,
+    });
+    const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
+    const capped = entries.slice(0, params.config.limit);
+    const bodyLines = buildLightDreamingBody(capped);
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir: params.workspaceDir,
+      phase: "light",
+      bodyLines,
+      nowMs,
+      timezone: params.config.timezone,
+      storage: params.config.storage,
+    });
+    await recordDreamingPhaseSignals({
+      workspaceDir: params.workspaceDir,
+      phase: "light",
+      keys: capped.map((entry) => entry.key),
+      nowMs,
+    });
+    if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
+      params.logger.info(
+        `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
+      );
+    }
+    return { capped, recentDiaryEntries };
+  });
+  const { capped, recentDiaryEntries } = prepared;
   // Generate dream diary narrative from the staged entries.
   if (params.subagent && capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     const data: NarrativePhaseData = {
       phase: "light",
       snippets: capped.map((e) => e.snippet).filter(Boolean),
+      sourceEntryKeys: capped.flatMap((entry) => entry.sourceEntryKeys),
       currentDate: formatMemoryDreamingDay(nowMs, params.config.timezone),
       ...(themes.length > 0 ? { themes } : {}),
       ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
@@ -1396,56 +1451,60 @@ async function runRemDreaming(
   params: DreamingPhaseRunParams<RemDreamingConfig>,
 ): Promise<DreamNarrativeOutcome> {
   const nowMs = await ingestDreamingPhaseSignals(params);
-  const allEntries = (
-    await filterLiveShortTermRecallEntries({
+  const prepared = await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const allEntries = (
+      await filterLiveShortTermRecallEntries({
+        workspaceDir: params.workspaceDir,
+        entries: filterRecallEntriesWithinLookback({
+          entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+          nowMs,
+          lookbackDays: params.config.lookbackDays,
+        }),
+      })
+    ).filter((entry) => !isPromotionOriginBlocked(entry));
+    // Prefer entries staged by light sleep so REM synthesises from the
+    // sequential light→REM pipeline instead of rescanning the full store.
+    const lightKeys = await readLightStagedKeys({
       workspaceDir: params.workspaceDir,
-      entries: filterRecallEntriesWithinLookback({
-        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-        nowMs,
-        lookbackDays: params.config.lookbackDays,
-      }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
-  // Prefer entries staged by light sleep so REM synthesises from the
-  // sequential light→REM pipeline instead of rescanning the full store.
-  const lightKeys = await readLightStagedKeys({
-    workspaceDir: params.workspaceDir,
-    nowMs,
-  });
-  const stagedEntries =
-    lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : [];
-  const entries = stagedEntries.length > 0 ? stagedEntries : allEntries;
-  const preview = previewRemDreaming({
-    entries,
-    limit: params.config.limit,
-    minPatternStrength: params.config.minPatternStrength,
-  });
-  await writeDailyDreamingPhaseBlock({
-    workspaceDir: params.workspaceDir,
-    phase: "rem",
-    bodyLines: preview.bodyLines,
-    nowMs,
-    timezone: params.config.timezone,
-    storage: params.config.storage,
-  });
-  if (stagedEntries.length > 0) {
-    await recordRemConsideredPhaseSignals({
-      workspaceDir: params.workspaceDir,
-      keys: stagedEntries.map((entry) => entry.key),
       nowMs,
     });
-  }
-  await recordDreamingPhaseSignals({
-    workspaceDir: params.workspaceDir,
-    phase: "rem",
-    keys: preview.candidateKeys,
-    nowMs,
+    const stagedEntries =
+      lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : [];
+    const entries = stagedEntries.length > 0 ? stagedEntries : allEntries;
+    const preview = previewRemDreaming({
+      entries,
+      limit: params.config.limit,
+      minPatternStrength: params.config.minPatternStrength,
+    });
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir: params.workspaceDir,
+      phase: "rem",
+      bodyLines: preview.bodyLines,
+      nowMs,
+      timezone: params.config.timezone,
+      storage: params.config.storage,
+    });
+    if (stagedEntries.length > 0) {
+      await recordRemConsideredPhaseSignals({
+        workspaceDir: params.workspaceDir,
+        keys: stagedEntries.map((entry) => entry.key),
+        nowMs,
+      });
+    }
+    await recordDreamingPhaseSignals({
+      workspaceDir: params.workspaceDir,
+      phase: "rem",
+      keys: preview.candidateKeys,
+      nowMs,
+    });
+    if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
+      params.logger.info(
+        `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
+      );
+    }
+    return { entries, preview };
   });
-  if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
-    params.logger.info(
-      `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
-    );
-  }
+  const { entries, preview } = prepared;
   // Generate dream diary narrative from REM reflections.
   if (params.subagent && entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
@@ -1454,6 +1513,7 @@ async function runRemDreaming(
     );
     const data: NarrativePhaseData = {
       phase: "rem",
+      sourceEntryKeys: entries.map((entry) => entry.key),
       snippets:
         snippets.length > 0
           ? snippets
@@ -1485,7 +1545,7 @@ type DreamingSweepPhaseResult = {
 
 export async function runDreamingSweepPhases(params: {
   /**
-   * Agent that owns this workspace; narrative subagent sessions are stored under it.
+   * Agent whose model and credentials own this workspace's narrative completions.
    * Absent only when no roster or triggering agent can be attributed, which downgrades
    * narratives to the local diary fallback without stopping the sweep.
    */
@@ -1498,80 +1558,41 @@ export async function runDreamingSweepPhases(params: {
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<DreamingSweepPhaseResult> {
-  // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
+  // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
+  const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
   let degradedPhases = 0;
   let pendingNarratives = 0;
-  const recordNarrativeOutcome = (outcome: DreamNarrativeOutcome): void => {
-    if (outcome.status === "degraded") {
-      degradedPhases += 1;
-    } else if (outcome.status === "pending") {
-      pendingNarratives += 1;
+  async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
+    phase: "light" | "rem",
+    config: TConfig,
+    run: (params: DreamingPhaseRunParams<TConfig>) => Promise<DreamNarrativeOutcome>,
+  ): Promise<void> {
+    if (!config.enabled || config.limit <= 0) {
+      return;
     }
-  };
-
-  const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (light.enabled && light.limit > 0) {
     try {
-      recordNarrativeOutcome(
-        await runLightDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: light,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-        }),
-      );
+      const outcome = await run({ ...params, config, nowMs: sweepNowMs, admissionPolicy });
+      if (outcome.status === "degraded") {
+        degradedPhases += 1;
+      } else if (outcome.status === "pending") {
+        pendingNarratives += 1;
+      }
     } catch (err) {
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
-        phase: "light",
+        phase,
         error: formatErrorMessage(err),
-        storageMode: light.storage.mode,
+        storageMode: config.storage.mode,
         nowMs: sweepNowMs,
         logger: params.logger,
       });
       throw err;
     }
   }
-
-  const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (rem.enabled && rem.limit > 0) {
-    try {
-      recordNarrativeOutcome(
-        await runRemDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: rem,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-        }),
-      );
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir: params.workspaceDir,
-        phase: "rem",
-        error: formatErrorMessage(err),
-        storageMode: rem.storage.mode,
-        nowMs: sweepNowMs,
-        logger: params.logger,
-      });
-      throw err;
-    }
-  }
+  await runPhase("light", resolveMemoryLightDreamingConfig(params), runLightDreaming);
+  await runPhase("rem", resolveMemoryRemDreamingConfig(params), runRemDreaming);
   return { degradedPhases, pendingNarratives };
 }
 

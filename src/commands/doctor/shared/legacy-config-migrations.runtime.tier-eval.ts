@@ -1,6 +1,10 @@
 // Tier-eval config compatibility migration and its scoped traversal helpers.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath, visitChannelEntries } from "./legacy-config-record-shared.js";
+import {
+  deleteRetiredPath,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
 
 const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["cloudWorkers", "profiles", "*", "lifetime"],
@@ -42,34 +46,6 @@ const TIER_EVAL_RETIRED_AGENT_PATHS = [
   ["heartbeat", "skipWhenBusy"],
   ["heartbeat", "suppressToolErrorWarnings"],
 ] as const;
-
-export function visitAgentConfigScopes(
-  raw: Record<string, unknown>,
-  visitor: (scope: Record<string, unknown>, path: string) => void,
-): void {
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
-  if (defaults) {
-    visitor(defaults, "agents.defaults");
-  }
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const [agentId, value] of Object.entries(entries)) {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.entries.${agentId}`);
-      }
-    }
-  }
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((value, index) => {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.list[${index}]`);
-      }
-    });
-  }
-}
 
 type LegacyExecPolicy = {
   security: "deny" | "allowlist" | "full";
@@ -256,6 +232,8 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
 }
 
 const RESPONSE_PREFIX_CHANNELS = new Set([
+  "buzz",
+  "clickclack",
   "discord",
   "feishu",
   "googlechat",
@@ -265,6 +243,7 @@ const RESPONSE_PREFIX_CHANNELS = new Set([
   "mattermost",
   "msteams",
   "nextcloud-talk",
+  "qa-channel",
   "signal",
   "slack",
   "telegram",

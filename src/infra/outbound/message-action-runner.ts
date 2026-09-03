@@ -10,7 +10,6 @@ import { readStringArrayParam, readToolStringParam } from "../../agents/tools/co
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -220,6 +219,25 @@ async function handleInternalSourceReplySendAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
       : undefined);
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg: input.cfg,
+      agentId,
+      workspaceDir: input.workspaceDir,
+      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
+      workspaceMediaAccess: input.workspaceMediaAccess,
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
+      accountId: input.sessionKey ? input.requesterAccountId : undefined,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
+  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
+    ? mediaAccess.readFile
+    : undefined;
   await hydrateAttachmentParamsForAction({
     cfg: input.cfg,
     channel: INTERNAL_MESSAGE_CHANNEL,
@@ -228,8 +246,9 @@ async function handleInternalSourceReplySendAction(
     dryRun,
     mediaPolicy: resolveAttachmentMediaPolicy({
       sandboxRoot: input.sandboxRoot,
-      mediaAccess: input.mediaAccess,
-      mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+      mediaAccess,
+      mediaReadFile: sandboxMediaReadFile,
     }),
   });
   const sourceReply = await buildMessagePayload({
@@ -244,7 +263,7 @@ async function handleInternalSourceReplySendAction(
   if (!dryRun && requestedMediaCount > 0) {
     const workspaceDir =
       input.workspaceDir ??
-      input.mediaAccess?.workspaceDir ??
+      mediaAccess.workspaceDir ??
       (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined);
     if (!workspaceDir) {
       throw new Error("Current-source media requires an agent workspace.");
@@ -261,7 +280,9 @@ async function handleInternalSourceReplySendAction(
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      mediaAccess,
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
@@ -421,10 +442,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   params = route.params;
   const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } = route;
 
-  const normalizationPolicy = resolveAttachmentMediaPolicy({
-    sandboxRoot: input.sandboxRoot,
-    mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
-  });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
     cfg,
     action,
@@ -439,14 +456,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   });
   const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
-  await normalizeSandboxMediaParams({
-    args: params,
-    mediaPolicy: normalizationPolicy,
-    extraParamKeys: extraActionMediaSourceParamKeys,
-    structuredAttachments: structuredAttachmentMode,
-  });
-
-  const mediaAccess =
+  const resolveMediaAccess = () =>
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg,
@@ -454,6 +464,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
         structuredAttachments: structuredAttachmentMode,
       }),
+      workspaceMediaAccess: input.workspaceMediaAccess,
       sessionKey: input.sessionKey,
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -462,9 +473,28 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       requesterSenderUsername: input.requesterSenderUsername,
       requesterSenderE164: input.requesterSenderE164,
     });
+  const mediaAccess = resolveMediaAccess();
+  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
+    ? mediaAccess.readFile
+    : undefined;
+  const normalizationPolicy = resolveAttachmentMediaPolicy({
+    sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+    mediaAccess,
+    mediaReadFile: sandboxMediaReadFile,
+  });
+
+  await normalizeSandboxMediaParams({
+    args: params,
+    mediaPolicy: normalizationPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
+    structuredAttachments: structuredAttachmentMode,
+  });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaAccess,
+    mediaReadFile: sandboxMediaReadFile,
   });
   const gateway = input.gateway;
   const preserveSendBuffer =

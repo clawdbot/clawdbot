@@ -33,6 +33,7 @@ import {
   type StoredCodexAppServerBinding,
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client.js";
+import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
@@ -62,18 +63,15 @@ import {
 } from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
-const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
-  "new",
-  "reset",
-  "idle",
-  "daily",
-  "deleted",
-]);
+const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set(["new", "reset", "idle", "daily"]);
 
 export default definePluginEntry({
   id: "codex",
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
+  reload: {
+    noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+  },
   register(api) {
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
@@ -116,6 +114,7 @@ export default definePluginEntry({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       }),
     );
+    api.registerService(createCodexAppServerProcessReaperService());
     if (appServerConfig?.transport === "websocket") {
       api.registerService(
         createCodexAppServerConnectionHealthService({
@@ -136,11 +135,13 @@ export default definePluginEntry({
     // store only when a proxied runtime performs the first binding operation.
     const lazyBindingStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "delete" | "entries" | "lookup" | "update"
+      "deleteIf" | "entries" | "lookup" | "registerIfAbsent" | "update"
     > = {
-      delete: (key) => openBindingStateStore().delete(key),
+      deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
+      registerIfAbsent: (key, value, options) =>
+        openBindingStateStore().registerIfAbsent(key, value, options),
       get update() {
         const store = openBindingStateStore();
         return store.update?.bind(store);
@@ -156,9 +157,10 @@ export default definePluginEntry({
       }));
     const lazyManagedThreadStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-      "entries" | "registerIfAbsent"
+      "entries" | "lookup" | "registerIfAbsent"
     > = {
       entries: () => openManagedThreadStateStore().entries(),
+      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(
@@ -167,6 +169,7 @@ export default definePluginEntry({
     );
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
@@ -389,7 +392,7 @@ export default definePluginEntry({
       // under a different session key. The only cross-key emitter (gateway child
       // creation) keeps the parent row live; same-key rollovers omit or repeat
       // the key and still retire, as do unknown-current-key ends (no provable
-      // handoff) and later idle/daily/deleted ends. See #106778.
+      // handoff) and later idle/daily ends. See #106778.
       const endedSessionKey = sessionKey?.trim();
       const nextSessionKey = event.nextSessionKey?.trim();
       if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {

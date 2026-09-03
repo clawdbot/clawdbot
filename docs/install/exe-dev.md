@@ -48,7 +48,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
     ```
 
     <Tip>
-    Keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent `auth-profiles.json`, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+    Keep this VM **stateful**. OpenClaw stores `openclaw.json`, shared and per-agent SQLite auth stores, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
     </Tip>
 
   </Step>

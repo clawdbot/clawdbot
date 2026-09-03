@@ -12,10 +12,10 @@ export function buildAuthenticatedPresenceUser(params: {
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedUserProfile?: AuthenticatedPresenceProfile;
 }): SystemPresence["user"] | undefined {
-  if (!params.authenticatedUserId) {
-    return undefined;
-  }
   if (!params.authenticatedUserProfile) {
+    if (!params.authenticatedUserId) {
+      return undefined;
+    }
     return {
       id: params.authenticatedUserId,
       ...(params.authenticatedUserIsTailscaleProvider ? {} : { email: params.authenticatedUserId }),
@@ -23,7 +23,10 @@ export function buildAuthenticatedPresenceUser(params: {
   }
   return {
     id: params.authenticatedUserProfile.profileId,
-    ...(params.authenticatedUserIsTailscaleProvider ? {} : { email: params.authenticatedUserId }),
+    identity: { type: "profile", id: params.authenticatedUserProfile.profileId },
+    ...(params.authenticatedUserId && !params.authenticatedUserIsTailscaleProvider
+      ? { email: params.authenticatedUserId }
+      : {}),
     ...(params.authenticatedUserProfile.displayName
       ? { name: params.authenticatedUserProfile.displayName }
       : {}),

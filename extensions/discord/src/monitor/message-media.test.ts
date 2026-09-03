@@ -47,11 +47,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
-let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
+let resolveForwardedMediaList: typeof import("./message-media.js").resolveForwardedMediaList;
+let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
 
 beforeAll(async () => {
-  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-utils.js"));
+  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-media.js"));
 });
 
 afterEach(() => vi.restoreAllMocks());

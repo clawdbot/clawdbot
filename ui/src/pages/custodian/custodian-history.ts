@@ -1,7 +1,9 @@
 import type { SystemChangeEntry } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import "../../styles/settings.css";
 
 function changeSourceLabel(source: SystemChangeEntry["source"]): string {
   switch (source) {
@@ -76,18 +78,24 @@ export function renderCustodianChangeHistory(params: {
             </button>
           </div>`
         : nothing}
-      <div class="custodian__change-list">
-        ${params.entries.map(renderHistoryCard)}
-        ${params.loading
-          ? html`<div class="custodian__history-state" role="status">
-              ${t("custodian.history.loading")}
-            </div>`
-          : params.loaded && params.entries.length === 0 && !params.error
-            ? html`<div class="custodian__history-state" role="status">
-                ${t("custodian.history.empty")}
-              </div>`
-            : nothing}
-      </div>
+      ${params.loading && params.entries.length === 0
+        ? renderSettingsLoadingSkeleton({ label: t("custodian.history.loading") })
+        : html`<div class="custodian__change-list">
+            ${params.entries.map(renderHistoryCard)}
+            ${params.loading
+              ? html`<div
+                  class="custodian__history-state"
+                  role="status"
+                  aria-label=${t("custodian.history.loading")}
+                >
+                  <span class="custodian__history-spinner" aria-hidden="true"></span>
+                </div>`
+              : params.loaded && params.entries.length === 0 && !params.error
+                ? html`<div class="custodian__history-state" role="status">
+                    ${t("custodian.history.empty")}
+                  </div>`
+                : nothing}
+          </div>`}
       ${params.nextCursor
         ? html`<button
             class="btn btn--ghost custodian__history-more"

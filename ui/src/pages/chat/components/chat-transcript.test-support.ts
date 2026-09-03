@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { resetThreadPresentation } from "./chat-thread-interactions.ts";
+import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
@@ -67,10 +67,11 @@ export function threadProps(
   paneId: string,
   sessionKey = "agent:main:main",
   messages: unknown[] = defaultMessages,
-) {
+): ChatThreadProps {
   return {
     paneId,
     sessionKey,
+    selectedSession: undefined,
     loading: false,
     messages,
     toolMessages: [],

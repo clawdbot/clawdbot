@@ -86,6 +86,8 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "app_home_opened",
           "app_mention",
           "app_context_changed",
+          "agent_session_stopped",
+          "agent_session_title_changed",
           "channel_rename",
           "member_joined_channel",
           "member_left_channel",
@@ -106,13 +108,13 @@ export function buildSlackManifest(botName = "OpenClaw") {
 
 export function buildSlackSetupLines(): string[] {
   return [
-    "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
-    "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
-    "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message, App Home, and Agent View events",
-    "5) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
-    "Manifest JSON follows as plain text for copy/paste.",
-    "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
+    "1) Slack API -> Create App -> From scratch or a transport-specific manifest",
+    "2) Install App to workspace to get the xoxb- bot token",
+    "3) Socket Mode: enable it and create an app-level token (xapp-...)",
+    "4) HTTP: configure a public HTTPS Request URL and copy the app Signing Secret",
+    "5) Enable Event Subscriptions for message, App Home, and Agent View events",
+    "6) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
+    "Tip: Socket Mode can use SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
   ];
 }

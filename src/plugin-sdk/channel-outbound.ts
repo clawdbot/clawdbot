@@ -34,9 +34,9 @@ export {
 } from "../channels/message/ingress-drain.js";
 export {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressMonitor,
 } from "../channels/message/ingress-monitor.js";
+export { createChannelIngressError } from "../channels/message/ingress-errors.js";
 export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,

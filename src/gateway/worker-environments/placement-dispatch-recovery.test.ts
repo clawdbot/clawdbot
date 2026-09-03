@@ -23,6 +23,131 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  const createRecoveryService = (
+    placements: ReturnType<typeof createWorkerSessionPlacementStore>,
+    environments: ReturnType<typeof support.createService>,
+  ) =>
+    createWorkerPlacementDispatchService({
+      placements,
+      environments,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+      runActivationBarrier: async ({ activate }) => activate(),
+      runMoveBarrier: async ({ begin }) => begin(),
+      resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+
+  it.each(["startup", "active"] as const)(
+    "does not report successful reclaim while provider-loss teardown is pending during %s recovery",
+    async (mode) => {
+      support.testState.prepareInstallation = vi.fn(async () => ({
+        ...support.BUNDLE_ARTIFACT,
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      }));
+      const destroy = vi.fn(async (): Promise<void> => {
+        throw new Error("provider deletion unavailable");
+      });
+      const environments = support.createService(
+        support.createProvider({ inspect: async () => ({ status: "unknown" }), destroy }),
+      );
+      const ready = await environments.create(
+        "development",
+        "provider-loss-cleanup",
+        undefined,
+        "remote-exec",
+      );
+      const attached = await environments.attachSession({
+        environmentId: ready.environmentId,
+        ownerEpoch: ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => support.testState.nowMs,
+      });
+      seedActivePlacement(placements, {
+        environmentId: ready.environmentId,
+        ownerEpoch: attached.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      const recovery = createRecoveryService(placements, environments);
+
+      if (mode === "startup") {
+        await recovery.reconcile("startup");
+      } else {
+        await recovery.reconcileActive(ready.environmentId);
+      }
+
+      expect(environments.get(ready.environmentId)).toMatchObject({
+        state: "destroying",
+        leaseId: ready.leaseId,
+        destroyRequestedAtMs: support.testState.nowMs,
+      });
+      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("cleanup is still pending");
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "failed",
+        environmentId: ready.environmentId,
+        recoveryError: expect.stringContaining("teardown failed"),
+      });
+
+      destroy.mockResolvedValue(undefined);
+      await expect(recovery.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+      expect(environments.get(ready.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+    },
+  );
+
+  it.each(["startup", "active"] as const)(
+    "fences a destroy-requested attachment during %s recovery even when physical cleanup fails",
+    async (mode) => {
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => 1_000,
+      });
+      const harness = createHarness(placements, { destroyFails: true });
+      await harness.environments.attachSession({
+        environmentId: harness.ready.environmentId,
+        ownerEpoch: harness.ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      const environment = {
+        ...harness.attached,
+        nodeDeviceId: "revoked-node",
+        destroyRequestedAtMs: 1_000,
+      };
+      vi.mocked(harness.environments.get).mockReturnValue(environment);
+      vi.mocked(harness.environments.stopTunnel).mockRejectedValue(
+        new Error("node role revoked before stop confirmation"),
+      );
+      harness.placements.seedActive(environment.ownerEpoch);
+
+      if (mode === "startup") {
+        await harness.service.reconcile("startup");
+      } else {
+        await harness.service.reconcileActive(environment.environmentId);
+      }
+
+      expect(harness.placements.current()).toMatchObject({
+        state: "failed",
+        environmentId: environment.environmentId,
+        activeOwnerEpoch: environment.ownerEpoch,
+        recoveryError: expect.stringContaining("node role revoked before stop confirmation"),
+      });
+      expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       failure: "provider no longer supports the persisted execution mode",
@@ -638,23 +763,7 @@ describe("worker placement restart recovery", () => {
         database: support.testState.stateDb,
         now: () => support.testState.nowMs,
       });
-      const recovery = createWorkerPlacementDispatchService({
-        placements,
-        environments: workerService,
-        runnerAvailability: { read: () => undefined, version: () => 0 },
-        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-        runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
-        runActivationBarrier: async ({ activate }) => activate(),
-        runMoveBarrier: async ({ begin }) => begin(),
-        resolveMoveDestination: async () => undefined,
-        runReclaimBarrier: async ({ begin, reclaim }) =>
-          await reclaim("/gateway/workspace", begin()),
-        runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspacePath: async () => "/gateway/workspace",
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
-      });
+      const recovery = createRecoveryService(placements, workerService);
       const environmentId = "worker-stale-recovery";
       const bootstrapping = support.seedBootstrapping(environmentId);
       support.testState.store.transition({

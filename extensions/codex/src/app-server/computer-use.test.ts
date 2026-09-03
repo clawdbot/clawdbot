@@ -70,6 +70,8 @@ vi.mock("./desktop-app-paths.js", async (importOriginal) => {
     ...actual,
     resolveMacOSDesktopCodexAppPathCandidates: (platform?: NodeJS.Platform) =>
       actual.resolveMacOSDesktopCodexAppPathCandidates(platform ?? "darwin"),
+    resolveMacOSDesktopCodexBundledMarketplaceCandidates: (platform?: NodeJS.Platform) =>
+      actual.resolveMacOSDesktopCodexBundledMarketplaceCandidates(platform ?? "darwin"),
   };
 });
 
@@ -1112,6 +1114,110 @@ describe("Codex Computer Use setup", () => {
   });
 
   it.each([
+    "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
+    "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled",
+  ])("migrates the legacy bundled marketplace source through Codex", async (legacySource) => {
+    const { agentDir, client, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-managed-marketplace-"),
+    );
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath, {
+      configuredSource: legacySource,
+    });
+
+    const status = await ensureCodexComputerUse({
+      agentDir,
+      client,
+      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+    });
+    expect(
+      requestCalls(request)
+        .filter(([method]) => method.startsWith("marketplace/"))
+        .map(([method, params]) => [method, params]),
+    ).toStrictEqual([
+      ["marketplace/remove", { marketplaceName: "openai-bundled" }],
+      ["marketplace/add", { source: managedMarketplacePath }],
+    ]);
+
+    await expect(
+      ensureCodexComputerUse({
+        agentDir,
+        client,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        request,
+      }),
+    ).resolves.toMatchObject({ ready: true, reason: "ready" });
+    expect(
+      requestCalls(request).filter(([method]) => method === "marketplace/remove"),
+    ).toHaveLength(1);
+  });
+
+  it("preserves a custom source that uses the reserved bundled marketplace name", async () => {
+    const { agentDir, client, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-managed-marketplace-"),
+    );
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath, {
+      configuredSource: "/opt/company/openai-bundled",
+    });
+
+    await expect(
+      ensureCodexComputerUse({
+        agentDir,
+        client,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        request,
+      }),
+    ).rejects.toThrow("already added from a different source");
+    expectRequestMethodNotCalled(request, "marketplace/remove");
+  });
+
+  it("preserves a legacy source owned by a non-user config layer", async () => {
+    const { agentDir, client, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-managed-marketplace-"),
+    );
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath, {
+      configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
+      configuredSourceOrigin: "system",
+    });
+
+    await expect(
+      ensureCodexComputerUse({
+        agentDir,
+        client,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        request,
+      }),
+    ).rejects.toThrow("already added from a different source");
+    expectRequestMethodNotCalled(request, "marketplace/remove");
+  });
+
+  it("preserves a legacy source owned by a selected user profile", async () => {
+    const { agentDir, client, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-managed-marketplace-"),
+    );
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath, {
+      configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
+      configuredSourceProfile: "work",
+    });
+
+    await expect(
+      ensureCodexComputerUse({
+        agentDir,
+        client,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        request,
+      }),
+    ).rejects.toThrow("already added from a different source");
+    expectRequestMethodNotCalled(request, "marketplace/remove");
+  });
+
+  it.each([
     {
       label: "config-selected default marketplace",
       commandSource: "config" as const,
@@ -1932,18 +2038,66 @@ function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
 
 function createBundledMarketplaceComputerUseRequest(
   bundledMarketplacePath: string,
+  options: {
+    configuredSource?: string;
+    configuredSourceOrigin?: "system" | "user";
+    configuredSourceProfile?: string;
+  } = {},
 ): CodexComputerUseRequest {
-  let registered = false;
+  const codexHome = path.resolve(bundledMarketplacePath, "../../..");
+  let configuredSource = options.configuredSource;
+  let registered = configuredSource === bundledMarketplacePath;
   let installed = false;
   let threadStartCalls = 0;
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
     }
+    if (method === "config/read") {
+      return {
+        config: configuredSource
+          ? {
+              marketplaces: {
+                "openai-bundled": { source_type: "local", source: configuredSource },
+              },
+            }
+          : {},
+        origins: configuredSource
+          ? {
+              "marketplaces.openai-bundled.source": {
+                name:
+                  options.configuredSourceOrigin === "system"
+                    ? { type: "system", file: "/etc/codex/config.toml" }
+                    : {
+                        type: "user",
+                        file: options.configuredSourceProfile
+                          ? path.join(codexHome, `${options.configuredSourceProfile}.config.toml`)
+                          : path.join(codexHome, "config.toml"),
+                        profile: options.configuredSourceProfile ?? null,
+                      },
+                version: "legacy-config",
+              },
+            }
+          : {},
+        layers: null,
+      };
+    }
+    if (method === "marketplace/remove") {
+      expect(requestParams).toEqual({ marketplaceName: "openai-bundled" });
+      configuredSource = undefined;
+      registered = false;
+      return { marketplaceName: "openai-bundled", installedRoot: null };
+    }
     if (method === "marketplace/add") {
       expect(requestParams).toEqual({
         source: bundledMarketplacePath,
       });
+      if (configuredSource && configuredSource !== bundledMarketplacePath) {
+        throw new Error(
+          "marketplace 'openai-bundled' is already added from a different source; remove it before adding this source | -32600",
+        );
+      }
+      configuredSource = bundledMarketplacePath;
       registered = true;
       return {
         marketplaceName: "openai-bundled",
@@ -2024,6 +2178,28 @@ function createBundledMarketplaceComputerUseRequest(
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
+}
+
+function createManagedMarketplaceHarness(root: string): {
+  agentDir: string;
+  client: ReturnType<typeof createClientHarness>["client"];
+  managedMarketplacePath: string;
+} {
+  const agentDir = path.join(root, "agent");
+  const codexHome = path.join(agentDir, "codex-home");
+  const managedMarketplacePath = path.join(
+    codexHome,
+    ".tmp",
+    "bundled-marketplaces",
+    "openai-bundled",
+  );
+  fs.mkdirSync(managedMarketplacePath, { recursive: true });
+  const client = createClientHarness().client;
+  vi.spyOn(client, "getRuntimeIdentity").mockReturnValue({
+    serverVersion: "0.149.1",
+    codexHome,
+  });
+  return { agentDir, client, managedMarketplacePath };
 }
 
 function marketplaceEntry(marketplaceName: string, installed: boolean) {

@@ -9,6 +9,7 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
     expect(
       buildEmbeddedMessageActionDiscoveryInput({
         channel: "telegram",
+        chatType: "direct",
         currentChannelId: "chat-1",
         currentThreadTs: "thread-9",
         currentMessageId: "msg-42",
@@ -21,6 +22,7 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
     ).toEqual({
       cfg: undefined,
       channel: "telegram",
+      chatType: "direct",
       currentChannelId: "chat-1",
       currentThreadTs: "thread-9",
       currentMessageId: "msg-42",

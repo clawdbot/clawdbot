@@ -5,6 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { resolveBrowserConfig } from "../browser/config.js";
 import {
   browserExtensionStatus,
   FOUNDATION_CHROME_WEB_STORE_URL,
@@ -30,7 +31,6 @@ import {
   defaultRuntime,
   getRuntimeConfig,
   info,
-  resolveBrowserConfig,
   runCommandWithRuntime,
   theme,
 } from "./core-api.js";

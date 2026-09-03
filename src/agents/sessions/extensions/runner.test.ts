@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
+import { createExtensionRuntime } from "./loader.js";
 import { ExtensionRunner } from "./runner.js";
-import type { Extension, ExtensionRuntime } from "./types.js";
+import type {
+  Extension,
+  ExtensionActions,
+  ExtensionContext,
+  ExtensionContextActions,
+} from "./types.js";
 
 type TestHandler = (...args: unknown[]) => Promise<unknown>;
 type TestHandlers = Record<string, TestHandler[]>;
@@ -29,7 +35,7 @@ function buildExtension(handlers?: TestHandlers, path = "/tmp/test-extension.ts"
 function buildRunner(extensions: Extension[]): ExtensionRunner {
   return new ExtensionRunner(
     extensions,
-    {} as ExtensionRuntime,
+    createExtensionRuntime(),
     "/tmp",
     {} as SessionManager,
     {} as ModelRegistry,
@@ -225,5 +231,153 @@ describe("ExtensionRunner handler dispatch", () => {
       }),
     ).rejects.toBe(failure);
     expect(laterHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExtensionRunner context construction", () => {
+  function messageUpdateEvent() {
+    return {
+      type: "message_update",
+      message: buildMessages()[1],
+      assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
+    } as Parameters<ExtensionRunner["emit"]>[0];
+  }
+
+  it.each([
+    { name: "no extensions", extensions: [] },
+    {
+      name: "unrelated handlers",
+      extensions: [buildExtension({ user_bash: [async () => undefined] })],
+    },
+  ])("skips streaming contexts with $name", async ({ extensions }) => {
+    const runner = buildRunner(extensions);
+    const createContext = vi.spyOn(runner, "createContext");
+
+    await runner.emit(messageUpdateEvent());
+    await runner.emit({
+      type: "tool_execution_update",
+      toolCallId: "call-1",
+      toolName: "custom",
+      args: {},
+      partialResult: {},
+    });
+
+    expect(createContext).not.toHaveBeenCalled();
+  });
+
+  it("shares one context across matching streaming handlers", async () => {
+    const contexts: unknown[] = [];
+    const record: TestHandler = async (_event, context) => void contexts.push(context);
+    const runner = buildRunner([
+      buildExtension({ message_update: [record] }, "/tmp/first.ts"),
+      buildExtension({ message_update: [record] }, "/tmp/second.ts"),
+    ]);
+    const createContext = vi.spyOn(runner, "createContext");
+
+    await runner.emit(messageUpdateEvent());
+
+    expect(createContext).toHaveBeenCalledOnce();
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0]).toBe(contexts[1]);
+  });
+
+  it("propagates context construction failures outside extension handler isolation", async () => {
+    const failure = new Error("context construction failed");
+    const runner = buildRunner([buildExtension({ message_update: [async () => undefined] })]);
+    vi.spyOn(runner, "createContext").mockImplementation(() => {
+      throw failure;
+    });
+    const errors: unknown[] = [];
+    runner.onError((error) => errors.push(error));
+
+    await expect(runner.emit(messageUpdateEvent())).rejects.toBe(failure);
+    expect(errors).toEqual([]);
+  });
+
+  it("skips tool-call context construction without a matching handler", async () => {
+    const runner = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
+    const createContext = vi.spyOn(runner, "createContext");
+
+    await runner.emitToolCall({
+      type: "tool_call",
+      toolName: "custom",
+      toolCallId: "call-1",
+      input: {},
+    });
+
+    expect(createContext).not.toHaveBeenCalled();
+  });
+
+  it("preserves supplied context identity and its evolving system prompt", async () => {
+    const contexts: ExtensionContext[] = [];
+    const prompts: string[] = [];
+    const runner = buildRunner([
+      buildExtension({
+        before_agent_start: [
+          async (_event, value) => {
+            const context = value as ExtensionContext;
+            contexts.push(context);
+            prompts.push(context.getSystemPrompt());
+            return { systemPrompt: "updated" };
+          },
+          async (_event, value) => {
+            const context = value as ExtensionContext;
+            contexts.push(context);
+            prompts.push(context.getSystemPrompt());
+          },
+        ],
+      }),
+    ]);
+    const createContext = vi.spyOn(runner, "createContext");
+
+    await expect(
+      runner.emitBeforeAgentStart("hello", undefined, "original", { cwd: "/tmp" }),
+    ).resolves.toMatchObject({ systemPrompt: "updated" });
+
+    expect(createContext).toHaveBeenCalledOnce();
+    expect(contexts[0]).toBe(contexts[1]);
+    expect(prompts).toEqual(["original", "updated"]);
+  });
+
+  it("keeps lazy live context guards while retaining its captured model getter", () => {
+    const runner = buildRunner([]);
+    const firstGetModel = vi.fn(() => undefined);
+    const secondGetModel = vi.fn(() => undefined);
+    const buildActions = (
+      getModel: ExtensionContextActions["getModel"],
+      idle: boolean,
+    ): ExtensionContextActions => ({
+      getModel,
+      isIdle: () => idle,
+      getSignal: () => undefined,
+      abort: () => {},
+      hasPendingMessages: () => false,
+      shutdown: () => {},
+      getContextUsage: () => undefined,
+      compact: () => {},
+      getSystemPrompt: () => "system",
+    });
+
+    runner.bindCore({} as ExtensionActions, buildActions(firstGetModel, true));
+    const context = runner.createContext();
+    const commandContext = runner.createCommandContext();
+    expect(typeof Object.getOwnPropertyDescriptor(context, "ui")?.get).toBe("function");
+    expect(typeof Object.getOwnPropertyDescriptor(commandContext, "ui")?.get).toBe("function");
+
+    const updatedUi = { ...runner.getUIContext() };
+    runner.setUIContext(updatedUi);
+    runner.bindCore({} as ExtensionActions, buildActions(secondGetModel, false));
+
+    expect(context.ui).toBe(updatedUi);
+    expect(context.hasUI).toBe(true);
+    expect(context.isIdle()).toBe(false);
+    expect(context.model).toBeUndefined();
+    expect(firstGetModel).toHaveBeenCalledOnce();
+    expect(secondGetModel).not.toHaveBeenCalled();
+
+    runner.invalidate("session replaced");
+    expect(() => context.ui).toThrow("session replaced");
+    expect(() => context.isIdle()).toThrow("session replaced");
+    expect(() => commandContext.cwd).toThrow("session replaced");
   });
 });

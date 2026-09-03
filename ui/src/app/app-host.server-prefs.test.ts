@@ -22,6 +22,7 @@ describe("OpenClaw shell locale preferences", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
+    patchSettings({ gatewayUrl: "ws://locale.test" });
   });
 
   afterEach(() => {
@@ -48,7 +49,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const refreshTheme = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://locale.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://locale.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
@@ -84,7 +88,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const refreshTheme = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://locale.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://locale.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
@@ -107,6 +114,7 @@ describe("OpenClaw shell locale preferences", () => {
   });
 
   it("publishes authored theme changes when the local mirror needs no patch", () => {
+    patchSettings({ gatewayUrl: "ws://theme.test" });
     const state = {
       configSnapshot: {
         config: { ui: { prefs: { theme: "custom" } } },
@@ -116,7 +124,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const recordServerSelection = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://theme.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://theme.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,

@@ -10,6 +10,7 @@ import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveUserPath } from "../../utils.js";
+import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import type {
   SkillEligibilityContext,
@@ -19,6 +20,7 @@ import type {
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
+import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
@@ -155,9 +157,16 @@ export async function syncWorkspaceSkills(params: {
     const skillRoots = skillsSnapshot?.skillRoots;
     // Same-named skills from different execution roots share entry identities.
     // Bind roots to the cache so shared sandboxes recopy when sessions change repos.
-    const skillRootsFingerprint = skillRoots
-      ? sha256Hex(JSON.stringify([skillRoots.agentWorkspaceDir, skillRoots.executionSkillsDir]))
-      : undefined;
+    const skillRootsFingerprint =
+      skillRoots || skillsSnapshot?.librarySelections?.length
+        ? sha256Hex(
+            JSON.stringify([
+              skillRoots?.agentWorkspaceDir,
+              skillRoots?.executionSkillsDir,
+              skillsSnapshot?.librarySelections,
+            ]),
+          )
+        : undefined;
     const skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
 
     await ensureSyncedSkillsDirectory(targetSkillsDir);
@@ -196,6 +205,14 @@ export async function syncWorkspaceSkills(params: {
     const entries = skillRoots
       ? loadMergedWorkspaceSkills({ ...skillRoots, ...loadOptions })
       : loadWorkspaceSkills(sourceDir, loadOptions);
+    if (skillsSnapshot?.librarySelections?.length) {
+      const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
+      entries.push(
+        ...loadSkillLibrarySelection(skillsSnapshot.librarySelections).filter((entry) =>
+          selectedNames.has(entry.skill.name),
+        ),
+      );
+    }
 
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
@@ -262,16 +279,32 @@ export async function syncWorkspaceSkills(params: {
       }
       if (!preservedDestinations.has(path.basename(destinationPath))) {
         try {
-          const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
-          await fsp.cp(syncSourceDir, destinationPath, {
-            recursive: true,
-            force: true,
-            filter: (src) => {
-              const name = path.basename(src);
-              return !(name === ".git" || name === "node_modules");
-            },
-          });
+          const pin = skillsSnapshot?.librarySelections?.find(
+            (selection) => selection.name === entry.skill.name,
+          );
+          if (pin) {
+            const files = await readSelectedSkillLibraryFiles(pin);
+            for (const file of files) {
+              const target = path.join(destinationPath, file.path);
+              await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+              await fsp.writeFile(
+                target,
+                Buffer.from(file.content, file.encoding === "base64" ? "base64" : "utf8"),
+                { mode: file.executable ? 0o500 : 0o400, flag: "wx" },
+              );
+            }
+          } else {
+            const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
+            await fsp.cp(syncSourceDir, destinationPath, {
+              recursive: true,
+              force: true,
+              filter: shouldSyncSkillPath,
+            });
+          }
         } catch (error) {
+          if (entry.skill.source === "openclaw-library") {
+            throw error;
+          }
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
           skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);

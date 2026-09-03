@@ -177,6 +177,14 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
+
+When `gateway.publicOrigin` is configured and the Control UI is enabled,
+direct channel notifications include an `Inspect` link to the task's own
+session. Session-queued notifications do not include this link.
+
 Durable subagent completion handoffs retry for up to 30 minutes with capped
 exponential backoff. A queued handoff is not reported as delivered until the
 queue settles. If delivery reaches its deadline or fails permanently, the task
@@ -280,6 +288,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">
@@ -295,7 +304,7 @@ openclaw tasks notify <lookup> state_changes
     - ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
     - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
-    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
+    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
 
     Completion cleanup is also runtime-aware:
 
@@ -334,6 +343,8 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
+
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 
 ## Status integration (task pressure)
@@ -366,7 +377,7 @@ Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles four things:
+A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles five things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -380,6 +391,9 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
+  </Step>
+  <Step title="Task Flow retention">
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 

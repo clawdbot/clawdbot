@@ -277,7 +277,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(requireInvokeResult(params.sendInvokeResult)).toMatchObject({
       ok: false,
       error: {
-        code: "UNAVAILABLE",
+        code: "SYSTEM_RUN_DENIED",
         message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
       },
     });
@@ -547,6 +547,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   async function runSystemInvoke(params: {
     preferMacAppExecHost: boolean;
+    execHostFallbackAllowed?: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
     env?: Record<string, string>;
@@ -577,13 +578,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     prepareDelayedApprovalPlan?: boolean;
     signal?: AbortSignal;
   }): Promise<InvokeSpies> {
-    const {
-      runCommand,
-      runViaMacAppExecHost,
-      sendInvokeResult,
-      sendExecFinishedEvent,
-      sendNodeEvent,
-    } = createInvokeSpies({
+    const spies = createInvokeSpies({
       runCommand: params.runCommand,
       runViaMacAppExecHost:
         params.runViaMacAppExecHost ?? (async () => params.runViaResponse ?? null),
@@ -595,7 +590,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const command = params.command ?? params.preparedPlan?.argv ?? ["echo", "ok"];
     let dispatchCommand = command;
     let dispatchRawCommand = params.rawCommand ?? params.preparedPlan?.commandText;
-    let dispatchCwd = params.cwd;
+    let dispatchCwd = params.cwd ?? params.preparedPlan?.cwd ?? undefined;
     let dispatchAgentId: string | undefined = params.agentId ?? "main";
     const forwardsDelayedApproval =
       params.approvalSource === "auto-review" ||
@@ -653,30 +648,20 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
       signal: params.signal,
       execHostEnforced: false,
-      execHostFallbackAllowed: true,
+      execHostFallbackAllowed: params.execHostFallbackAllowed ?? true,
       resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
       resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
       sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
-      runCommand,
-      runViaMacAppExecHost,
-      sendNodeEvent,
+      ...spies,
       buildExecEventPayload: (payload) => payload,
-      sendInvokeResult,
-      sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
       autoReviewer: params.autoReviewer,
       commitExecAuthorization: params.commitExecAuthorization,
     });
 
-    return {
-      runCommand,
-      runViaMacAppExecHost,
-      sendInvokeResult,
-      sendNodeEvent,
-      sendExecFinishedEvent,
-    };
+    return spies;
   }
 
   type SystemInvokeFixtureParams = Parameters<typeof runSystemInvoke>[0];
@@ -714,6 +699,31 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return await runMacSystemInvoke({ ...params, security, ask });
   }
 
+  it("preserves a native cwd refusal without labelling it approval-required", async () => {
+    const result = await runMacSystemInvoke({
+      runViaResponse: {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          reason: "cwd-unavailable",
+          message: "Working directory does not exist, is inaccessible, or is not a directory.",
+        },
+      },
+    });
+    expectExecDeniedEvent(result.sendNodeEvent, "cwd-unavailable");
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lost companion response ambiguous", async () => {
+    const result = await runMacSystemInvoke({ execHostFallbackAllowed: false });
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expect(requireInvokeResult(result.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE" },
+    });
+  });
+
   it("forwards cancellation to locally spawned node commands", async () => {
     const controller = new AbortController();
     const result = await runLocalSystemInvoke({ signal: controller.signal });
@@ -746,20 +756,28 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
   });
 
-  it("does not publish a cancelled Mac exec-host completion", async () => {
-    const controller = new AbortController();
-    const result = await runMacSystemInvoke({
-      signal: controller.signal,
-      runViaMacAppExecHost: async () => {
-        controller.abort();
-        return { ok: true, payload: createLocalRunResult("cancelled") };
-      },
-    });
+  it.each([null, createMacExecHostSuccess()])(
+    "cancels pending Mac exec without replay or publication (%j)",
+    async (response) => {
+      const controller = new AbortController();
+      const result = await runMacSystemInvoke({
+        signal: controller.signal,
+        runViaMacAppExecHost: ({ signal }) => {
+          expect(signal).toBe(controller.signal);
+          return new Promise((resolve) => {
+            signal?.addEventListener("abort", () => resolve(response), { once: true });
+            queueMicrotask(() => controller.abort());
+          });
+        },
+      });
 
-    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
-    expect(result.sendInvokeResult).not.toHaveBeenCalled();
-    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
-  });
+      expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+      expect(result.runCommand).not.toHaveBeenCalled();
+      expect(result.sendNodeEvent).not.toHaveBeenCalled();
+      expect(result.sendInvokeResult).not.toHaveBeenCalled();
+      expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runLocalSystemInvoke({});
@@ -1417,7 +1435,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           "off",
           { command: ["poccmd", "-n", "SAFE"], approved: true },
         );
-        expectCommandPinnedToCanonicalPath(runCommand, expected, ["-n", "SAFE"]);
+        expectCommandPinnedToCanonicalPath(
+          runCommand,
+          expected,
+          ["-n", "SAFE"],
+          fs.realpathSync(process.cwd()),
+        );
         expectInvokeOk(sendInvokeResult);
       });
     },
@@ -1447,7 +1470,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               });
             },
           );
-          expectCommandPinnedToCanonicalPath(runCommand, expected, ["-n", "SAFE"]);
+          expectCommandPinnedToCanonicalPath(
+            runCommand,
+            expected,
+            ["-n", "SAFE"],
+            fs.realpathSync(process.cwd()),
+          );
           expectInvokeOk(sendInvokeResult);
         },
       );
@@ -2583,7 +2611,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(invoke.runCommand).toHaveBeenCalledWith(
         prepared.plan.argv,
-        undefined,
+        prepared.plan.cwd,
         undefined,
         undefined,
       );
@@ -3107,6 +3135,46 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects durable trust when its approved directory is replaced before execution",
+    async () => {
+      const tempDir = createFixtureDir("openclaw-durable-cwd-drift-");
+      const movedDir = `${tempDir}-moved`;
+      const prepared = buildCwdApprovalPlan(["/bin/sh", "-c", "/bin/ls"], tempDir);
+      expect(prepared.ok).toBe(true);
+      requireApprovalPlan(prepared, "unreachable");
+      const commandPattern = createExactCommandPattern(prepared.plan.commandText);
+
+      await withTempApprovalsHome(
+        createApprovals("allowlist", "on-miss", "full", {
+          main: {
+            allowlist: [{ pattern: commandPattern, source: "allow-always" }],
+          },
+        }),
+        async () => {
+          const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] =
+            async (params) => {
+              await commitExecAuthorizationLocked(params);
+              fs.renameSync(tempDir, movedDir);
+              fs.mkdirSync(tempDir);
+            };
+          const rerun = await runLocalSystemInvokeWithPolicy("allowlist", "on-miss", {
+            preparedPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            commitExecAuthorization: commitAuthorization,
+          });
+
+          expect(rerun.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(
+            rerun.sendInvokeResult,
+            "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            true,
+          );
+        },
+      );
+    },
+  );
 
   it("does not bind safe builtin policy to a redundant exact-command grant", async () => {
     if (process.platform === "win32") {

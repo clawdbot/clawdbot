@@ -1,7 +1,7 @@
 import { resolveBundledProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { ListRowModel } from "./list.model-row.js";
+import { type ListRowModel, toListRowInput } from "./list.model-row.js";
 import type { RowBuilderContext } from "./list.row-context.js";
 
 type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
@@ -9,14 +9,6 @@ type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 const providerRuntimeModuleLoader = createLazyImportLoader<ProviderRuntimeModule>(
   () => import("../../plugins/provider-runtime.js"),
 );
-
-function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
-  const parsed = input?.filter(
-    (item): item is NonNullable<ListRowModel["input"]>[number] =>
-      item === "text" || item === "image" || item === "document",
-  );
-  return parsed?.length ? parsed : ["text"];
-}
 
 function mergeNormalizedListRow(
   model: ListRowModel,

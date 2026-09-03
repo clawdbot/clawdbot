@@ -79,12 +79,10 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
     if (!filePath.includes("/")) {
       throw new Error("Support file paths must include a file below an allowed support directory.");
     }
-  }
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1];
-    const current = sorted[index];
-    if (previous && current?.startsWith(`${previous}/`)) {
-      throw new Error(`Support file paths cannot overlap: ${previous} and ${current}`);
+    // A parent may not neighbor its descendant when another name sorts between them.
+    const ancestor = sorted.find((candidate) => filePath.startsWith(`${candidate}/`));
+    if (ancestor) {
+      throw new Error(`Support file paths cannot overlap: ${ancestor} and ${filePath}`);
     }
   }
 }

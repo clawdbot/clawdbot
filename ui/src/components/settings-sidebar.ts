@@ -18,14 +18,18 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
+import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { icons } from "./icons.ts";
-import { redactLoginFailureError } from "./login-gate.ts";
-import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
+import {
+  renderSidebarConnectionStatus,
+  resolveSidebarConnectionStatus,
+} from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
 import "./sidebar-build-chip.ts";
@@ -37,6 +41,8 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
+  restartPending?: boolean;
+  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
   queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
@@ -171,8 +177,7 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active =
-    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
+  const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -244,6 +249,7 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
 }
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
+  const connectionStatus = resolveSidebarConnectionStatus(props);
   const reconnecting = t("connection.reconnecting");
   const searchBlockMatches =
     props.searchBlockMatches ??
@@ -333,10 +339,10 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             )}
       </nav>
       <footer class="settings-sidebar__footer">
-        ${props.offline
-          ? renderOfflineSidebarStatus({
+        ${connectionStatus
+          ? renderSidebarConnectionStatus({
+              kind: connectionStatus,
               queuedOutboxCount: props.queuedOutboxCount ?? 0,
-              reconnecting,
               title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
               onRetry: props.onRetryConnect,
             })

@@ -9,21 +9,19 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
+import "../styles/app-sidebar.css";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
@@ -58,6 +56,11 @@ import {
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import {
+  COMMUNITY_INVITE_KEY,
+  dismissCommunityInvite as persistCommunityInviteDismissal,
+  isCommunityInviteEligible,
+} from "./community-invite-state.ts";
 import { icons } from "./icons.ts";
 import {
   lobsterPetSeed,
@@ -67,14 +70,10 @@ import {
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
-const sidebarChromeImport = createIdleImport(() =>
-  Promise.all([
-    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
-    customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
-  ]),
-);
+const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
@@ -82,6 +81,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+  private readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -105,14 +105,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
-    const requestedPath = path?.trim();
-    const agent = this.activeChipAgent().agent;
+    const requestedPath = path?.trim() || this.activeChipAgent().agent?.workspace?.trim();
     if (!requestedPath) {
-      return agent?.workspaceGit === true
-        ? "git"
-        : agent?.workspaceGit === false
-          ? "not_git"
-          : "unavailable";
+      return "unavailable";
     }
     const sessions = this.context?.sessions;
     const scope = sessions?.captureConnectionScope();
@@ -144,11 +139,37 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     expandedRows: [],
     visibleRows: [],
   };
-  private readonly narrationSubscriptions = this.createNarrationSubscriptions();
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
+    )
+    .watch(
+      () => this.context?.agentIdentity,
+      (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+      () => this.syncCommunityInviteState(),
+    );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  };
+  @state() private communityInviteEligible = false;
+  @state() private communityInviteCardLoaded = false;
+  private readonly communityInviteCardImport = createIdleImport(
+    () => import("./community-invite-card.ts"),
+    () => {
+      this.communityInviteCardLoaded = true;
+    },
+  );
+  private readonly communityInviteStorageChanged = (event: StorageEvent) => {
+    if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
+      this.syncCommunityInviteState();
+    }
   };
 
   // Catalog rows are non-startup content. Load their renderer through the same
@@ -163,57 +184,16 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       }
     },
   );
-  private readonly agentIdentitySubscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.agentIdentity,
-    (agentIdentity, notify) => agentIdentity.subscribe(notify),
-  );
-
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   constructor() {
     super();
-    void this.narrationSubscriptions;
-    void this.agentIdentitySubscriptions;
-    void new BoardAvailabilityController(
-      this,
-      () => {
-        const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
-        return [
-          mainKey,
-          ...this.visibleSessionRowsInOrder()
-            .filter((session) => !session.isChild)
-            .map((session) => session.key),
-        ];
-      },
-      undefined,
-      () => {
-        const snapshot = this.context?.gateway.snapshot;
-        const client = snapshot?.client;
-        const availabilityClient =
-          client &&
-          typeof client.request === "function" &&
-          typeof client.addEventListener === "function"
-            ? client
-            : null;
-        return {
-          client: availabilityClient,
-          connected: snapshot?.phase === "connected",
-          available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
-          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
-            snapshot?.hello?.server?.version ?? ""
-          }`,
-        };
-      },
-    );
+    void this.subscriptions;
   }
 
-  private createNarrationSubscriptions(): SubscriptionsController {
-    const subscriptions = new SubscriptionsController(this);
-    subscriptions.effect(
-      () => this.context?.gateway,
-      (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
-    );
-    return subscriptions;
+  override dismissTransientMenus(): boolean {
+    const hadPersonCard = this.people.dismiss();
+    return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {
@@ -224,6 +204,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
+    this.communityInviteCardImport.dispose();
+    window.removeEventListener("storage", this.communityInviteStorageChanged);
     super.disconnectedCallback();
   }
 
@@ -237,13 +219,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
     this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
-    const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
     const identityIds =
       this.sidebarMenus.agentMenuPosition === null
-        ? [chip.activeId]
-        : chip.agents.map((agent) => agent.id);
+        ? [this.expandedAgentId()]
+        : this.activeChipAgent().agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
   }
 
@@ -338,11 +319,31 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
     );
+    window.addEventListener("storage", this.communityInviteStorageChanged);
+    this.syncCommunityInviteState();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    sidebarChromeImport.schedule();
+    lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
+
+  private syncCommunityInviteState() {
+    this.communityInviteEligible =
+      this.context?.config.current.communityInvite === true && isCommunityInviteEligible();
+    if (this.communityInviteEligible) {
+      this.communityInviteCardImport.schedule();
+    } else {
+      this.communityInviteCardImport.dispose();
+    }
+  }
+
+  private readonly dismissCommunityInvite = () => {
+    const result = persistCommunityInviteDismissal();
+    this.syncCommunityInviteState();
+    if (!result.ok) {
+      showToast({ message: t("communityInvite.dismissFailed") });
+    }
+  };
 
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
@@ -408,10 +409,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(target?: NewSessionTarget): void {
-    this.requestOpenNewSession(this.expandedAgentId(), target);
-  }
-
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     const previousLimit =
       this.sessionData.visibleSessionLimits.get(sectionId) ?? SIDEBAR_SESSION_PAGE_SIZE;
@@ -445,7 +442,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     setStoredSessionCatalogHidden(catalogId, true);
     // Reuse the settings-search destination for the Sidebar preferences block so the
     // toast opens the same place the rest of the app calls "Appearance > Sidebar".
-    const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;
+    const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
     const recoveryHref =
       pathForRoute(recovery.routeId, this.basePath) + recovery.search + recovery.hash;
     // The section disappears instantly and its only standing recovery lives on another
@@ -596,7 +593,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   className: "sidebar-session-error sidebar-session-catalog-error",
                 })}
           </div>
-          <div class="sidebar-shell__footer">
+          <div class="sidebar-shell__invite">
+            ${this.communityInviteEligible && this.communityInviteCardLoaded
+              ? html`<openclaw-community-invite-card
+                  .onDismiss=${this.dismissCommunityInvite}
+                ></openclaw-community-invite-card>`
+              : nothing}
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(
@@ -609,6 +611,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .gatewayVersion=${this.gatewayVersion}
               .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
+          </div>
+          <div class="sidebar-shell__footer">
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>
                   <div class="sidebar-footer-branch">

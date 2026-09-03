@@ -8,8 +8,6 @@ import type {
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
-import { renderWorktreeFields } from "./detail-chip.ts";
-import type { BrowserTarget, DraftBranches } from "./discovery.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
@@ -97,16 +95,11 @@ export function renderProjectChip(params: {
   projectSearchError: string | null;
   projectId: string;
   gatewayLabel: string;
-  remotePlacement: boolean;
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
   popoverHiding: boolean;
-  browserTarget: BrowserTarget | null;
+  browserOpen: boolean;
   browserListing: FsListDirResult | null;
   browserLoading: boolean;
   browserError: string | null;
@@ -122,9 +115,7 @@ export function renderProjectChip(params: {
   onProjectQueryInput: (query: string) => void;
   onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string) => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
-  onBrowse: (target: BrowserTarget) => void;
+  onBrowse: () => void;
   onBrowserPathDraftChange: (value: string) => void;
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
@@ -134,7 +125,6 @@ export function renderProjectChip(params: {
   const folder = params.folder.trim();
   const cloneInput = projectCloneInput(params.projectQuery);
   const query = params.projectQuery.trim();
-  const browseTarget: BrowserTarget = { nodeId: "", label: params.gatewayLabel };
   const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
   const recentItems = params.state.recents;
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.displayName, [
@@ -154,7 +144,7 @@ export function renderProjectChip(params: {
       (!params.browseAvailable && !browseNeedsAdmin)}
       @click=${() => {
         if (params.browseAvailable && !params.submitting && !params.pendingPlacement) {
-          params.onBrowse(browseTarget);
+          params.onBrowse();
         }
       }}
     >
@@ -184,8 +174,15 @@ export function renderProjectChip(params: {
           >${params.projectId ? icons.gitBranch : icons.folder}</span
         >
         <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
+          aria-hidden="true"
           >${icons.chevronDown}</span
+        >
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
+          aria-hidden="true"
+          >${icons.chevronsUpDown}</span
         >
       </button>
     </span>
@@ -198,10 +195,10 @@ export function renderProjectChip(params: {
       @wa-hide=${params.onPopoverHide}
       @wa-after-hide=${params.onPopoverAfterHide}
     >
-      ${params.browserTarget
+      ${params.browserOpen
         ? renderPlaceBrowser({
             listing: params.browserListing,
-            target: params.browserTarget,
+            label: params.gatewayLabel,
             loading: params.browserLoading,
             error: params.browserError,
             pathDraft: params.browserPathDraft,
@@ -326,29 +323,6 @@ export function renderProjectChip(params: {
                     </div>`
                   : nothing}
               `}
-              ${params.remotePlacement
-                ? html`
-                    <details>
-                      <summary class="new-session-page__menu-title">
-                        ${t("configForm.advancedDivider")}
-                      </summary>
-                      ${renderWorktreeFields({
-                        branches: params.branches,
-                        branchesLoading: params.branchesLoading,
-                        baseRef: params.baseRef,
-                        worktreeName: params.worktreeName,
-                        worktreeNameLabel: t("newSession.checkoutName"),
-                        submitting: params.submitting,
-                        pendingPlacement: params.pendingPlacement,
-                        onBaseRefInput: params.onBaseRefInput,
-                        onWorktreeNameInput: params.onWorktreeNameInput,
-                      })}
-                      <div class="new-session-page__menu-note">
-                        ${t("newSession.placementSyncsFolder", { folder: params.state.label })}
-                      </div>
-                    </details>
-                  `
-                : nothing}
               ${params.state.recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>

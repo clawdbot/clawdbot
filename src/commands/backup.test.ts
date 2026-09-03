@@ -41,6 +41,7 @@ type CapturedBackupManifest = {
     configPath: string;
     oauthDir: string;
     workspaceDirs: string[];
+    agentRoots: Array<{ agentId: string; sourcePath: string }>;
   };
   assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
   skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
@@ -48,15 +49,6 @@ type CapturedBackupManifest = {
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
-
-  function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    const [arg] = call;
-    return expectDefined(arg, "arg test invariant");
-  }
 
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
     vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
@@ -310,6 +302,7 @@ describe("backup commands", () => {
         configPath,
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [externalWorkspace],
+        agentRoots: [],
       });
       expect(manifest.assets).toEqual(
         result.assets.map((asset) => ({
@@ -364,7 +357,12 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        (options: { filter?: (entryPath: string) => boolean }, entryPaths: string[]) =>
+        (
+          options: {
+            filter?: (entryPath: string, entryStat: { isDirectory: () => boolean }) => boolean;
+          },
+          entryPaths: string[],
+        ) =>
           createMockTarStream({
             beforeRead: () => {
               const manifestPath = entryPaths[0];
@@ -372,9 +370,13 @@ describe("backup commands", () => {
               if (!manifestPath || !stateRoot) {
                 throw new Error("backup test expected manifest and state entries");
               }
-              expect(options.filter?.(manifestPath)).toBe(true);
+              const fileStat = { isDirectory: () => false };
+              expect(options.filter?.(manifestPath, fileStat)).toBe(true);
               expect(
-                options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+                options.filter?.(
+                  path.join(stateRoot, "agents", "main", "sessions", "s.jsonl"),
+                  fileStat,
+                ),
               ).toBe(false);
             },
           }),
@@ -387,13 +389,12 @@ describe("backup commands", () => {
 
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const payload = requireFirstMockArg(vi.mocked(runtime.log), "runtime log");
+      const [payload] = expectDefined(vi.mocked(runtime.log).mock.calls[0], "runtime log call");
       if (typeof payload !== "string") {
         throw new Error("backup test expected JSON string output");
       }
       expect(payload).not.toContain("Backup skipped");
-      const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
-      expect(parsedPayload.skippedVolatileCount).toBe(1);
+      expect(JSON.parse(payload)).toHaveProperty("skippedVolatileCount", 1);
     } finally {
       await fs.rm(backupDir, { recursive: true, force: true });
     }

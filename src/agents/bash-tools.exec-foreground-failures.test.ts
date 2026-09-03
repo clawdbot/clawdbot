@@ -454,6 +454,11 @@ describe("exec foreground failures", () => {
         containerName: "sandbox-workdir-test",
         workspaceDir,
         containerWorkdir: "/workspace",
+        buildExecSpec: async ({ command, workdir }) => ({
+          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
+          env: {},
+          stdinMode: "pipe-closed",
+        }),
       },
     });
 

@@ -32,6 +32,7 @@ const OperatorScopeSchema = z.enum([
 ]);
 const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({ others: z.enum(["none", "view", "suggest", "write"]) }),
+  sandbox: z.enum(["inherit", "required"]).optional(),
   agents: z.union([
     z.literal("*"),
     z
@@ -86,6 +87,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
+        communityInvite: z.boolean().optional(),
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
           .optional(),

@@ -25,17 +25,19 @@ export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
+  machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  const machineOutputMode = params.jsonOutputMode || params.machineOutputMode === true;
   // Protocol commands own stdout from process startup, before their action installs later routing.
-  const suppressDoctorStdout = params.jsonOutputMode || commandPolicy.ownsProtocolStdout;
+  const suppressDoctorStdout = machineOutputMode || commandPolicy.ownsProtocolStdout;
   const configGuard =
     typeof commandPolicy.configGuard === "function"
       ? commandPolicy.configGuard({ argv: params.argv ?? [], commandPath: params.commandPath })
       : commandPolicy.configGuard;
   const env = params.env ?? process.env;
-  const hideBanner = params.jsonOutputMode || commandPolicy.hideBanner;
+  const hideBanner = machineOutputMode || commandPolicy.hideBanner;
   return {
     suppressDoctorStdout,
     hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),

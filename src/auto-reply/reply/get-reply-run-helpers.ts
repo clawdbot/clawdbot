@@ -15,7 +15,6 @@ import {
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
 import type { ExecOverrides } from "./get-reply-run.types.js";
 import {
   resolvePersistedPromptProvider,
@@ -182,14 +181,14 @@ export function resolvePromptSilentReplyConversationType(params: {
 export function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
-  ctx?: Pick<MsgContext, "Provider">;
+  ctx?: Pick<MsgContext, "InternalTurnSource">;
   isHeartbeat?: boolean;
 }): TemplateContext {
   const { sessionCtx, sessionEntry } = params;
   const isSystemEvent =
     params.isHeartbeat === true ||
-    isSystemEventProvider(params.ctx?.Provider) ||
-    isSystemEventProvider(sessionCtx.Provider);
+    params.ctx?.InternalTurnSource !== undefined ||
+    sessionCtx.InternalTurnSource !== undefined;
   if (!isSystemEvent || !sessionEntry) {
     return sessionCtx;
   }
@@ -204,14 +203,8 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   const persistedSurface = resolvePersistedPromptSurface(sessionEntry);
   const liveProvider = normalizeOptionalString(sessionCtx.Provider);
   const liveSurface = normalizeOptionalString(sessionCtx.Surface);
-  const nextProvider =
-    liveProvider && !isSystemEventProvider(liveProvider)
-      ? liveProvider
-      : (persistedProvider ?? liveProvider);
-  const nextSurface =
-    liveSurface && !isSystemEventProvider(liveSurface)
-      ? liveSurface
-      : (persistedSurface ?? liveSurface);
+  const nextProvider = liveProvider ?? persistedProvider;
+  const nextSurface = liveSurface ?? persistedSurface;
 
   const next: TemplateContext = { ...sessionCtx };
   let changed = false;
@@ -314,18 +307,6 @@ export function loadAgentRunnerRuntime() {
 
 export function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-export function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
 }
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {

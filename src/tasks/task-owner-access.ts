@@ -1,6 +1,5 @@
 // Normalizes task owner keys and checks requester access to task records.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -13,6 +12,7 @@ import {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
+import { resolveTaskSessionAgentId } from "./task-session-identity.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
 type TaskOwnerIdentity = {
@@ -36,17 +36,11 @@ function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): bool
   if (!callerAgentId) {
     return false;
   }
-  let taskAgentId = task.requesterAgentId ?? parseAgentSessionKey(task.ownerKey)?.agentId;
-  if (!taskAgentId) {
-    try {
-      taskAgentId = resolveSessionAgentId({
-        sessionKey: task.ownerKey,
-        config: identity.config ?? getRuntimeConfig(),
-      });
-    } catch {
-      return false;
-    }
-  }
+  const taskAgentId = resolveTaskSessionAgentId(
+    task.ownerKey,
+    task.requesterAgentId,
+    identity.config ?? getRuntimeConfig,
+  );
   return (
     Boolean(taskAgentId) &&
     normalizeOptionalString(taskAgentId) === normalizeOptionalString(callerAgentId)

@@ -134,6 +134,47 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("probes auth with the same cleared environment as Claude execution", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        config: {
+          command: "claude",
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        },
+      });
+      const isAuthenticated = vi.fn(() => true);
+
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
+        {
+          env: {
+            ANTHROPIC_API_KEY: "ambient-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "ambient-oauth-token",
+            CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+            PATH: "/usr/bin",
+          },
+          homeDir,
+          workspaceDir,
+          isAuthenticated,
+          noteFn: vi.fn(),
+          resolveCommandPath: () => "/usr/bin/claude",
+        },
+      );
+
+      expect(isAuthenticated).toHaveBeenCalledWith("/usr/bin/claude", {
+        CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+        PATH: "/usr/bin",
+      });
+    });
+  });
+
   it("stays quiet for a healthy non-default Claude CLI runtime agent", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       resolveModelAgentRuntimeMetadataMock.mockImplementation(({ agentId }) => ({

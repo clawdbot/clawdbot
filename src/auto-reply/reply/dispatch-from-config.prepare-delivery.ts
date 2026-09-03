@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -36,20 +36,19 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
-  // Check if we should route replies to originating channel instead of dispatcher.
-  // Only route when the originating channel is DIFFERENT from the current surface.
-  // This handles cross-provider routing (e.g., message from Telegram being processed
-  // by a shared session that's currently on Slack) while preserving normal dispatcher
-  // flow when the provider handles its own messages.
-  //
-  // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const sessionAcpMeta = sessionStoreEntry.sessionKey
-    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+  // Gather awaits runtime preparation after its first row read. Reread ACP
+  // metadata with the same owner to preserve current lifecycle fences and
+  // recovery from an earlier store-read failure.
+  const currentAcpSession = sessionStoreEntry.sessionKey
+    ? readAcpSessionEntry({
+        cfg,
+        agentId: sessionStoreEntry.agentId,
+        sessionKey: sessionStoreEntry.sessionKey,
+      })
     : undefined;
-  const sessionEntryWithAcp =
-    sessionAcpMeta && sessionStoreEntry.entry
-      ? { ...sessionStoreEntry.entry, acp: sessionAcpMeta }
-      : sessionStoreEntry.entry;
+  const sessionEntryWithAcp = currentAcpSession?.entry
+    ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
+    : undefined;
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
@@ -109,6 +108,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
     normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
       cfg,
+      agentId: state.sessionAgentId,
       sessionKey: state.acpDispatchSessionKey,
       workspaceDir: state.workspaceDir,
       messageProvider: deliveryChannel,
@@ -170,6 +170,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
+      agentId: state.sessionAgentId,
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,

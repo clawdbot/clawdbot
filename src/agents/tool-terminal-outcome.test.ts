@@ -9,6 +9,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
+import { consumeToolEffectReceipt, registerToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
@@ -113,6 +114,93 @@ describe("tool terminal outcome observer", () => {
       sideEffectEvidence: false,
       lastToolError: { executionStarted: false, mutatingAction: false },
     });
+  });
+
+  it.each([
+    {
+      name: "pre-execution rejection",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked" },
+      },
+      state: "uncertain",
+    },
+    {
+      name: "completed read",
+      input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed read",
+      input: {
+        toolName: "message",
+        arguments: { action: "read" },
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "owner-declared replay-safe failure",
+      input: {
+        toolName: "plugin_read",
+        arguments: {},
+        replaySafe: true,
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed mutation",
+      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
+      state: "mutation_committed",
+    },
+    {
+      name: "completed unknown operation",
+      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
+      state: "uncertain",
+    },
+    {
+      name: "failed mutation",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        outcome: "failure",
+        failure: { error: "send failed" },
+      },
+      state: "uncertain",
+    },
+  ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
+    expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
+      state,
+    });
+  });
+
+  it("binds effect receipts to one exact host-owned result", () => {
+    const result = registerToolEffectReceipt({ status: "failed" }, { state: "failed_no_effect" });
+
+    expect(consumeToolEffectReceipt({ ...result })).toBeUndefined();
+    expect(consumeToolEffectReceipt(result)).toEqual({ state: "failed_no_effect" });
+    expect(consumeToolEffectReceipt(result)).toBeUndefined();
   });
 
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {

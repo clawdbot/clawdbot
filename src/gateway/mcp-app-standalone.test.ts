@@ -1,147 +1,27 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { makeMockHttpResponse } from "./test-http-response.js";
-
-const mocks = vi.hoisted(() => ({
-  completeRetirement: vi.fn(),
-  getMcpAppViewLease: vi.fn(),
-  peekSessionMcpRuntime: vi.fn(),
-}));
-
-vi.mock("../agents/agent-bundle-mcp-runtime.js", () => ({
-  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
-  peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
-}));
-vi.mock("../agents/mcp-ui-resource.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/mcp-ui-resource.js")>()),
-  getMcpAppViewLease: mocks.getMcpAppViewLease,
-}));
-
 import {
   createMcpAppStandaloneTicket,
+  createSerializedHost,
   handleMcpAppStandaloneHttpRequest,
+  issueTicket,
+  mocks,
   mcpAppStandaloneTesting,
-  verifyMcpAppStandaloneTicket,
-} from "./mcp-app-standalone.js";
-
-function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0]) {
-  const issued = createMcpAppStandaloneTicket(params);
-  if (!issued) {
-    throw new Error("ticket capacity unexpectedly exhausted");
-  }
-  return issued;
-}
-
-const nowMs = 1_800_000_000_000;
-const secret = Buffer.alloc(32, 7);
-const releaseRuntimeLease = vi.fn();
-const runtime = {
-  sessionId: "runtime-session",
-  mcpAppsEnabled: true,
-  markUsed: vi.fn(),
-  acquireLease: vi.fn(() => releaseRuntimeLease),
-  getCatalog: vi.fn(async () => ({
-    tools: [
-      { serverName: "demo", toolName: "shared" },
-      { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] },
-      { serverName: "demo", toolName: "model-only", uiVisibility: ["model"] },
-      { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
-    ],
-  })),
-  callTool: vi.fn(async (serverName: string, toolName: string) => ({
-    content: [{ type: "text", text: `${serverName}:${toolName}` }],
-  })),
-  listTools: vi.fn(async () => ({
-    tools: [
-      { name: "shared", inputSchema: { type: "object" } },
-      { name: "app-only", inputSchema: { type: "object" }, _meta: { ui: { visibility: ["app"] } } },
-      {
-        name: "model-only",
-        inputSchema: { type: "object" },
-        _meta: { ui: { visibility: ["model"] } },
-      },
-    ],
-  })),
-  listResources: vi.fn(async () => [{ uri: "ui://demo/state", name: "state" }]),
-  listResourceTemplates: vi.fn(async () => ({ resourceTemplates: [] })),
-  readResource: vi.fn(async (serverName: string, uri: string) => ({
-    contents: [{ uri, text: `${serverName}:${uri}` }],
-  })),
-};
-const view = {
-  viewId: "mcp-app-view",
-  agentId: "main",
-  sessionId: runtime.sessionId,
+  nowMs,
+  releaseRuntimeLease,
+  request,
+  resetStandaloneMcpAppTestState,
   runtime,
-  serverName: "demo",
-  toolName: "weather",
-  uiResourceUri: "ui://demo/app",
-  html: "<!doctype html><p>private fixture</p>",
-  csp: { connectDomains: ["https://api.example.com"] },
-  allowedAppToolNames: new Set(["shared", "app-only"]),
-  authorizeAppInteraction: undefined as (() => boolean | Promise<boolean>) | undefined,
-  toolInput: { city: "Paris" },
-  toolResult: { content: [{ type: "text", text: "sunny" }] },
-  requestTimeoutMs: 60_000,
-  expiresAtMs: nowMs + 10 * 60_000,
-  requestWindowStartedAtMs: nowMs,
-  requestCount: 0,
-  toolCallCount: 0,
-  activeRequests: 0,
-  byteSize: 100,
-};
-
-async function request(params: {
-  url: string;
-  method?: "GET" | "HEAD" | "POST";
-  authorization?: string;
-  clock?: () => number;
-  now?: number;
-  body?: unknown;
-}) {
-  const { res, end, setHeader } = makeMockHttpResponse();
-  const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
-  const req = Object.assign(Readable.from(serialized === undefined ? [] : [serialized]), {
-    url: params.url,
-    method: params.method ?? "GET",
-    headers: {
-      ...(params.authorization ? { authorization: params.authorization } : {}),
-      ...(serialized ? { "content-type": "application/json" } : {}),
-    },
-    socket: {},
-  }) as IncomingMessage;
-  const handled = await handleMcpAppStandaloneHttpRequest(req, res, {
-    gatewayPort: 18_789,
-    sandboxPort: 18_790,
-    now: params.clock,
-    nowMs: params.now ?? nowMs,
-    ticketSecret: secret,
-  });
-  return { handled, res, end, setHeader };
-}
+  secret,
+  view,
+  verifyMcpAppStandaloneTicket,
+} from "./mcp-app-standalone.http.test-support.js";
 
 describe("MCP App standalone host", () => {
-  beforeEach(() => {
-    mcpAppStandaloneTesting.clearTickets();
-    vi.clearAllMocks();
-    mocks.completeRetirement.mockResolvedValue(undefined);
-    Object.assign(view, {
-      allowedAppToolNames: new Set(["shared", "app-only"]),
-      authorizeAppInteraction: undefined,
-      readOnly: undefined,
-      requestTimeoutMs: 60_000,
-      requestWindowStartedAtMs: nowMs,
-      requestCount: 0,
-      toolCallCount: 0,
-      activeRequests: 0,
-    });
-    mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
-    mocks.getMcpAppViewLease.mockReturnValue(view);
-  });
+  beforeEach(resetStandaloneMcpAppTestState);
 
   it("mints an opaque ticket bound to the session, runtime, view, and lease", () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
@@ -288,7 +168,6 @@ describe("MCP App standalone host", () => {
         }
         if (authorized && !saturated) {
           expect(body.toString()).toContain("caf\u00e9 \ud83e\udd9e");
-          expect(JSON.parse(body.toString())).toMatchObject({ operationTimeoutMs: 65_000 });
         }
       } finally {
         view.html = originalHtml;
@@ -300,138 +179,53 @@ describe("MCP App standalone host", () => {
     },
   );
 
-  it("executes serialized fetch deadlines with visible outcomes", async () => {
-    const shell = await request({ url: "/__openclaw__/mcp-app" });
-    const html = String(shell.end.mock.calls[0]?.[0]);
-    const source = /<script>([\s\S]+)<\/script>/u.exec(html)?.[1];
-    expect(source).toBeDefined();
+  it.each(["headers", "body"])(
+    "bounds initial serialized fetch %s with a visible outcome",
+    async (phase) => {
+      const shell = await request({ url: "/__openclaw__/mcp-app" });
+      const html = String(shell.end.mock.calls[0]?.[0]);
+      const source = /<script>([\s\S]+)<\/script>/u.exec(html)?.[1];
+      expect(source).toBeDefined();
 
-    let renderedError = "";
-    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-    const initialSignal = AbortSignal.abort(timeoutError);
-    const initialTimeout = vi.fn(() => initialSignal);
-    const initialFetch = vi.fn(() => Promise.reject(timeoutError));
+      let renderedError = "";
+      const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      const initialSignal = AbortSignal.abort(timeoutError);
+      const initialTimeout = vi.fn(() => initialSignal);
+      const initialFetch = vi.fn(() =>
+        phase === "headers"
+          ? Promise.reject(timeoutError)
+          : Promise.resolve({ ok: true, json: () => Promise.reject(timeoutError) }),
+      );
 
-    runInNewContext(source!, {
-      AbortSignal: { timeout: initialTimeout },
-      URL,
-      addEventListener: vi.fn(),
-      document: {
-        createElement: () => ({ className: "", textContent: "" }),
-        getElementById: () => ({
-          replaceChildren: (child: { textContent?: string }) => {
-            renderedError = child.textContent ?? "";
-          },
-        }),
-      },
-      fetch: initialFetch,
-      innerWidth: 800,
-      location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
-      matchMedia: () => ({ matches: false }),
-      navigator: { language: "en" },
-      setTimeout,
-    });
-    await vi.waitFor(() =>
-      expect(renderedError).toBe("MCP App view timed out; reload to try again"),
-    );
-    expect(initialTimeout).toHaveBeenCalledWith(30_000);
-    expect(initialFetch).toHaveBeenCalledWith(
-      "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: initialSignal }),
-    );
-
-    const sandboxOrigin = "http://127.0.0.1:18790";
-    const postMessage = vi.fn();
-    const contentWindow = { postMessage };
-    const frame = {
-      setAttribute: vi.fn(),
-      contentWindow,
-    };
-    const replaceChildren = vi.fn();
-    let onMessage: ((event: unknown) => void) | undefined;
-    const operationController = new AbortController();
-    const timeout = vi.fn((delay: number) => {
-      if (delay === 65_000) {
-        queueMicrotask(() => operationController.abort(timeoutError));
-        return operationController.signal;
-      }
-      return new AbortController().signal;
-    });
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          sandboxUrl: "/mcp-app-sandbox",
-          sandboxPort: 18_790,
-          html: "<html>demo</html>",
-          toolInput: {},
-          toolResult: { content: [] },
-          serverTools: true,
-          operationTimeoutMs: 65_000,
-        }),
-      })
-      .mockImplementationOnce((_url: string, init: RequestInit) => {
-        const signal = init.signal as AbortSignal;
-        return new Promise<never>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(timeoutError), { once: true });
-        });
-      });
-
-    runInNewContext(source!, {
-      AbortSignal: { timeout },
-      URL,
-      addEventListener: (type: string, listener: (event: unknown) => void) => {
-        if (type === "message") {
-          onMessage = listener;
-        }
-      },
-      document: {
-        createElement: () => frame,
-        getElementById: () => ({ replaceChildren }),
-      },
-      fetch,
-      innerWidth: 800,
-      location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
-      matchMedia: () => ({ matches: false }),
-      navigator: { language: "en" },
-      setTimeout,
-    });
-    await vi.waitFor(() => expect(replaceChildren).toHaveBeenCalledWith(frame));
-
-    const emit = (data: unknown) =>
-      onMessage?.({ data, origin: sandboxOrigin, source: contentWindow });
-    emit({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "ui/initialize",
-      params: {
-        protocolVersion: "2026-01-26",
-        appInfo: { name: "demo", version: "1" },
-        appCapabilities: {},
-      },
-    });
-    emit({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
-    emit({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow" } });
-
-    await vi.waitFor(() =>
-      expect(postMessage).toHaveBeenCalledWith(
-        {
-          jsonrpc: "2.0",
-          id: 2,
-          error: { code: -32000, message: "MCP App operation timed out; try again" },
+      runInNewContext(source!, {
+        AbortSignal: { timeout: initialTimeout },
+        URL,
+        addEventListener: vi.fn(),
+        document: {
+          createElement: () => ({ className: "", textContent: "" }),
+          getElementById: () => ({
+            replaceChildren: (child: { textContent?: string }) => {
+              renderedError = child.textContent ?? "";
+            },
+          }),
         },
-        sandboxOrigin,
-      ),
-    );
-    expect(timeout).toHaveBeenNthCalledWith(1, 30_000);
-    expect(timeout).toHaveBeenNthCalledWith(2, 65_000);
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: operationController.signal }),
-    );
-  });
+        fetch: initialFetch,
+        innerWidth: 800,
+        location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+        matchMedia: () => ({ matches: false }),
+        navigator: { language: "en" },
+        setTimeout,
+      });
+      await vi.waitFor(() =>
+        expect(renderedError).toBe("MCP App view timed out; reload to try again"),
+      );
+      expect(initialTimeout).toHaveBeenCalledWith(30_000);
+      expect(initialFetch).toHaveBeenCalledWith(
+        "/__openclaw__/mcp-app/view",
+        expect.objectContaining({ signal: initialSignal }),
+      );
+    },
+  );
 
   it("returns capabilities only for handlers installed on the live view", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
@@ -445,7 +239,6 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
-      operationTimeoutMs: 65_000,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
@@ -454,6 +247,369 @@ describe("MCP App standalone host", () => {
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
     ).toBe(401);
+  });
+
+  it.each([0, 7, "7"])("cancels only the active serialized request %j", async (id) => {
+    const host = await createSerializedHost();
+    host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
+    const operation = host.operations[0]!;
+    const cancel = { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } };
+    host.emit(cancel, { source: {} });
+    host.emit(cancel, { origin: "https://untrusted.example" });
+    host.emit({ ...cancel, params: { requestId: "unknown" } });
+    host.emit({ ...cancel, id: "not-a-notification" });
+    expect(operation.signal?.aborted).toBe(false);
+    host.emit(cancel);
+    expect(operation.signal?.aborted).toBe(true);
+    operation.result.resolve("late response");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage.mock.calls.filter(([message]) => message.id === id)).toEqual([]);
+    expect(host.timeout).toHaveBeenCalledTimes(1);
+
+    host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+    host.emit(cancel);
+    expect(host.operations[1]?.signal?.aborted).toBe(false);
+    host.operations[1]!.result.resolve("next result");
+    await vi.waitFor(() =>
+      expect(host.postMessage).toHaveBeenCalledWith(
+        { jsonrpc: "2.0", id: "next", result: "next result" },
+        "http://127.0.0.1:18790",
+      ),
+    );
+  });
+
+  it.each(["tools/call", "ping", "ui/initialize", "unsupported"])(
+    "keeps the original reply when an active ID collides with %s",
+    async (method) => {
+      const host = await createSerializedHost();
+      host.emit({ jsonrpc: "2.0", id: 0, method: "tools/call", params: { name: "app-only" } });
+      host.emit({ jsonrpc: "2.0", id: 0, method, params: {} });
+      if (method === "ui/initialize") {
+        host.emit({ ...host.initialize, id: 0 });
+      }
+      expect(host.operations).toHaveLength(1);
+      expect(host.postMessage).not.toHaveBeenCalled();
+      host.operations[0]!.result.resolve("original result");
+      await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
+      expect(host.postMessage).toHaveBeenCalledWith(
+        { jsonrpc: "2.0", id: 0, result: "original result" },
+        "http://127.0.0.1:18790",
+      );
+    },
+  );
+
+  it.each(["tools/list", "resources/list", "resources/templates/list", "resources/read"])(
+    "retires %s when the page closes",
+    async (method) => {
+      const host = await createSerializedHost();
+      host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
+      host.pagehide();
+      expect(host.operations[0]?.signal?.aborted).toBe(true);
+      host.pageshow(true);
+      expect(host.reload).not.toHaveBeenCalled();
+      host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
+      expect(host.operations).toHaveLength(1);
+      host.operations[0]!.result.resolve("late result");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+    },
+  );
+
+  it("requests one fresh document on a persisted live-host return without replaying work", async () => {
+    const host = await createSerializedHost();
+    host.emit({ jsonrpc: "2.0", id: "old", method: "tools/call", params: { name: "app-only" } });
+    expect(host.operations).toHaveLength(1);
+    host.pagehide(true);
+    expect(host.operations[0]!.signal?.aborted).toBe(true);
+    host.operations[0]!.result.resolve("late result");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+    // Observe the real serialized owner's Location API, not simulated browser cache eligibility.
+    host.pageshow(true);
+    expect(host.reload).toHaveBeenCalledOnce();
+    host.pageshow(true);
+    expect(host.reload).toHaveBeenCalledOnce();
+    host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+    expect(host.operations).toHaveLength(1);
+    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "keeps an ordinary pageshow callable without reload (persisted=%s)",
+    async (persisted) => {
+      const host = await createSerializedHost();
+      host.pageshow(persisted);
+      expect(host.reload).not.toHaveBeenCalled();
+      host.emit({ jsonrpc: "2.0", id: "live", method: "tools/call", params: { name: "app-only" } });
+      expect(host.operations).toHaveLength(1);
+      host.operations[0]!.result.resolve("live result");
+      await vi.waitFor(() =>
+        expect(host.postMessage).toHaveBeenCalledWith(
+          { jsonrpc: "2.0", id: "live", result: "live result" },
+          "http://127.0.0.1:18790",
+        ),
+      );
+    },
+  );
+
+  it.each(["teardown-pending", "teardown-complete", "failed"])(
+    "does not resurrect a terminal %s host after persisted history events",
+    async (terminal) => {
+      const host = await createSerializedHost({
+        operationStatus: terminal === "failed" ? 401 : 200,
+      });
+      host.emit({ jsonrpc: "2.0", id: "old", method: "tools/call", params: { name: "app-only" } });
+      if (terminal === "failed") {
+        host.operations[0]!.result.resolve("rejected");
+        await vi.waitFor(() => expect(host.frame.remove).toHaveBeenCalledOnce());
+      } else {
+        host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
+        if (terminal === "teardown-complete") {
+          const teardown = host.postMessage.mock.calls.find(
+            ([message]) => message.method === "ui/resource-teardown",
+          )?.[0];
+          if (!teardown) {
+            throw new Error("Missing host teardown request");
+          }
+          host.emit({ jsonrpc: "2.0", id: teardown.id, result: {} });
+          expect(host.frame.remove).toHaveBeenCalledOnce();
+        }
+      }
+      host.pagehide(true);
+      expect(host.operations[0]!.signal?.aborted).toBe(true);
+      host.pageshow(true);
+      expect(host.reload).not.toHaveBeenCalled();
+      host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+      expect(host.operations).toHaveLength(1);
+      host.operations[0]!.result.resolve("late result");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { persisted: true, outcome: "resolve" },
+    { persisted: true, outcome: "reject" },
+    { persisted: false, outcome: "resolve" },
+    { persisted: false, outcome: "reject" },
+  ])(
+    "does not publish a retired bootstrap $outcome after pagehide (persisted=$persisted)",
+    async ({ persisted, outcome }) => {
+      const initialBody = createDeferred<unknown>();
+      const host = await createSerializedHost({ initialBody });
+      try {
+        expect(host.replaceChildren).not.toHaveBeenCalled();
+        host.pagehide(persisted);
+        if (outcome === "resolve") {
+          initialBody.resolve(host.payload);
+        } else {
+          initialBody.reject(new Error("retired initial body failed"));
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(host.replaceChildren).not.toHaveBeenCalled();
+        host.pageshow(true);
+        expect(host.reload).toHaveBeenCalledTimes(persisted ? 1 : 0);
+        expect(host.operations).toHaveLength(0);
+      } finally {
+        initialBody.resolve(host.payload);
+      }
+    },
+  );
+
+  it("does not fail the live frame when a retired 401 response body aborts", async () => {
+    const host = await createSerializedHost({ abortable401Body: true });
+    const cancel = {
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: "cancelled" },
+    };
+    host.emit({
+      jsonrpc: "2.0",
+      id: "cancelled",
+      method: "tools/call",
+      params: { name: "app-only" },
+    });
+    try {
+      const operation = host.operations[0]!;
+      await vi.waitFor(() => expect(operation.response?.bodyUsed).toBe(true));
+      host.emit(cancel);
+      expect(operation.signal?.aborted).toBe(true);
+      expect(operation.signal?.reason.name).toBe("AbortError");
+      // Native Response consumption rejects from the stream's actual AbortError; drain promise jobs.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(host.frame.remove).not.toHaveBeenCalled();
+      expect(host.replaceChildren).toHaveBeenCalledTimes(1);
+      expect(host.postMessage).not.toHaveBeenCalled();
+    } finally {
+      host.emit(cancel);
+    }
+  });
+
+  it("accepts a teardown response in the opposite request-ID namespace", async () => {
+    const host = await createSerializedHost();
+    host.emit({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "app-only" } });
+    host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} },
+      "http://127.0.0.1:18790",
+    );
+    host.emit({ jsonrpc: "2.0", id: 1, result: {} });
+    expect(host.frame.remove).toHaveBeenCalledOnce();
+    expect(host.operations[0]?.signal?.aborted).toBe(true);
+    host.operations[0]!.result.resolve("late result");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "finishes an async teardown save before unmount (await existing call=%s)",
+    async (awaitExisting) => {
+      const host = await createSerializedHost();
+      const existingReply = createDeferred();
+      const savedReply = createDeferred();
+      let cleanup: Promise<void> | undefined;
+      host.postMessage.mockImplementation((message) => {
+        if (message.method === "ui/resource-teardown") {
+          cleanup = Promise.resolve().then(async () => {
+            if (awaitExisting) {
+              await existingReply.promise;
+            }
+            host.emit({
+              jsonrpc: "2.0",
+              id: "save",
+              method: "tools/call",
+              params: { name: "app-only" },
+            });
+            await savedReply.promise;
+            host.emit({ jsonrpc: "2.0", id: message.id, result: {} });
+          });
+        } else if (message.id === "existing" && "result" in message) {
+          existingReply.resolve();
+        } else if (message.id === "save" && "result" in message) {
+          savedReply.resolve();
+        }
+      });
+      try {
+        if (awaitExisting) {
+          host.emit({
+            jsonrpc: "2.0",
+            id: "existing",
+            method: "tools/call",
+            params: { name: "app-only" },
+          });
+        }
+        host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
+        expect(cleanup).toBeDefined();
+        expect(host.frame.remove).not.toHaveBeenCalled();
+        if (awaitExisting) {
+          expect(host.operations[0]!.signal?.aborted).toBe(false);
+          host.operations[0]!.result.resolve("existing saved");
+        }
+        await vi.waitFor(() => expect(host.operations).toHaveLength(awaitExisting ? 2 : 1));
+        const save = host.operations.at(-1)!;
+        expect(save.signal?.aborted).toBe(false);
+        expect(host.frame.remove).not.toHaveBeenCalled();
+        save.result.resolve("cleanup saved");
+        await cleanup;
+        expect(host.postMessage).toHaveBeenCalledWith(
+          { jsonrpc: "2.0", id: "save", result: "cleanup saved" },
+          "http://127.0.0.1:18790",
+        );
+        expect(host.frame.remove).toHaveBeenCalledOnce();
+        host.timers[0]!.run();
+        expect(host.frame.remove).toHaveBeenCalledOnce();
+      } finally {
+        existingReply.resolve();
+        savedReply.resolve();
+        await cleanup;
+        for (const operation of host.operations) {
+          operation.result.resolve("cleanup");
+        }
+      }
+    },
+  );
+
+  it.each(["deadline", "pagehide", "persisted-pagehide"])(
+    "retires graceful cleanup at %s without replay or late replies",
+    async (terminal) => {
+      const host = await createSerializedHost();
+      const teardown = { jsonrpc: "2.0", method: "ui/notifications/request-teardown" };
+      host.emit(teardown);
+      host.emit({ jsonrpc: "2.0", id: "save", method: "tools/call", params: { name: "app-only" } });
+      expect(host.operations).toHaveLength(1);
+      expect(host.operations[0]!.signal?.aborted).toBe(false);
+      host.emit(teardown);
+      expect(host.timers).toHaveLength(1);
+      expect(host.timers[0]!.delayMs).toBe(1_000);
+      if (terminal === "deadline") {
+        host.timers[0]!.run();
+        expect(host.frame.remove).toHaveBeenCalledOnce();
+      } else {
+        host.pagehide(terminal === "persisted-pagehide");
+      }
+      expect(host.operations[0]!.signal?.aborted).toBe(true);
+      host.pageshow(true);
+      expect(host.reload).not.toHaveBeenCalled();
+      host.emit({ jsonrpc: "2.0", id: "late", method: "tools/call", params: { name: "app-only" } });
+      host.operations[0]!.result.resolve("late save result");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(host.operations).toHaveLength(1);
+      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+    },
+  );
+
+  it("keeps simultaneous numeric and string request IDs independent", async () => {
+    const host = await createSerializedHost();
+    for (const id of [7, "7"]) {
+      host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
+    }
+    expect(host.operations).toHaveLength(2);
+    host.emit({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } });
+    expect(host.operations[0]?.signal?.aborted).toBe(true);
+    expect(host.operations[1]?.signal?.aborted).toBe(false);
+    host.operations[0]!.result.resolve("cancelled number");
+    host.operations[1]!.result.resolve("live string");
+    await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: "7", result: "live string" },
+      "http://127.0.0.1:18790",
+    );
+  });
+
+  it("does not let a retired completion affect a reused request ID", async () => {
+    const host = await createSerializedHost();
+    const call = { jsonrpc: "2.0", id: 0, method: "tools/call", params: { name: "app-only" } };
+    host.emit(call);
+    host.emit({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 0 } });
+    // MCP forbids session ID reuse; old completion cleanup must still be harmless.
+    host.emit(call);
+    host.operations[0]!.result.resolve("retired result");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage).not.toHaveBeenCalled();
+    host.operations[1]!.result.resolve("current result");
+    await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: 0, result: "current result" },
+      "http://127.0.0.1:18790",
+    );
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
@@ -516,9 +672,16 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it("keeps reconstructed views read-only while preserving resource reads", async () => {
+  it("denies resource reads from reconstructed read-only views", async () => {
     Object.assign(view, { readOnly: true });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const payload = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+      serverResources: false,
+    });
     const invoke = (body: unknown) =>
       request({
         url: "/__openclaw__/mcp-app/view",
@@ -533,10 +696,11 @@ describe("MCP App standalone host", () => {
     expect(
       (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
         .statusCode,
-    ).toBe(200);
+    ).toBe(403);
+    expect(runtime.readResource).not.toHaveBeenCalled();
   });
 
-  it("does not accept standalone tool operations without explicit run authority", async () => {
+  it("does not accept standalone server operations without explicit run authority", async () => {
     Object.assign(view, { allowedAppToolNames: undefined });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
     const invoke = (body: unknown) =>
@@ -555,7 +719,7 @@ describe("MCP App standalone host", () => {
     expect(
       (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
         .statusCode,
-    ).toBe(200);
+    ).toBe(403);
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
@@ -617,24 +781,5 @@ describe("MCP App standalone host", () => {
         })
       ).res.statusCode,
     ).toBe(400);
-  });
-
-  it("omits the browser operation deadline when the view has no runtime deadline contract", async () => {
-    const noDeadlineView = { ...view, requestTimeoutMs: undefined };
-    mocks.getMcpAppViewLease.mockReturnValue(noDeadlineView);
-
-    const issued = issueTicket({
-      sessionKey: "agent:main:main",
-      view: noDeadlineView,
-      nowMs,
-      secret,
-    });
-    const accepted = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
-    expect(accepted.res.statusCode).toBe(200);
-    const payload = JSON.parse(String(accepted.end.mock.calls[0]?.[0]));
-    expect(payload).not.toHaveProperty("operationTimeoutMs");
   });
 });

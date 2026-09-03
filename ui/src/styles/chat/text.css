@@ -19,11 +19,19 @@
 }
 
 .chat-text {
+  font-family: var(--font-chat);
   font-size: var(--chat-text-size);
   line-height: 1.5;
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
+     the app-wide `antialiased` (base.css body) thins their hairlines into
+     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
+     the resolved chat typeface is a serif; unset falls back to the inherited
+     app-wide smoothing. */
+  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
+  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
 .chat-message-disclosure {
@@ -31,10 +39,10 @@
 }
 
 .chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
-  display: -webkit-box;
+  /* Legacy line clamp compresses hidden blocks that browser descendant reveal can
+     expose as overlapping text. Clip the natural Markdown layout instead. */
+  max-height: calc(var(--chat-text-size) * 1.5 * 5);
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
 }
 
 .chat-message-disclosure__toggle {
@@ -166,7 +174,6 @@
 .markdown-table__viewport {
   max-width: 100%;
   overflow-x: auto;
-  scrollbar-width: thin;
 }
 
 .markdown-table--can-scroll-right .markdown-table__viewport {
@@ -238,9 +245,14 @@
   max-height: 16px;
 }
 
+.markdown-table-modal {
+  --openclaw-modal-width: min(1200px, calc(100vw - 64px));
+  --openclaw-modal-backdrop-filter: blur(3px);
+  --wa-color-overlay-modal: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+
 .markdown-table-dialog {
-  width: calc(100vw - 64px);
-  max-width: 1200px;
+  width: 100%;
   max-height: calc(100dvh - 64px);
   padding: 20px 28px;
   border: 0;
@@ -249,11 +261,6 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
   overflow: auto;
-}
-
-.markdown-table-dialog::backdrop {
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(3px);
 }
 
 .markdown-table-dialog.chat-text > table {
@@ -300,7 +307,6 @@
     color-mix(in srgb, var(--accent) 6%, var(--secondary))
   );
   color: var(--text-strong);
-  font-family: var(--font-body);
   font-weight: 600;
 }
 
@@ -417,7 +423,6 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(details) {
-  box-sizing: border-box;
   width: 100%;
   padding: var(--space-4);
   border: 1px solid var(--border);
@@ -565,7 +570,7 @@
   line-break: anywhere;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link {
   display: inline;
   padding: 0.1em 0.2em;
   border: 1px solid var(--border-strong);
@@ -580,12 +585,12 @@
   word-break: break-word;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link:hover,
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link:focus-visible {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover,
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:focus-visible {
   text-decoration: underline;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link--titled {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link--titled {
   display: inline-block;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
@@ -724,7 +729,6 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
-  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
@@ -1035,5 +1039,102 @@
   /* Left padding stays 12px so the quote border inset matches desktop. */
   .chat-text :where(blockquote) {
     padding: 6px 10px 6px 12px;
+  }
+}
+
+/* ── Inline JSON disclosure ── */
+
+.chat-json-collapse {
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
+  overflow: hidden;
+}
+
+.chat-json-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.chat-json-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-json-summary::before {
+  content: "▸";
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.chat-json-collapse[open] > .chat-json-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-json-summary:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
+}
+
+.chat-json-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.chat-json-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-json-content {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.chat-json-content code {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+@media (max-width: 768px) {
+  .chat-json-content {
+    padding: 8px 10px;
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 560px) {
+  .chat-json-content {
+    max-height: 200px;
   }
 }

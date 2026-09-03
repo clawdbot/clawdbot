@@ -14,6 +14,7 @@ import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
+import { resolveGatewayStartupTiming } from "../gateway-startup-timing.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -43,34 +44,6 @@ import {
 } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
 import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
-
-const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
-const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
-const INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 10_000;
-const WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS = 90_000;
-const WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 15_000;
-const INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 10_000;
-const WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 90_000;
-
-/** Returns platform-specific health timing for managed daemon installs. */
-function resolveInstallDaemonGatewayHealthTiming(platform: NodeJS.Platform = process.platform): {
-  deadlineMs: number;
-  probeTimeoutMs: number;
-  healthCommandTimeoutMs: number;
-} {
-  if (platform === "win32") {
-    return {
-      deadlineMs: WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS,
-      probeTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
-      healthCommandTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
-    };
-  }
-  return {
-    deadlineMs: INSTALL_DAEMON_HEALTH_DEADLINE_MS,
-    probeTimeoutMs: INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
-    healthCommandTimeoutMs: INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
-  };
-}
 
 async function collectGatewayHealthFailureDiagnostics(): Promise<
   GatewayHealthFailureDiagnostics | undefined
@@ -158,7 +131,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     Symbol.for("openclaw.onboardNonInteractiveLocalTestApi")
   ] = {
     resolveGatewayHealthProbeToken,
-    resolveInstallDaemonGatewayHealthTiming,
   };
 }
 
@@ -175,9 +147,10 @@ export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  sourceConfigBeforeMigrations: OpenClawConfig;
   baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig, baseHash } = params;
+  const { opts, runtime, baseConfig, sourceConfigBeforeMigrations, baseHash } = params;
   const mode = "local" as const;
 
   const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
@@ -185,7 +158,12 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  // Injected main is not authored membership; legacy workspace state still owns its guard.
+  const hasAuthoredRoster = listAgentEntries(sourceConfigBeforeMigrations).length > 0;
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(
+    sourceConfigBeforeMigrations,
+    requestedWorkspaceDir,
+  );
   const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
@@ -201,6 +179,7 @@ export async function runNonInteractiveLocalSetup(params: {
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
+    { allowWorkspaceChange: !hasAuthoredRoster && !workspaceConflict },
   );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
@@ -209,9 +188,7 @@ export async function runNonInteractiveLocalSetup(params: {
   // that requested owner before first-agent creation is allowed to write.
   const authTarget = resolveOnboardingSetupTarget(
     nextConfig,
-    opts.agentName && listAgentEntries(baseConfig).length === 0
-      ? { name: opts.agentName, workspaceDir }
-      : undefined,
+    opts.agentName && !hasAuthoredRoster ? { name: opts.agentName, workspaceDir } : undefined,
   );
 
   const inferredAuthChoice = opts.authChoice
@@ -276,6 +253,7 @@ export async function runNonInteractiveLocalSetup(params: {
     workspace: workspaceDir,
     baseConfig,
     firstAgent: { name: opts.agentName ?? "main" },
+    expectedConfigHash: baseHash ?? null,
   });
   for (const warning of created.sessionMigrationWarnings ?? []) {
     runtime.log(`Warning: ${warning}`);
@@ -370,18 +348,15 @@ export async function runNonInteractiveLocalSetup(params: {
       basePath: undefined,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const installDaemonGatewayHealthTiming = resolveInstallDaemonGatewayHealthTiming();
+    const startupTiming = opts.installDaemon
+      ? resolveGatewayStartupTiming()
+      : { deadlineMs: 15_000 };
     const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
     const probe = await waitForGatewayReachable({
       url: links.wsUrl,
       token: probeAuth.token,
       password: probeAuth.password,
-      deadlineMs: opts.installDaemon
-        ? installDaemonGatewayHealthTiming.deadlineMs
-        : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
-      probeTimeoutMs: opts.installDaemon
-        ? installDaemonGatewayHealthTiming.probeTimeoutMs
-        : undefined,
+      ...startupTiming,
     });
     if (!probe.ok) {
       // Non-daemon setup attaches to an existing gateway, so collect expensive
@@ -450,9 +425,7 @@ export async function runNonInteractiveLocalSetup(params: {
         await healthCommandNonExiting(
           {
             json: false,
-            timeoutMs: opts.installDaemon
-              ? installDaemonGatewayHealthTiming.healthCommandTimeoutMs
-              : 10_000,
+            timeoutMs: opts.installDaemon && process.platform === "win32" ? 90_000 : 10_000,
             config: nextConfig,
             token: probeAuth.token,
             password: probeAuth.password,

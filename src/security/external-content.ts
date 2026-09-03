@@ -1,6 +1,7 @@
 // Wraps external content with source tags and random boundary tokens.
 import { randomBytes } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { escapeRegExp } from "../shared/regexp.js";
 export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
@@ -141,16 +142,19 @@ const LLM_SPECIAL_TOKEN_LITERALS = [
   "<end_of_turn>",
 ] as const;
 
-const LLM_SPECIAL_TOKEN_PATTERNS = [
-  // Many Hugging Face chat templates reserve token spellings in this form. Exact known
-  // literals above handle the common cases; this catches future reserved-token variants.
-  /<\|reserved_special_token_\d+\|>/g,
-] as const;
+// Token spellings do not overlap, and the replacement cannot create another token.
+// Keep the existing literal set and reserved numeric family in one native scan.
+const LLM_SPECIAL_TOKEN_PATTERN = new RegExp(
+  [...LLM_SPECIAL_TOKEN_LITERALS.map(escapeRegExp), /<\|reserved_special_token_\d+\|>/.source].join(
+    "|",
+  ),
+  "g",
+);
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
-// Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
-const ANGLE_BRACKET_MAP: Record<number, string> = {
+// Finite character folds used only to locate spoofed external-content markers.
+const MARKER_CHAR_FOLDS: Record<number, string> = {
   0xff1c: "<", // fullwidth <
   0xff1e: ">", // fullwidth >
   0x2329: "<", // left-pointing angle bracket
@@ -179,63 +183,58 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x276f: ">", // heavy right-pointing angle quotation mark ornament
   0x02c2: "<", // modifier letter left arrowhead
   0x02c3: ">", // modifier letter right arrowhead
+  0x200b: "", // zero width space
+  0x200c: "", // zero width non-joiner
+  0x200d: "", // zero width joiner
+  0x2060: "", // word joiner
+  0xfeff: "", // zero width no-break space
+  0x00ad: "", // soft hyphen
 };
 
-function foldMarkerChar(char: string): string {
-  const code = char.charCodeAt(0);
-  if (code >= 0xff21 && code <= 0xff3a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
+for (const start of [0xff21, 0xff41]) {
+  for (let code = start; code < start + 26; code += 1) {
+    MARKER_CHAR_FOLDS[code] = String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
-  if (code >= 0xff41 && code <= 0xff5a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
-  }
-  const bracket = ANGLE_BRACKET_MAP[code];
-  if (bracket) {
-    return bracket;
-  }
-  return char;
 }
 
-function isMarkerIgnorableChar(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return (
-    code === 0x200b ||
-    code === 0x200c ||
-    code === 0x200d ||
-    code === 0x2060 ||
-    code === 0xfeff ||
-    code === 0x00ad
-  );
-}
+// Derive detection from the folds so new substitutions cannot bypass offset mapping.
+// Every key is a non-ASCII BMP code unit, not RegExp character-class syntax.
+const MARKER_FOLD_PATTERN = new RegExp(
+  `[${Object.keys(MARKER_CHAR_FOLDS)
+    .map((code) => String.fromCharCode(Number(code)))
+    .join("")}]`,
+  "u",
+);
 
 type FoldedMarkerMatch = {
   folded: string;
-  originalStartByFoldedIndex: number[];
-  originalEndByFoldedIndex: number[];
+  // Without folds, offsets are identity; changed text needs each retained source start.
+  originalStartByFoldedIndex?: number[];
 };
 
 function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
+  if (!MARKER_FOLD_PATTERN.test(input)) {
+    return { folded: input };
+  }
   let folded = "";
   const originalStartByFoldedIndex: number[] = [];
-  const originalEndByFoldedIndex: number[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
     const char = input.charAt(index);
-    if (isMarkerIgnorableChar(char)) {
+    const code = input.charCodeAt(index);
+    const foldedChar = code < 0x80 ? char : (MARKER_CHAR_FOLDS[code] ?? char);
+    if (foldedChar === "") {
       continue;
     }
-    const foldedChar = foldMarkerChar(char);
     folded += foldedChar;
     originalStartByFoldedIndex.push(index);
-    originalEndByFoldedIndex.push(index + 1);
   }
 
-  return { folded, originalStartByFoldedIndex, originalEndByFoldedIndex };
+  return { folded, originalStartByFoldedIndex };
 }
 
 function replaceMarkers(content: string): string {
-  const { folded, originalStartByFoldedIndex, originalEndByFoldedIndex } =
-    foldMarkerTextWithIndexMap(content);
+  const { folded, originalStartByFoldedIndex } = foldMarkerTextWithIndexMap(content);
   // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
   // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
   if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
@@ -264,11 +263,8 @@ function replaceMarkers(content: string): string {
       const foldedStart = match.index;
       const foldedEnd = match.index + match[0].length;
       replacements.push({
-        start: originalStartByFoldedIndex[foldedStart] ?? foldedStart,
-        end:
-          originalEndByFoldedIndex[foldedEnd - 1] ??
-          originalStartByFoldedIndex[foldedEnd] ??
-          foldedEnd,
+        start: originalStartByFoldedIndex?.[foldedStart] ?? foldedStart,
+        end: (originalStartByFoldedIndex?.[foldedEnd - 1] ?? foldedEnd - 1) + 1,
         value: pattern.value,
       });
     }
@@ -294,14 +290,7 @@ function replaceMarkers(content: string): string {
 }
 
 export function sanitizeModelSpecialTokens(content: string): string {
-  let output = content;
-  for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
-    output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
-  }
-  for (const pattern of LLM_SPECIAL_TOKEN_PATTERNS) {
-    output = output.replace(pattern, SPECIAL_TOKEN_REPLACEMENT);
-  }
-  return output;
+  return content.replace(LLM_SPECIAL_TOKEN_PATTERN, SPECIAL_TOKEN_REPLACEMENT);
 }
 
 /** Bound sanitized external prose while preserving its exact retained source prefix. */
@@ -311,18 +300,23 @@ export function truncateSanitizedExternalContent(
 ): { text: string; truncated: boolean; retainedRawChars: number } {
   const sanitizePrefix = (candidate: string): { text: string; retainedRawChars: number } => {
     let retained = candidate;
-    let text = sanitizeExternalContentText(retained);
     if (retained.length < value.length) {
-      const markerPrefix = /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT/iu;
-      if (markerPrefix.test(foldMarkerTextWithIndexMap(text).folded)) {
-        // Clipping inside a forged marker bypasses complete-marker replacement.
-        const folded = foldMarkerTextWithIndexMap(retained);
-        const match = markerPrefix.exec(folded.folded);
-        retained = retained.slice(0, folded.originalStartByFoldedIndex[match?.index ?? 0] ?? 0);
-        text = sanitizeExternalContentText(retained);
+      const folded = foldMarkerTextWithIndexMap(retained);
+      // Consume complete markers (including their ids) before locating a clipped
+      // one, or an earlier opening marker can erase all useful wrapped content.
+      const markers =
+        /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT((?:\s+id=\\*"[^"]*")?\s*>>>)?/giu;
+      for (const match of folded.folded.matchAll(markers)) {
+        if (!match[1]) {
+          retained = retained.slice(
+            0,
+            folded.originalStartByFoldedIndex?.[match.index] ?? match.index,
+          );
+          break;
+        }
       }
     }
-    return { text, retainedRawChars: retained.length };
+    return { text: sanitizeExternalContentText(retained), retainedRawChars: retained.length };
   };
   const prefix = truncateUtf16Safe(value, maxChars);
   const sanitized = sanitizePrefix(prefix);

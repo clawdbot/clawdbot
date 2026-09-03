@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTabAccessEvents } from "./tab-access-events.js";
+import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
 function deferred<T>() {
   let resolve = (_value: T) => {};
@@ -18,29 +19,45 @@ function createHarness(
     | undefined;
   let debuggerDetachListener: ((source: { tabId?: number }, reason: string) => void) | undefined;
   let tabsUpdatedListener:
-    | ((tabId: number, changeInfo: { groupId?: number; url?: string }) => void)
+    | ((
+        tabId: number,
+        changeInfo: { groupId?: number; url?: string },
+        tab: BrowserTabSnapshot,
+      ) => void)
     | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
-  let groupUpdatedListener: (() => void) | undefined;
+  let groupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
   let revision = 0;
   let accessible = true;
-  const attachedTabs = new Set([7]);
-  const attachedAccessEpochs = new Map([[7, { revision: 0, tabRevision: 0 }]]);
-  const attachingTabs = new Map<number, Promise<unknown>>();
+  const attachments = new Map([[7, { epoch: { revision: 0, groupRevision: 0, tabRevision: 0 } }]]);
   const send = vi.fn();
   const policy = {
     mode,
+    observeTabUpdate: vi.fn(
+      (_tabId: number, change: { url?: string; groupId?: number }) =>
+        typeof change.url === "string" ||
+        (mode === "selected" && typeof change.groupId === "number"),
+    ),
+    retireTab: vi.fn(() => {
+      revision += 1;
+    }),
     beginRevocation: vi.fn(() => Symbol("revocation")),
     endRevocation: vi.fn(),
-    capture: vi.fn(() => ({ revision, tabRevision: 0 })),
+    capture: vi.fn(() => ({ revision, groupRevision: 0, tabRevision: 0 })),
     epochIsCurrent: vi.fn(
       (_tabId: number, epoch: { revision: number }) => epoch.revision === revision,
     ),
     invalidateTab: vi.fn(() => {
       revision += 1;
     }),
-    invalidateAll: vi.fn(() => {
+    renewTabAccess: vi.fn(() => {
       revision += 1;
+      return undefined;
+    }),
+    forwardDocumentEvent: vi.fn((event, emit) => emit(event)),
+    invalidateGroup: vi.fn(() => {
+      revision += 1;
+      return true;
     }),
     inspectTab: vi.fn(async (_tabId: number, epoch: { revision: number }) => ({
       accessible: accessible && epoch.revision === revision,
@@ -50,8 +67,7 @@ function createHarness(
     replaceTab: vi.fn(async () => false),
   };
   const detachDebugger = vi.fn(async (tabId: number) => {
-    attachedTabs.delete(tabId);
-    attachedAccessEpochs.delete(tabId);
+    attachments.delete(tabId);
   });
   const pauseTab = vi.fn(async () => undefined);
   const removeTabFromOpenClawGroup = vi.fn(async () => undefined);
@@ -83,7 +99,7 @@ function createHarness(
     },
     tabGroups: {
       onUpdated: {
-        addListener: (listener: () => void) => {
+        addListener: (listener: (group?: { id: number; title?: string }) => void) => {
           groupUpdatedListener = listener;
         },
       },
@@ -95,9 +111,8 @@ function createHarness(
     chromeApi,
     accessReady,
     policy,
-    attachedTabs,
-    attachedAccessEpochs,
-    attachingTabs,
+    attachments,
+    nativeDetached: (tabId: number) => attachments.delete(tabId),
     send,
     scheduleTabsSync: vi.fn(),
     detachDebugger,
@@ -115,8 +130,7 @@ function createHarness(
     throw new Error("expected tab access event listeners");
   }
   return {
-    attachedAccessEpochs,
-    attachingTabs,
+    attachments,
     detachDebugger,
     debuggerDetachListener,
     debuggerEventListener,
@@ -128,7 +142,8 @@ function createHarness(
     setAccessible: (next: boolean) => {
       accessible = next;
     },
-    tabsUpdatedListener,
+    tabsUpdatedListener: (tabId: number, changeInfo: { groupId?: number; url?: string }) =>
+      tabsUpdatedListener?.(tabId, changeInfo, { id: tabId, ...changeInfo }),
     tabsReplacedListener,
   };
 }
@@ -190,7 +205,11 @@ describe("tab access event epochs", () => {
       await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
       harness.tabsUpdatedListener(7, secondChange);
       await vi.waitFor(() => {
-        expect(harness.attachedAccessEpochs.get(7)).toEqual({ revision: 2, tabRevision: 0 });
+        expect(harness.attachments.get(7)?.epoch).toEqual({
+          revision: 2,
+          groupRevision: 0,
+          tabRevision: 0,
+        });
       });
 
       firstInspection.resolve({ accessible: false });
@@ -264,28 +283,6 @@ describe("tab access event epochs", () => {
       expect(harness.detachDebugger).toHaveBeenCalledWith(7);
       expect(harness.detachDebugger).toHaveBeenCalledWith(8);
     });
-  });
-
-  it("lets a newer eligible tab event own stale group-wide reconciliation", async () => {
-    const harness = createHarness("selected");
-    const groupInspection = deferred<{ accessible: boolean }>();
-    harness.policy.inspectTab
-      .mockImplementationOnce(async () => await groupInspection.promise)
-      .mockResolvedValueOnce({ accessible: true });
-
-    harness.groupUpdatedListener();
-    harness.debuggerEventListener({ tabId: 7 }, "Page.frameNavigated", {});
-    expect(harness.send).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
-
-    harness.tabsUpdatedListener(7, { url: "https://two.example" });
-    await vi.waitFor(() => {
-      expect(harness.attachedAccessEpochs.get(7)).toEqual({ revision: 2, tabRevision: 0 });
-    });
-    groupInspection.resolve({ accessible: false });
-    await Promise.resolve();
-
-    expect(harness.detachDebugger).not.toHaveBeenCalled();
   });
 
   it("does not refresh epochs from a stale group-wide access snapshot", async () => {

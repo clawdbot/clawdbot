@@ -4,10 +4,6 @@ import type {
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  CLAUDE_CLI_PROFILE_ID,
-  validateAnthropicSetupToken,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
   addProviderUsageModel,
   asProviderUsageObject,
   buildUsageHttpErrorSnapshot,
@@ -24,6 +20,7 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
@@ -264,8 +261,11 @@ export async function resolveAnthropicUsageAuth(
   if (adminKey) {
     return { token: encodeAdminToken(adminKey) };
   }
-  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
-    return { token: apiKey };
+  if (apiKey) {
+    const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
+    if (validateAnthropicSetupToken(apiKey) === undefined) {
+      return { token: apiKey };
+    }
   }
 
   // Claude owns its native refresh-token family. Do not resolve a copied

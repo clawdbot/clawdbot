@@ -1,5 +1,7 @@
 import path from "node:path";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mcpMocks = vi.hoisted(() => ({
@@ -22,6 +24,8 @@ const mcpMocks = vi.hoisted(() => ({
   staticFacade: vi.fn(),
   threadConfigFacade: vi.fn(),
   requesterCalls: 0,
+  requesterCollisionTool: false,
+  requesterDispose: vi.fn(async () => undefined),
   requesterParams: [] as Array<Record<string, unknown>>,
   staticDiagnosticNotice: undefined as string | undefined,
   staticFailure: undefined as Error | undefined,
@@ -39,15 +43,34 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
     ) => {
       mcpMocks.requesterCalls += 1;
-      mcpMocks.requesterParams.push(args[0] as Record<string, unknown>);
-      return undefined;
+      const params = args[0] as Record<string, unknown>;
+      mcpMocks.requesterParams.push(params);
+      if (!mcpMocks.requesterCollisionTool) {
+        return undefined;
+      }
+      const reserved = new Set(params.reservedToolNames as string[] | undefined);
+      const name = reserved.has("fake__show") ? "fake__show_2" : "fake__show";
+      const tool = {
+        name,
+        description: "Requester-scoped MCP collision fixture.",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "scoped" }] })),
+      };
+      return {
+        tools: [tool],
+        advertisedTools: [tool],
+        dispose: mcpMocks.requesterDispose,
+      };
     },
     loadCodexBundleMcpThreadConfig: async (
       ...args: Parameters<typeof actual.loadCodexBundleMcpThreadConfig>
     ) => {
       const params = args[0] as Record<string, unknown>;
       mcpMocks.threadConfigCalls.push(params);
-      mcpMocks.threadConfigFacade(params);
+      const override = mcpMocks.threadConfigFacade(params);
+      if (override) {
+        return override;
+      }
       const cfg = params.cfg as
         | { mcp?: { servers?: Record<string, Record<string, unknown>> } }
         | undefined;
@@ -82,7 +105,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       mcpMocks.authorityResolvers.push(params.resolve);
       return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
     },
-    materializeStaticMcpToolsForScheduledHarnessRun: async (params: Record<string, unknown>) => {
+    materializeStaticMcpToolsForHarnessRun: async (params: Record<string, unknown>) => {
       mcpMocks.staticCalls.push(params);
       mcpMocks.staticFacade(params);
       if (mcpMocks.staticFailure) {
@@ -173,12 +196,14 @@ beforeEach(() => {
   mcpMocks.staticCalls.length = 0;
   mcpMocks.staticToolExecutes.length = 0;
   mcpMocks.requesterCalls = 0;
+  mcpMocks.requesterCollisionTool = false;
   mcpMocks.requesterParams.length = 0;
   mcpMocks.threadConfigCalls.length = 0;
   mcpMocks.staticDiagnosticNotice = undefined;
   mcpMocks.staticFailure = undefined;
   mcpMocks.staticFailureGate = undefined;
   mcpMocks.dispose.mockClear();
+  mcpMocks.requesterDispose.mockClear();
   mcpMocks.captureFacade.mockClear();
   mcpMocks.staticFacade.mockClear();
   mcpMocks.threadConfigFacade.mockClear();
@@ -394,64 +419,233 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     });
   });
 
-  it("keeps ordinary configured MCP native without probing or stamping its inventory", async () => {
-    const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-native-mcp-auth-failure"),
-    );
-    configureFakeMcp(params);
-
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "mcpServerStatus/list") {
-        return {
-          data: [
-            {
-              name: "fake",
-              serverInfo: null,
-              authStatus: "notLoggedIn",
-              tools: {},
+  it.each([
+    { mode: undefined, source: "operator", delegate: false },
+    { mode: "approve", source: "operator", delegate: false },
+    { mode: "auto", source: "operator", delegate: true },
+    { mode: "prompt", source: "operator", delegate: true },
+    { mode: "prompt", source: "bundle", delegate: true },
+    { mode: "approve", source: "operator-over-bundle", delegate: false },
+  ] as const)(
+    "honors $source MCP approval mode $mode at thread and turn startup",
+    async (testCase) => {
+      const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, "workspace-native-mcp-auth-failure"),
+      );
+      configureFakeMcp(params);
+      params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: testCase.mode };
+      if (testCase.source === "bundle") {
+        params.config!.mcp = {};
+        mcpMocks.threadConfigFacade.mockReturnValueOnce({
+          configPatch: {
+            mcp_servers: {
+              bundled: {
+                url: "https://mcp.example.test",
+                default_tools_approval_mode: testCase.mode,
+              },
             },
-          ],
-          nextCursor: null,
-        };
+          },
+          diagnostics: [],
+          evaluated: true,
+          staticServerNames: ["bundled", "unannotated"],
+          userStaticServerNames: ["unannotated"],
+        });
+      } else if (testCase.source === "operator-over-bundle") {
+        mcpMocks.threadConfigFacade.mockReturnValueOnce({
+          configPatch: {
+            mcp_servers: {
+              fake: { url: "https://mcp.example.test", default_tools_approval_mode: "prompt" },
+            },
+          },
+          diagnostics: [],
+          evaluated: true,
+          staticServerNames: ["fake", "unannotated"],
+          userStaticServerNames: ["fake", "unannotated"],
+        });
       }
-      return undefined;
-    });
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toBeDefined();
+      params.config!.mcp!.servers = {
+        ...params.config!.mcp!.servers,
+        unannotated: { url: "https://unannotated.example.test/mcp" },
+      };
+      const requestApproval = vi.fn(async (_request: { description?: string }) => ({
+        id: "plugin:mcp-fixture",
+      }));
+      const waitForApproval = vi.fn(async () => ({
+        decision: "deny" as const,
+        terminalReason: "user" as const,
+      }));
+      params.hostCapabilities = Object.freeze({
+        ...params.hostCapabilities,
+        requestApproval,
+        waitForApproval,
+      });
 
-    expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
-    expect(mcpMocks.staticCalls).toHaveLength(0);
-    expect(mcpMocks.requesterParams[0]?.manifestRegistry).toBe(
-      params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
-    );
-    expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
-  });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "mcpServerStatus/list") {
+          return {
+            data: [
+              {
+                name: "fake",
+                serverInfo: null,
+                authStatus: "notLoggedIn",
+                tools: {},
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        return undefined;
+      });
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: {
+          appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
+        },
+      });
+      await harness.waitForMethod("turn/start");
+      const responses = [];
+      for (const serverName of ["unannotated", testCase.source === "bundle" ? "bundled" : "fake"]) {
+        responses.push(
+          await harness.handleServerRequest({
+            id: `approval-${serverName}`,
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              serverName,
+              mode: "form",
+              _meta: { codex_approval_kind: "mcp_tool_call" },
+              requestedSchema: { type: "object", properties: {} },
+            },
+          }),
+        );
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
 
-  it("captures a restricted ordinary turn without inventing intentionally disabled native MCP", async () => {
+      expect(responses).toEqual([
+        { action: "accept", content: null, _meta: null },
+        { action: testCase.delegate ? "decline" : "accept", content: null, _meta: null },
+      ]);
+      expect(requestApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
+      expect(waitForApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
+      // Codex drops decline meta, so the remedy must reach the operator via the card.
+      if (testCase.delegate) {
+        expect(requestApproval.mock.calls[0]?.[0]?.description).toContain(
+          `openclaw mcp configure ${testCase.source === "bundle" ? "bundled" : "fake"} --approval approve`,
+        );
+      }
+      const expectedApprovalPolicy = testCase.delegate
+        ? {
+            granular: {
+              mcp_elicitations: true,
+              rules: false,
+              sandbox_approval: false,
+              request_permissions: false,
+              skill_approval: false,
+            },
+          }
+        : "never";
+      for (const method of ["thread/start", "turn/start"]) {
+        expect(harness.requests.find((request) => request.method === method)?.params).toMatchObject(
+          {
+            approvalPolicy: expectedApprovalPolicy,
+          },
+        );
+      }
+      expect(harness.requests.map((request) => request.method)).not.toContain(
+        "mcpServerStatus/list",
+      );
+      expect(mcpMocks.staticCalls).toHaveLength(0);
+      expect(mcpMocks.requesterParams[0]?.manifestRegistry).toBe(
+        params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
+      );
+      expect(mcpMocks.captureCalls).toHaveLength(1);
+      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+    },
+  );
+
+  it("keeps configured and requester MCP unique when the native surface is unavailable", async () => {
     const sessionFile = path.join(tempDir, "session-native-mcp-restricted.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-native-mcp-restricted"));
     configureFakeMcp(params);
+    params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: "auto" };
     params.toolsAllow = ["cron", "fake__show"];
+    mcpMocks.requesterCollisionTool = true;
+    const requestApproval = vi.fn(async (request: { isMcpToolApprovalActive?: () => boolean }) => {
+      expect(request.isMcpToolApprovalActive?.()).toBe(true);
+      return { id: "plugin:mcp-dynamic" };
+    });
+    const waitForApproval = vi.fn(async () => ({
+      decision: "allow-always" as const,
+      terminalReason: "user" as const,
+    }));
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      requestApproval,
+      waitForApproval,
+    });
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
+    const dynamicTools = JSON.stringify(threadStart?.dynamicTools ?? []);
+    expect(mcpMocks.staticCalls).toHaveLength(1);
+    expect(mcpMocks.staticCalls[0]).toMatchObject({
+      agentId: "main",
+      projectedMcpServers: expect.objectContaining({ fake: expect.any(Object) }),
+      requestInteractiveCodexApproval: expect.any(Function),
+    });
+    expect(threadStart?.config).not.toHaveProperty("mcp_servers");
+    expect(dynamicTools.match(/fake__show"/gu)).toHaveLength(1);
+    expect(dynamicTools.match(/fake__show_2"/gu)).toHaveLength(1);
+
+    const requestInteractiveCodexApproval = mcpMocks.staticCalls[0]!
+      .requestInteractiveCodexApproval as (params: {
+      safeToolName: string;
+      toolCallId: string;
+      serverName: string;
+      toolName: string;
+      mode: "auto";
+      isActive: () => boolean;
+    }) => Promise<void>;
+    await requestInteractiveCodexApproval({
+      safeToolName: "fake__show",
+      toolCallId: "call-fake-show",
+      serverName: "fake",
+      toolName: "show",
+      mode: "auto",
+      isActive: () => true,
+    });
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        mcpTool: { server: "fake", tool: "show" },
+        toolCallId: "call-fake-show",
+      }),
+    );
+    expect(waitForApproval).toHaveBeenCalledOnce();
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();
 
     expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
-    expect(mcpMocks.staticCalls).toHaveLength(0);
     expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+    expect(mcpMocks.captureCalls[0]!.storedNames).toEqual(
+      expect.arrayContaining(["fake__show", "fake__show_2"]),
+    );
+    expect(new Set(mcpMocks.captureCalls[0]!.storedNames).size).toBe(
+      mcpMocks.captureCalls[0]!.storedNames.length,
+    );
     expect(mcpMocks.captureCalls[0]!.provenance).toEqual({
       version: 1,
       source: "final-executable-surface",
     });
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
   });
 
   it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {
@@ -673,31 +867,46 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     await expect(run).resolves.toBeDefined();
   });
 
-  it("keeps static discovery failures visible without stamping inherited authority", async () => {
-    const sessionFile = path.join(tempDir, "session-static-mcp-discovery-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-static-mcp-discovery-failure"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "cron";
-    params.toolsAllow = ["*"];
-    params.scheduledToolPolicy = { version: 1, mode: "trusted" };
-    mcpMocks.staticDiagnosticNotice =
-      "Configured MCP is incomplete for this scheduled run: fake: authentication required. " +
-      "Do not claim MCP-backed work succeeded; report this blocker to the operator.";
+  it.each(["current hook policy", ""])(
+    "keeps post-hook static discovery failures visible with replacement policy %j",
+    async (systemPrompt) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: async () => ({ systemPrompt }) },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-static-mcp-discovery-failure.jsonl");
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, "workspace-static-mcp-discovery-failure"),
+      );
+      configureFakeMcp(params);
+      params.trigger = "cron";
+      params.toolsAllow = ["*"];
+      params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      mcpMocks.staticDiagnosticNotice =
+        "Configured MCP is incomplete for this scheduled run: fake: authentication required. " +
+        "Do not claim MCP-backed work succeeded; report this blocker to the operator.";
 
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
 
-    const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    expect(JSON.stringify(threadStart?.params)).toContain("fake: authentication required");
-    expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+      const threadStart = harness.requests.find((request) => request.method === "thread/start");
+      expect(threadStart?.params).toMatchObject({
+        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
+          .filter(Boolean)
+          .join("\n\n"),
+      });
+      expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
+        false,
+      );
+      expect(mcpMocks.captureCalls).toHaveLength(1);
+      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
 
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toBeDefined();
-    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
-  });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
+      expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    },
+  );
 });

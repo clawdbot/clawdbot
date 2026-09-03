@@ -73,7 +73,7 @@ async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string;
 
 function itWithFrozenClock(name: string, run: () => Promise<void>): void {
   it(name, async () => {
-    // Size and pagination proofs must not spend the separately tested catalog deadline.
+    // Non-timeout catalog proofs must not spend the separately tested catalog deadline.
     useFrozenTime(1_000);
     try {
       await run();
@@ -115,7 +115,7 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
-  it("terminates streamable HTTP sessions on failed startup and manager close", async () => {
+  itWithFrozenClock("terminates HTTP sessions on failed startup and manager close", async () => {
     const events = new Map<string, string[]>();
     const transports = new Map(
       ["failed", "healthy"].map((serverName) => {

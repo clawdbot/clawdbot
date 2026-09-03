@@ -71,7 +71,6 @@ export {
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
-export { adaptMemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
