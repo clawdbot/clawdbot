@@ -1,5 +1,5 @@
-import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import { readDesktopOverlay } from "./session-catalog-desktop.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   projectsDir,
   readProjectsTreeSnapshot,

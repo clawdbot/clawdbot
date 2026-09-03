@@ -22,14 +22,19 @@ import {
   type ClaudeProjectsTreeSnapshot,
   type CatalogJsonReadBudget,
   type ClaudeSessionScanContext,
+  projectsDir,
   readClaudeCatalogMetadata,
   readJsonFile,
+  readProjectsTreeSnapshot,
   reserveCatalogJsonFile,
   safeSessionFileForScan,
   setBoundedCache,
 } from "./session-catalog-scan.js";
 import { collectTranscriptText } from "./session-catalog-transcript.js";
-import type { ClaudeSessionCatalogError, ClaudeSessionCatalogSession } from "./session-catalog-types.js";
+import type {
+  ClaudeSessionCatalogError,
+  ClaudeSessionCatalogSession,
+} from "./session-catalog-types.js";
 
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
@@ -593,6 +598,7 @@ async function readMergedClaudeSessions(
     merged = mergeClaudeSessions(cli, desktop);
     overlays.set(desktop, merged);
   }
+  const records = await merged;
   const skippedFiles = Math.max(cli.budget.skippedFiles, budget.skippedFiles);
   const racedFiles = Math.max(cli.budget.racedFiles, budget.racedFiles);
   const complete =
@@ -606,10 +612,10 @@ async function readMergedClaudeSessions(
             ? `Some Local Claude session metadata was skipped by the 16 MiB per-file or 64 MiB aggregate safety limit (${skippedFiles} file${skippedFiles === 1 ? "" : "s"}).`
             : racedFiles > 0
               ? `Some Local Claude session metadata changed while being read (${racedFiles} file${racedFiles === 1 ? "" : "s"}).`
-            : "Some Local Claude session metadata could not be read.",
+              : "Some Local Claude session metadata could not be read.",
       };
   return {
-    records: merged,
+    records,
     complete,
     ...(error ? { error } : {}),
   };

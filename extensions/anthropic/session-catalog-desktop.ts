@@ -158,9 +158,7 @@ async function readDesktopMetadata(
           continue;
         }
         const filePath = path.join(workspaceDir, name);
-        const reservedBytes = budget
-          ? await reserveCatalogJsonFile(filePath, budget)
-          : undefined;
+        const reservedBytes = budget ? await reserveCatalogJsonFile(filePath, budget) : undefined;
         if (budget && reservedBytes === undefined) {
           continue;
         }
