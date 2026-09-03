@@ -93,25 +93,18 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
-    ["success", "standalone", "skill", "completed", "stop"],
-    ["success", "managed", "skill", "completed", "stop"],
-    ["provider failure", "managed", "skill", "failed", "error"],
-    ["cancellation", "managed", "skill", "failed", "aborted"],
-    ["success", "standalone", "credential", "completed", "stop"],
-    ["success", "managed", "credential", "completed", "stop"],
+    ["success", "standalone", "completed", "stop"],
+    ["success", "managed", "completed", "stop"],
+    ["provider failure", "managed", "failed", "error"],
+    ["cancellation", "managed", "failed", "aborted"],
   ] as const)(
-    "settles %s through the %s command with real EACCES deleting %s files",
-    async (outcome, mode, deniedOwner, expectedStatus, stopReason) => {
+    "settles %s through the %s command with real EACCES deleting skill files",
+    async (outcome, mode, expectedStatus, stopReason) => {
       const skillDir = path.join(harness.root, "skills", "cleanup");
       await fs.mkdir(skillDir, { recursive: true });
       const markdown = "---\nname: cleanup\ndescription: Cleanup proof\n---\n# Instructions\n";
       await fs.writeFile(path.join(skillDir, "SKILL.md"), markdown);
       const descriptor = harness.createDescriptor();
-      descriptor.assignment.github = {
-        login: "worker-cleanup-fixture",
-        token: "synthetic-worker-cleanup-token",
-        branch: "openclaw/cleanup-fixture",
-      };
       descriptor.assignment.skillResources = await prepareSkillResourceDelivery(
         buildSkillSnapshot(harness.root, {
           entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
@@ -171,13 +164,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         )?.[1];
         expect(retainedFile).toBeDefined();
         turnDirectory = path.dirname(path.dirname(retainedFile!));
-        const profilesRoot = path.join(environmentStateDir!, "github-profiles");
-        const profiles = await fs.readdir(profilesRoot);
-        expect(profiles).toHaveLength(1);
-        const profileDir = path.join(profilesRoot, profiles[0]!);
-        const hostsPath = path.join(profileDir, "hosts.yml");
-        expect(await fs.readFile(hostsPath, "utf8")).toContain(descriptor.assignment.github.token);
-        protectedDirectory = deniedOwner === "skill" ? path.dirname(retainedFile!) : profileDir;
+        protectedDirectory = path.dirname(retainedFile!);
         expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
         await fs.chmod(protectedDirectory, 0o500);
         if (outcome === "cancellation") {
@@ -220,11 +207,7 @@ describe("cloud worker milestone 2 fault injection", () => {
           finishing[0]!.seq,
         );
         finishingGate.release.resolve();
-        if (deniedOwner === "credential") {
-          await expect.soft(command).rejects.toMatchObject({ code: "EACCES" });
-        } else {
-          await expect.soft(command).resolves.toBeUndefined();
-        }
+        await expect.soft(command).resolves.toBeUndefined();
         const settled: unknown = JSON.parse(stdout || "null");
         const transcript = SessionManager.open(harness.sessionTarget);
         const messages = transcript
@@ -238,20 +221,16 @@ describe("cloud worker milestone 2 fault injection", () => {
           expect(messages[1]).toHaveProperty("errorMessage", "fixture provider failed");
         }
         const expectedResult = { status: expectedStatus, transcriptLeafId: transcript.getLeafId() };
-        if (deniedOwner === "credential" && !managed) {
-          expect.soft(stdout).toBe("");
-        } else {
-          expect.soft(settled).toMatchObject(
-            managed
-              ? {
-                  type: "result",
-                  turnId: descriptor.assignment.turnId,
-                  retainWorker: false,
-                  result: expectedResult,
-                }
-              : expectedResult,
-          );
-        }
+        expect.soft(settled).toMatchObject(
+          managed
+            ? {
+                type: "result",
+                turnId: descriptor.assignment.turnId,
+                retainWorker: false,
+                result: expectedResult,
+              }
+            : expectedResult,
+        );
         expect(lifetime.dispose).toHaveBeenCalledOnce();
         expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
@@ -259,23 +238,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         expect(harness.requestParams("worker.inference.start")).toHaveLength(1);
         expect(harness.requestParams("worker.live-event")).toHaveLength(finishing[0]!.seq);
         const warning = warn.mock.calls.flat().map(String).join("\n");
-        if (deniedOwner === "skill") {
-          expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
-          await expect
-            .soft(fs.stat(environmentStateDir!))
-            .rejects.toMatchObject({ code: "ENOENT" });
-          await expect.soft(fs.stat(hostsPath)).rejects.toMatchObject({ code: "ENOENT" });
-          expect.soft(warning).toContain("Materialized skill cleanup failed");
-          expect.soft(warning).toContain(turnDirectory);
-          expect.soft(warning).toContain("EACCES");
-        } else {
-          expect(await fs.readFile(hostsPath, "utf8")).toContain(
-            descriptor.assignment.github.token,
-          );
-          await expect(fs.stat(turnDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-        }
+        expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
+        await expect.soft(fs.stat(environmentStateDir!)).rejects.toMatchObject({ code: "ENOENT" });
+        expect.soft(warning).toContain("Materialized skill cleanup failed");
+        expect.soft(warning).toContain(turnDirectory);
+        expect.soft(warning).toContain("EACCES");
         expect.soft(warning).not.toContain("Worker environment cleanup failed");
-        expect.soft(warning).not.toContain(descriptor.assignment.github.token);
         expect.soft(warning).not.toContain(markdown);
       } finally {
         providerRelease.resolve(doneOutcome("fixture teardown"));

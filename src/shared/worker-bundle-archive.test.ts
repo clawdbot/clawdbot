@@ -100,15 +100,17 @@ describe("worker bundle archive", () => {
     const archive = path.join(root, "unix-mode-bundle.tgz");
     const destination = path.join(root, "destination");
     await fs.mkdir(source);
-    const artifacts = ["github-exec-launcher.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];
-    for (const artifact of artifacts) {
+    for (const artifact of ["worker.mjs", "workspace-rsync-receiver.mjs"]) {
       await fs.writeFile(
         path.join(source, artifact),
         `export const name = ${JSON.stringify(artifact)};\n`,
       );
       await fs.chmod(path.join(source, artifact), 0o700);
     }
-    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, artifacts);
+    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
+      "worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]);
     const bundleHash = hashWorkerBundleManifest(
       await readWorkerBundleArchiveManifest(archive, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
     );

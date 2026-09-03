@@ -7,6 +7,7 @@ import {
   WorkerAdmissionResponseFrameSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerGitHubPublishResponseFrameSchema,
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
@@ -17,6 +18,7 @@ import {
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
@@ -28,6 +30,7 @@ import {
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
+  validateWorkerGitHubPublishParams,
   validateWorkerLiveEventParams,
   validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
@@ -283,12 +286,21 @@ describe("worker protocol schemas", () => {
       sessionKey: "agent:main:dashboard:child",
       message: "report status",
     };
+    const publish = { toolCallId: "call-publish", title: "Publish the fix" };
     const portal = { toolCallId: "call-portal", action: "open", port: 3000, path: "/app" };
     expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
     expect(validateWorkerSessionsSendParams(send)).toBe(true);
+    expect(validateWorkerGitHubPublishParams(publish)).toBe(true);
     expect(validateWorkerPortalParams(portal)).toBe(true);
     expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
     expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, token: "secret" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, repository: "openclaw/openclaw" })).toBe(
+      false,
+    );
+    expect(validateWorkerGitHubPublishParams({ ...publish, branch: "main" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, title: "Fix\rInject" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, commitMessage: "Inject" })).toBe(false);
     expect(validateWorkerPortalParams({ ...portal, token: "secret" })).toBe(false);
     expect(validateWorkerPortalParams({ ...portal, action: "unknown" })).toBe(false);
     expect(validateWorkerPortalParams({ ...portal, port: 0 })).toBe(false);
@@ -345,6 +357,15 @@ describe("worker protocol schemas", () => {
     );
     expect(validateWorkerSessionsSendParams(impossibleSend)).toBe(false);
 
+    const maximalPublish = {
+      toolCallId: escaped.repeat(256),
+      title: escaped.repeat(256),
+      body: escaped.repeat(8 * 1024),
+    };
+    expect(validateWorkerGitHubPublishParams(maximalPublish)).toBe(true);
+    expect(requestBytes("worker.github.publish", maximalPublish)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
     const maximalPortal = {
       toolCallId: escaped.repeat(256),
       action: "open",
@@ -368,6 +389,7 @@ describe("worker protocol schemas", () => {
       }),
     ).toBe(false);
     expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE);
     expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_PORTAL_PROTOCOL_FEATURE);
 
     const response = {
@@ -378,6 +400,7 @@ describe("worker protocol schemas", () => {
     };
     expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
     expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerGitHubPublishResponseFrameSchema, response)).toBe(true);
     expect(Value.Check(WorkerPortalResponseFrameSchema, response)).toBe(true);
     expect(
       Value.Check(WorkerSessionsSendResponseFrameSchema, {

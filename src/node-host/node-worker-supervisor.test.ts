@@ -542,11 +542,6 @@ describe("node worker supervisor", () => {
   it("bounds output and scrubs launch credentials after registry eviction", async () => {
     const { supervisor, workspaceDir } = fixture();
     const successInput = launchInput(workspaceDir, "secret-success-launch", "secret-success");
-    successInput.descriptor.assignment.github = {
-      token: "worker-github-token",
-      login: "worker-bot",
-      branch: "session/worker-1",
-    };
     const failureInput = launchInput(workspaceDir, "failure-launch", "secret-fail");
     const overflowInput = launchInput(workspaceDir, "overflow-launch", "overflow");
 
@@ -554,9 +549,8 @@ describe("node worker supervisor", () => {
     await supervisor.launch(successInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(failureInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(overflowInput, TEST_WORKER_ENDPOINT);
-    expect(registrations).toHaveBeenCalledTimes(4);
+    expect(registrations).toHaveBeenCalledTimes(3);
     expect(registrations).toHaveBeenCalledWith(TEST_WORKER_CREDENTIAL);
-    expect(registrations).toHaveBeenCalledWith(successInput.descriptor.assignment.github.token);
     const success = await waitForTerminal(supervisor, successInput.launchId);
     const failure = await waitForTerminal(supervisor, failureInput.launchId);
     const overflow = await waitForTerminal(supervisor, overflowInput.launchId);
@@ -564,12 +558,11 @@ describe("node worker supervisor", () => {
       TEST_WORKER_CREDENTIAL,
       encodeURIComponent(TEST_WORKER_CREDENTIAL),
       JSON.stringify(TEST_WORKER_CREDENTIAL).slice(1, -1),
-      successInput.descriptor.assignment.github.token,
     ];
     expect(success.state).toBe("completed");
     expect(JSON.parse(success.resultJson ?? "null")).toEqual({
       status: "completed",
-      transcriptLeafId: "raw [REDACTED] encoded [REDACTED] github [REDACTED]",
+      transcriptLeafId: "raw [REDACTED] encoded [REDACTED]",
       transcriptNextSeq: 2,
     });
     expect(failure.state).toBe("failed");
@@ -611,11 +604,6 @@ describe("node worker supervisor", () => {
     const first = testWorkerLaunchInput(workspaceDir, "previous-diagnostic", "diagnostic-retain");
     const second = testWorkerLaunchInput(workspaceDir, "rotated-credential", "secret-success");
     second.descriptor.admission.credential = 'fresh worker/"credential\\secret?';
-    second.descriptor.assignment.github = {
-      token: "rotated-worker-github-token",
-      login: "worker-bot",
-      branch: "session/worker-1",
-    };
     const last = testWorkerLaunchInput(workspaceDir, "fresh-failure", "quiet-fail");
     last.descriptor.admission.credential = "final-worker-credential";
     try {
@@ -626,11 +614,10 @@ describe("node worker supervisor", () => {
         worker: original.worker,
       });
       expect(registrations).toHaveBeenCalledWith(second.descriptor.admission.credential);
-      expect(registrations).toHaveBeenCalledWith(second.descriptor.assignment.github.token);
       const completed = await waitForTerminal(supervisor, second.launchId);
       expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
         status: "completed",
-        transcriptLeafId: "raw [REDACTED] encoded [REDACTED] github [REDACTED]",
+        transcriptLeafId: "raw [REDACTED] encoded [REDACTED]",
         transcriptNextSeq: 2,
       });
 

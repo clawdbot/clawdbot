@@ -301,9 +301,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[0] ||
       parsed.method === WORKER_PROTOCOL_METHODS[1] ||
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[6] ||
       parsed.method === "worker.computer" ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
@@ -341,9 +342,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         ...(signal ? { signal } : {}),
       });
     const isLongSessionOperation =
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[6] ||
       parsed.method === "worker.computer";
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {

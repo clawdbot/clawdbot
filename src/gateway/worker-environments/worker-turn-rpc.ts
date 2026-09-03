@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
+  WorkerGitHubPublishParamsSchema,
   WorkerPortalParamsSchema,
   WorkerSessionsSendParamsSchema,
   WorkerSessionsSpawnParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerGitHubPublishParams,
   WorkerConnectParams,
   WorkerLiveEventParams,
   WorkerPortalParams,
@@ -136,6 +138,12 @@ type WorkerTurnRpcOptions = {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "github_publish";
+          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         }
       | {
@@ -439,6 +447,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       | WorkerSkillWorkshopParams
       | WorkerSessionsSpawnParams
       | WorkerSessionsSendParams
+      | WorkerGitHubPublishParams
       | WorkerPortalParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
@@ -459,7 +468,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
             ? { toolName, request }
             : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
               ? { toolName, request }
-              : undefined;
+              : toolName === "github_publish" &&
+                  Value.Check(WorkerGitHubPublishParamsSchema, request)
+                ? { toolName, request }
+                : undefined;
     if (!operation) {
       return { ok: false, closeReason: "invalid-frame" };
     }

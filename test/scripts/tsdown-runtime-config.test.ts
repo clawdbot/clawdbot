@@ -101,9 +101,6 @@ describe("tsdown config", () => {
     const rsyncReceiver = configs.find((config) =>
       entryKeys(config).includes("worker/workspace-rsync-receiver"),
     );
-    const githubExecLauncher = configs.find((config) =>
-      entryKeys(config).includes("worker/github-exec-launcher"),
-    );
 
     expect(deployWorker?.minify).toEqual({
       codegen: true,
@@ -111,7 +108,6 @@ describe("tsdown config", () => {
       mangle: { keepNames: true },
     });
     expect(rsyncReceiver?.minify).toBeUndefined();
-    expect(githubExecLauncher?.minify).toBeUndefined();
     expect(requireUnifiedDistGraph().minify).toBeUndefined();
   });
 

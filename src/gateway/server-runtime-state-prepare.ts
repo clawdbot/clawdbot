@@ -176,6 +176,7 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
+    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -253,6 +254,9 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
     );
+  }
+  if (githubPublicationRuntime) {
+    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {

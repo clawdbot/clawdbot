@@ -94,14 +94,7 @@ describe("node worker bundle installer", () => {
         ? `import fs from "node:fs";\nconst cacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE === "1";\nif (process.argv[2] !== "--internal-worker-prewarm" || cacheDisabled !== ${compileCacheDisabled} || (cacheDisabled ? process.env.NODE_COMPILE_CACHE : !process.env.NODE_COMPILE_CACHE)) throw new Error("worker bundle was not prewarmed with the requested compile-cache mode");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
         : "export {};\n");
     await fs.writeFile(path.join(source, "worker.mjs"), workerSource, { mode: 0o700 });
-    for (const artifact of ["github-exec-launcher.mjs", "workspace-rsync-receiver.mjs"]) {
-      await fs.writeFile(path.join(source, artifact), "export {};\n", { mode: 0o700 });
-    }
-    const archiveEntries = [
-      "github-exec-launcher.mjs",
-      "worker.mjs",
-      "workspace-rsync-receiver.mjs",
-    ];
+    const archiveEntries = ["worker.mjs"];
     if (options.packageShell) {
       await fs.mkdir(path.join(source, "dist"));
       await fs.writeFile(path.join(source, "openclaw.mjs"), "#!/usr/bin/env node\n", {
@@ -591,7 +584,7 @@ describe("node worker bundle installer", () => {
       "bundles",
       fixture.input.build.bundleHash,
     );
-    await fs.writeFile(path.join(bundleDir, "github-exec-launcher.mjs"), "tampered\n");
+    await fs.writeFile(path.join(bundleDir, "worker.mjs"), "tampered\n");
     await expect(
       installer.inspect({
         gatewayNamespace: fixture.input.gatewayNamespace,

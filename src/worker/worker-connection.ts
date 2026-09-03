@@ -1,6 +1,8 @@
 import type { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
+  WorkerGitHubPublishParams,
+  WorkerGitHubPublishResponseFrame,
   WorkerHeartbeatParams,
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
@@ -220,6 +222,12 @@ export class WorkerConnection {
     return this.requestDurableSessionOperation(() =>
       this.frames.request("sessions-send", params, undefined, timeoutMs),
     );
+  }
+
+  requestGitHubPublish(
+    params: WorkerGitHubPublishParams,
+  ): Promise<WorkerGitHubPublishResponseFrame> {
+    return this.requestDurableSessionOperation(() => this.frames.request("github-publish", params));
   }
 
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {

@@ -195,7 +195,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["github-exec-launcher.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -438,9 +438,6 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
     expect(npmRunner.calls[1]?.options.input).toContain("package/dist/worker/worker.mjs");
     expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/github-exec-launcher.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
       "package/dist/worker/workspace-rsync-receiver.mjs",
     );
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
@@ -634,15 +631,14 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        for (const artifact of [
-          "github-exec-launcher.mjs",
-          "worker.mjs",
-          "workspace-rsync-receiver.mjs",
-        ]) {
-          await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), "export {};\n", {
-            mode: 0o755,
-          });
-        }
+        await fs.writeFile(path.join(packageRoot, "dist/worker/worker.mjs"), "export {};\n", {
+          mode: 0o755,
+        });
+        await fs.writeFile(
+          path.join(packageRoot, "dist/worker/workspace-rsync-receiver.mjs"),
+          "export {};\n",
+          { mode: 0o755 },
+        );
         const artifact = await createWorkerBundleProducer({
           packageRoot,
           cacheDir: path.join(root, "cache"),
@@ -886,16 +882,14 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        const artifacts = [
-          "github-exec-launcher.mjs",
-          "worker.mjs",
-          "workspace-rsync-receiver.mjs",
-        ];
-        for (const artifact of artifacts) {
-          await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), "export {};\n", {
-            mode: 0o755,
-          });
-        }
+        await fs.writeFile(path.join(packageRoot, "dist/worker/worker.mjs"), "export {};\n", {
+          mode: 0o755,
+        });
+        await fs.writeFile(
+          path.join(packageRoot, "dist/worker/workspace-rsync-receiver.mjs"),
+          "export {};\n",
+          { mode: 0o755 },
+        );
         const bundle = await createWorkerBundleProducer({
           packageRoot,
           cacheDir: path.join(root, "cache"),
@@ -916,13 +910,16 @@ describe("bootstrapWorker", () => {
         });
         const installRoot = path.join(remoteHome, ".openclaw-worker", bundle.bundleHash);
         await fs.mkdir(installRoot, { recursive: true });
-        for (const artifactName of artifacts) {
-          await fs.copyFile(
-            path.join(packageRoot, "dist", "worker", artifactName),
-            path.join(installRoot, artifactName),
-          );
-          await fs.chmod(path.join(installRoot, artifactName), 0o700);
-        }
+        await fs.copyFile(
+          path.join(packageRoot, "dist", "worker", "worker.mjs"),
+          path.join(installRoot, "worker.mjs"),
+        );
+        await fs.chmod(path.join(installRoot, "worker.mjs"), 0o700);
+        await fs.copyFile(
+          path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
+          path.join(installRoot, "workspace-rsync-receiver.mjs"),
+        );
+        await fs.chmod(path.join(installRoot, "workspace-rsync-receiver.mjs"), 0o700);
         await fs.writeFile(path.join(installRoot, "bootstrap-receipt.json"), `${receiptJson}\n`);
         const runCommand: WorkerBootstrapCommandRunner = async (_argv, options) => {
           const isPreflight =

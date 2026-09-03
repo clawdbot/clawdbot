@@ -171,6 +171,9 @@ export function createGitHubPublicationCoordinator(params: {
     const requestId = randomUUID();
     const row = runOpenClawStateWriteTransaction(
       ({ db }) => {
+        // Revalidate operational authority immediately before the durable insert;
+        // no await may separate this check from the write.
+        request.assertCurrent?.();
         assertStoredClaim(db, request);
         const stored = insertGitHubPublicationRequest(db, {
           request,

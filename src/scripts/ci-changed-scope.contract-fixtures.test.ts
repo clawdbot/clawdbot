@@ -21,8 +21,6 @@ describe("shared Apple contract fixture CI scope", () => {
   });
 
   it.each([
-    "src/agents/github-exec-launcher.ts",
-    "src/agents/github-exec-credential.ts",
     "src/shared/worker-bundle-hash.ts",
     "src/worker/workspace-rsync-receiver.ts",
     "src/gateway/worker-environments/workspace-sync.ts",
@@ -31,7 +29,7 @@ describe("shared Apple contract fixture CI scope", () => {
     "src/gateway/worker-environments/workspace-accepted-remote-script.ts",
     "src/gateway/worker-environments/workspace-mutation-remote-script.ts",
     "src/gateway/worker-environments/workspace-rsync-path.test.ts",
-  ])("routes worker deploy artifact owner %s through macOS CI", (ownerPath) => {
+  ])("routes workspace rsync receiver owner %s through macOS CI", (ownerPath) => {
     expect(detectChangedScope([ownerPath])).toMatchObject({
       runNode: true,
       runMacos: true,

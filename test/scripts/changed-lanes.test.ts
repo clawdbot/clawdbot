@@ -2615,10 +2615,8 @@ describe("scripts/changed-lanes", () => {
     expect(withoutFormat(mixedPlan)).toEqual(withoutFormat(fullPlan));
   });
 
-  it("runs macOS CI tests for worker deploy artifact owners", () => {
+  it("runs macOS CI tests for workspace rsync receiver owners", () => {
     for (const changedPath of [
-      "src/agents/github-exec-launcher.ts",
-      "src/agents/github-exec-credential.ts",
       "src/shared/worker-bundle-hash.ts",
       "src/worker/workspace-rsync-receiver.ts",
       "src/gateway/worker-environments/workspace-sync.ts",

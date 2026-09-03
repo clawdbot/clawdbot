@@ -43,16 +43,15 @@ describe("node worker bundle transfer", () => {
     const source = path.join(root, "source");
     const tarballPath = path.join(root, "bundle.tgz");
     await fs.mkdir(source, { recursive: true });
-    const artifacts = ["github-exec-launcher.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];
-    for (const artifact of artifacts) {
-      await fs.writeFile(path.join(source, artifact), "export {};\n", { mode: 0o700 });
-    }
+    await fs.writeFile(path.join(source, "worker.mjs"), "export {};\n", { mode: 0o700 });
     const manifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
     });
     const bundleHash = hashWorkerBundleManifest(manifest);
-    await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, artifacts);
+    await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, [
+      "worker.mjs",
+    ]);
     const tarball = await fs.readFile(tarballPath);
     const service = createNodeWorkerBundleTransferService({
       generateToken: () => "A".repeat(43),

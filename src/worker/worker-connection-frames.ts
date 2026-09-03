@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
+  type WorkerGitHubPublishParams,
+  type WorkerGitHubPublishResponseFrame,
+  WorkerGitHubPublishResponseFrameSchema,
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
   type WorkerHeartbeatResponseFrame,
@@ -82,6 +85,10 @@ const WORKER_REQUEST_SPECS = {
     method: "worker.sessions.send",
     responseSchema: WorkerSessionsSendResponseFrameSchema,
   },
+  "github-publish": {
+    method: "worker.github.publish",
+    responseSchema: WorkerGitHubPublishResponseFrameSchema,
+  },
   portal: {
     method: "worker.portal",
     responseSchema: WorkerPortalResponseFrameSchema,
@@ -108,6 +115,7 @@ type WorkerRequestParams = {
   "live-event": WorkerLiveEventParams;
   "sessions-spawn": WorkerSessionsSpawnParams;
   "sessions-send": WorkerSessionsSendParams;
+  "github-publish": WorkerGitHubPublishParams;
   portal: WorkerPortalParams;
   computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
@@ -120,6 +128,7 @@ type WorkerResponseFrames = {
   "live-event": WorkerLiveEventResponseFrame;
   "sessions-spawn": WorkerSessionsSpawnResponseFrame;
   "sessions-send": WorkerSessionsSendResponseFrame;
+  "github-publish": WorkerGitHubPublishResponseFrame;
   portal: WorkerPortalResponseFrame;
   computer: WorkerComputerResponseFrame;
   "inference-start": WorkerInferenceStartResponseFrame;

@@ -1,4 +1,5 @@
 import type {
+  WorkerGitHubPublishParams,
   WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -120,6 +121,12 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "github_publish";
+          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         }
       | {
