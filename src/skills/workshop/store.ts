@@ -85,7 +85,6 @@ type SkillProposalReadOptions = {
   reconcile?: boolean;
 };
 
-/** Creates a stable proposal id from skill name, date, and random suffix. */
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
   const date = now.toISOString().slice(0, 10).replaceAll("-", "");

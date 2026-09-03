@@ -1,4 +1,3 @@
-// Skill runtime refresh helpers reload active skill state and notify subscribers.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";

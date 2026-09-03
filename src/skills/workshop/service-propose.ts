@@ -92,10 +92,11 @@ export async function proposeCreateSkill(
   const name = normalizeRequired(input.name, "Skill name");
   const description = normalizeRequired(input.description, "Skill description");
   const config = resolveSkillWorkshopConfig(input.config);
+  const agentId = requireWorkshopAgentId(input.agentId);
   const target = resolveSkillProposalTarget({
     skillName: name,
     config: input.config ?? {},
-    agentId: requireWorkshopAgentId(input.agentId),
+    agentId,
     ...(input.env ? { env: input.env } : {}),
   });
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
@@ -165,14 +166,14 @@ export async function proposeCreateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    ownerAgentId: requireWorkshopAgentId(input.agentId),
+    ownerAgentId: agentId,
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: { ...proposalStoreOptions(input.env), agentId: requireWorkshopAgentId(input.agentId) },
+    store: { ...proposalStoreOptions(input.env), agentId },
   });
   await dispatchSkillProposalChanged({
     event,
@@ -183,7 +184,6 @@ export async function proposeCreateSkill(
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 
-/** Applies a reviewer patch to the live body: unique-match replace, or append when oldString is empty. */
 export function composeSkillBodyPatch(
   body: string,
   patch: { oldString: string; newString: string },
@@ -198,7 +198,6 @@ export function composeSkillBodyPatch(
   return `${body.slice(0, start)}${patch.newString}${body.slice(end)}`;
 }
 
-/** Resolves the one exact live-body span that a targeted patch may replace. */
 export function findUniqueSkillPatchSpan(
   body: string,
   oldString: string,
@@ -222,9 +221,10 @@ export async function proposeUpdateSkill(
 ): Promise<SkillProposalReadResult> {
   const skillName = normalizeRequired(input.skillName, "Skill name");
   const config = resolveSkillWorkshopConfig(input.config);
+  const agentId = requireWorkshopAgentId(input.agentId);
   const target = await readWritableWorkshopSkill(skillName, {
     config: input.config,
-    agentId: requireWorkshopAgentId(input.agentId),
+    agentId,
     env: input.env,
   });
   const currentContent = target.content;
@@ -311,14 +311,14 @@ export async function proposeUpdateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    ownerAgentId: requireWorkshopAgentId(input.agentId),
+    ownerAgentId: agentId,
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: { ...proposalStoreOptions(input.env), agentId: requireWorkshopAgentId(input.agentId) },
+    store: { ...proposalStoreOptions(input.env), agentId },
   });
   await dispatchSkillProposalChanged({
     event,

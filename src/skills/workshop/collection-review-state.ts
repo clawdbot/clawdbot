@@ -115,7 +115,7 @@ export function recordSkillCollectionReviewStatus(
           attemptedAtMs: review.attemptedAtMs,
           ...(review.succeededAtMs !== undefined ? { succeededAtMs: review.succeededAtMs } : {}),
         };
-  recordReviewEntry("collectionReviews", agentId, status, {}, options);
+  recordReviewEntry("collectionReviews", agentId, status, options);
 }
 
 export function recordSkillExperienceReviewOutcome(
@@ -128,7 +128,6 @@ export function recordSkillExperienceReviewOutcome(
     "experienceReviews",
     experienceReviewKey(agentId, workspaceDir),
     review,
-    {},
     options,
   );
 }
@@ -137,7 +136,6 @@ function recordReviewEntry(
   field: "collectionReviews" | "experienceReviews",
   entryKey: string,
   review: SkillCollectionReviewStatus | SkillExperienceReviewStatus,
-  columns: Partial<Omit<SkillCuratorState, "lastResult">>,
   options: OpenClawStateDatabaseOptions,
 ): void {
   updateConfigMachineState<SkillCuratorState>(
@@ -149,7 +147,6 @@ function recordReviewEntry(
         lastSuccessAtMs: null,
         lastError: null,
         ...current,
-        ...columns,
         lastResult: {
           ...state,
           [field]: {

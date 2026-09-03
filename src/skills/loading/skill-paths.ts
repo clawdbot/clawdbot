@@ -1,4 +1,3 @@
-// Skill path helpers keep prompt and diagnostic paths compact without changing their meaning.
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";

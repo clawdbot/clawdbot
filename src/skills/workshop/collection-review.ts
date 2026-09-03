@@ -112,8 +112,7 @@ export async function runSkillCollectionReviewForAgent(params: {
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return { status: "skipped", summary: "skill collection review disabled" };
   }
-  // Each review is admitted and recorded for one agent, and the workspace only supplies
-  // session context for the embedded run.
+  // Reviews belong to one agent; the workspace only supplies embedded-run context.
   const workspaceDir = canonicalizePath(
     resolveAgentWorkspaceDir(params.config, params.agentId, params.env),
   );

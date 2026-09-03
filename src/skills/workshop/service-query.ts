@@ -58,8 +58,7 @@ export async function listSkillProposals(
   const scope = proposalScope(options);
   const manifest = await readSkillProposalManifest(store, scope);
   const missingDrafts = new Set<string>();
-  // Every reconciliation takes the agent's collection lease. Serialize them so a
-  // large manifest cannot make its own waiters exhaust the bounded lease wait.
+  // The agent collection lease bounds concurrent manifest reconciliation.
   for (const proposal of manifest.proposals) {
     if (proposal.kind !== "create" || proposal.status !== "pending") {
       continue;

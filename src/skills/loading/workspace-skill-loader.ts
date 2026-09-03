@@ -609,7 +609,6 @@ export function loadWorkspaceSkills(
     opts?.eligibility,
   );
 }
-/** Loads agent-workspace skills first, then execution-directory OpenClaw skills. */
 export function loadMergedWorkspaceSkills(
   params: WorkspaceSkillRoots & WorkspaceSkillLoadOptions,
 ): SkillEntry[] {

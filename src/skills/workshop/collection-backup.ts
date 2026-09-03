@@ -157,7 +157,6 @@ export async function readCollectionBackupManifest(params: {
   };
 }
 
-/** Manifest entries are normalized relative paths to skill directories under one agent's Workshop root. */
 function readBackupSkillDirs(value: unknown, label: string, skillsRoot: string): string[] {
   if (
     !Array.isArray(value) ||

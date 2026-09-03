@@ -62,9 +62,7 @@ import {
   type WorkshopSkillReadOptions,
 } from "./workspace-skill-read.js";
 
-/**
- * The Workshop's editable collection is the active agent's Workshop directory.
- */
+/** The editable collection is the active agent's Workshop directory. */
 export function listWritableSkillCollection(
   options: WorkshopSkillReadOptions = {},
 ): WritableSkillCollectionEntry[] {
