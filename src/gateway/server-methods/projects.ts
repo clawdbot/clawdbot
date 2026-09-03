@@ -88,9 +88,6 @@ const PROJECTS_LIST_MAX_RAW_CANDIDATES = Math.max(
 
 function folderDisplayName(folder: string): string {
   const trimmed = folder.replace(/[\\/]+$/u, "");
-  // Recents carry whatever separator the session host used, so split on both.
-  // path.posix.basename hands back a backslash path unchanged, which left the
-  // win32 basename it was chained to behind an `||` that never fires.
   return trimmed.split(/[\\/]/u).at(-1) || folder;
 }
 

@@ -539,7 +539,17 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
   }
 });
 
-test("projects.list names folder recents from Windows-style paths", async () => {
+test.each([
+  ["POSIX", "/Users/dev/projects/posix-project", "posix-project"],
+  ["POSIX with a trailing separator", "/Users/dev/projects/posix-project/", "posix-project"],
+  ["Windows", "C:\\Users\\dev\\projects\\windows-project", "windows-project"],
+  [
+    "Windows with a trailing separator",
+    "C:\\Users\\dev\\projects\\windows-project\\",
+    "windows-project",
+  ],
+  ["mixed separators", "C:\\Users/dev\\projects/mixed-project/", "mixed-project"],
+] as const)("projects.list names folder recents from %s paths", async (_, folder, displayName) => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
     const profile = ensureProfileForEmail("windows-recents@example.test");
@@ -549,7 +559,7 @@ test("projects.list names folder recents from Windows-style paths", async () => 
         sessionId: "session-windows",
         updatedAt: 900,
         createdActor: { type: "human", source: "profile", id: profile.id },
-        spawnedCwd: "C:\\Users\\dev\\projects\\windows-project",
+        spawnedCwd: folder,
       },
     );
     const result = await invokeProjectMethod(
@@ -562,8 +572,8 @@ test("projects.list names folder recents from Windows-style paths", async () => 
     expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
       {
         kind: "folder",
-        folder: "C:\\Users\\dev\\projects\\windows-project",
-        displayName: "windows-project",
+        folder,
+        displayName,
       },
     ]);
   } finally {
