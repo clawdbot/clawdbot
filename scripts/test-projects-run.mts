@@ -14,7 +14,7 @@ import {
   resolveVitestRuntimeCliSelections,
 } from "./lib/vitest-build-prerequisites.mts";
 import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
-import { parseVitestExecutionArgs, type exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import {
   isCiLikeEnv,
@@ -22,6 +22,7 @@ import {
   resolveLocalVitestEnv,
 } from "./lib/vitest-local-scheduling.mts";
 import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
+import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
 import {
   createShardTimingSample,

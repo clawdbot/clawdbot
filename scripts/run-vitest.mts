@@ -26,11 +26,7 @@ import {
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
-import {
-  parseVitestExecutionArgs,
-  runVitestCli,
-  type exitVitestBySignal,
-} from "./lib/vitest-cli.mts";
+import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import {
   resolveVitestProcessEnv,
@@ -43,7 +39,11 @@ import {
   normalizeVitestConfigPath,
   matchesVitestConfigPath,
 } from "./lib/vitest-process-env.mts";
-import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
+import {
+  spawnOwnedVitestProcess,
+  runVitestCli,
+  type exitVitestBySignal,
+} from "./lib/vitest-process.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
