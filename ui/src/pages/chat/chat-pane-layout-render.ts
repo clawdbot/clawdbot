@@ -152,7 +152,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource: resolveChatPaneDesktopTarget(selectedSession),
-      dashboard: !this.compact && board.hasBoard ? this.renderBoardPanel(board) : nothing,
+      dashboard:
+        !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
       detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),

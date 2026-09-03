@@ -39,7 +39,6 @@ import {
   isSidebarSlotVisible,
   openSlot,
   resizeSidebarPanel,
-  setSidebarDock,
   setSidebarExpanded,
   sidebarDock,
   type SidebarLayout,
@@ -152,7 +151,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.boardProviderLease = undefined;
   }
 
-  protected resolveWorkboardCardChip(board: ResolvedBoardView): WorkboardCardChipProps | null {
+  protected resolveWorkboardCardChip(
+    board: ResolvedBoardView,
+    layout = this.state?.sidebarLayout,
+  ): WorkboardCardChipProps | null {
     const gateway = this.context?.gateway.snapshot;
     const enabled = isWorkboardEnabledInConfigSnapshot(
       this.context?.runtimeConfig?.state.configSnapshot,
@@ -166,7 +168,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
-      active: isSidebarSlotVisible(state.sidebarLayout, "dashboard") && this.visuallyPresented,
+      active:
+        Boolean(layout && isSidebarSlotVisible(layout, "dashboard")) && this.visuallyPresented,
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
@@ -328,12 +331,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.requestUpdate();
   }
 
-  protected renderBoardPanel(board: ResolvedBoardView) {
+  protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     const shouldRender = board.hasBoard && Boolean(sessionKey);
-    const boardActive =
-      (this.state ? isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") : false) &&
-      this.visuallyPresented;
+    const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
@@ -355,7 +356,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             board.provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-        workboardCardChip: this.resolveWorkboardCardChip(board),
+        workboardCardChip: this.resolveWorkboardCardChip(board, layout),
       });
     const boardSurface = !shouldRender
       ? nothing
@@ -370,10 +371,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!state) {
       return;
     }
-    const layout = setSidebarExpanded(
-      setSidebarDock(openSlot(state.sidebarLayout, "dashboard"), "right"),
-      expanded,
-    );
+    const layout = setSidebarExpanded(openSlot(state.sidebarLayout, "dashboard"), expanded);
     this.commitSidebarLayout(layout);
     this.persistBoardSessionView({ face: "dashboard" });
   }

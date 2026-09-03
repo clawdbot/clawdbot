@@ -125,6 +125,17 @@ describe("chat pane sidebar layout", () => {
     expect(layout.open).toBe(true);
   });
 
+  it("preserves a selected bottom dock when opening a dashboard route", () => {
+    const layout = resolveSidebarLayoutForBoard({
+      board: board(),
+      layout: { ...openSlot({ columns: [] }, "terminal"), dock: "bottom" },
+      paneWidth: 1_400,
+    });
+
+    expect(layout.dock).toBe("bottom");
+    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal", "dashboard"]);
+  });
+
   it("does not reopen a dashboard panel the user explicitly closed", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board(),

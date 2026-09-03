@@ -304,6 +304,20 @@ suite.define(() => {
     await page.locator(".side-panel").waitFor();
     await page.locator(".board-session-surface").waitFor();
     await page.locator(".chat-thread").waitFor();
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "03-direct-route.png"),
+      });
+    }
+
+    await page.locator(".side-panel__dock-bottom").click();
+    await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "04-bottom-dock.png"),
+      });
+    }
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const previewBubble = page.locator(".chat-bubble", { has: preview });
@@ -373,11 +387,25 @@ suite.define(() => {
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
     await page.getByRole("button", { name: "Collapse", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+    await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
       )
       .toBe(true);
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "05-collapsed-bottom.png"),
+      });
+    }
+    await page.locator(".side-panel__minimize").click();
+    await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+    await page.locator(".chat-thread").waitFor();
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "06-chat-only.png"),
+      });
+    }
     await context.close();
   });
 

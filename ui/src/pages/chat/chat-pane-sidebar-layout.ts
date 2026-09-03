@@ -211,7 +211,7 @@ export function resolveSidebarLayoutForBoard(params: {
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
   const selectedPanelId = layout.columns[0]?.activePanelId;
-  layout = setSidebarDock(openSlot(layout, "dashboard"), "right");
+  layout = openSlot(layout, "dashboard");
   // Route projection guarantees the dashboard exists without stealing a
   // side-panel tab the user selected after arriving.
   if (selectedPanelId) {
