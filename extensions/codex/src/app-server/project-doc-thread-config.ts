@@ -2,9 +2,12 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
-import type { JsonObject } from "./protocol.js";
+import { type CodexTurnEnvironmentParams, type JsonObject } from "./protocol.js";
 
 const CODEX_NATIVE_PROJECT_DOC_MAX_BYTES = 128 * 1024;
+const CODEX_NATIVE_PROJECT_DOC_FILENAMES = ["AGENTS.override.md", "AGENTS.md"] as const;
+const CODEX_NATIVE_PROJECT_ROOT_MARKERS = [".git"] as const;
+const CODEX_PROJECT_DOC_PREFLIGHT_CONCURRENCY = 32;
 
 type CodexNativeProjectInstructionFile = {
   path: string;
@@ -16,25 +19,38 @@ export function buildCodexProjectDocThreadConfig(config?: JsonObject): JsonObjec
   return mergeCodexThreadConfigs(defaults, config) ?? defaults;
 }
 
-export type CodexNativeProjectInstructionSourceIdentitySnapshot = ReadonlyMap<string, Stats>;
+export type CodexNativeProjectInstructionSourceIdentitySnapshot = {
+  identities: ReadonlyMap<string, Stats>;
+  environmentCwds: readonly string[];
+};
 
 /**
- * Records inspectable file identities from the cwd's ancestor chain without
- * duplicating Codex's source-selection rules. The response remains authoritative
- * about which files were selected; a selected path without a baseline fails closed.
+ * Records the bounded set of project-document candidates that Codex can select
+ * for every host-local environment. The response remains authoritative about
+ * which candidates were selected; a selected path without a baseline fails closed.
  */
-export async function snapshotCodexNativeProjectInstructionSourceIdentities(
-  cwd: string,
-): Promise<CodexNativeProjectInstructionSourceIdentitySnapshot> {
-  const identities = new Map<string, CodexProjectDocIdentity>();
-  let directory = path.resolve(cwd);
-  while (true) {
-    const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isFile() && !entry.isSymbolicLink()) {
-        continue;
+export async function snapshotCodexNativeProjectInstructionSourceIdentities(params: {
+  cwd: string;
+  config?: JsonObject;
+  environmentSelection?: readonly CodexTurnEnvironmentParams[];
+}): Promise<CodexNativeProjectInstructionSourceIdentitySnapshot> {
+  const environmentCwds = resolveCodexProjectInstructionEnvironmentCwds(params);
+  const candidateFilenames = resolveCodexProjectDocCandidateFilenames(params.config);
+  const rootMarkers = resolveCodexProjectRootMarkers(params.config);
+  const candidatePaths = new Set<string>();
+  for (const cwd of environmentCwds) {
+    const directories = await resolveCodexProjectDocSearchDirectories(cwd, rootMarkers);
+    for (const directory of directories) {
+      for (const filename of candidateFilenames) {
+        candidatePaths.add(path.resolve(directory, filename));
       }
-      const filePath = path.join(directory, entry.name);
+    }
+  }
+  const identities = new Map<string, CodexProjectDocIdentity>();
+  await forEachWithConcurrency(
+    [...candidatePaths],
+    CODEX_PROJECT_DOC_PREFLIGHT_CONCURRENCY,
+    async (filePath) => {
       try {
         const identity = await fs.stat(filePath);
         if (identity.isFile()) {
@@ -44,14 +60,9 @@ export async function snapshotCodexNativeProjectInstructionSourceIdentities(
         // An unrelated broken or inaccessible entry must not block startup.
         // If Codex selects it, the missing baseline below still fails closed.
       }
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) {
-      break;
-    }
-    directory = parent;
-  }
-  return identities;
+    },
+  );
+  return { identities, environmentCwds };
 }
 
 /**
@@ -67,7 +78,7 @@ export async function captureCodexNativeProjectInstructions(params: {
   sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<string | undefined> {
   const files = await readCodexNativeProjectInstructionFiles({
-    cwd: params.cwd,
+    environmentCwds: params.sourceIdentitiesBeforeRequest.environmentCwds,
     instructionSources: params.instructionSources,
     maxBytes: params.config?.project_doc_max_bytes,
     sourceIdentitiesBeforeRequest: params.sourceIdentitiesBeforeRequest,
@@ -88,12 +99,11 @@ export async function captureCodexNativeProjectInstructions(params: {
 }
 
 async function readCodexNativeProjectInstructionFiles(params: {
-  cwd: string;
+  environmentCwds: readonly string[];
   instructionSources: readonly string[];
   maxBytes?: unknown;
   sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<CodexNativeProjectInstructionFile[]> {
-  const cwd = path.resolve(params.cwd);
   let remaining = normalizeProjectDocMaxBytes(params.maxBytes);
   if (remaining === 0) {
     return [];
@@ -102,7 +112,11 @@ async function readCodexNativeProjectInstructionFiles(params: {
   const seen = new Set<string>();
   for (const source of params.instructionSources) {
     const filePath = path.resolve(source);
-    if (remaining === 0 || seen.has(filePath) || !isProjectInstructionSource(filePath, cwd)) {
+    if (
+      remaining === 0 ||
+      seen.has(filePath) ||
+      !params.environmentCwds.some((cwd) => isProjectInstructionSource(filePath, cwd))
+    ) {
       continue;
     }
     seen.add(filePath);
@@ -130,6 +144,95 @@ function normalizeProjectDocMaxBytes(value: unknown): number {
   return Math.floor(value);
 }
 
+function resolveCodexProjectInstructionEnvironmentCwds(params: {
+  cwd: string;
+  environmentSelection?: readonly CodexTurnEnvironmentParams[];
+}): string[] {
+  const environmentCwds = new Set<string>([path.resolve(params.cwd)]);
+  for (const environment of params.environmentSelection ?? []) {
+    if (typeof environment.cwd === "string" && environment.cwd.trim()) {
+      environmentCwds.add(path.resolve(environment.cwd));
+    }
+  }
+  return [...environmentCwds];
+}
+
+function resolveCodexProjectDocCandidateFilenames(config?: JsonObject): string[] {
+  const filenames = new Set<string>(CODEX_NATIVE_PROJECT_DOC_FILENAMES);
+  const configured = config?.project_doc_fallback_filenames;
+  if (Array.isArray(configured)) {
+    for (const value of configured) {
+      if (typeof value === "string" && value.length > 0) {
+        filenames.add(value);
+      }
+    }
+  }
+  return [...filenames];
+}
+
+function resolveCodexProjectRootMarkers(config?: JsonObject): string[] {
+  const configured = config?.project_root_markers;
+  if (configured === undefined || !Array.isArray(configured)) {
+    return [...CODEX_NATIVE_PROJECT_ROOT_MARKERS];
+  }
+  if (!configured.every((value): value is string => typeof value === "string")) {
+    return [...CODEX_NATIVE_PROJECT_ROOT_MARKERS];
+  }
+  return [...configured];
+}
+
+async function resolveCodexProjectDocSearchDirectories(
+  cwd: string,
+  rootMarkers: readonly string[],
+): Promise<string[]> {
+  const resolvedCwd = path.resolve(cwd);
+  if (rootMarkers.length === 0) {
+    return [resolvedCwd];
+  }
+  const ancestors = [resolvedCwd];
+  let directory = resolvedCwd;
+  while (true) {
+    const containsRootMarker = await Promise.all(
+      rootMarkers.map(async (marker) => {
+        try {
+          await fs.stat(path.resolve(directory, marker));
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    ).then((results) => results.some(Boolean));
+    if (containsRootMarker) {
+      return ancestors.reverse();
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return [resolvedCwd];
+    }
+    ancestors.push(parent);
+    directory = parent;
+  }
+}
+
+async function forEachWithConcurrency<T>(
+  values: readonly T[],
+  concurrency: number,
+  visit: (value: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const value = values[nextIndex];
+        nextIndex += 1;
+        if (value !== undefined) {
+          await visit(value);
+        }
+      }
+    }),
+  );
+}
+
 function isProjectInstructionSource(filePath: string, cwd: string): boolean {
   const relative = path.relative(path.dirname(filePath), cwd);
   return (
@@ -148,7 +251,7 @@ async function readCodexProjectDoc(
     handle = await fs.open(filePath, "r");
     const identityBefore = await handle.stat();
     assertCodexProjectDocFile(filePath, identityBefore);
-    const identityBeforeRequest = sourceIdentitiesBeforeRequest.get(filePath);
+    const identityBeforeRequest = sourceIdentitiesBeforeRequest.identities.get(filePath);
     if (!identityBeforeRequest) {
       throw new Error(
         `Codex-selected project instruction source was not present before native startup: ${filePath}`,

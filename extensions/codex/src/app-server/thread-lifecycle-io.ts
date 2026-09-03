@@ -175,7 +175,11 @@ export async function resumeExistingCodexThread(
       resumeBinding.agentWorkspaceDeveloperInstructions === undefined;
     const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
       ? await lifecycleTiming.measure("project-instructions-preflight", () =>
-          snapshotCodexNativeProjectInstructionSourceIdentities(params.cwd),
+          snapshotCodexNativeProjectInstructionSourceIdentities({
+            cwd: params.cwd,
+            config: resumeParams.config,
+            environmentSelection: params.environmentSelection,
+          }),
         )
       : undefined;
     // Keep ownership accounting atomic with the resume request: a
@@ -526,7 +530,11 @@ export async function startFreshCodexThread(
     params.captureNativeProjectInstructions === true && !preserveExistingBinding;
   const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
     ? await lifecycleTiming.measure("project-instructions-preflight", () =>
-        snapshotCodexNativeProjectInstructionSourceIdentities(params.cwd),
+        snapshotCodexNativeProjectInstructionSourceIdentities({
+          cwd: params.cwd,
+          config: startParams.config,
+          environmentSelection: params.environmentSelection,
+        }),
       )
     : undefined;
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {

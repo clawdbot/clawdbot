@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureCodexNativeProjectInstructions,
   snapshotCodexNativeProjectInstructionSourceIdentities,
@@ -15,9 +15,10 @@ async function captureProjectInstructions(
 ) {
   return captureCodexNativeProjectInstructions({
     ...params,
-    sourceIdentitiesBeforeRequest: await snapshotCodexNativeProjectInstructionSourceIdentities(
-      params.cwd,
-    ),
+    sourceIdentitiesBeforeRequest: await snapshotCodexNativeProjectInstructionSourceIdentities({
+      cwd: params.cwd,
+      config: params.config,
+    }),
   });
 }
 
@@ -37,6 +38,7 @@ describe("Codex native project-document snapshots", () => {
     const packageOverride = path.join(packageDir, "AGENTS.override.md");
     const cwdFallback = path.join(cwd, "WORKSPACE.md");
     await fs.mkdir(path.dirname(globalInstructions), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, ".git"));
     await fs.mkdir(cwd, { recursive: true });
     await fs.writeFile(globalInstructions, "global policy");
     await fs.writeFile(rootFallback, "root fallback");
@@ -47,6 +49,7 @@ describe("Codex native project-document snapshots", () => {
       captureProjectInstructions({
         cwd,
         instructionSources: [globalInstructions, rootFallback, packageOverride, cwdFallback],
+        config: { project_doc_fallback_filenames: ["PROJECT.md", "WORKSPACE.md"] },
       }),
     ).resolves.toBe(
       [
@@ -73,10 +76,17 @@ describe("Codex native project-document snapshots", () => {
     const cwd = path.join(workspaceDir, "nested");
     const selected = path.join(cwd, "PROJECT.md");
     await fs.mkdir(cwd);
+    await fs.mkdir(path.join(workspaceDir, ".git"));
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "unselected parent policy");
     await fs.writeFile(selected, "selected custom policy");
 
-    await expect(captureProjectInstructions({ cwd, instructionSources: [selected] })).resolves.toBe(
+    await expect(
+      captureProjectInstructions({
+        cwd,
+        instructionSources: [selected],
+        config: { project_doc_fallback_filenames: ["PROJECT.md"] },
+      }),
+    ).resolves.toBe(
       [
         "## OpenClaw Agent Workspace Instructions",
         "",
@@ -94,6 +104,7 @@ describe("Codex native project-document snapshots", () => {
     const rootInstructions = path.join(workspaceDir, "AGENTS.md");
     const nestedInstructions = path.join(cwd, "AGENTS.md");
     await fs.mkdir(cwd);
+    await fs.mkdir(path.join(workspaceDir, ".git"));
     await fs.writeFile(rootInstructions, "root");
     await fs.writeFile(nestedInstructions, "nested");
 
@@ -128,7 +139,10 @@ describe("Codex native project-document snapshots", () => {
       captureProjectInstructions({
         cwd: workspaceDir,
         instructionSources: [instructions],
-        config: { project_doc_max_bytes: 6 },
+        config: {
+          project_doc_fallback_filenames: ["CUSTOM.md"],
+          project_doc_max_bytes: 6,
+        },
       }),
     ).resolves.toBe(
       [
@@ -158,7 +172,7 @@ describe("Codex native project-document snapshots", () => {
     const instructions = path.join(workspaceDir, "AGENTS.md");
     await fs.writeFile(instructions, "original authority");
     const sourceIdentitiesBeforeRequest =
-      await snapshotCodexNativeProjectInstructionSourceIdentities(workspaceDir);
+      await snapshotCodexNativeProjectInstructionSourceIdentities({ cwd: workspaceDir });
     await fs.writeFile(instructions, "changed authority");
 
     await expect(
@@ -168,6 +182,50 @@ describe("Codex native project-document snapshots", () => {
         sourceIdentitiesBeforeRequest,
       }),
     ).rejects.toThrow("changed during native startup");
+  });
+
+  it("captures Codex-selected instructions from every host-local environment", async () => {
+    const primaryCwd = path.join(workspaceDir, "primary");
+    const secondaryCwd = path.join(workspaceDir, "secondary");
+    const secondaryInstructions = path.join(secondaryCwd, "AGENTS.md");
+    await fs.mkdir(primaryCwd);
+    await fs.mkdir(secondaryCwd);
+    await fs.writeFile(secondaryInstructions, "secondary environment authority");
+    const environmentSelection = [
+      { environmentId: "primary", cwd: primaryCwd },
+      { environmentId: "secondary", cwd: secondaryCwd },
+    ];
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({
+        cwd: primaryCwd,
+        environmentSelection,
+      });
+
+    await expect(
+      captureCodexNativeProjectInstructions({
+        cwd: primaryCwd,
+        instructionSources: [secondaryInstructions],
+        sourceIdentitiesBeforeRequest,
+      }),
+    ).resolves.toContain("secondary environment authority");
+  });
+
+  it("probes only Codex project-document candidates instead of unrelated ancestor files", async () => {
+    const cwd = path.join(workspaceDir, "nested");
+    const unrelated = path.join(workspaceDir, "large-unrelated-tree.txt");
+    await fs.mkdir(path.join(workspaceDir, ".git"));
+    await fs.mkdir(cwd);
+    await fs.writeFile(unrelated, "not a project instruction");
+    const stat = vi.spyOn(fs, "stat");
+    try {
+      await snapshotCodexNativeProjectInstructionSourceIdentities({ cwd });
+
+      expect(
+        stat.mock.calls.some(([filePath]) => path.resolve(String(filePath)) === unrelated),
+      ).toBe(false);
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it("accepts a selected source with a legitimate future mtime", async () => {
