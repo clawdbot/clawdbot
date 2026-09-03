@@ -3553,7 +3553,7 @@ export const en: TranslationMap & {
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",
       unidentified:
-        "This connection has no personal profile, so a display name and avatar are not available. Sign in with a profile through Cloudflare Access, Tailscale Serve, or a trusted proxy to use them.",
+        "This connection has no personal profile; sign in through Cloudflare Access, Tailscale Serve, or a trusted proxy to set a name and avatar.",
       writeRequired: "Profile editing requires operator.write access.",
       notSet: "Identity is not set.",
       setIdentity: "Set identity",

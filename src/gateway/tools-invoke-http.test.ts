@@ -14,7 +14,7 @@ import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
@@ -568,49 +568,61 @@ describe("POST /tools/invoke", () => {
     });
   });
 
-  it("preserves host-minted system authority for a shared-secret caller under roles", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
-      const owner = ensureProfileForEmail("sysauth-owner@example.test");
-      const sessionKey = "agent:main:sysauth-primary";
-      const entry = {
-        sessionId: "sysauth-primary-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      sessionEntries.set(sessionKey, entry);
-      cfg = {
-        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["guest-agent"],
-                scopes: ["operator.write"],
+  it.each([
+    { toolName: "agents_list", withProfile: false },
+    { toolName: "agents_list", withProfile: true },
+    { toolName: "sessions_spawn", withProfile: true },
+  ])(
+    "preserves system authority for $toolName with owner profile: $withProfile",
+    async ({ toolName, withProfile }) => {
+      await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+        const owner = ensureGatewayOwnerProfile("Gateway Owner");
+        const sessionKey = "agent:main:sysauth-primary";
+        const entry = {
+          sessionId: "sysauth-primary-session",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+        };
+        await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        sessionEntries.set(sessionKey, entry);
+        cfg = {
+          agents: { list: [{ id: "main", default: true, tools: { allow: [toolName] } }] },
+          gateway: {
+            tools: { allow: [toolName] },
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: {
+                  sessions: { others: "view" },
+                  agents: ["guest-agent"],
+                  scopes: ["operator.write"],
+                },
               },
             },
           },
-        },
-      };
+        };
 
-      // Shared-secret operator owners have no durable profile; connect mints system
-      // authority on the connection. Dispatch must carry that fact forward instead of
-      // re-deriving ownership from scopes, or the caller is denied its own agent.
-      const call = await invokeToolsRpc(
-        { name: "agents_list", args: {}, sessionKey },
-        ["operator.write"],
-        undefined,
-        undefined,
-        undefined,
-        { operatorRoleActor: { kind: "system" } },
-      );
+        const call = await invokeToolsRpc(
+          { name: toolName, args: { agentId: "restricted-agent" }, sessionKey },
+          ["operator.write"],
+          undefined,
+          undefined,
+          withProfile
+            ? {
+                profileId: owner.id,
+                displayName: owner.displayName,
+                hasAvatar: false,
+                updatedAt: owner.updatedAt,
+              }
+            : undefined,
+          { operatorRoleActor: { kind: "system" } },
+        );
 
-      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
-    });
-  });
+        expect(call?.[1]).toMatchObject({ ok: true, toolName });
+      });
+    },
+  );
 
   it("rejects a nested sessions_send target that the operator cannot mutate", async () => {
     await withOpenClawTestState({ label: "tools-invoke-foreign-session" }, async () => {

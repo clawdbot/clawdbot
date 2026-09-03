@@ -84,6 +84,7 @@ export type AuthorizedGatewayHttpRequest = {
   trustDeclaredOperatorScopes: boolean;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
+  operatorRoleActor?: { kind: "system" };
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
@@ -568,6 +569,10 @@ async function checkGatewayHttpRequestAuthWith(
       // must opt in explicitly if they want to treat that shared-secret path as a
       // full trusted-operator surface.
       trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+      // Shared-secret authority belongs to authentication, independently of profile attribution.
+      ...(usesSharedSecretGatewayMethod(authResult.method)
+        ? { operatorRoleActor: { kind: "system" as const } }
+        : {}),
       ...authenticatedProfile,
     },
   };

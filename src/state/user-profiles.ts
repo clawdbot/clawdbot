@@ -91,6 +91,7 @@ type UserProfileListRow = Pick<
 };
 
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
+export const GATEWAY_OWNER_PROFILE_ID = "gateway-owner";
 // A dot keeps the local owner outside Tailscale's provider-suffix namespace.
 const GATEWAY_OWNER_PROFILE_PROVIDER = "gateway.local";
 const GATEWAY_OWNER_PROFILE_SUBJECT = "owner";
@@ -140,9 +141,10 @@ function insertUserProfile(
   db: DatabaseSync,
   displayName: string | null,
   now: number,
+  id = generateSecureUuid(),
 ): UserProfileRow {
   const row: UserProfileRow = {
-    id: generateSecureUuid(),
+    id,
     display_name: displayName,
     avatar: null,
     avatar_mime: null,
@@ -317,6 +319,7 @@ export function ensureProfileForEmail(
 }
 
 function ensureProfileForProviderIdentity(params: {
+  profileId?: string;
   provider: string;
   subject: string;
   initialDisplayName: string | null;
@@ -358,7 +361,7 @@ function ensureProfileForProviderIdentity(params: {
         }
         return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
       }
-      const row = insertUserProfile(db, params.initialDisplayName, now);
+      const row = insertUserProfile(db, params.initialDisplayName, now, params.profileId);
       executeSqliteQuerySync(
         db,
         kysely.insertInto("user_profile_identities").values({
@@ -462,6 +465,7 @@ export function ensureGatewayOwnerProfile(
 ): UserProfile {
   const displayName = normalizeInitialDisplayName(initialDisplayName);
   const profile = ensureProfileForProviderIdentity({
+    profileId: GATEWAY_OWNER_PROFILE_ID,
     provider: GATEWAY_OWNER_PROFILE_PROVIDER,
     subject: GATEWAY_OWNER_PROFILE_SUBJECT,
     initialDisplayName: displayName,

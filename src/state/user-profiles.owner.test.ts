@@ -7,6 +7,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   listProfiles,
   setDisplayName,
@@ -28,6 +29,7 @@ describe("gateway owner profiles", () => {
   it("keeps one email-less gateway owner and its edits across database reopen", () => {
     const options = stateOptions();
     const owner = ensureGatewayOwnerProfile("  Ada Lovelace  ", options);
+    expect(owner.id).toBe("gateway-owner");
     expect(owner.displayName).toBe("Ada Lovelace");
     expect(ensureGatewayOwnerProfile("Host Renamed", options)).toEqual(owner);
     setDisplayName(owner.id, "User Chosen", options);
@@ -45,6 +47,19 @@ describe("gateway owner profiles", () => {
         .db.prepare("SELECT provider, subject, profile_id FROM user_profile_identities")
         .all(),
     ).toEqual([{ provider: "gateway.local", subject: "owner", profile_id: owner.id }]);
+  });
+
+  it("reuses the existing provider identity without creating another owner", () => {
+    const options = stateOptions();
+    const existing = ensureProfileForEmail("existing-owner@example.test", options);
+    openOpenClawStateDatabase(options)
+      .db.prepare(
+        "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("gateway.local", "owner", existing.id, existing.createdAt);
+
+    expect(ensureGatewayOwnerProfile("Host Name", options)).toEqual(existing);
+    expect(listProfiles(options)).toHaveLength(1);
   });
 
   it.each(["owner@gateway", "owner@gateway.local"])(

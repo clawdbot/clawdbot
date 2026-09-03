@@ -40,7 +40,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
 }));
-vi.mock("../../state/user-profiles.js", () => ({
+vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   getUserProfileRole: hoisted.getUserProfileRole,
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));

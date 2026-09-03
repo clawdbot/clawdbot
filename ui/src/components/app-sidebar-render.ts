@@ -378,7 +378,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   });
   const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.owner");
   const avatarUser = {
-    ...(selfUser ?? { id: "owner" }),
+    id: "owner",
+    ...selfUser,
     name: selfLabel,
     watchedSessions: [],
   };

@@ -64,7 +64,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -281,15 +285,22 @@ test("sessions.create assigns and registers its requested group", async () => {
 });
 
 test.each([
-  ["sessions.create", "create"],
-  ["sessions.patch", "patch"],
-  ["sessions.patchMany", "patch-many"],
+  ["sessions.create", "create", false],
+  ["sessions.patch", "patch", false],
+  ["sessions.patchMany", "patch-many", false],
+  ["sessions.create", "owner-create", true],
+  ["sessions.patch", "owner-patch", true],
+  ["sessions.patchMany", "owner-patch-many", true],
 ] as const)(
-  "required operator sandbox follows new %s session ownership",
-  async (method, suffix) => {
+  "required operator sandbox follows new %s session ownership (%s)",
+  async (method, suffix, systemActor) => {
     const { storePath } = await createSessionStoreDir();
-    const profile = ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
-    setUserProfileRole(profile.id, "guest");
+    const profile = systemActor
+      ? ensureGatewayOwnerProfile("Gateway Owner")
+      : ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
+    if (!systemActor) {
+      setUserProfileRole(profile.id, "guest");
+    }
     const cfg = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
@@ -309,6 +320,7 @@ test.each([
       },
     };
     const client = {
+      ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
       connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
       authenticatedUserProfile: {
         profileId: profile.id,
@@ -334,10 +346,11 @@ test.each([
     if (method === "sessions.patchMany") {
       expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    const createdEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(createdEntry).toMatchObject({
       createdActor: { type: "human", source: "profile", id: profile.id },
-      sandbox: "required",
     });
+    expect(createdEntry?.sandbox).toBe(systemActor ? undefined : "required");
 
     for (const forgedSandbox of [null, "inherit"] as const) {
       const forged = await directSessionReq(
@@ -348,9 +361,9 @@ test.each([
 
       expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      sandbox: "required",
-    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sandbox).toBe(
+      systemActor ? undefined : "required",
+    );
   },
 );
 
@@ -3621,6 +3634,7 @@ test.each([false, true])(
           connect: { scopes: ["operator.write"] },
           internal: {
             syntheticClient: true,
+            operatorRoleActor: { kind: "system" },
             sessionCreation: {
               via: "spawn",
               actor: { type: "agent", id: "main" },

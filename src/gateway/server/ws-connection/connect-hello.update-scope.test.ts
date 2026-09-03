@@ -224,7 +224,7 @@ describe("sendGatewayHello update detail scope", () => {
     };
 
     const context = makeContext("operator", ["operator.pairing"]);
-    await sendGatewayHello(context as never, state as never, {});
+    await sendGatewayHello(context as never, state as never, {}, "owner-profile");
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
       client: null,
@@ -254,6 +254,7 @@ describe("sendGatewayHello update detail scope", () => {
       const context = makeContext("operator", ["operator.read"]);
       const state = {
         ...makeState("operator", ["operator.read"]),
+        authResult: { ok: true, method: "trusted-proxy", user: `${principal}@example.test` },
         device: { id: "device-a" },
         deviceToken: {
           token,

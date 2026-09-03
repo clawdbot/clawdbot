@@ -416,7 +416,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   const position = params.position;
   const profileName = params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = {
-    ...(params.profileViewer ?? { id: "owner", watchedSessions: [] }),
+    id: "owner",
+    watchedSessions: [],
+    ...params.profileViewer,
     name: profileName,
   };
   const profileEmail =
