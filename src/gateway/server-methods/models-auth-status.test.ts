@@ -614,7 +614,7 @@ describe("models.authStatus", () => {
         {
           id: "provider-auth",
           origin: "bundled",
-          providers: ["OpenAI", "github-copilot", "media-only"],
+          providers: ["OpenAI", "github-copilot", "local-cli", "media-only"],
           providerAuthAliases: { "openai-legacy": "openai" },
           providerAuthChoices: [
             {
@@ -643,6 +643,15 @@ describe("models.authStatus", () => {
               choiceId: "github-copilot-oauth",
               choiceLabel: "GitHub Copilot OAuth",
             },
+            {
+              provider: "local-cli",
+              method: "cli",
+              choiceId: "local-cli-reconnect",
+              choiceLabel: "Local CLI",
+              choiceHint: "Validate the CLI-owned session",
+              appGuidedDiscovery: true,
+              appGuidedActionLabel: "Reconnect",
+            },
           ],
         },
         {
@@ -657,6 +666,19 @@ describe("models.authStatus", () => {
 
     expect(result.providerCapabilities).toEqual([
       { provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false },
+      {
+        provider: "local-cli",
+        apiKeySupported: false,
+        quickApiKeySetup: false,
+        setupActions: [
+          {
+            choiceId: "local-cli-reconnect",
+            label: "Local CLI",
+            hint: "Validate the CLI-owned session",
+            actionLabel: "Reconnect",
+          },
+        ],
+      },
       { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
     ]);
   });

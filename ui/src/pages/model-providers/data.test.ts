@@ -43,6 +43,39 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("keeps a selected provider visible with its provider-owned setup action", () => {
+    const setupActions = [
+      {
+        choiceId: "local-cli-reconnect",
+        label: "Local CLI",
+        hint: "Validate the CLI-owned session",
+        actionLabel: "Reconnect",
+      },
+    ];
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus(
+        [],
+        [
+          {
+            provider: "local-cli",
+            apiKeySupported: false,
+            quickApiKeySetup: false,
+            setupActions,
+          },
+        ],
+      ),
+      selectedProviderIds: ["local-cli"],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "local-cli",
+      apiKeySupported: false,
+      setupActions,
+    });
+  });
+
   it("omits API-key-only auth rows without model-provider evidence", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -494,6 +527,7 @@ describe("model provider configuration data", () => {
       }),
     ).toEqual({
       providerIds: ["openai", "anthropic"],
+      selectedProviderIds: [],
       apiKeyProviderIds: ["openai"],
       providerAuthModes: {},
       defaults: {
@@ -508,6 +542,23 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({ agents: { defaults: { utilityModel: "" } } }).defaults.utilityModel,
     ).toBe("");
+  });
+
+  it("reads selected provider ids not already represented by provider config", () => {
+    expect(
+      readModelProviderConfig({
+        models: { providers: { OpenAI: {} } },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5",
+              fallbacks: ["local-cli/model", "LOCAL-CLI/backup"],
+            },
+            utilityModel: "utility-cli/tool-model",
+          },
+        },
+      }).selectedProviderIds,
+    ).toEqual(["local-cli", "utility-cli"]);
   });
 
   it("retains explicit provider auth modes for API-key edit gating", () => {

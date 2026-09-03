@@ -598,11 +598,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       ...data,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
+      selectedProviderIds: config.selectedProviderIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
     });
     const configuredProviderIds = new Set([
       ...config.providerIds,
+      ...config.selectedProviderIds,
       ...(data.authStatus?.providers
         .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
         .map((provider) => provider.provider) ?? []),
@@ -635,9 +637,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       mutationBlockedReason: this.mutationBlockedReason(),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
-      busy: { ...this.busy, add: this.providerSetup.busy },
+      busy: {
+        ...this.busy,
+        add: this.providerSetup.busy && this.providerSetup.targetProviderId === null,
+        ...(this.providerSetup.targetProviderId
+          ? { [`setup:${this.providerSetup.targetProviderId}`]: this.providerSetup.busy }
+          : {}),
+      },
       messages: this.providerSetup.message
-        ? { ...this.messages, add: this.providerSetup.message }
+        ? { ...this.messages, [this.providerSetup.messageTarget]: this.providerSetup.message }
         : this.messages,
       probeResults: this.probeResults,
       keyEditorProvider: this.keyEditorProvider,
@@ -667,6 +675,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onAddProviderReload: () => void this.providerSetup.load(),
       onAddProviderIdChange: (choice) => this.providerSetup.select(choice),
       onAddProvider: () => void this.providerSetup.start(),
+      onSetupProvider: (providerId, providerName, action) =>
+        void this.providerSetup.startChoice(providerId, providerName, action),
       onPrimaryChange: (model) => {
         const current = this.defaultsDraft ?? configuredDefaults;
         stageDefaults({

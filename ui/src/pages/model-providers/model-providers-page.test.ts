@@ -469,6 +469,142 @@ describe("ModelProvidersPage agent scope", () => {
     },
   );
 
+  it("runs a configured provider reconnect without changing its selected model", async () => {
+    const { context, request, runtimeConfig } = createProviderSetupHarness();
+    const config = {
+      agents: { defaults: { model: { primary: "local-cli/current-model" } } },
+    };
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { config, sourceConfig: config, hash: "config-hash", valid: true, issues: [] };
+      }
+      if (method === "models.authStatus") {
+        return {
+          ts: 1,
+          providers: [],
+          providerCapabilities: [
+            {
+              provider: "local-cli",
+              apiKeySupported: false,
+              quickApiKeySetup: false,
+              setupActions: [
+                {
+                  choiceId: "local-cli-reconnect",
+                  label: "Local CLI",
+                  hint: "Validate the CLI-owned session",
+                  actionLabel: "Reconnect",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "openclaw.setup.prepare.start") {
+        return { sessionId: "provider-reconnect", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return { done: true, status: "done", preparedModelRef: "local-cli/current-model" };
+      }
+      return originalRequest(method);
+    });
+    await runtimeConfig.ensureLoaded();
+    const page = appendPage(context);
+    try {
+      let reconnect: HTMLButtonElement | undefined;
+      await waitForFast(() => {
+        reconnect = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+          (entry) => entry.textContent?.trim() === "Reconnect",
+        );
+        expect(reconnect?.disabled).toBe(false);
+      });
+      reconnect?.click();
+      await waitForFast(() => expect(page.textContent).toContain("Provider Local Cli configured."));
+
+      expect(request).toHaveBeenCalledWith(
+        "openclaw.setup.prepare.start",
+        {
+          sessionId: expect.any(String),
+          agentId: "main",
+          authChoice: "local-cli-reconnect",
+        },
+        { timeoutMs: null },
+      );
+      expect(requestCount(request, "openclaw.setup.detect")).toBe(0);
+      expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
+      expect(requestCount(request, "config.patch")).toBe(0);
+      expect(
+        readModelProviderConfig(runtimeConfig.state.configSnapshot?.config ?? null).defaults
+          .primary,
+      ).toBe("local-cli/current-model");
+    } finally {
+      page.remove();
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("keeps a pending provider setup owned by its initiating card", async () => {
+    const { context, request, runtimeConfig } = createProviderSetupHarness();
+    const prepare = deferred<unknown>();
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "local-cli/current-model",
+            fallbacks: ["other-cli/fallback-model"],
+          },
+        },
+      },
+    };
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { config, sourceConfig: config, hash: "config-hash", valid: true, issues: [] };
+      }
+      if (method === "models.authStatus") {
+        return {
+          ts: 1,
+          providers: [],
+          providerCapabilities: ["local-cli", "other-cli"].map((provider) => ({
+            provider,
+            apiKeySupported: false,
+            quickApiKeySetup: false,
+            setupActions: [
+              {
+                choiceId: `${provider}-reconnect`,
+                label: provider,
+                actionLabel: "Reconnect",
+              },
+            ],
+          })),
+        };
+      }
+      if (method === "openclaw.setup.prepare.start") {
+        return prepare.promise;
+      }
+      return originalRequest(method);
+    });
+    await runtimeConfig.ensureLoaded();
+    const page = appendPage(context);
+    try {
+      const providerButton = (providerId: string) =>
+        page.querySelector<HTMLButtonElement>(`[data-provider-id="${providerId}"] button`);
+      await waitForFast(() => expect(providerButton("local-cli")?.disabled).toBe(false));
+
+      providerButton("local-cli")?.click();
+      providerButton("other-cli")?.click();
+      await page.updateComplete;
+
+      expect(requestCount(request, "openclaw.setup.prepare.start")).toBe(1);
+      expect(providerButton("local-cli")?.disabled).toBe(true);
+      expect(providerButton("other-cli")?.disabled).toBe(false);
+    } finally {
+      prepare.resolve({ done: true, status: "done", preparedModelRef: "local-cli/current-model" });
+      page.remove();
+      runtimeConfig.dispose();
+    }
+  });
+
   it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
     const { context, runtimeConfig } = createHarness("main");
     runtimeConfig.refresh.mockImplementationOnce(async () => {

@@ -4672,6 +4672,9 @@ export const en: TranslationMap & {
       loggingOut: "Logging out…",
       done: "Logged out.",
     },
+    setup: {
+      action: "Set up",
+    },
     add: {
       title: "Add provider",
       subtitle: "Choose a provider and follow its setup steps. Your default model stays the same.",
