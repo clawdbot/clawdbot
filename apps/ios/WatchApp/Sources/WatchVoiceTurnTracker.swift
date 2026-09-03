@@ -156,7 +156,12 @@ extension WatchInboxStore {
     }
 
     func expireVoiceTurnIfNeeded(nowMs: Int64) {
+        let commandId = self.voiceTurnState.tracker.commandId
         guard self.voiceTurnState.expireIfNeeded(nowMs: nowMs) else { return }
+        guard self.canPresentChatDelivery(commandId: commandId) else {
+            self.persistVoiceTurnState()
+            return
+        }
         // Only readback expires; the message may already be delivered or still running.
         self.markAppCommandBlocked(
             .sendChat,
