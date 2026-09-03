@@ -103,7 +103,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
   { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
   { prefix: "gateway.nodes.browser", kind: "hot" },
-  { prefix: "gateway.nodes.pairing", kind: "hot" },
+  // Pairing approvals retain policy across async probes and store locks, so
+  // pairing settings must keep restart ownership until the approval owner fences them.
   { prefix: "gateway.push.apns.relay", kind: "hot" },
   // gateway.terminal.* deliberately has no rule here: it falls through to the
   // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM

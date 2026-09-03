@@ -588,7 +588,7 @@ back to OpenClaw.
 | Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                     | No (reloads plugin runtime)  |
 | UI & misc               | `ui`, `logging`, `identity`, `bindings`                                                     | No                           |
 | Gateway HTTP APIs       | `gateway.http.endpoints`                                                                    | No (next request)            |
-| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`                           | No (next operation)          |
+| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`                                                    | No (next operation)          |
 | Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                            | No                           |
 | Gateway push            | `gateway.push.apns.relay`                                                                   | No (next push)               |
 | Gateway server          | Other `gateway.*` settings (port, bind, auth, roles, tailscale, TLS, HTTP security headers) | **Yes**                      |
@@ -603,7 +603,9 @@ origin policy, and authentication still require a Gateway restart.
 
 Node command allowlists and node-published tools or skills still require a
 Gateway restart because they also configure services created at startup. Browser
-node routing and pairing policy apply to subsequent operations or connections.
+node routing applies to subsequent operations. Node pairing policy
+(`gateway.nodes.pairing`) still requires a restart because approvals can outlive
+the connection that started them.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart. Individual plugins can override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
