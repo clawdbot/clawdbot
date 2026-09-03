@@ -54,7 +54,12 @@ export function describeUnavailableMcpServers(
   };
 }
 
-/** Recorded failed server a lookup names by catalog id, prefixed tool name, or bare server name. */
+/**
+ * Recorded failed server a lookup names through an encoded MCP identifier:
+ * the catalog id `mcp:<server>:…` or the generated tool name `<server>__…`.
+ * A bare name is never attributed, so an unrelated or policy-hidden tool that
+ * happens to share a server's name keeps the generic unknown-tool recovery.
+ */
 function findUnavailableMcpServer(
   needle: string,
   catalog: ToolSearchCatalogSession,
@@ -66,8 +71,10 @@ function findUnavailableMcpServer(
   const separatorIndex = needle.indexOf(TOOL_NAME_SEPARATOR);
   const server =
     MCP_CATALOG_ID_SERVER_RE.exec(needle)?.[1] ??
-    (separatorIndex > 0 ? needle.slice(0, separatorIndex) : needle);
-  return diagnostics.find((diagnostic) => diagnostic.safeServerName === server);
+    (separatorIndex > 0 ? needle.slice(0, separatorIndex) : undefined);
+  return server === undefined
+    ? undefined
+    : diagnostics.find((diagnostic) => diagnostic.safeServerName === server);
 }
 
 function formatUnavailableMcpToolError(

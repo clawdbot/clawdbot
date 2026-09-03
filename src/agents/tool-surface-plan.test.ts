@@ -387,4 +387,49 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(result.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
     expect(result.catalogToolCount).toBe(1);
   });
+
+  it.each([
+    {
+      name: "tools",
+      config: { tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" } } },
+    },
+    {
+      name: "directory",
+      config: { tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } } },
+    },
+    { name: "code", config: { tools: { codeMode: true, toolSearch: true } } },
+  ] satisfies Array<{ name: string; config: OpenClawConfig }>)(
+    "registers recorded MCP diagnostics on the $name catalog",
+    ({ config }) => {
+      const catalogRef = createToolSearchCatalogRef();
+      const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
+      const controls = plan.codeModeControlsEnabled
+        ? createCodeModeTools({ config, catalogRef, executeTool })
+        : [createStubTool(TOOL_SEARCH_RAW_TOOL_NAME)];
+      const mcpDiagnostics = [
+        {
+          serverName: "memos",
+          safeServerName: "memos",
+          launchSummary: "memos",
+          message: "connect ECONNREFUSED",
+        },
+      ];
+
+      applyAgentToolSurfaceCatalog({
+        tools: [...controls, createStubTool("hidden_target")],
+        config,
+        toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
+        codeModeControlsEnabled: plan.codeModeControlsEnabled,
+        toolSearchConfig: plan.toolSearchConfig,
+        forceDirectMessageTool: false,
+        catalogRef,
+        mcpDiagnostics,
+      });
+
+      // Every catalog mode must carry the failed-server fact, or that mode's
+      // lookups fall back to the generic unknown-tool text during an outage.
+      expect(catalogRef.current?.mcpDiagnostics).toBe(mcpDiagnostics);
+      clearToolSearchCatalog({ catalogRef });
+    },
+  );
 });

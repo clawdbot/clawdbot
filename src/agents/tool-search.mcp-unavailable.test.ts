@@ -143,15 +143,15 @@ describe("Tool Search with an unavailable MCP server", () => {
     }
   });
 
-  it("keeps the generic unknown-tool recovery for servers without a recorded failure", async () => {
+  it.each([
+    { label: "a server without a recorded failure", id: "mcp:other:other__read" },
+    { label: "a bare name that only matches the failed server", id: "memos" },
+  ])("keeps the generic unknown-tool recovery for $label", async ({ id }) => {
     const { control } = await createControls(makeOutageCatalog());
 
     await expect(
-      control(TOOL_CALL_RAW_TOOL_NAME).execute("lookup-other", {
-        id: "mcp:other:other__read",
-        args: {},
-      }),
-    ).rejects.toThrow("Unknown tool id: mcp:other:other__read");
+      control(TOOL_CALL_RAW_TOOL_NAME).execute("lookup-generic", { id, args: {} }),
+    ).rejects.toThrow(`Unknown tool id: ${id}`);
   });
 
   it("keeps plain results when no MCP server failed", async () => {
