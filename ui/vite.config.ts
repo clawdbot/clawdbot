@@ -436,16 +436,16 @@ function controlUiPublicAssetBuildIdPlugin(buildId: string, buildOutDir: string)
           continue;
         }
         const filePath = path.join(buildOutDir, asset.path);
-        const source = fs.readFileSync(filePath, "utf8");
+        const assetSource = fs.readFileSync(filePath, "utf8");
         if (fontStylesheet) {
           // Relative CSS URLs do not inherit their parent stylesheet's query.
-          const versioned = source.replace(
+          const versioned = assetSource.replace(
             /url\("([^"/?#]+\.woff2)"\)/gu,
             `url("$1?v=${cacheId}")`,
           );
           fs.writeFileSync(filePath, versioned);
         } else {
-          const manifest = JSON.parse(source) as { icons: Array<{ src: string }> };
+          const manifest = JSON.parse(assetSource) as { icons: Array<{ src: string }> };
           for (const icon of manifest.icons) {
             icon.src += `?v=${cacheId}`;
           }

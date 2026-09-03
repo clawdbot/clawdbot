@@ -21,7 +21,7 @@ export function isControlUiRootPublicAsset(value: string): value is ControlUiRoo
 export function isControlUiVersionedPublicAsset(value: string): boolean {
   return (
     (isControlUiRootPublicAsset(value) && value !== "sw.js") ||
-    /^(?:fonts\/[^/]+\.(?:css|woff2)|themes\/[^/]+\.css|(?:provider-icons|file-icons)\/[^/]+\.svg|(?:plugin-art|app-art|community-art)\/[^/]+\.webp)$/u.test(
+    /^(?:fonts\/[^/]+\.(?:css|woff2)|themes\/[^/]+\.css|(?:provider-icons|file-icons(?:\/[^/]+)*)\/[^/]+\.svg|(?:plugin-art|app-art|community-art)\/[^/]+\.webp)$/u.test(
       value,
     )
   );
