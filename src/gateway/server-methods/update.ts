@@ -239,8 +239,10 @@ export const updateHandlers: GatewayRequestHandlers = {
     let adoptedCampaignId: string | undefined;
     const refuseNonOwner = () => {
       const requester = params.requester;
+      // Only external chat identities are revocable here; internal or channel-less
+      // requesters retain the owner authority established at admission.
       if (
-        !requester ||
+        !requester?.channel ||
         isInternalMessageChannel(requester.channel) ||
         isConfiguredCommandOwner(context.getRuntimeConfig(), requester)
       ) {

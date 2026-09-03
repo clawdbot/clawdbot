@@ -59,7 +59,7 @@ describe("update.run current owner authority", () => {
     );
   }
 
-  it.each(["revoked", "reassigned", "unchanged", "webchat"])(
+  it.each(["revoked", "reassigned", "unchanged", "webchat", "channel-less"])(
     "%s owner after tool construction uses current config",
     async (change) => {
       const tool = createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" });
@@ -69,8 +69,11 @@ describe("update.run current owner authority", () => {
             change === "unchanged" ? ["owner"] : change === "revoked" ? [] : ["replacement"],
         },
       };
-      const result = await runOwnerTool(tool, change === "webchat" ? "webchat" : "slack");
-      const allowed = change === "unchanged" || change === "webchat";
+      const result =
+        change === "channel-less"
+          ? await tool.execute("update", { action: "update.run" })
+          : await runOwnerTool(tool, change === "webchat" ? "webchat" : "slack");
+      const allowed = change === "unchanged" || change === "webchat" || change === "channel-less";
       expect(result.details).toMatchObject({ ok: allowed });
       if (allowed) {
         expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
