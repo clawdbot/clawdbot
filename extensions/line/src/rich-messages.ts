@@ -166,12 +166,10 @@ function toLineQuestionChoice(
 }
 
 /**
- * LINE can open the composer on a tap (`inputOption: "openKeyboard"`), but the
- * answer typed after one is not claimed by the pending question on this runtime:
- * it is queued as a new turn and the question aborts. A control whose only
- * outcome is "now type" would therefore promise something that does not happen,
- * so the free-text route stays in the words the card already carries, the way
- * Discord and Slack leave it.
+ * The free-text control resolves nothing by itself, and LINE cannot take a
+ * control back off a card it already delivered, so drawing it would add a tap
+ * that changes nothing the card's own words do not already offer. The route
+ * stays in those words, the way Discord and Slack leave it.
  */
 function isLineTextFallbackButton(button: MessagePresentationButton): boolean {
   const action = resolveMessagePresentationButtonAction(button);

@@ -310,13 +310,12 @@ option. The eligible shape is one single-select, non-secret question offering tw
 four distinct options — the same bound Telegram, Discord and Slack use; anything else
 stays readable text that a typed reply still answers.
 
-The **Other…** free-text control is not drawn. LINE can open the composer on a tap, but the
-answer typed after one is not claimed by the pending question today — it is queued as a new
-turn and the question ends unanswered — so a control whose only outcome is "now type" would
-promise something that does not happen. The question's own text still names the typed route,
-and Discord and Slack leave it there for the same reason. Every declared option therefore
-keeps a native control, including a four-option question, where **Other…** stays named in
-the card's text under `Actions:`.
+The **Other…** free-text control is not drawn. Tapping it resolves nothing by itself, and LINE
+cannot take a control back off a card it already delivered, so the button would add a tap that
+changes nothing the question's own text does not already offer. Discord and Slack leave that
+route in text for the same reason. Every declared option therefore keeps a native control,
+including a four-option question, where **Other…** stays named in the card's text under
+`Actions:`.
 
 LINE cannot edit a message it already delivered, so the controls stay on screen after
 the question ends. A tap that arrives then is answered with `That question is no longer
