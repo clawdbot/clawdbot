@@ -40,6 +40,7 @@ export const ROOT_SECTIONS = [
 export const TARGET_KEYS = [
   "memory.citations",
   "memory.search.provider",
+  "memory.search.timeoutMs",
   "memory.search.fallback",
   "memory.search.sources",
   "memory.search.extraPaths",

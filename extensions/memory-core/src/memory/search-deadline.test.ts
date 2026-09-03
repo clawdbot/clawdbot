@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isMemorySearchDeadlineError, runMemorySearchWithDeadline } from "./search-deadline.js";
+import {
+  isMemorySearchDeadlineError,
+  normalizeMemorySearchTimeoutMs,
+  runMemorySearchWithDeadline,
+} from "./search-deadline.js";
+
+describe("normalizeMemorySearchTimeoutMs", () => {
+  it("uses the default and clamps configured deadlines", () => {
+    expect(normalizeMemorySearchTimeoutMs(undefined)).toBe(15_000);
+    expect(normalizeMemorySearchTimeoutMs(500)).toBe(1_000);
+    expect(normalizeMemorySearchTimeoutMs(45_999.9)).toBe(45_999);
+    expect(normalizeMemorySearchTimeoutMs(180_000)).toBe(120_000);
+  });
+});
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {

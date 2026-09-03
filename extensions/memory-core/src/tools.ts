@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   resolveMemorySearchStaleness,
   stripMemoryAnnotationCarriers,
@@ -36,7 +37,7 @@ import {
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
 import {
-  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  normalizeMemorySearchTimeoutMs,
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
@@ -144,6 +145,7 @@ function isActiveMemoryManagerContext(
 
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
+  timeoutMs: number,
   parentSignal?: AbortSignal,
 ): Promise<void> {
   const pending = Array.from(managers, async (manager) => await manager.close?.());
@@ -152,7 +154,7 @@ async function closeMemoryManagers(
   }
   try {
     await runMemorySearchWithDeadline({
-      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      timeoutMs,
       parentSignal,
       run: async () => {
         await Promise.allSettled(pending);
@@ -237,6 +239,10 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
     execute:
       ({ cfg, agentId, settings }) =>
       async (_toolCallId, params, callerSignal) => {
+        const timeoutMs = normalizeMemorySearchTimeoutMs(
+          resolveAgentConfig(cfg, agentId)?.memory?.search?.timeoutMs ??
+            cfg.memory?.search?.timeoutMs,
+        );
         const rawParams = asToolParamsRecord(params);
         if (callerSignal?.aborted) {
           throw resolveMemorySearchAbortError(callerSignal);
@@ -277,7 +283,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
           if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
             if (cleanupStarted) {
-              void closeMemoryManagers([context.manager]);
+              void closeMemoryManagers([context.manager], timeoutMs);
             } else {
               memoryManagersToClose.add(context.manager);
             }
@@ -395,6 +401,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         try {
           return await runMemoryCorpusDeadline({
             operation: "memory_search",
+            timeoutMs,
             parentSignal: callerSignal,
             run: async (signal) => {
               const [memory, wiki] = await Promise.all([
@@ -516,7 +523,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
         } finally {
           cleanupStarted = true;
-          await closeMemoryManagers(memoryManagersToClose, callerSignal);
+          await closeMemoryManagers(memoryManagersToClose, timeoutMs, callerSignal);
         }
       },
   });
@@ -529,6 +536,10 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params, callerSignal) => {
+        const timeoutMs = normalizeMemorySearchTimeoutMs(
+          resolveAgentConfig(cfg, agentId)?.memory?.search?.timeoutMs ??
+            cfg.memory?.search?.timeoutMs,
+        );
         const rawParams = asToolParamsRecord(params);
         const relPath = readStringParam(rawParams, "path", { required: true });
         const from = readPositiveIntegerParam(rawParams, "from");
@@ -537,6 +548,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           return await executeWikiMemoryReadResult({
+            timeoutMs,
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
@@ -548,6 +560,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
           });
         }
         return await executeMemoryReadResult({
+          timeoutMs,
           read: async () =>
             await readAgentMemoryFile({
               cfg,

@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   createMemorySearchDeadlineError,
-  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   isMemorySearchDeadlineError,
   resolveMemorySearchAbortError,
 } from "./memory/search-deadline.js";
@@ -93,6 +92,7 @@ export async function attemptMemoryCorpus<T>(params: {
 
 export async function runMemoryCorpusDeadline<T>(params: {
   operation: "memory_search" | "memory_get";
+  timeoutMs: number;
   parentSignal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
@@ -103,10 +103,10 @@ export async function runMemoryCorpusDeadline<T>(params: {
   const timer = setTimeout(() => {
     controller.abort(
       createMemorySearchDeadlineError(
-        `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+        `${params.operation} timed out after ${Math.round(params.timeoutMs / 1000)}s`,
       ),
     );
-  }, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
+  }, params.timeoutMs);
   timer.unref?.();
   const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
   params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });

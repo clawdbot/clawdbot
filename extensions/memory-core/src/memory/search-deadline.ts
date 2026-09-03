@@ -1,4 +1,17 @@
 export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
+export const MIN_MEMORY_SEARCH_TIMEOUT_MS = 1_000;
+export const MAX_MEMORY_SEARCH_TIMEOUT_MS = 120_000;
+
+export function normalizeMemorySearchTimeoutMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
+  }
+  return Math.max(
+    MIN_MEMORY_SEARCH_TIMEOUT_MS,
+    Math.min(MAX_MEMORY_SEARCH_TIMEOUT_MS, Math.floor(value)),
+  );
+}
+
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
   if (reason instanceof Error) {

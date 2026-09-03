@@ -769,6 +769,7 @@ const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
     rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z
