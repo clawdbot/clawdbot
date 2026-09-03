@@ -421,11 +421,13 @@ async function waitForAcpRuntimeBackendReady(params: {
   backendId?: string;
   timeoutMs?: number;
   pollMs?: number;
+  nowMs?: () => number;
 }): Promise<boolean> {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
   const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
   const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
+  const nowMs = params.nowMs ?? (() => performance.now());
+  const deadline = nowMs() + timeoutMs;
 
   do {
     const backend = getAcpRuntimeBackend(params.backendId);
@@ -439,7 +441,7 @@ async function waitForAcpRuntimeBackendReady(params: {
       }
     }
     await sleep(pollMs, undefined, { ref: false });
-  } while (Date.now() < deadline);
+  } while (nowMs() < deadline);
 
   return false;
 }
@@ -1701,5 +1703,6 @@ export const testing = {
   scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,
+  waitForAcpRuntimeBackendReady,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

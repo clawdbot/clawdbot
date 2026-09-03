@@ -467,6 +467,64 @@ function firstGatewayStartCall(
   return call as [PluginHookGatewayStartEvent, PluginHookGatewayContext];
 }
 
+describe("waitForAcpRuntimeBackendReady", () => {
+  beforeEach(() => {
+    hoisted.getAcpRuntimeBackend.mockReset().mockReturnValue({
+      id: "acpx",
+      runtime: {},
+      healthy: () => false,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { direction: "forward", shiftedWallClockMs: 10_000, shouldSettle: false },
+    { direction: "backward", shiftedWallClockMs: -10_000, shouldSettle: true },
+  ])(
+    "uses elapsed time instead of a $direction wall-clock shift for its deadline",
+    async ({ shiftedWallClockMs, shouldSettle }) => {
+      let wallClockMs = 10_000;
+      let monotonicMs = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
+      let resolveBackend: (() => void) | undefined;
+      const backendChecked = new Promise<void>((resolve) => {
+        resolveBackend = resolve;
+      });
+      hoisted.getAcpRuntimeBackend.mockImplementation(() => {
+        resolveBackend?.();
+        return { id: "acpx", runtime: {}, healthy: () => false };
+      });
+      let settled = false;
+      const waiting = testing
+        .waitForAcpRuntimeBackendReady({
+          backendId: "acpx",
+          timeoutMs: 5_000,
+          pollMs: 1,
+          nowMs: () => monotonicMs,
+        })
+        .then(() => {
+          settled = true;
+        });
+
+      await backendChecked;
+      expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
+
+      wallClockMs += shiftedWallClockMs;
+      monotonicMs = shouldSettle ? 5_000 : 50;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(settled).toBe(shouldSettle);
+      if (!shouldSettle) {
+        monotonicMs = 5_000;
+      }
+      await waiting;
+    },
+  );
+});
+
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
