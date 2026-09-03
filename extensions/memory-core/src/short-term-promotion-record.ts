@@ -242,8 +242,8 @@ export async function recordShortTermRecalls(params: {
                 entry.claimHash === claimHash,
             )
           : undefined;
-      // Interactive/grounded writers retain their path-qualified identity.
-      // Daily recurrence reinforces that candidate instead of creating a rival.
+      // Non-daily writers retain their path-qualified identity unless daily
+      // ingestion has already established the canonical claim entry.
       const claimKey =
         signalType === "daily"
           ? buildDailyClaimEntryKey(claimHash)
@@ -254,12 +254,8 @@ export async function recordShortTermRecalls(params: {
               source: "memory",
               claimHash,
             });
-      // The reverse arrival order needs the same treatment: a daily claim
-      // recorded before its first interactive recall must be reinforced by that
-      // recall, or the recall opens the rival entry this pairing avoids and
-      // neither side alone reaches the promotion thresholds.
       const dailyClaimEntry =
-        signalType === "recall" ? store.entries[buildDailyClaimEntryKey(claimHash)] : undefined;
+        signalType === "daily" ? undefined : store.entries[buildDailyClaimEntryKey(claimHash)];
       const key =
         nonDailyEntry?.key ??
         dailyClaimEntry?.key ??
@@ -319,8 +315,8 @@ export async function recordShortTermRecalls(params: {
         : nowIso;
       // Daily claim keys omit the file path; retain the first source citation
       // while observations from distinct days accumulate on the same claim. A
-      // recall reinforcing such a claim cites it the same way, so the claim
-      // never adopts the path of whichever file the search happened to hit.
+      // A later non-daily signal cites it the same way, so the claim never
+      // adopts the path of whichever file the search or backfill happened to hit.
       const preserveFirstDailySource =
         existing !== undefined && (signalType === "daily" || dailyClaimEntry !== undefined);
       store.entries[key] = {
