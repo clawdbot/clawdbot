@@ -232,7 +232,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(credential).toEqual(
       expect.objectContaining({
         env: {
-          CLAUDE_AGENT_SDK_VERSION: "0.3.241",
+          CLAUDE_AGENT_SDK_VERSION: "0.3.243",
           NoDefaultCurrentDirectoryInExePath: "1",
           CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
         },
@@ -242,7 +242,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     );
     expect(emptyCredential).toEqual(
       expect.objectContaining({
-        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.241", NoDefaultCurrentDirectoryInExePath: "1" },
+        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.243", NoDefaultCurrentDirectoryInExePath: "1" },
         execute: expect.any(Function),
       }),
     );

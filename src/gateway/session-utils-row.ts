@@ -468,6 +468,7 @@ export function buildGatewaySessionRow(params: {
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
+    archiveReason: entry?.archiveReason,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),

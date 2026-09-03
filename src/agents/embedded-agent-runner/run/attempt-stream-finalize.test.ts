@@ -148,6 +148,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         state: sessionRuntimeState,
         toolResultPromptProjectionState: {},
         trajectoryRecorder: {},
+        transcriptPolicy: { appendOnlyRuntimeContext: false },
         transport: {
           effectiveAgentTransport: "sse",
           effectiveExtraParams: {},

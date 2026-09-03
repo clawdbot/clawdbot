@@ -13,6 +13,7 @@ beforeEach(() => {
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  pauseVirtualClock,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -110,6 +111,7 @@ async function openPullPreviewPage(deferPreview = false): Promise<{
   );
 
   const page = await context.newPage();
+  await page.clock.install();
   const gateway = await installMockGateway(page, {
     deferredMethods: deferPreview ? ["controlUi.githubPreview"] : [],
     methodResponses: {
@@ -428,19 +430,28 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await pullLink.hover();
     await expectText(card, "openclaw/openclaw #99816");
+    // Let preview response timers finish before freezing the pointer's grace.
+    await pauseVirtualClock(page);
     const linkBox = await pullLink.boundingBox();
     expect(linkBox).not.toBeNull();
-
-    // Cross the physical gap with real intermediate pointer positions: off the
-    // link, through the unowned strip below it, then onto the card body. Each
-    // move is a fast CDP round trip, so the whole crossing lands comfortably
-    // inside CLOSE_DELAY_MS (github-link-hovercard.runtime.ts); the card must
-    // survive every step.
-    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height / 2);
-    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height + 5);
     const cardBox = await card.boundingBox();
     expect(cardBox).not.toBeNull();
-    await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + 4);
+    const below = (await card.getAttribute("data-side")) === "bottom";
+    const linkEdgeY = below ? linkBox!.y + linkBox!.height : linkBox!.y;
+    const cardEdgeY = below ? cardBox!.y : cardBox!.y + cardBox!.height;
+    const gap = { x: linkBox!.x + linkBox!.width / 2, y: (linkEdgeY + cardEdgeY) / 2 };
+
+    // Cross the actual top/bottom gap using native pointer events, then enter
+    // the card just before the existing 120 ms dismissal deadline.
+    await page.mouse.move(gap.x, gap.y);
+    expect(
+      await page.evaluate(({ x, y }) => {
+        const target = document.elementFromPoint(x, y);
+        return target !== null && !target.closest("a.markdown-github-link, .github-link-hovercard");
+      }, gap),
+    ).toBe(true);
+    await page.clock.runFor(119);
+    expect(await card.count()).toBe(1);
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
     expect(await card.count()).toBe(1);
     const faces = card.locator(".github-link-hovercard__coauthors img");
@@ -452,14 +463,17 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     // Staying on the card holds it open regardless of elapsed time, mirroring
     // the unit test's ten-grace-window persistence check.
-    await page.waitForTimeout(300);
+    await page.clock.runFor(1_200);
     expect(await card.count()).toBe(1);
     await expectText(card, "openclaw/openclaw #99816");
 
     // Leaving both surfaces, with no click, still dismisses the card after the
     // traversal grace period.
     await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await page.clock.runFor(119);
+    expect(await card.count()).toBe(1);
+    await page.clock.runFor(1);
+    expect(await card.count()).toBe(0);
   });
 
   it("exposes the card as a dialog whose title link Tab reaches and Escape leaves", async () => {

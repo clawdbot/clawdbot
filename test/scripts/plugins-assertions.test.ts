@@ -480,6 +480,36 @@ ${command}
     }
   });
 
+  it("routes npm through both registry environment spellings after replacing a parent registry", () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-routing-");
+    writeFileSync(path.join(root, "fixture.tgz"), "fixture package archive");
+    const result = runPluginsSweepShell(
+      `
+set -euo pipefail
+source scripts/e2e/lib/plugins/fixtures.sh
+unset NPM_CONFIG_REGISTRY npm_config_registry
+export NPM_CONFIG_REGISTRY=http://127.0.0.1:1 npm_config_registry=http://127.0.0.1:1
+start_npm_fixture_registry fixture-pkg 1.0.0 "$REGISTRY_ROOT/fixture.tgz" "$REGISTRY_ROOT"
+# Duplicate-case precedence depends on environment order; exercise each accepted spelling.
+for registry_key in NPM_CONFIG_REGISTRY npm_config_registry; do
+  env -u "$registry_key" npm view fixture-pkg@1.0.0 version --json --fetch-retries=0 --fetch-timeout=1000 --cache "$REGISTRY_ROOT/cache"
+done
+`,
+      {
+        HOME: root,
+        REGISTRY_ROOT: root,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual(["1.0.0", "1.0.0"]);
+  });
+
   it("cleans npm fixture registry children when readiness times out", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-cleanup-"));
     try {
@@ -731,11 +761,14 @@ ${command}
     }
   });
 
-  it("serves tarball dependencies using the request-visible registry origin", async () => {
+  it("serves drive-qualified tarball dependencies using the request-visible registry origin", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-package-");
     const packageDir = path.join(root, "package");
     const portFile = path.join(root, "port");
-    const tarballPath = path.join(root, "openclaw.tgz");
+    // On POSIX, a relative D:/ path reproduces GNU tar's Windows remote-archive parsing.
+    const archiveDir = process.platform === "win32" ? root : "D:/packages";
+    const tarballPath = path.join(archiveDir, "openclaw.tgz");
+    mkdirSync(path.resolve(root, archiveDir), { recursive: true });
     mkdirSync(packageDir);
     writeJson(path.join(packageDir, "package.json"), {
       name: "openclaw",
@@ -748,7 +781,8 @@ ${command}
         "sqlite-vec": "0.1.7-alpha.2",
       },
     });
-    const packed = spawnSync("tar", ["-czf", tarballPath, "-C", root, "package"], {
+    const packed = spawnSync("tar", ["-czf", "openclaw.tgz", "-C", root, "package"], {
+      cwd: path.resolve(root, archiveDir),
       encoding: "utf8",
     });
     expect(packed.status, packed.stderr).toBe(0);
@@ -756,17 +790,19 @@ ${command}
     const child = spawn(
       process.execPath,
       [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
         portFile,
         "openclaw",
         "2026.7.1-beta.3",
         tarballPath,
       ],
       {
-        cwd: process.cwd(),
+        cwd: root,
         env: {
           ...process.env,
           OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+          // Fail locally if GNU tar mistakes the synthetic drive letter for a remote host.
+          TAR_OPTIONS: "--rsh-command=false",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },

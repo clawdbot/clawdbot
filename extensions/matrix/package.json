@@ -14,7 +14,7 @@
     "markdown-it": "15.0.0",
     "matrix-js-sdk": "42.2.0",
     "music-metadata": "11.15.0",
-    "typebox": "1.3.17",
+    "typebox": "1.3.18",
     "zod": "4.4.3"
   },
   "devDependencies": {

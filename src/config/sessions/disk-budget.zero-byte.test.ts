@@ -97,6 +97,8 @@ describe.each([false, true])("zero-byte artifact accounting (dryRun=%s)", (dryRu
           sessionId,
           sessionFile: path.join(dir, "old.jsonl"),
           updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
           skillsSnapshot: {
             prompt: "",
             skills: [],

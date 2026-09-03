@@ -6389,6 +6389,7 @@ public struct SessionRow: Codable, Sendable {
     public let archived: Bool?
     public let archivedat: Double?
     public let archivedby: SessionCreatedActor?
+    public let archivereason: AnyCodable?
     public let pinned: Bool?
     public let pinnedat: Double?
     public let unread: Bool?
@@ -6464,6 +6465,7 @@ public struct SessionRow: Codable, Sendable {
         archived: Bool? = nil,
         archivedat: Double? = nil,
         archivedby: SessionCreatedActor? = nil,
+        archivereason: AnyCodable? = nil,
         pinned: Bool? = nil,
         pinnedat: Double? = nil,
         unread: Bool? = nil,
@@ -6538,6 +6540,7 @@ public struct SessionRow: Codable, Sendable {
         self.archived = archived
         self.archivedat = archivedat
         self.archivedby = archivedby
+        self.archivereason = archivereason
         self.pinned = pinned
         self.pinnedat = pinnedat
         self.unread = unread
@@ -6614,6 +6617,7 @@ public struct SessionRow: Codable, Sendable {
         case archived
         case archivedat = "archivedAt"
         case archivedby = "archivedBy"
+        case archivereason = "archiveReason"
         case pinned
         case pinnedat = "pinnedAt"
         case unread
@@ -14446,6 +14450,134 @@ public struct WebLoginWaitParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
         case currentqrdataurl = "currentQrDataUrl"
+    }
+}
+
+public struct TranscriptSessionSummary: Codable, Sendable {
+    public let selector: String
+    public let sessionid: String
+    public let title: String?
+    public let providerid: String
+    public let providername: String?
+    public let source: [String: AnyCodable]
+    public let startedat: String
+    public let stoppedat: String?
+    public let active: Bool
+    public let utterancecount: Int
+    public let participants: [String]
+    public let hassummary: Bool
+    public let summarysource: AnyCodable?
+    public let overview: String?
+
+    public init(
+        selector: String,
+        sessionid: String,
+        title: String? = nil,
+        providerid: String,
+        providername: String? = nil,
+        source: [String: AnyCodable],
+        startedat: String,
+        stoppedat: String? = nil,
+        active: Bool,
+        utterancecount: Int,
+        participants: [String],
+        hassummary: Bool,
+        summarysource: AnyCodable? = nil,
+        overview: String? = nil)
+    {
+        self.selector = selector
+        self.sessionid = sessionid
+        self.title = title
+        self.providerid = providerid
+        self.providername = providername
+        self.source = source
+        self.startedat = startedat
+        self.stoppedat = stoppedat
+        self.active = active
+        self.utterancecount = utterancecount
+        self.participants = participants
+        self.hassummary = hassummary
+        self.summarysource = summarysource
+        self.overview = overview
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case selector
+        case sessionid = "sessionId"
+        case title
+        case providerid = "providerId"
+        case providername = "providerName"
+        case source
+        case startedat = "startedAt"
+        case stoppedat = "stoppedAt"
+        case active
+        case utterancecount = "utteranceCount"
+        case participants
+        case hassummary = "hasSummary"
+        case summarysource = "summarySource"
+        case overview
+    }
+}
+
+public struct TranscriptsListParams: Codable, Sendable {
+    public let limit: Int?
+    public let providerid: String?
+
+    public init(
+        limit: Int? = nil,
+        providerid: String? = nil)
+    {
+        self.limit = limit
+        self.providerid = providerid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case providerid = "providerId"
+    }
+}
+
+public struct TranscriptsListResult: Codable, Sendable {
+    public let sessions: [TranscriptSessionSummary]
+
+    public init(
+        sessions: [TranscriptSessionSummary])
+    {
+        self.sessions = sessions
+    }
+}
+
+public struct TranscriptsGetParams: Codable, Sendable {
+    public let selector: String
+    public let includeutterances: Bool?
+
+    public init(
+        selector: String,
+        includeutterances: Bool? = nil)
+    {
+        self.selector = selector
+        self.includeutterances = includeutterances
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case selector
+        case includeutterances = "includeUtterances"
+    }
+}
+
+public struct TranscriptsGetResult: Codable, Sendable {
+    public let session: TranscriptSessionSummary
+    public let summary: [String: AnyCodable]?
+    public let utterances: [[String: AnyCodable]]?
+
+    public init(
+        session: TranscriptSessionSummary,
+        summary: [String: AnyCodable]? = nil,
+        utterances: [[String: AnyCodable]]? = nil)
+    {
+        self.session = session
+        self.summary = summary
+        self.utterances = utterances
     }
 }
 

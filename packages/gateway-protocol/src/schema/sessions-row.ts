@@ -25,6 +25,13 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("timeout"),
 ]);
 
+export const SessionEntryArchiveReasonSchema = Type.Union([
+  Type.Literal("manual"),
+  Type.Literal("active-session-cap"),
+  Type.Literal("stale-dashboard"),
+  Type.Literal("restart-recovery"),
+]);
+
 export const SessionToolOverridesSchema = closedObject({
   mcpServers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
   mcpToolsDeny: Type.Optional(
@@ -88,6 +95,7 @@ export const SessionRowSchema = Type.Object(
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
+    archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
@@ -176,3 +184,4 @@ export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

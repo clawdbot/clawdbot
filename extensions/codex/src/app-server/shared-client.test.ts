@@ -865,7 +865,7 @@ describe("shared Codex app-server client", () => {
       managedFallbackCommandPaths: ["/cache/openclaw/codex"],
     });
     expect(desktop.process.stdin.destroyed).toBe(false);
-    expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
+    expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledExactlyOnceWith(
       "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
       {
         detectedVersion: desktopVersion,

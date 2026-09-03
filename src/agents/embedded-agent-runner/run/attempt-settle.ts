@@ -246,6 +246,7 @@ export async function runEmbeddedAttemptSettledPhase(
         },
       },
       context: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         ...(boundaryTimezone ? { boundaryTimezone } : {}),
         includeBoundaryTimestamp,
         isRawModelRun: input.isRawModelRun,
@@ -284,6 +285,7 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       toolPolicy: input.prepared.promptToolPolicy,
       preflight: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
         compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
         contextEngineAssemblySucceeded,
@@ -295,6 +297,7 @@ export async function runEmbeddedAttemptSettledPhase(
           : {}),
       },
       submission: {
+        appendOnlyRuntimeContext: sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext,
         promptActiveSession,
         sessionPromptState,
         toolResultPromptProjectionState,

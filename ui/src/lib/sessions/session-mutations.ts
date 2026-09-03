@@ -408,6 +408,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         archiveState.observe(normalizedKey, true, {
           ...archivedPresentationRow,
           archivedAt,
+          archiveReason: result.entry?.archiveReason,
           sessionId: archivedSessionId,
         });
         const state = host.readState();
@@ -416,6 +417,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
             ...archivedPresentationRow,
             archived: true,
             archivedAt,
+            archiveReason: result.entry?.archiveReason,
             updatedAt: result.entry?.updatedAt ?? archivedPresentationRow.updatedAt,
             pinned: false,
             pinnedAt: undefined,

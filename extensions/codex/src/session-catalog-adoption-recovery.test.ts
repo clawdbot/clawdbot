@@ -262,6 +262,8 @@ describe("Codex supervision actions", () => {
       entry: {
         ...adoptedEntry({ sourceThreadId: "thread-1", sessionId }),
         archivedAt: 123,
+        archivedBy: { type: "human", id: "operator-1" },
+        archiveReason: "manual",
         updatedAt: 99,
         model: "gpt-5.4",
         modelProvider: "openai",
@@ -305,6 +307,8 @@ describe("Codex supervision actions", () => {
       },
     });
     expect(entries[0]?.entry.archivedAt).toBeUndefined();
+    expect(entries[0]?.entry.archivedBy).toBeUndefined();
+    expect(entries[0]?.entry.archiveReason).toBeUndefined();
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 

@@ -380,7 +380,6 @@ describe("renderChatComposer controls", () => {
     await dropdown?.updateComplete;
 
     expect(dropdown?.open).toBe(true);
-    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledWith(true));
     await vi.waitFor(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
     );

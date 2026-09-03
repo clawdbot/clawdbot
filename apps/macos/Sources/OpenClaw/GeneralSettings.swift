@@ -524,7 +524,8 @@ struct GeneralSettings: View {
 
             TailscaleIntegrationSection(
                 connectionMode: self.state.connectionMode,
-                isPaused: self.state.isPaused)
+                isPaused: self.state.isPaused,
+                isActive: self.isActive)
         }
     }
 

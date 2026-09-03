@@ -1281,10 +1281,14 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // Twelve combined shards reduce repeated checkout/setup while retaining
-          // the target-owned two-worker and single-worker phases. Older configs
-          // retain their existing serial width.
-          const uiE2eJobCount = supportsUiE2eProjects ? 13 : usesHostedRunnerProfile ? 14 : 4;
+          // Six shards share setup on larger Blacksmith first attempts. Failed-job
+          // reruns retain this matrix while live routing still selects hosted runners;
+          // frozen targets and fresh hosted plans retain their established widths.
+          const compactUiE2e = !frozenTarget && runnerProfile === "blacksmith" &&
+            process.env.GITHUB_RUN_ATTEMPT === "1";
+          const uiE2eJobCount = supportsUiE2eProjects
+            ? (compactUiE2e ? 7 : 13)
+            : usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -3217,6 +3221,7 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     env:
+      # Prepare comparison history before checkout's credential scope ends.
       CHECKOUT_BASE_SHA: ${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
       fail-fast: false
@@ -3338,8 +3343,6 @@ jobs:
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
-          DIFF_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -3383,9 +3386,9 @@ jobs:
                 echo "Current CI targets must provide the check:coercion-helpers package script." >&2
                 exit 1
               fi
-              if [ -n "$PR_BASE_SHA" ]; then
-                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-ratchet-base --head HEAD --no-merge-base
+              if [ -n "$CHECKOUT_BASE_SHA" ]; then
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+                node scripts/report-test-temp-creations.mjs --base "$CHECKOUT_BASE_SHA" --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -3399,14 +3402,10 @@ jobs:
               # dependency-surface changes resolve nothing); dispatches and
               # release validation keep the full sweep, which also covers
               # registry-side drift on unchanged lockfiles.
-              npm_lock_base=""
-              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
+              if [[ -n "$CHECKOUT_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
-                npm_lock_base="refs/remotes/origin/ci-ratchet-base"
-                test "$(git rev-parse "${npm_lock_base}^{commit}")" = "$DIFF_BASE_SHA"
-              fi
-              if [[ -n "$npm_lock_base" ]]; then
-                pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+                pnpm deps:npm-lock:check:changed --base "$CHECKOUT_BASE_SHA" --head HEAD
               elif has_package_script "deps:npm-lock:check"; then
                 pnpm deps:npm-lock:check
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
@@ -4167,12 +4166,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Jobs requesting the Blacksmith Windows class admit at most two project
-          # processes with one Vitest worker each; hosted fallbacks remain serial.
+          # Native allocation can be smaller than the runner label. Keep projects
+          # serial within each machine; the two matrix jobs still run concurrently.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
-          if [[ "${RUNNER_ENVIRONMENT:-}" == "self-hosted" ]]; then
-            export OPENCLAW_TEST_PROJECTS_PARALLEL=2
-          fi
           case "$TASK" in
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.
