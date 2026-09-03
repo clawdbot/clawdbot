@@ -406,9 +406,13 @@ function cleanSchemaForGeminiWithDefs(
       }
     } else if (key === "items" && value) {
       if (Array.isArray(value)) {
-        cleaned[key] = value.map((entry) =>
-          cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack),
-        );
+        // Gemini models `items` as a single schema, so tuple form (`items: [a, b]`)
+        // is rejected outright. Collapse it the way unions already are.
+        cleaned[key] =
+          flattenUnionFallback(
+            {},
+            value.map((entry) => cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack)),
+          ) ?? {};
       } else if (typeof value === "object") {
         cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
       } else {

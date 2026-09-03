@@ -298,4 +298,48 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.enum).toBeUndefined();
   });
+
+  it("collapses tuple-form items into a single schema", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        range: { type: "array", items: [{ type: "number" }, { type: "number" }] },
+      },
+    }) as { properties?: { range?: { items?: unknown } } };
+
+    const items = cleaned.properties?.range?.items;
+    expect(Array.isArray(items)).toBe(false);
+    expect(items).toStrictEqual({ type: "number" });
+  });
+
+  it("collapses mixed-type tuple items to a single representative type", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "array",
+      items: [{ type: "string" }, { type: "number" }],
+    }) as { items?: unknown };
+
+    expect(cleaned.items).toStrictEqual({ type: "string" });
+  });
+
+  it("keeps the single variant when tuple items has one entry", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "array",
+      items: [{ type: "string", description: "only" }],
+    }) as { items?: { type?: unknown; description?: unknown } };
+
+    expect(cleaned.items?.type).toBe("string");
+    expect(cleaned.items?.description).toBe("only");
+  });
+
+  it("cleans unsupported keywords inside tuple items before collapsing", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "array",
+      items: [
+        { type: "string", minLength: 2 },
+        { type: "string", maxLength: 4 },
+      ],
+    }) as { items?: unknown };
+
+    expect(cleaned.items).toStrictEqual({ type: "string" });
+  });
 });
