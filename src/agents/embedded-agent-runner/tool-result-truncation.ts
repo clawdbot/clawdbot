@@ -173,6 +173,8 @@ export function pruneExpiredCacheTtlToolResults(params: {
   dropThinkingBlocksForEstimate: boolean;
   now: number;
   projectionState: ToolResultPromptProjectionState;
+  /** False replays existing projections only, when another owner (server clearing) prunes. */
+  pruneNewRounds: boolean;
   onPruned?: () => void;
 }): AgentMessage[] {
   const { settings, projectionState } = params;
@@ -239,6 +241,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
     projectionState.restoredCacheTtl.clear();
   }
   if (
+    !params.pruneNewRounds ||
     !params.lastCacheTouchAt ||
     settings.ttlMs <= 0 ||
     params.now - params.lastCacheTouchAt < settings.ttlMs
@@ -918,7 +921,7 @@ const cacheTtlProjectionSnapshotSchema = z.object({
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
 export function restoreCacheTtlToolResultProjections(
   projectionState: ToolResultPromptProjectionState,
-  entries: readonly { type: string; customType?: string; data?: unknown }[],
+  entries: readonly { type?: unknown; customType?: unknown; data?: unknown }[],
 ): void {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];

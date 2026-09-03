@@ -34,8 +34,10 @@ The request's provider, endpoint, and authentication determine where it runs.
 For provider `anthropic` with the `anthropic-messages` API, API-key authentication,
 and the default endpoint or `api.anthropic.com`, OpenClaw delegates pruning to
 Anthropic's [server-side tool-result clearing](https://platform.claude.com/docs/en/build-with-claude/context-editing).
-OpenClaw skips new client-side cache-TTL pruning, and the server clears old
-results before the model sees them. Full local history is retained. `ttl` does
+OpenClaw opens no new client-side pruning rounds, and the server clears old
+results before the model sees them. Projections made earlier in the same session
+(for example on a proxy route, or restored from the transcript marker) still
+replay unchanged. Full local history is retained. `ttl` does
 not gate this path.
 
 OpenClaw derives the request parameters without adding config options:

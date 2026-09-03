@@ -86,6 +86,7 @@ function project(
     lastCacheTouchAt?: number | null;
     now?: number;
     projectionState?: ToolResultPromptProjectionState;
+    pruneNewRounds?: boolean;
     onPruned?: () => void;
   } = {},
 ): AgentMessage[] {
@@ -98,6 +99,7 @@ function project(
     dropThinkingBlocksForEstimate: options.dropThinkingBlocksForEstimate ?? false,
     now: options.now ?? NOW,
     projectionState: options.projectionState ?? createToolResultPromptProjectionState(),
+    pruneNewRounds: options.pruneNewRounds ?? true,
     onPruned: options.onPruned,
   });
 }
@@ -247,6 +249,37 @@ describe("cache-TTL tool-result projection", () => {
     restoreCacheTtlToolResultProjections(restarted, entries);
     const restored = project(expanded, { projectionState: restarted, lastCacheTouchAt: NOW });
     expect(JSON.stringify(restored)).toBe(JSON.stringify(continued));
+  });
+
+  it("replays existing and restored projections when another owner prunes new rounds", () => {
+    const state = createToolResultPromptProjectionState();
+    const history = prunableHistory([tool({ id: "old", text: "a".repeat(5_000) })]);
+    const first = project(history, { projectionState: state });
+    const entries = [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: serializeCacheTtlToolResultProjections(state),
+      },
+    ];
+    const expanded = [
+      ...history,
+      assistant(),
+      tool({ id: "new", text: "b".repeat(5_000) }),
+      assistant(),
+      assistant(),
+      assistant(),
+    ];
+    // Live state: the earlier projection replays, the new result is left to the server.
+    const live = project(expanded, { projectionState: state, pruneNewRounds: false });
+    expect(toolText(live, "old")).toBe(toolText(first, "old"));
+    expect(toolText(live, "new")).toBe("b".repeat(5_000));
+    // Restarted state: marker keys re-derive the same bytes without opening a new round.
+    const restarted = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restarted, entries);
+    const restored = project(expanded, { projectionState: restarted, pruneNewRounds: false });
+    expect(toolText(restored, "old")).toBe(toolText(first, "old"));
+    expect(toolText(restored, "new")).toBe("b".repeat(5_000));
   });
 
   it("gates new pruning rounds without undoing earlier projections", () => {

@@ -625,10 +625,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     );
   }
   session.agent.transport = effectiveAgentTransport;
+  const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
+  const serverToolClearingEnabled =
+    contextPruning?.mode === "cache-ttl" &&
+    isAnthropicServerToolClearingEnabled(attempt.model, transportApiKey);
+  if (serverToolClearingEnabled) {
+    // One owner: the decision that suspends client-side pruning also hands the
+    // clearing request to the transport, so neither can happen without the other.
+    const baseStreamFn = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      const requestOptions = { ...options, cacheTtlPruning: { tools: contextPruning?.tools } };
+      return baseStreamFn(model, context, requestOptions);
+    };
+  }
   return {
-    serverToolClearingEnabled:
-      attempt.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-      isAnthropicServerToolClearingEnabled(attempt.model, transportApiKey),
+    serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
       extraParams: effectiveExtraParams,
       apiKey: transportApiKey,

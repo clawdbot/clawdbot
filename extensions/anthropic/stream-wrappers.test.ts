@@ -153,7 +153,6 @@ function runCompactionProviderWrapper(params?: {
   extraParams?: Record<string, unknown>;
   headers?: Record<string, string>;
   payload?: Record<string, unknown>;
-  config?: Parameters<typeof wrapAnthropicProviderStream>[0]["config"];
 }) {
   const captured: {
     headers?: Record<string, string>;
@@ -164,7 +163,6 @@ function runCompactionProviderWrapper(params?: {
     streamFn: createPayloadCapturingBaseStream(captured),
     modelId: "claude-sonnet-4-6",
     extraParams: params?.extraParams ?? { anthropicServerCompaction: true },
-    config: params?.config,
   } as never);
   const payload = params?.payload ?? {};
   void wrapped?.(
@@ -237,23 +235,6 @@ describe("anthropic stream wrappers", () => {
       anthropicCompactThreshold: 140_000,
     });
   });
-
-  it.each(["off", "cache-ttl"] satisfies Array<"off" | "cache-ttl">)(
-    "derives context management from context pruning mode %s",
-    (mode) => {
-      const tools = { allow: ["read*"], deny: ["read_secret"] };
-      const captured = runCompactionProviderWrapper({
-        extraParams: {},
-        config: { agents: { defaults: { contextPruning: { mode, tools } } } },
-      });
-
-      if (mode === "cache-ttl") {
-        expect(captured.options).toMatchObject({ cacheTtlPruning: { tools } });
-      } else {
-        expect(captured.options).not.toHaveProperty("cacheTtlPruning");
-      }
-    },
-  );
 
   it("preserves existing context management under the compaction wrapper", () => {
     const existing = { edits: [{ type: "clear_tool_uses_20250919" }] };

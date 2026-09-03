@@ -212,25 +212,22 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
-/** Pass context-management settings to the shared request payload policy. */
-function createAnthropicContextManagementWrapper(
+/** Pass opt-in server compaction to the shared request payload policy. */
+function createAnthropicCompactionWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
-  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    if (!compaction.enabled) {
+      return underlying(model, context, options);
+    }
     const requestOptions = {
       ...options,
-      ...(cacheTtlPruning ? { cacheTtlPruning } : {}),
-      ...(compaction.enabled
-        ? {
-            anthropicServerCompaction: true,
-            anthropicCompactThreshold: compaction.threshold,
-            headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
-          }
-        : {}),
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: compaction.threshold,
+      headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
     };
     return underlying(model, context, requestOptions);
   };
@@ -311,7 +308,6 @@ export function resolveAnthropicServiceTier(
 export function wrapAnthropicProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
-  const contextPruning = ctx.config?.agents?.defaults?.contextPruning;
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
@@ -333,13 +329,8 @@ export function wrapAnthropicProviderStream(
       ? (streamFn) =>
           createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
       : undefined,
-    ctx.extraParams?.anthropicServerCompaction === true || contextPruning?.mode === "cache-ttl"
-      ? (streamFn) =>
-          createAnthropicContextManagementWrapper(
-            streamFn,
-            ctx.extraParams,
-            contextPruning?.mode === "cache-ttl" ? { tools: contextPruning.tools } : undefined,
-          )
+    ctx.extraParams?.anthropicServerCompaction === true
+      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
       : undefined,
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );

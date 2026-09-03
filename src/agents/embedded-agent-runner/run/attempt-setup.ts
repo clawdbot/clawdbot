@@ -353,9 +353,6 @@ export function installEmbeddedAttemptContextGuards(input: {
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
       const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-      if (input.getServerToolClearingEnabled()) {
-        return sourceMessages;
-      }
       const projected = pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
@@ -364,6 +361,9 @@ export function installEmbeddedAttemptContextGuards(input: {
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
         projectionState: input.toolResultPromptProjectionState,
+        // Server-side clearing owns new rounds; earlier client projections still
+        // replay so the prefix already sent for this session does not change.
+        pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
           lastCacheTouchAt = Date.now();
         },

@@ -24,6 +24,7 @@ vi.mock("../../tools/computer-tool.js", () => ({
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
 }));
 vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
   isCacheTtlEligibleProvider: hoisted.isCacheTtlEligibleProvider,
   readLastCacheTtlTimestamp: hoisted.readLastCacheTtlTimestamp,
 }));
@@ -218,6 +219,24 @@ describe("installEmbeddedAttemptContextGuards", () => {
         activeContextEngine: { info: { id: "test-engine", ownsCompaction: true } },
         getServerToolClearingEnabled: () => serverClearing,
       });
+      const earlierProjection = "[trimmed by an earlier client-side prune]";
+      if (serverClearing) {
+        // A projection made before this route took over (proxy/OAuth turn, or restored
+        // from the transcript marker) must keep replaying under server clearing.
+        const key = "tool:old-tool:1";
+        input.toolResultPromptProjectionState.replacements.set(key, {
+          message: {
+            role: "toolResult",
+            toolCallId: "old-tool",
+            toolName: "read",
+            content: [{ type: "text", text: earlierProjection }],
+            timestamp: 1,
+          } as AgentMessage,
+          cacheTtl: "soft",
+        });
+        input.toolResultPromptProjectionState.sourceTextByKey.set(key, ["x".repeat(5_000)]);
+        input.toolResultPromptProjectionState.frozen.add(key);
+      }
       input.attempt = {
         ...input.attempt,
         config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
@@ -271,7 +290,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       const firstTool = engineMessages?.find((message) => message.role === "toolResult");
       expect(firstTool?.content[0]).toMatchObject({
         type: "text",
-        text: serverClearing ? "x".repeat(5_000) : expect.stringContaining("[Tool result trimmed:"),
+        text: serverClearing ? earlierProjection : expect.stringContaining("[Tool result trimmed:"),
       });
 
       await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
