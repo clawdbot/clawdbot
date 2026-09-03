@@ -7,9 +7,13 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
+import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
+import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
+import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
 import type { CollectionBackupManifest } from "../skills/workshop/collection-backup.js";
 import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
 import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
+import { resolveSkillProposalTarget } from "../skills/workshop/store.js";
 
 const LEGACY_COLLECTION_BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 const MAX_BACKUP_MANIFEST_BYTES = 1024 * 1024;
@@ -40,8 +44,6 @@ type LegacyCollectionBackup = {
   convertedSkillDirs: string[];
   convertedResultSkillDirs: string[];
 };
-
-type LegacyWorkshopSkillRelocations = ReadonlyMap<string, string>;
 
 export function inferWorkspaceOwnerAgentId(
   config: OpenClawConfig,
@@ -189,10 +191,69 @@ async function isHistoryOnlyBackup(backupDir: string): Promise<boolean> {
   }
 }
 
+async function readLegacyBackupSkillKey(
+  backup: LegacyCollectionBackup,
+  relativeDir: string,
+  fallbackKey: string,
+  maxSkillFileBytes: number,
+): Promise<string | undefined> {
+  const skillDir = path.join(backup.backupDir, "workspace", relativeDir);
+  const frontmatter = readSkillFrontmatterSafe({
+    rootDir: skillDir,
+    filePath: path.join(skillDir, "SKILL.md"),
+    maxBytes: maxSkillFileBytes,
+  });
+  if (!frontmatter) {
+    return (await pathExists(skillDir)) ? undefined : fallbackKey;
+  }
+  return (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? frontmatter.name)?.trim();
+}
+
+async function proveLegacyCollectionBackupRelocations(
+  backup: LegacyCollectionBackup,
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ownerAgentId: string,
+): Promise<ReadonlySet<string>> {
+  const provenPaths = new Set<string>();
+  const maxSkillFileBytes = resolveSkillDiscoveryLimits(config).maxSkillFileBytes;
+  for (const [index, relativeDir] of backup.manifest.resultSkillDirs.entries()) {
+    const legacyPath = path.resolve(backup.manifest.workspaceDir, relativeDir);
+    if (await pathExists(legacyPath)) {
+      continue;
+    }
+    const skillKey = await readLegacyBackupSkillKey(
+      backup,
+      relativeDir,
+      path.basename(backup.convertedResultSkillDirs[index] ?? ""),
+      maxSkillFileBytes,
+    );
+    if (!skillKey) {
+      continue;
+    }
+    const target = resolveSkillProposalTarget({
+      skillName: skillKey,
+      config,
+      agentId: ownerAgentId,
+      env,
+    });
+    if (!(await pathExists(target.skillDir))) {
+      continue;
+    }
+    const resultHash = await readSkillProposalTargetTreeSha256(target.skillDir);
+    if (resultHash === backup.manifest.resultSkillHashes[relativeDir]) {
+      provenPaths.add(legacyPath);
+    }
+  }
+  return provenPaths;
+}
+
 async function migrateLegacyCollectionBackup(
   backup: LegacyCollectionBackup,
   destinationRoot: string,
-  workshopSkillRelocations: LegacyWorkshopSkillRelocations,
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ownerAgentId: string,
 ): Promise<{ preserveLegacyRoot: boolean }> {
   const destination = path.join(destinationRoot, backup.manifest.id);
   if (await pathExists(destination)) {
@@ -206,9 +267,15 @@ async function migrateLegacyCollectionBackup(
     const affectedDirs = [
       ...new Set([...backup.manifest.skillDirs, ...backup.manifest.resultSkillDirs]),
     ];
+    const provenLegacyPaths = await proveLegacyCollectionBackupRelocations(
+      backup,
+      config,
+      env,
+      ownerAgentId,
+    );
     const unownedDirs = affectedDirs.filter(
       (relativeDir) =>
-        !workshopSkillRelocations.has(path.resolve(backup.manifest.workspaceDir, relativeDir)),
+        !provenLegacyPaths.has(path.resolve(backup.manifest.workspaceDir, relativeDir)),
     );
     if (unownedDirs.length > 0) {
       await fs.cp(
@@ -229,18 +296,6 @@ async function migrateLegacyCollectionBackup(
       await fs.mkdir(destinationRoot, { recursive: true });
       await fs.rename(staging, destination);
       return { preserveLegacyRoot: true };
-    }
-    for (const relativeDir of backup.manifest.resultSkillDirs) {
-      const workshopSkillDir = workshopSkillRelocations.get(
-        path.resolve(backup.manifest.workspaceDir, relativeDir),
-      );
-      if (!workshopSkillDir) {
-        throw new Error(`legacy collection result path conversion failed: ${relativeDir}`);
-      }
-      const resultHash = await readSkillProposalTargetTreeSha256(workshopSkillDir);
-      if (resultHash !== backup.manifest.resultSkillHashes[relativeDir]) {
-        throw new Error(`legacy collection result changed after cleanup: ${relativeDir}`);
-      }
     }
     await fs.mkdir(path.join(staging, "skills"), { recursive: true });
     for (const [index, relativeDir] of backup.manifest.skillDirs.entries()) {
@@ -288,7 +343,6 @@ async function migrateLegacyCollectionBackup(
 export async function migrateLegacyCollectionBackups(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  workshopSkillRelocations: LegacyWorkshopSkillRelocations = new Map(),
 ): Promise<{ migrated: number; warnings: string[] }> {
   const { backupRoot, names } = await listLegacyCollectionBackupRoots(env);
   if (names.length === 0) {
@@ -345,7 +399,9 @@ export async function migrateLegacyCollectionBackups(
         const migration = await migrateLegacyCollectionBackup(
           backup,
           destinationRoot,
-          workshopSkillRelocations,
+          config,
+          env,
+          ownerAgentId,
         );
         preserveLegacyRoot ||= migration.preserveLegacyRoot;
         if (!migration.preserveLegacyRoot) {

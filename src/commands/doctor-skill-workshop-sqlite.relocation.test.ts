@@ -34,6 +34,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import * as collectionBackups from "./doctor-skill-workshop-collection-backups.js";
 import {
   inspectLegacySkillWorkshopMigration,
   migrateLegacySkillWorkshopProposals,
@@ -214,6 +215,93 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
         "utf8",
       ),
     ).resolves.toContain("# Before cleanup");
+  });
+
+  it("converts a legacy collection backup after an interrupted relocation retarget", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-interrupted-backup-workspace-"),
+    );
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+      name: "interrupted-backup",
+      description: "Interrupted backup relocation",
+      content: "# Current\n",
+    });
+    const applied = await applySkillProposal({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    const legacySkillDir = path.join(workspaceDir, "skills", "interrupted-backup");
+    const legacySkillFile = path.join(legacySkillDir, "SKILL.md");
+    await fs.cp(applied.record.target.skillDir, legacySkillDir, { recursive: true });
+    await fs.rm(applied.record.target.skillDir, { recursive: true });
+    await workshopStore.updateSkillProposalRecord({
+      record: {
+        ...applied.record,
+        target: {
+          ...applied.record.target,
+          skillDir: legacySkillDir,
+          skillFile: legacySkillFile,
+          source: "openclaw-workspace",
+        },
+      },
+      store: { env: testState.env },
+    });
+    const resultContent = await fs.readFile(legacySkillFile, "utf8");
+    const backupId = "2026-09-01T00-00-00.000Z-interrupted1";
+    await seedLegacyCollectionBackup({
+      workspaceDir,
+      backupId,
+      relativeSkillDir: path.join("skills", "interrupted-backup"),
+      backupContent:
+        "---\nname: interrupted-backup\ndescription: Interrupted backup\n---\n\n# Before cleanup\n",
+      resultContent,
+    });
+    const config = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+    const backupMigration = vi
+      .spyOn(collectionBackups, "migrateLegacyCollectionBackups")
+      .mockRejectedValueOnce(new Error("injected backup conversion interruption"));
+    try {
+      await expect(
+        migrateLegacySkillWorkshopProposals({ config, env: testState.env }),
+      ).rejects.toThrow("injected backup conversion interruption");
+    } finally {
+      backupMigration.mockRestore();
+    }
+
+    await expect(fs.access(legacySkillDir)).rejects.toThrow();
+    await expect(
+      readSkillProposalRecord(applied.record.id, { env: testState.env }),
+    ).resolves.toMatchObject({
+      target: {
+        skillDir: path.join(
+          resolveWorkshopSkillsDir(config, "main", testState.env),
+          "interrupted-backup",
+        ),
+        source: "openclaw-workshop",
+      },
+    });
+
+    const rerun = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+    expect(rerun.changes.join("\n")).toContain("migrated 1 legacy collection backup root");
+    expect(rerun.warnings).toEqual([]);
+    await expect(
+      restoreLatestSkillCollectionBackup({
+        workspaceDir,
+        config,
+        agentId: "main",
+        env: testState.env,
+      }),
+    ).resolves.toMatchObject({ backupId, restored: ["interrupted-backup"] });
   });
 
   it("preserves a legacy collection backup when its workspace has ambiguous owners", async () => {
