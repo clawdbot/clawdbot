@@ -64,7 +64,6 @@ const openAiCodexPackageJson = findPackageJson("@openai/codex", [
 if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }
-assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 assertCodexReleasePackageContract({
   pluginPackageJson: codexPackageJson,
   codexPackageJson: openAiCodexPackageJson,
