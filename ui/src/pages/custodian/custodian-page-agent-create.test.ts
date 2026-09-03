@@ -157,7 +157,7 @@ describe("custodian new-agent flow", () => {
   it("hands model-account setup to the existing human Profile controls", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Open Settings → Profile → Model accounts to connect your account.",
+      reply: "Open Settings → Profile → Connected accounts to connect your account.",
       action: "none",
       handoff: { kind: "model-accounts" },
     });

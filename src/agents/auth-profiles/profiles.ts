@@ -260,7 +260,7 @@ export async function removeAuthProfilesWithLock(params: {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
     throw new Error(
-      "Personal model accounts are managed in Settings → Profile → Model accounts. Disconnect the account there instead of removing a shared auth profile.",
+      "Personal model accounts are managed in Settings → Profile → Connected accounts. Clearing a default keeps the credential; revoke access with the provider instead of removing a shared auth profile.",
     );
   }
   return await updateAuthProfileStoreWithLock({

@@ -34,11 +34,10 @@ describe.each([
       expect(reply.text).toContain("Nothing has changed");
       expect(reply.text).toContain("never paste credentials");
       expect(reply.handoff).toEqual(surface === "gateway" ? { kind: "model-accounts" } : undefined);
-      expect(reply.text).toContain(
-        surface === "gateway"
-          ? "Settings → Profile → Model accounts"
-          : "openclaw models accounts login <provider>",
-      );
+      expect(reply.text).toContain("Settings → Profile → Connected accounts");
+      if (surface === "cli") {
+        expect(reply.text).toContain("openclaw models accounts login <provider>");
+      }
       expect(runAgentTurn).toHaveBeenCalledTimes(source === "command" ? 0 : 1);
       expect(executeOperation).not.toHaveBeenCalled();
     },

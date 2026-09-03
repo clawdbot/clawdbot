@@ -258,7 +258,9 @@ describe("inherited auth-profile usage persistence", () => {
         agentDir: mainAgentDir,
         profileIds: [PRIMARY_ID, personalId],
       }),
-    ).rejects.toThrow("Personal model accounts are managed in Settings");
+    ).rejects.toThrow(
+      "Personal model accounts are managed in Settings → Profile → Connected accounts",
+    );
     expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[PRIMARY_ID]).toBeDefined();
     expect(readUserModelAuthProfile(personalId)?.credential).toBeDefined();
   });
