@@ -319,7 +319,8 @@ including a four-option question, where **Other…** stays named in the card's t
 
 LINE cannot edit a message it already delivered, so the controls stay on screen after
 the question ends. A tap that arrives then is answered with `That question is no longer
-waiting for an answer.` rather than silently doing nothing. The Gateway reports one
+waiting for an answer.` A tap from someone the group's `groupPolicy` does not admit is
+dropped before that, with nothing sent back. The Gateway reports one
 terminal state for answered, cancelled and expired questions alike, so the notice does
 not claim which one it was.
 

@@ -166,10 +166,12 @@ function toLineQuestionChoice(
 }
 
 /**
- * The free-text control resolves nothing by itself, and LINE cannot take a
- * control back off a card it already delivered, so drawing it would add a tap
- * that changes nothing the card's own words do not already offer. The route
- * stays in those words, the way Discord and Slack leave it.
+ * The free-text control is not drawn. LINE can open the composer on a tap
+ * (`inputOption: "openKeyboard"`), so the platform is not the reason: an answer
+ * is claimed only on the plain-text inbound path, which no postback reaches, so
+ * the button cannot change whether what follows it counts as the answer. It
+ * would add a tap that changes nothing the card's own words already offer, which
+ * is why Discord and Slack leave that route in text too.
  */
 function isLineTextFallbackButton(button: MessagePresentationButton): boolean {
   const action = resolveMessagePresentationButtonAction(button);
