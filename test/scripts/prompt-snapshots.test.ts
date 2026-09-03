@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   materializeCodexDynamicToolSnapshot,
   materializeCodexPromptSnapshot,
@@ -17,6 +18,13 @@ import {
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
 import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+} from "../../src/test-helpers/state-dir-env.js";
 import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -38,9 +46,41 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
+let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;
+let pluginLoaderCallsBefore: number;
+let pluginLoaderCallsAfter: number;
+let poisonedStateRoot: string | undefined;
+const stateDirEnv = snapshotStateDirEnv();
+
 describe("happy path prompt snapshots", () => {
+  beforeAll(async () => {
+    poisonedStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-poison-"));
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: poisonedStateRoot,
+    });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    } finally {
+      database.close();
+    }
+    setStateDirEnv(poisonedStateRoot);
+
+    pluginLoaderCallsBefore = getPluginModuleLoaderStats().calls;
+    generated = await createHappyPathPromptSnapshotFiles();
+    pluginLoaderCallsAfter = getPluginModuleLoaderStats().calls;
+  }, 300_000);
+
+  afterAll(() => {
+    restoreStateDirEnv(stateDirEnv);
+    if (poisonedStateRoot) {
+      fs.rmSync(poisonedStateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
-    const generated = await createHappyPathPromptSnapshotFiles();
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
@@ -129,12 +169,10 @@ describe("happy path prompt snapshots", () => {
     // plugin-loader call here means a scenario channel (or another plugin
     // surface) fell back to source re-transpilation, which re-evaluates the
     // core graph and stalls the lane by minutes.
-    const callsBefore = getPluginModuleLoaderStats().calls;
-    const files = await createHappyPathPromptSnapshotFiles();
-    expect(files.length).toBeGreaterThan(0);
+    expect(generated.length).toBeGreaterThan(0);
     const stats = getPluginModuleLoaderStats();
     expect(
-      stats.calls - callsBefore,
+      pluginLoaderCallsAfter - pluginLoaderCallsBefore,
       `prompt snapshot generation hit the jiti plugin loader; targets: ${stats.topSourceTransformTargets
         .map((entry) => entry.target)
         .join(", ")}`,

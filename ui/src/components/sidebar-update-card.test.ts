@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import "./sidebar-update-card.ts";
 
@@ -111,32 +110,6 @@ describe("SidebarUpdateCard", () => {
     expect(element.textContent).toContain("Update failed");
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
     expect(onReviewUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("returns a declined native alert update to the gateway", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = true;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = false;
-    element.updateAvailable = null;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.remove();
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
   });
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {

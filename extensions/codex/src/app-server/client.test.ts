@@ -502,6 +502,8 @@ describe("CodexAppServerClient", () => {
 
   it.each([
     ["0.149.0", 0],
+    [`${CODEX_APP_SERVER_VERSION}-alpha.4`, 0],
+    [CODEX_APP_SERVER_VERSION, 0],
     [`${newerMinorVersion}-alpha.4`, 1],
     [newerMinorVersion, 1],
     [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],

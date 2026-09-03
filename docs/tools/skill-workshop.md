@@ -360,6 +360,11 @@ Other workspace parameters apply depending on the action:
 | `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                              |
 | `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                           |
 
+`read` and `prepare_patch` return the resolved `skillName`. Reuse that name as
+`skill_name` in follow-up calls; a metadata `skillKey` can match a different
+skill's exact name. Update proposals and revisions preserve the existing skill's
+frontmatter name.
+
 Only one prepared patch span may be active per skill. A second
 `prepare_patch` is rejected until a `patch` attempt consumes or invalidates the
 active authorization.

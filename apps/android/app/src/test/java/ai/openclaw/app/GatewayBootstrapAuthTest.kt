@@ -1289,22 +1289,6 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun sameTalkModeReassertionStopsManualMicCapture() {
-    val runtime = createVoiceRuntime()
-    readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancel()
-    runtime.setTalkModeEnabled(true)
-    val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
-    micCapture.setMicEnabled(true)
-
-    runtime.setTalkModeEnabled(true)
-
-    assertFalse(runtime.micEnabled.value)
-    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
-    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
-    assertTrue(talkMode.isEnabled.value)
-  }
-
-  @Test
   fun backgroundingStopsTalkModeCapture() {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value

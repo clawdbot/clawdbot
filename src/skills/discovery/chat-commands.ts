@@ -14,15 +14,12 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 export {
-  expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
@@ -52,17 +49,6 @@ export function listSkillCommandsForWorkspace(params: {
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
   };
-  const entries =
-    params.includeAllowlistHidden || params.sessionEntry?.skillLibrarySelections?.length
-      ? loadWorkspaceSkills(params.workspaceDir, {
-          config: params.cfg,
-          eligibility,
-          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        })
-      : undefined;
-  if (entries && params.sessionEntry?.skillLibrarySelections?.length) {
-    entries.push(...loadSkillLibrarySelection(params.sessionEntry.skillLibrarySelections));
-  }
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     agentId: params.agentId,
@@ -70,7 +56,7 @@ export function listSkillCommandsForWorkspace(params: {
     includeAllowlistHidden: params.includeAllowlistHidden,
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    ...(entries ? { entries } : {}),
+    librarySelections: params.sessionEntry?.skillLibrarySelections,
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }

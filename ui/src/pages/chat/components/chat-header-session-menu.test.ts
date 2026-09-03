@@ -305,7 +305,7 @@ describe("chat header session menu", () => {
     const groupLabels = Array.from(
       moveToGroup.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     ).map(itemLabel);
-    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group…"]);
+    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
   });
 
   it("dispatches canonical session actions from the header surface", async () => {

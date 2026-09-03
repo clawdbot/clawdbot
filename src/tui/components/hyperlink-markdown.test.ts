@@ -1,12 +1,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
 function osc8Targets(raw: string) {
-  return splitAnsiSegments(raw).flatMap((segment) => {
+  return [...iterateAnsiSegments(raw)].flatMap((segment) => {
     if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
       return [];
     }

@@ -2,6 +2,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -28,6 +29,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();
@@ -133,6 +135,83 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
+  it.each([false, true])(
+    "replays turn and tool-loop prefixes with append-only runtime context %s",
+    async (appendOnlyRuntimeContext) => {
+      const { activeSession } = createActiveSession();
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        appendOnlyRuntimeContext,
+        attempt: {
+          config: { agents: { defaults: { userTimezone: "UTC" } } },
+          prompt: "first question",
+          trigger: "user",
+        },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager: createSessionManager(),
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+      const user = {
+        role: "user" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\nfirst question`,
+          },
+        ],
+        timestamp: 1_717_570_800_000,
+      };
+      const carrier = buildRuntimeContextCustomMessage("first turn context")!;
+      const messages: AgentMessage[] = appendOnlyRuntimeContext ? [user, carrier] : [carrier, user];
+      const first = await activeSession.agent.convertToLlm(messages);
+      expect(first).toHaveLength(2);
+      expect(first[1]).toBe(carrier);
+      messages.push(
+        makeAssistantMessageFixture({
+          content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+        {
+          role: "toolResult",
+          toolCallId: "call_read",
+          toolName: "read",
+          content: [{ type: "text", text: "result" }],
+          isError: false,
+          timestamp: user.timestamp + 1,
+        },
+      );
+      const toolLoop = await activeSession.agent.convertToLlm(messages);
+      if (appendOnlyRuntimeContext) {
+        expect(JSON.stringify(toolLoop.slice(0, first.length))).toBe(JSON.stringify(first));
+      } else {
+        expect(toolLoop.at(-1)).toBe(carrier);
+      }
+      const nextUser = {
+        role: "user" as const,
+        content: "next question",
+        timestamp: user.timestamp + 60_000,
+      };
+      const nextCarrier = buildRuntimeContextCustomMessage("second turn context")!;
+      messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "done" }] }));
+      messages.push(
+        ...(appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
+      );
+      const next = await activeSession.agent.convertToLlm(messages);
+      if (appendOnlyRuntimeContext) {
+        expect(JSON.stringify(next.slice(0, toolLoop.length))).toBe(JSON.stringify(toolLoop));
+        expect(next[1]).toBe(carrier);
+        expect(next.at(-1)).toBe(nextCarrier);
+        expect(next[0]!.content).toContain("Conversation info:");
+      } else {
+        expect(next).not.toContain(carrier);
+        expect(next.at(-1)).toBe(nextCarrier);
+        expect(next[0]!.content).not.toContain("Conversation info:");
+      }
+    },
+  );
+
   it.each(["aborted", "rebound-writer"] as const)(
     "does not persist orphan repair for an unavailable owner: %s",
     async (reason) => {

@@ -5,6 +5,7 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import {
   isUiGlobalScopeConfigured,
   parseAgentSessionKey,
@@ -99,14 +100,19 @@ export function projectChatTranscript(
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const archiveActor = activeSession?.archivedBy;
+  const archiveLabel = archiveActor?.id
+    ? t("sessionsView.archivedBy", {
+        name: archiveActor.label ?? archiveActor.id,
+      })
+    : activeSession?.archiveReason
+      ? formatSessionArchiveReason(activeSession.archiveReason)
+      : undefined;
   const archiveNotice =
-    activeSession?.archived && activeSession.archivedAt !== undefined && archiveActor?.id
+    activeSession?.archived && activeSession.archivedAt !== undefined && archiveLabel
       ? ({
           kind: "notice",
           key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
-          label: t("sessionsView.archivedBy", {
-            name: archiveActor.label ?? archiveActor.id,
-          }),
+          label: archiveLabel,
           text: "",
           timestamp: activeSession.archivedAt,
         } satisfies Extract<ChatItem, { kind: "notice" }>)
@@ -598,7 +604,6 @@ export function projectChatTranscript(
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
-    chatItems,
     locale,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),

@@ -555,6 +555,7 @@ describe("qa suite planning helpers", () => {
   it("isolates and collects scenario-declared transport policy", () => {
     const scenario = makeQaSuiteTestScenario("sender-policy", {
       transportPolicy: {
+        directMessageOnly: true,
         requireGroupMention: true,
         senderAllowlist: ["driver"],
       },
@@ -562,6 +563,7 @@ describe("qa suite planning helpers", () => {
 
     expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
     expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
+      directMessageOnly: true,
       requireGroupMention: true,
       senderAllowlist: ["driver"],
     });

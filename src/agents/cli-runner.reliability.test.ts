@@ -75,6 +75,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
@@ -2498,6 +2499,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("returns accepted CLI session spawns when sessions_yield pauses the requester", async () => {
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const requesterTurnRunId = "run-cli-yield";
     const childRunId = "run-cli-child";
     const childSessionKey = "agent:main:subagent:cli-child";
@@ -2537,24 +2539,44 @@ describe("runCliAgent reliability", () => {
       runId: requesterTurnRunId,
     });
     context.mcpDeliveryCapture = true;
-
-    const result = await runPreparedCliAgent(context);
-
-    expect(result).toMatchObject({
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
-      ],
-      meta: {
-        yielded: true,
-        livenessState: "paused",
-        stopReason: "end_turn",
-        completion: {
-          finishReason: "end_turn",
-          stopReason: "end_turn",
-          refusal: false,
-        },
-      },
+    Object.assign(context.params, {
+      sessionFile,
+      sessionTarget,
+      storePath,
+      workspaceDir: dir,
+      persistAssistantTranscript: true,
     });
+
+    try {
+      const result = await runPreparedCliAgent(context);
+
+      expect(result).toMatchObject({
+        acceptedSessionSpawns: [
+          { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
+        ],
+        meta: {
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+          completion: {
+            finishReason: "end_turn",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+        },
+      });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "yield acknowledged" }],
+          idempotencyKey: `cli-assistant:${requesterTurnRunId}`,
+        }),
+      ]);
+      expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each([

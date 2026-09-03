@@ -29,8 +29,8 @@ import {
   renderGroupedTestComparison,
   renderGroupedTestReport,
 } from "./lib/test-group-report.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
-import { resolveVitestNodeArgs } from "./run-vitest.mts";
 import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,

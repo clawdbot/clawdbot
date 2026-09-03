@@ -1152,6 +1152,8 @@ openclaw-settings-save-indicator:empty {
    bottom one puts the divider on the settings takeover's line and lets the
    symmetric block padding center the row in the band it leaves. */
 .sidebar-shell__footer {
+  /* Positioned ledge for resident sidebar surfaces such as the lobster pet. */
+  position: relative;
   flex-shrink: 0;
   min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
@@ -2567,6 +2569,11 @@ wa-dropdown.session-menu::part(menu) {
 
 .session-menu--compact .session-menu__chevron {
   display: inline-flex;
+}
+
+html[dir="rtl"] .session-menu__chevron,
+html[dir="rtl"] .session-menu__back > .session-menu__icon {
+  transform: scaleX(-1);
 }
 
 wa-dropdown.session-menu--compact::part(menu) {

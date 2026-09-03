@@ -77,6 +77,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -404,6 +405,7 @@ internal fun OpenClawSidebar(
   val agentPicker = agentPickerState(agents, selectedAgentId)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val catalogState by viewModel.sessionCatalogState.collectAsState()
+  val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val catalogAvailable by viewModel.sessionCatalogAvailable.collectAsState()
   val operatorScopes by viewModel.operatorScopes.collectAsState()
   val canMutateSessions = operatorScopesAllowWrite(operatorScopes)
@@ -533,13 +535,25 @@ internal fun OpenClawSidebar(
           modifier = Modifier.size(20.dp),
         )
       }
-      IconButton(onClick = onNewSession, modifier = Modifier.size(48.dp)) {
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = nativeString("New session"),
-          tint = palette.text,
-          modifier = Modifier.size(22.dp),
-        )
+      IconButton(
+        onClick = onNewSession,
+        enabled = !sessionCreating,
+        modifier =
+          Modifier.size(48.dp).semantics {
+            contentDescription = nativeString("New session")
+            if (sessionCreating) stateDescription = nativeString("Loading")
+          },
+      ) {
+        if (sessionCreating) {
+          CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = palette.text)
+        } else {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = palette.text,
+            modifier = Modifier.size(22.dp),
+          )
+        }
       }
       if (showCloseButton) {
         IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("sidebar-close")) {
@@ -736,6 +750,7 @@ internal fun OpenClawSidebar(
                         {
                           IconButton(
                             onClick = { onCreateCatalogSession(catalog.id) },
+                            enabled = !sessionCreating,
                             modifier = Modifier.size(40.dp),
                           ) {
                             Icon(

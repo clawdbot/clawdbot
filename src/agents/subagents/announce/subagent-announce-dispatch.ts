@@ -16,6 +16,7 @@ type SubagentAnnounceDeliveryDisposition =
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
+  | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"

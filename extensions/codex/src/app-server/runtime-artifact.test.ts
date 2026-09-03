@@ -94,7 +94,7 @@ async function createNpmLauncherFixture(root: string) {
   await fs.chmod(path.join(binDir, "node"), 0o755);
   const command = path.join(binDir, "codex");
   await fs.symlink(launcher, command);
-  return { command, native, binDir };
+  return { command, launcher, native, binDir };
 }
 
 describe("Codex app-server runtime artifact", () => {
@@ -115,6 +115,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+    ["resolved-managed", "package-entrypoint"],
     ["config", "absolute"],
     ["env", "path"],
     ["config", "relative"],
@@ -122,9 +123,15 @@ describe("Codex app-server runtime artifact", () => {
     "binds the official npm launcher selected by %s via %s",
     async (source, selection) => {
       await withTempDir("openclaw-codex-npm-artifact-", async (root) => {
-        const { command, native, binDir } = await createNpmLauncherFixture(root);
+        const { command, launcher, native, binDir } = await createNpmLauncherFixture(root);
         const options = startOptions(
-          selection === "path" ? "codex" : selection === "relative" ? "bin/codex" : command,
+          selection === "package-entrypoint"
+            ? launcher
+            : selection === "path"
+              ? "codex"
+              : selection === "relative"
+                ? "bin/codex"
+                : command,
           {
             commandSource: source,
             cwd: root,

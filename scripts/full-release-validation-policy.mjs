@@ -3,6 +3,7 @@ import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
+import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 // Full profiles carry over 500 job records. Keep complete evidence under one
@@ -287,7 +288,12 @@ export function normalizeReleaseCoveragePolicy({
   runReleaseSoak,
   targetVersion,
   candidateVersion,
+  crossOsSuiteFilter = "",
 }) {
+  // All-group evidence may omit advisory OS lanes, never required Linux suites.
+  if (rerunGroup === "all" && !hasRequiredLinuxCrossOsSuites(crossOsSuiteFilter)) {
+    throw new Error("release coverage policy requires all Linux cross-OS suites");
+  }
   if (coveragePolicy === undefined) {
     return undefined;
   }
@@ -1166,7 +1172,12 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+  // Cross-OS Windows/macOS results remain evidence without gating npm publication.
+  // Match only execution lanes: Linux and shared preparation still block.
+  if (/^cross_os_release_checks \/ (?:Windows|macOS) \/ /u.test(jobName)) {
+    return true;
+  }
   if (
     jobName.startsWith("Run QA Lab parity lane (") ||
     jobName === "Run QA Lab parity report" ||

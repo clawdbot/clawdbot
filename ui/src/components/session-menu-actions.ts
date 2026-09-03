@@ -310,7 +310,13 @@ export class SessionMenuActions {
     title?: string,
   ) {
     if (this.readState().compact) {
-      return renderCompactSessionMenuNavigationItem({ view, label, icon, disabled, title });
+      return renderCompactSessionMenuNavigationItem({
+        value: `compact:open-${view}`,
+        label,
+        icon,
+        disabled,
+        title,
+      });
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
@@ -396,7 +402,7 @@ export class SessionMenuActions {
         : state.compact
           ? state.selfOwner || state.ownerOptions.length > 0
             ? renderCompactSessionMenuNavigationItem({
-                view: "assign-owner",
+                value: "compact:open-assign-owner",
                 label: t("sessionsView.assignTo"),
                 icon: icons.users,
                 disabled: this.actionDisabled("assign-owner"),

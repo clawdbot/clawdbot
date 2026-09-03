@@ -81,6 +81,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
@@ -124,9 +125,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     content: canonicalContent,
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
-    // stopReason is a strict runner enum; this is not model output, but we still store it as a
-    // normal assistant message so it participates in the session parentId chain.
-    stopReason: "stop",
+    // Runtime projections retain their terminal state; host-authored partials
+    // keep their replayable default and carry cancellation in openclawAbort.
+    stopReason: params.stopReason ?? "stop",
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",

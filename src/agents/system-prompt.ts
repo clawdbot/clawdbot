@@ -582,9 +582,13 @@ function buildMessagingSection(params: {
   const subagentOrchestrationGuidance = params.delegationSectionRenders
     ? ""
     : hasSessionsSpawn
-      ? hasSubagents
-        ? `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`; ${hasSessionsYield ? "wait via `sessions_yield`; " : ""}\`subagents(action=list)\` only status/debug.`
-        : `- Subagents: \`sessions_spawn\` with objective/output/write-scope/verification; stable handle needs \`taskName\`, UI title \`label\`; clean context needs \`context:"isolated"\`, transcript needs \`context:"fork"\`${hasSessionsYield ? "; wait via `sessions_yield`" : ""}.`
+      ? [
+          '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`. Follow the accepted completion mode.',
+          hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : "",
+          hasSubagents ? "`subagents(action=list)` only status/debug." : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
       : hasSubagents
         ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
         : "";
@@ -877,7 +881,7 @@ export function buildAgentSystemPrompt(params: {
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
-    openclaw: "Gateway restart/system setup/config; changes need human approval",
+    openclaw: "Gateway restart/system setup/config",
     gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
@@ -1224,7 +1228,7 @@ export function buildAgentSystemPrompt(params: {
               : []),
             ...(hasSessionsSpawn
               ? [
-                  "Large work: `sessions_spawn`; completion push-based.",
+                  "Large work: `sessions_spawn`; follow the accepted completion mode.",
                   '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`.',
                   "`visible:true` for work the user follows or asked for; else hidden.",
                 ]
@@ -1266,7 +1270,7 @@ export function buildAgentSystemPrompt(params: {
         : []),
       ...(renderOpenClawToolWorkflowHints && subagentStatusTools.length > 0
         ? [
-            `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") ? " Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
+            `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") ? " Announcing children: Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
           ]
         : []),
       ...(renderOpenClawToolWorkflowHints && sessionLookupTools.length > 0

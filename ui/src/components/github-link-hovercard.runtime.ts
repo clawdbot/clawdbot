@@ -31,6 +31,7 @@ type PreviewState = {
 type CacheEntry = {
   expiresAt: number;
   promise: Promise<GitHubPreview>;
+  signal: AbortSignal;
 };
 
 let nextHovercardId = 0;
@@ -598,13 +599,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > now) {
-      this.cache.delete(key);
+    this.cache.delete(key);
+    // Dismissal invalidates only that request, even before its rejection settles.
+    if (cached && !cached.signal.aborted && cached.expiresAt > now) {
       this.cache.set(key, cached);
       return cached.promise;
-    }
-    if (cached) {
-      this.cache.delete(key);
     }
 
     const load = async (): Promise<GitHubPreview> => {
@@ -626,6 +625,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
     const entry: CacheEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
+      signal,
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.

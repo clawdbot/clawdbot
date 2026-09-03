@@ -58,7 +58,7 @@ suite.define(() => {
       // The agent's deferred self-archive reaches clients as a committed patch,
       // without running the sidebar menu's optimistic mutation path.
       const archived = { ...target, archived: true, archivedAt: 3, updatedAt: 3 };
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, archived]));
+      await gateway.setSessionsListResponse(sessionsListResponse([main, archived]));
       await gateway.emitGatewayEvent("sessions.changed", {
         ...archived,
         agentId: "main",
@@ -86,7 +86,7 @@ suite.define(() => {
         .click();
       await row.waitFor({ state: "detached" });
 
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
+      await gateway.setSessionsListResponse(sessionsListResponse([main, target]));
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         agentId: "main",
@@ -945,7 +945,7 @@ suite.define(() => {
         .waitFor({ state: "visible", timeout: 10_000 });
 
       const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([mainSession]));
+      await gateway.setSessionsListResponse(sessionsListResponse([mainSession]));
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
         reason: "delete",

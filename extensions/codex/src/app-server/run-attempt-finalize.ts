@@ -37,6 +37,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
   createCodexUsageLimitPromptError,
   isCodexUsageLimitPromptError,
@@ -275,6 +276,26 @@ export async function finalizeCodexAttempt(
   });
   // Every terminal observer must see the same immutable outcome.
   freezeRunTerminalOutcome();
+  result.terminal = attemptTerminal.normalize({
+    timedOut: effectiveTimedOut,
+    aborted: finalAborted,
+    promptError: finalPromptError,
+    promptErrorSource: finalPromptErrorSource,
+  });
+  // Failure enrichment can change the outcome after projection. Update this turn's
+  // terminal rows before transcript hooks read them; earlier work keeps its own outcome.
+  for (const message of [
+    result.lastAssistant,
+    result.currentAttemptAssistant,
+    result.messagesSnapshot.find(
+      (candidate) => readMirrorIdentity(candidate) === `${activeTurnId}:assistant`,
+    ),
+  ]) {
+    if (message?.role === "assistant") {
+      message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
+      message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
+    }
+  }
   const modelCallFailureKind =
     classifyCodexModelCallFailureKind({
       error: finalPromptError,
@@ -312,20 +333,30 @@ export async function finalizeCodexAttempt(
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
     (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
+  // Supervised auth belongs to its native connection, which has no generic stock
+  // tool-free summary operation. Retain fallback eligibility instead of selecting host auth.
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-    ? ((await captureCodexSettledTurnFinalizationContext({
-        ...activeTranscriptTarget,
-        mirroredMessages: mirrorOutcome.mirroredMessages,
-        settledMessages: result.messagesSnapshot,
-        turnId: activeTurnId,
-      })) ?? Object.freeze({ source: "unavailable" as const }))
+    ? ((!usesSupervisionConnection
+        ? await captureCodexSettledTurnFinalizationContext({
+            ...activeTranscriptTarget,
+            model: resourceState.thread.model,
+            modelProvider: resourceState.thread.modelProvider,
+            authProfileId: startupAuthProfileId,
+            mirroredMessages: mirrorOutcome.mirroredMessages,
+            settledMessages: result.messagesSnapshot,
+            turnId: activeTurnId,
+          })
+        : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
   if (settledTurnFinalizationContext?.source === "unavailable") {
-    // Unavailable evidence forbids native inference, but must not revoke this
-    // eligible turn's path to the existing host-owned fallback.
+    // Unavailability must not revoke the completed turn's host-owned fallback.
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+      runId: params.runId,
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
+      reason: usesSupervisionConnection
+        ? "native_auth_finalization_unsupported"
+        : "context_unavailable",
     });
   }
   runAgentHarnessLlmOutputHook({
@@ -476,12 +507,6 @@ export async function finalizeCodexAttempt(
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),
-    terminal: attemptTerminal.normalize({
-      timedOut: effectiveTimedOut,
-      aborted: finalAborted,
-      promptError: finalPromptError,
-      promptErrorSource: finalPromptErrorSource,
-    }),
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),

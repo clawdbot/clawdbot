@@ -3,7 +3,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { routeKey } from "./catalog-target.ts";
+import { isTarget, routeKey } from "./catalog-target.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -14,7 +14,6 @@ type DraftTitleInput = {
   ownerKey?: string;
   message: string;
   model?: string;
-  catalogId?: string;
 };
 
 function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null): boolean {
@@ -23,8 +22,7 @@ function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null):
     left?.agentId === right?.agentId &&
     left?.ownerKey === right?.ownerKey &&
     left?.message === right?.message &&
-    left?.model === right?.model &&
-    left?.catalogId === right?.catalogId
+    left?.model === right?.model
   );
 }
 
@@ -79,8 +77,7 @@ export class DraftTitlePreparation {
         {
           agentId: current.agentId,
           message: truncateUtf16Safe(current.message, 1_000),
-          ...(current.catalogId ? { catalogId: current.catalogId } : {}),
-          ...(!current.catalogId && current.model ? { model: current.model } : {}),
+          ...(current.model ? { model: current.model } : {}),
         },
         { timeoutMs: 20_000 },
       );
@@ -156,8 +153,10 @@ export class NewSessionTitleController implements ReactiveController {
   private input(): DraftTitleInput | null {
     const { context, data, place, submission, dictating } = this.read();
     const snapshot = context?.gateway.snapshot;
+    // Native prompts belong to the selected CLI, never OpenClaw title inference.
     if (
       !this.connected ||
+      isTarget(data) ||
       this.composing ||
       dictating ||
       submission.submitting ||
@@ -174,8 +173,7 @@ export class NewSessionTitleController implements ReactiveController {
       ownerKey: routeKey(data),
       agentId: place.agentId,
       message: submission.message.trim(),
-      model: data?.catalogId ? undefined : place.modelControl.selected,
-      catalogId: data?.catalogId || undefined,
+      model: place.modelControl.selected,
     };
     // A failed navigation/retry may leave this page mounted after creation. The
     // submitted draft cannot start more inference; only a new draft can do so.

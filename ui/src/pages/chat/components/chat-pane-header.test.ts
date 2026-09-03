@@ -1,4 +1,4 @@
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -403,6 +403,46 @@ describe("chat pane header", () => {
       [...container.querySelectorAll("[data-slot]")].map((slot) => slot.getAttribute("data-slot")),
     ).toEqual(["placement", "presence", "face"]);
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
+  });
+
+  it("groups visibility with the face switch inside the centered header region", () => {
+    const { container } = mountHeader({
+      placementControl: html`<span data-slot="placement"></span>`,
+      presence: html`<span data-slot="presence"></span>`,
+      faceControl: html`<span data-slot="face"></span>`,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector('[data-slot="placement"]')?.parentElement?.className).toBe(
+      "chat-pane__header-leading",
+    );
+    expect(container.querySelector('[data-slot="face"]')?.parentElement?.className).toBe(
+      "chat-pane__header-center",
+    );
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-center",
+    );
+  });
+
+  it("keeps visibility with trailing actions when the session has no face switch", () => {
+    const { container } = mountHeader({
+      faceControl: nothing,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-trailing",
+    );
+    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+  });
+
+  it("uses the full header width when no face switch needs centering", () => {
+    const { container } = mountHeader();
+    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+    expect(container.querySelector(".chat-pane__header-center")).toBeNull();
+    expect(
+      [...container.querySelector(".chat-pane__header")!.children].map((child) => child.className),
+    ).toEqual(["chat-pane__header-leading", "chat-pane__header-trailing"]);
   });
 
   it("leads with the project, then a separator, then the session title", () => {

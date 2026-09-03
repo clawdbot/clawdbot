@@ -1568,30 +1568,50 @@ if (cleanupFails) {
   );
 
   posixIt.each([
-    { runner: "managed", output: "ignore" },
-    { runner: "managed", output: "inherit" },
-    { runner: "preparation", output: "ignore" },
-    { runner: "preparation", output: "inherit" },
+    { runner: "managed", output: "ignore", exit: 0 },
+    { runner: "managed", output: "inherit", exit: 0 },
+    { runner: "preparation", output: "ignore", exit: 0 },
+    { runner: "preparation", output: "inherit", exit: 0 },
+    { runner: "managed", output: "pipe", exit: 143 },
+    { runner: "managed", output: "pipe", exit: "SIGTERM" },
   ] as const)(
-    "rejects and drains descendants left after a successful leader exit through $runner ($output output)",
-    async ({ runner, output }) => {
+    "joins descendants after $runner leader exits $exit ($output output)",
+    async ({ runner, output, exit }) => {
       const dir = createTempDir("openclaw-managed-lingering-");
       const owner = createVitestResourceOwner(dir);
       const env = { ...process.env, TMPDIR: dir, TMP: dir, TEMP: dir };
       const descendantPidPath = path.join(dir, "descendant.pid");
+      const receivedSignalPath = path.join(dir, "descendant.signal");
+      const leafOutput = output === "ignore" ? "ignore" : "inherit";
+      const leaf = `
+const fs = require("node:fs");
+const keepAlive = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.argv[2], "SIGTERM");
+  process.stdout.write("descendant stdout drained\\n");
+  process.stderr.write("descendant stderr drained\\n");
+  clearInterval(keepAlive);
+});
+fs.writeFileSync(process.argv[1], String(process.pid));
+process.send("ready");
+process.disconnect();
+`;
       const args = [
         "-e",
         `
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, [
-  "-e",
-  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.send('ready'); process.disconnect(); setInterval(() => {}, 1000)",
-  process.argv[1],
-], { stdio: ["ignore", ${JSON.stringify(output)}, ${JSON.stringify(output)}, "ipc"] });
-child.once("message", () => process.exit(0));
+  "-e", ${JSON.stringify(leaf)}, process.argv[1], process.argv[2],
+], { stdio: ["ignore", ${JSON.stringify(leafOutput)}, ${JSON.stringify(leafOutput)}, "ipc"] });
+child.once("message", () => ${typeof exit === "string" ? `process.kill(process.pid, ${JSON.stringify(exit)})` : `process.exit(${exit})`});
 `,
         descendantPidPath,
+        receivedSignalPath,
       ];
+      const onSignal = vi.fn();
+      let child: ReturnType<typeof spawn> | undefined;
+      let stdout = "";
+      let stderr = "";
       try {
         const command =
           runner === "preparation"
@@ -1600,17 +1620,34 @@ child.once("message", () => process.exit(0));
                 bin: process.execPath,
                 args,
                 env,
+                onSignal,
                 requireProcessTreeExit: true,
                 shell: false,
-                stdio: output,
+                stdio: output === "pipe" ? ["ignore", "pipe", "pipe"] : output,
                 timeoutMs: 1_000,
+                onReady(owned) {
+                  child = owned;
+                  child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
+                  child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+                },
               });
-        const failure = await command.catch((error: unknown) => error);
+        const outcome = await command.catch((error: unknown) => error);
         const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-        expect.soft(failure).toMatchObject({
-          code: "EPROCESSGROUP_CLEANUP_FAILED",
-          processTreeState: "terminated",
-        });
+        if (typeof exit === "string") {
+          expect(outcome).toBe(143);
+          expect(fs.readFileSync(receivedSignalPath, "utf8")).toBe("SIGTERM");
+          expect(stdout).toBe("descendant stdout drained\n");
+          expect(stderr).toBe("descendant stderr drained\n");
+          expect(child?.stdout?.closed).toBe(true);
+          expect(child?.stderr?.closed).toBe(true);
+        } else {
+          expect.soft(outcome).toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "terminated",
+          });
+          expect(fs.existsSync(receivedSignalPath)).toBe(false);
+        }
+        expect(onSignal).not.toHaveBeenCalled();
         expect(() => owner.assertReleased()).not.toThrow();
         expect
           .soft(
@@ -1632,6 +1669,37 @@ child.once("message", () => process.exit(0));
       }
     },
   );
+
+  posixIt("releases non-strict command claims after a child signal exit", async () => {
+    const dir = createTempDir("openclaw-managed-signal-");
+    const owner = createVitestResourceOwner(dir);
+    const onSignal = vi.fn();
+    let child: ReturnType<typeof spawn> | undefined;
+    let stdout = "";
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: [
+        "-e",
+        "require('node:fs').writeSync(1, 'signal output\\n'); process.kill(process.pid, 'SIGTERM');",
+      ],
+      env: { ...process.env, TMPDIR: dir, TMP: dir, TEMP: dir },
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      onSignal,
+      onReady(owned) {
+        child = owned;
+        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
+      },
+    });
+    expect(code).toBe(143);
+    expect(onSignal).not.toHaveBeenCalled();
+    expect(stdout).toBe("signal output\n");
+    expect(child?.signalCode).toBe("SIGTERM");
+    expect(child?.stdout?.closed).toBe(true);
+    expect(child?.stderr?.closed).toBe(true);
+    expect(() => owner.assertReleased()).not.toThrow();
+  });
 
   posixIt(
     "kills managed child process group descendants when the runner is terminated",

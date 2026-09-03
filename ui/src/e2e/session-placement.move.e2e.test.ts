@@ -205,7 +205,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "available" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
@@ -214,7 +214,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "offline" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       const continueAction = page.getByText("Continue on Gateway…", { exact: true });

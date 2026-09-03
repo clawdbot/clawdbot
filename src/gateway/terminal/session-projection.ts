@@ -2,11 +2,13 @@ import type { TerminalSession } from "./session-manager.types.js";
 import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
 
 export function terminalAttachSummary(session: TerminalSession): TerminalAttachSummary {
+  const {
+    attached: _attached,
+    createdAtMs: _createdAtMs,
+    ...summary
+  } = terminalSessionSummary(session);
   return {
-    sessionId: session.id,
-    agentId: session.agentId,
-    cwd: session.cwd,
-    shell: session.shell,
+    ...summary,
     buffer: session.buffer.snapshot(),
     seq: session.output.endOffset,
   };
@@ -19,6 +21,7 @@ export function terminalSessionSummary(session: TerminalSession): TerminalSessio
     sessionId: session.id,
     agentId: session.agentId,
     shell: session.shell,
+    ...(session.title ? { title: session.title } : {}),
     cwd: session.cwd,
     attached:
       session.owner?.kind === "conn" ||

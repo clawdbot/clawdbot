@@ -19,6 +19,7 @@ import type {
 } from "./qa-channel-protocol.js";
 
 type QaRunnerTransportPolicy = {
+  directMessageOnly?: true;
   requireGroupMention?: true;
   senderAllowlist?: readonly string[];
   topLevelReplies?: true;

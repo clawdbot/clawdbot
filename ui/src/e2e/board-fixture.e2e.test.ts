@@ -753,6 +753,48 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
   }
 
+  it("renders consistent menu options with a leading trash icon", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      await openWidgetMenu(page);
+      const presentation = await page
+        .locator(".board-widget__menu[open] .board-widget__menu-danger")
+        .evaluate((action) => {
+          const menu = action.parentElement;
+          const move = menu?.querySelector('wa-dropdown-item[value^="move:"]');
+          const preset = menu?.querySelector(".board-widget__preset");
+          const icon = action.querySelector('[slot="icon"]');
+          if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
+            throw new Error("board fixture menu did not expose move and resize options");
+          }
+          return {
+            actionFontSize: getComputedStyle(action).fontSize,
+            actionText: action.textContent?.trim(),
+            iconHidden: icon?.getAttribute("aria-hidden"),
+            iconSvg: Boolean(icon?.querySelector("svg")),
+            moveFontSize: getComputedStyle(move).fontSize,
+            presetFontSize: getComputedStyle(preset).fontSize,
+          };
+        });
+      expect({
+        actionText: presentation.actionText,
+        fontSizesMatch:
+          presentation.moveFontSize === presentation.presetFontSize &&
+          presentation.actionFontSize === presentation.presetFontSize,
+        iconHidden: presentation.iconHidden,
+        iconSvg: presentation.iconSvg,
+      }).toEqual({
+        actionText: "Delete",
+        fontSizesMatch: true,
+        iconHidden: "true",
+        iconSvg: true,
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
   it("follows live system color-scheme changes", async () => {
     const context = await browser.newContext({ colorScheme: "dark" });
     try {

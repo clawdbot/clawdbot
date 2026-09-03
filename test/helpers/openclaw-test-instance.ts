@@ -1,23 +1,35 @@
 // OpenClaw test instance helper spawns isolated OpenClaw processes.
-import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
-import { runUtf8CommandWithTimeout } from "../../src/process/exec-runner.js";
+import {
+  hasUnjoinedWork,
+  runManagedCommand,
+  terminateManagedChild,
+} from "../../scripts/lib/managed-child-process.mts";
+import { hasErrnoCode } from "../../src/infra/errno.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+  resolveMaxOutputBytes,
+} from "../../src/process/exec-output.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
+import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
 
@@ -82,6 +94,7 @@ const GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER =
 const entrypointPromises = new Map<string, Promise<string[]>>();
 
 type BoundedStringLog = string[] & {
+  maxBytes?: number;
   byteLength?: number;
   truncated?: boolean;
 };
@@ -93,20 +106,27 @@ type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "sign
 type GatewayProcessStopOptions = NonNullable<Parameters<typeof terminateManagedChild>[2]> & {
   forceWindowsTree?: boolean;
 };
+type TaskkillResult = Exclude<
+  ReturnType<NonNullable<GatewayProcessStopOptions["runTaskkill"]>>,
+  undefined
+> & {
+  signal?: NodeJS.Signals | null;
+};
 
-function createBoundedStringLog(): string[] {
+function createBoundedStringLog(maxBytes = LOG_TAIL_MAX_BYTES): string[] {
   const log = [] as BoundedStringLog;
+  log.maxBytes = Math.max(1, maxBytes);
   log.byteLength = 0;
   log.truncated = false;
   return log;
 }
 
-function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_BYTES): void {
+function appendLogChunk(log: string[], chunk: unknown): void {
   const chunks = log as BoundedStringLog;
-  const limit = Math.max(1, maxBytes);
+  const limit = chunks.maxBytes ?? LOG_TAIL_MAX_BYTES;
   const text = String(chunk);
   const textBytes = Buffer.byteLength(text);
-  if (textBytes >= limit) {
+  if (textBytes > limit) {
     const buffer = Buffer.from(text);
     const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
     chunks.splice(0, chunks.length, tail);
@@ -140,7 +160,7 @@ function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_B
 function readLogBuffer(log: string[]): string {
   const text = log.join("");
   return (log as BoundedStringLog).truncated
-    ? `[output truncated to last ${LOG_TAIL_MAX_BYTES} bytes]\n${text}`
+    ? `[output truncated to last ${(log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES} bytes]\n${text}`
     : text;
 }
 
@@ -325,6 +345,7 @@ async function stopGatewayProcess(
   deadline: number,
   stopTimeoutMs: number,
   options: GatewayProcessStopOptions = {},
+  stopLog: string[] = [],
 ): Promise<boolean> {
   const platform = options.platform ?? process.platform;
   const waitForClose = (remainingSteps: number) =>
@@ -350,22 +371,80 @@ async function stopGatewayProcess(
     return true;
   }
   if (platform === "win32") {
+    const startedAt = Date.now();
+    const taskkill: Array<{
+      force: boolean;
+      elapsedMs: number;
+      status?: number | null;
+      signal?: NodeJS.Signals | null;
+      errorCode?: string;
+      threw?: boolean;
+    }> = [];
+    // At most the owner's TERM and force attempts; never retain command output or error text.
+    const runTaskkill: NonNullable<GatewayProcessStopOptions["runTaskkill"]> = (...args) => {
+      const attemptStartedAt = Date.now();
+      let result: TaskkillResult | undefined;
+      let threw = false;
+      let error: unknown;
+      try {
+        result = (options.runTaskkill ?? spawnSync)(...args);
+        return result;
+      } catch (cause) {
+        threw = true;
+        error = cause;
+        throw cause;
+      } finally {
+        taskkill.push({
+          force: args[1].includes("/F"),
+          elapsedMs: Date.now() - attemptStartedAt,
+          status: result?.status,
+          signal: result?.signal,
+          errorCode: shutdownErrorCode(result?.error ?? error),
+          ...(threw ? { threw } : {}),
+        });
+      }
+    };
+    const failed = (
+      reason: "termination-indeterminate" | "close-incomplete" | "exception",
+      error?: unknown,
+    ) => {
+      const diagnostic = {
+        reason,
+        pid: child.pid,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+        stdoutClosed: child.stdout.closed,
+        stderrClosed: child.stderr.closed,
+        elapsedMs: Date.now() - startedAt,
+        taskkill,
+        errorCode: shutdownErrorCode(error),
+      };
+      appendLogChunk(
+        stopLog,
+        `[openclaw-test-instance] Windows shutdown ${JSON.stringify(diagnostic)}\n`,
+      );
+      return false;
+    };
     if (hasChildExited(child) && (await waitForClose(2))) {
       return true;
     }
     if (Date.now() >= deadline) {
-      return false;
+      return failed("close-incomplete");
     }
     // Taskkill owns its bounded synchronous TERM/force sequence. Node cannot observe
     // exit or pipe closure until it returns, so charge the existing close allowance afterward.
     try {
-      const termination = terminate(options.forceWindowsTree ? "SIGKILL" : "SIGTERM");
-      return (
-        termination?.processTreeState === "terminated" &&
-        (await waitForGatewayClose(child, stopTimeoutMs))
+      const termination = terminateManagedChild(
+        child,
+        options.forceWindowsTree ? "SIGKILL" : "SIGTERM",
+        { platform, runTaskkill },
       );
-    } catch {
-      return false;
+      if (termination?.processTreeState !== "terminated") {
+        return failed("termination-indeterminate");
+      }
+      return (await waitForGatewayClose(child, stopTimeoutMs)) || failed("close-incomplete");
+    } catch (error) {
+      return failed("exception", error);
     }
   }
   const signals = ["SIGTERM", "SIGKILL"] as const;
@@ -393,6 +472,10 @@ async function stopGatewayProcess(
   return hasGatewayProcessClosed(child);
 }
 
+function shutdownErrorCode(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.code === "string" ? error.code.slice(0, 128) : undefined;
+}
+
 function hasChildExited(child: Pick<OpenClawTestProcess, "exitCode" | "signalCode">) {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -414,7 +497,9 @@ function mergeConfig(
 
 function formatLogs(stdout: string[], stderr: string[]): string {
   const diagnosticTail = (log: string[]): string => {
-    const tail = createBoundedStringLog() as BoundedStringLog;
+    const tail = createBoundedStringLog(
+      Math.min((log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES, LOG_TAIL_MAX_BYTES),
+    ) as BoundedStringLog;
     for (const chunk of log) {
       appendLogChunk(tail, chunk);
     }
@@ -492,7 +577,9 @@ export async function createOpenClawTestInstance(
     extraEnv: options.env ?? {},
   });
   let child: { process: OpenClawTestProcess; ready: boolean } | undefined;
-  let cleaned = false;
+  const commands = new Set<Promise<OpenClawTestInstanceCommandResult>>();
+  let acceptingWork = true;
+  let cleanupPromise: Promise<void> | undefined;
   let operation: { kind: "start" | "stop" | "cleanup"; promise: Promise<void> } | undefined;
   const enqueue = (kind: NonNullable<typeof operation>["kind"], action: () => Promise<void>) => {
     if (operation?.kind === kind) {
@@ -537,7 +624,7 @@ export async function createOpenClawTestInstance(
     deadline: number,
     stopOptions: GatewayProcessStopOptions = {},
   ): Promise<boolean> => {
-    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, stopOptions);
+    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, stopOptions, stderr);
     if (closed && child?.process === target) {
       child = undefined;
     }
@@ -579,20 +666,39 @@ export async function createOpenClawTestInstance(
     },
     env,
     entrypoint: () => resolveGatewayEntrypoint(cwd),
-    cli: async (args, commandOptions = {}) => {
-      const entrypoint = await resolveGatewayEntrypoint(cwd);
-      return await runCommand({
-        args: ["node", ...entrypoint, ...args],
-        cwd,
-        env,
-        timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,
+    cli: (args, commandOptions = {}) => {
+      if (!acceptingWork) {
+        return Promise.reject(new Error("test instance no longer accepts CLI commands"));
+      }
+      // Admit the whole operation before preparation yields. Failed process cleanup
+      // retains its completion and closes admission until the instance is retired.
+      const command = Promise.resolve().then(async () => {
+        const entrypoint = await resolveGatewayEntrypoint(cwd);
+        return await runCommand({
+          args: ["node", ...entrypoint, ...args],
+          cwd,
+          env,
+          timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,
+        });
       });
+      commands.add(command);
+      void command.then(
+        () => commands.delete(command),
+        (error: unknown) => {
+          if (hasUnjoinedWork(error)) {
+            acceptingWork = false;
+          } else {
+            commands.delete(command);
+          }
+        },
+      );
+      return command;
     },
-    startGateway: () =>
-      enqueue("start", async () => {
-        if (cleaned) {
-          throw new Error("cannot start a cleaned test instance");
-        }
+    startGateway: () => {
+      if (!acceptingWork) {
+        return Promise.reject(new Error("test instance no longer accepts Gateway starts"));
+      }
+      return enqueue("start", async () => {
         if (child?.ready && !hasChildExited(child.process)) {
           return;
         }
@@ -649,20 +755,40 @@ export async function createOpenClawTestInstance(
             throw err;
           }
         }
-      }),
+      });
+    },
     stopGateway: () => enqueue("stop", stopGatewayChild),
     logs: () => formatLogs(stdout, stderr),
-    cleanup: () =>
-      enqueue("cleanup", async () => {
-        if (cleaned) {
-          return;
-        }
-        // Terminal cleanup has no graceful-shutdown contract. Force the Windows
-        // tree so inherited pipes cannot outlive the completed test instance.
-        await stopGatewayChild({ forceWindowsTree: true });
+    cleanup: () => {
+      acceptingWork = false;
+      // Commands may need the Gateway to finish. Drain them first, still attempt
+      // Gateway shutdown on failure, and never turn an unverified drain into a retry success.
+      return (cleanupPromise ??= enqueue("cleanup", async () => {
+        await runQaGatewayFixture(
+          async () => {
+            const results = await Promise.allSettled(commands);
+            const errors = results.flatMap((result) =>
+              result.status === "rejected" && hasUnjoinedWork(result.reason) ? [result.reason] : [],
+            );
+            if (errors.length === 1) {
+              throw errors[0];
+            }
+            if (errors.length > 1) {
+              throw new AggregateError(
+                errors,
+                "CLI cleanup unverified; test instance state retained",
+              );
+            }
+          },
+          () => {
+            // Terminal cleanup has no graceful-shutdown contract. Force the Windows
+            // tree so inherited pipes cannot outlive the completed test instance.
+            return stopGatewayChild({ forceWindowsTree: true });
+          },
+        );
         await state.cleanup();
-        cleaned = true;
-      }),
+      }));
+    },
   };
 
   return instance;
@@ -674,30 +800,59 @@ async function runCommand(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
 }): Promise<OpenClawTestInstanceCommandResult> {
-  const result = await runUtf8CommandWithTimeout(params.args, {
-    cwd: params.cwd,
-    // This is the complete isolated environment, not an overlay on the parent.
-    baseEnv: params.env,
-    timeoutMs: params.timeoutMs,
-    killProcessTree: true,
-    // CLI stdout is a machine-readable result; only diagnostics may lose their head.
-    outputCapture: { stdout: "head", stderr: "tail" },
-    maxOutputBytes: { stderr: LOG_TAIL_MAX_BYTES },
-    terminateOnOutputLimit: { stdout: true },
-  });
+  const [command, ...args] = params.args;
+  if (!command) {
+    throw new Error("missing command");
+  }
+  const stdout = createCapturedOutputBuffers();
+  const maxStdoutBytes = resolveMaxOutputBytes(undefined, "stdout");
+  const outputLimit = new AbortController();
+  const readStdout = () => finalizeCapturedOutput(stdout, "head", true).toString("utf8");
+  const stdoutDiagnostic = createBoundedStringLog();
+  const stdoutDiagnosticDecoder = new StringDecoder("utf8");
   const stderr = createBoundedStringLog();
-  appendLogChunk(stderr, result.stderr);
-  (stderr as BoundedStringLog).truncated ||= Boolean(result.stderrTruncatedBytes);
-  if (result.outputLimitExceeded || result.termination === "timeout") {
-    const failure = result.outputLimitExceeded
-      ? "command stdout exceeded capture limit"
-      : `command timed out after ${params.timeoutMs}ms`;
-    throw new Error(`${failure}: ${params.args.join(" ")}\n${formatLogs([result.stdout], stderr)}`);
+  let child!: ChildProcess;
+  try {
+    await runManagedCommand({
+      bin: command,
+      args,
+      cwd: params.cwd,
+      // The fixture environment is complete; never merge credentials from the parent.
+      env: params.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      timeoutMs: params.timeoutMs,
+      timeoutKillGraceMs: 0,
+      signal: outputLimit.signal,
+      abortKillGraceMs: 0,
+      onReady: (process) => {
+        child = process;
+        child.stderr?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk) => {
+          appendCapturedOutput(stdout, chunk, maxStdoutBytes, "head");
+          appendLogChunk(stdoutDiagnostic, stdoutDiagnosticDecoder.write(chunk));
+          if (stdout.truncatedBytes > 0) {
+            outputLimit.abort();
+          }
+        });
+        child.stderr?.on("data", (chunk) => appendLogChunk(stderr, chunk));
+      },
+    });
+  } catch (error) {
+    appendLogChunk(stdoutDiagnostic, stdoutDiagnosticDecoder.end());
+    const message = hasErrnoCode(error, "ETIMEDOUT")
+      ? `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}`
+      : stdout.truncatedBytes > 0
+        ? "command stdout exceeded capture limit"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(`${message}\n${formatLogs(stdoutDiagnostic, stderr)}`, { cause: error });
   }
   return {
-    code: result.code,
-    signal: result.signal,
-    stdout: result.stdout,
+    code: child.exitCode,
+    signal: child.signalCode,
+    stdout: readStdout(),
     stderr: readLogBuffer(stderr),
   };
 }

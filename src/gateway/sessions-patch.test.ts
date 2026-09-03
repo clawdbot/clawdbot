@@ -370,26 +370,37 @@ describe("gateway sessions patch", () => {
     );
     expect(archived.archivedAt).toEqual(expect.any(Number));
     expect(archived.archivedBy).toEqual(archivedBy);
+    expect(archived.archiveReason).toBe("manual");
     expect(archived.pinnedAt).toBeUndefined();
 
     const idempotent = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
     expect(idempotent.archivedAt).toBe(archived.archivedAt);
     expect(idempotent.archivedBy).toEqual(archivedBy);
+    expect(idempotent.archiveReason).toBe("manual");
 
     const restored = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
+    expect(restored.archiveReason).toBeUndefined();
   });
 
   test.each([

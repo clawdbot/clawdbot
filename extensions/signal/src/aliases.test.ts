@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover alias target resolution behavior.
 import { describe, expect, it } from "vitest";
-import { listSignalAliasDirectoryEntries, resolveSignalTarget } from "./aliases.js";
+import {
+  listSignalAliasDirectoryEntries,
+  resolveSignalDeliveredConversationKey,
+  resolveSignalTarget,
+} from "./aliases.js";
 
 describe("resolveSignalTarget aliases", () => {
   it("resolves top-level DM aliases to canonical targets", () => {
@@ -48,6 +52,13 @@ describe("resolveSignalTarget aliases", () => {
       source: "alias",
     });
     expect(resolveSignalTarget({ cfg, accountId: "work", input: "home" })?.to).toBe("+15551234567");
+    expect(
+      resolveSignalDeliveredConversationKey({
+        cfg,
+        accountId: "work",
+        to: "ops",
+      }),
+    ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
   });
 
   it("rejects recursive aliases before delivery", () => {
@@ -65,6 +76,12 @@ describe("resolveSignalTarget aliases", () => {
     expect(() => resolveSignalTarget({ cfg, input: "home" })).toThrow(
       'Signal alias "home" resolves recursively through "home".',
     );
+    expect(
+      resolveSignalDeliveredConversationKey({
+        cfg,
+        to: "signal:home",
+      }),
+    ).toBe("home");
   });
 
   it("rejects aliases whose final value is not a Signal target", () => {

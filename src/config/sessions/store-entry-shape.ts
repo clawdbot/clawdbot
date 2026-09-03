@@ -9,6 +9,17 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
+function normalizeSessionEntryArchiveReason(
+  value: unknown,
+): SessionEntry["archiveReason"] | undefined {
+  return value === "manual" ||
+    value === "active-session-cap" ||
+    value === "stale-dashboard" ||
+    value === "restart-recovery"
+    ? value
+    : undefined;
+}
+
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
 function isSafeSessionId(value: unknown): value is string {
   if (typeof value !== "string") {
@@ -159,6 +170,17 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     canonicalValue.memoryFlush = memoryFlush;
   } else {
     delete canonicalValue.memoryFlush;
+  }
+  const archiveReason = normalizeSessionEntryArchiveReason(canonicalValue.archiveReason);
+  if (canonicalValue.archivedAt !== undefined) {
+    if (archiveReason) {
+      canonicalValue.archiveReason = archiveReason;
+    } else {
+      delete canonicalValue.archiveReason;
+    }
+  } else {
+    delete canonicalValue.archivedBy;
+    delete canonicalValue.archiveReason;
   }
   return canonicalValue as unknown as SessionEntry;
 }

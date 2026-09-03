@@ -176,6 +176,16 @@ describe("sqlite hot query plans", () => {
          WHERE status = ?
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_nodes_active",
+      sql: `
+        SELECT *
+          FROM session_nodes
+         WHERE archived_at IS NULL
+         ORDER BY session_key
+      `,
+    });
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `

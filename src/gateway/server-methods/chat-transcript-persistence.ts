@@ -342,6 +342,7 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: {
     aborted: true;
     origin: ChatAbortOrigin;
@@ -368,6 +369,7 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,

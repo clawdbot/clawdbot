@@ -2422,6 +2422,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(shouldRunWrapperShadowingCheck(["scripts/lib/source-file-scan-cache.mts"])).toBe(true);
     expect(
       shouldRunWrapperShadowingCheck([
         "src/channels/turn/run-channel-turn.ts",

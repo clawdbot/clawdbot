@@ -572,6 +572,8 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
   sharedControlUiE2eServerBaseUrl = baseUrl;
 }
 
+type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
+
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
@@ -593,6 +595,7 @@ export type MockGatewayControls = {
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => Promise<void>;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
@@ -1084,6 +1087,7 @@ export type ControlUiMockGateway = {
   setOperatorScopes: (scopes: string[]) => void;
   setHistoryMessages: (messages: unknown[]) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => void;
   setRequestHandler: (method: string, handler: ControlUiMockRequestHandler) => void;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
@@ -1160,6 +1164,7 @@ function installControlUiMockGateway(
   (window as MockGatewayWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = scenario.basePath;
   const protocolVersion = input.protocolVersion;
   const methodResponseOverridesStorageKey = "openclaw.control-ui-e2e.method-responses.v1";
+  const canonicalSessionsStorageKey = "openclaw.control-ui-e2e.canonical-sessions.v1";
   const methodResponseOverrides: Record<string, unknown> = {};
   try {
     const storedOverrides = window.sessionStorage.getItem(methodResponseOverridesStorageKey);
@@ -1178,10 +1183,29 @@ function installControlUiMockGateway(
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
   const methodResponseSequenceIndexes = new Map<string, number>();
   const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
+  let canonicalSessionRows = scenario.sessions;
+  let hasCanonicalSessionsOverride = false;
+  try {
+    const storedCanonicalSessions = window.sessionStorage.getItem(canonicalSessionsStorageKey);
+    const parsedCanonicalSessions = storedCanonicalSessions
+      ? (JSON.parse(storedCanonicalSessions) as unknown)
+      : null;
+    if (Array.isArray(parsedCanonicalSessions)) {
+      canonicalSessionRows = parsedCanonicalSessions as ControlUiSessionFixture[];
+      hasCanonicalSessionsOverride = true;
+    }
+  } catch {
+    // The scenario remains authoritative when browser storage is unavailable.
+  }
   const sessions = createSessions({
-    rows: scenario.sessions,
+    rows: canonicalSessionRows,
     mainKey: scenario.mainSessionKey,
   });
+  if (hasCanonicalSessionsOverride) {
+    // Persisted explicit snapshots bypass scenario-default enrichment so reload
+    // preserves the same exact owner rows used by CAS, describe, and startup.
+    sessions.replaceCanonicalList(canonicalSessionRows);
+  }
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
   const sessionMessageSubscriptions = new Set<string>();
@@ -1546,6 +1570,17 @@ function installControlUiMockGateway(
       }
     }
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
+      if (
+        typeof params.expectedSessionId === "string" &&
+        sessions.read(params.key).sessionId !== params.expectedSessionId
+      ) {
+        return {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "session identity changed; refresh and retry",
+          },
+        };
+      }
       const result = sessions.patch(params.key, params);
       return "__mockError" in result || (isRecord(response) && Object.keys(response).length === 0)
         ? result
@@ -1991,7 +2026,9 @@ function installControlUiMockGateway(
         const row = sessions.read(key);
         const info = sessions.sessionInfo(key);
         const override =
-          row.key === sessions.read(scenario.sessionKey).key ? scenario.sessionInfo : null;
+          !hasCanonicalSessionsOverride && row.key === sessions.read(scenario.sessionKey).key
+            ? scenario.sessionInfo
+            : null;
         return {
           messages: scenario.historyMessages,
           sessionId: row.sessionId,
@@ -2564,9 +2601,6 @@ function installControlUiMockGateway(
       requestHandlers.set(method, handler);
     },
     setMethodResponse(method, payload) {
-      if (method === "sessions.list" && isRecord(payload) && Array.isArray(payload.sessions)) {
-        sessions.replaceListSnapshot(payload.sessions);
-      }
       scenario.methodResponses[method] = payload;
       methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
@@ -2578,6 +2612,21 @@ function installControlUiMockGateway(
       } catch {
         // Current-document responses still work if browser storage is unavailable.
       }
+    },
+    setSessionsListResponse(payload) {
+      // Generic method responses may be stale or delayed. Only this explicit
+      // owner transition advances the canonical rows used by mutation CAS.
+      sessions.replaceCanonicalList(payload.sessions);
+      hasCanonicalSessionsOverride = true;
+      try {
+        window.sessionStorage.setItem(
+          canonicalSessionsStorageKey,
+          JSON.stringify(payload.sessions),
+        );
+      } catch {
+        // The current document still observes the canonical replacement.
+      }
+      this.setMethodResponse("sessions.list", payload);
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
@@ -2838,6 +2887,15 @@ function createMockGatewayControls(
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setSessionsListResponse(payload) {
+      await page.evaluate((responsePayload) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setSessionsListResponse(responsePayload);
+      }, payload);
     },
     async setSessionSharingPolicy(policy) {
       await page.evaluate((nextPolicy) => {

@@ -84,6 +84,8 @@ openclaw tui --local
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
+Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter; press again to close it.
+
 ## Keyboard shortcuts
 
 - Enter: send message

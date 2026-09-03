@@ -523,6 +523,7 @@ function runFullReleaseTargetIdentityValidation(params: {
   releaseProfile?: string;
   runReleaseSoak?: string;
   rerunGroup?: string;
+  crossOsSuiteFilter?: string;
 }) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
@@ -615,6 +616,7 @@ printf '%s\\n' "$value"
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
+      CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
       SKIP_PACKAGE_TELEGRAM_E2E: "false",
       TARGET_CONTEXT_REF: params.targetContextRef ?? "",
       TARGET_REF: params.targetRef,
@@ -3925,6 +3927,74 @@ NODE
     }
   });
 
+  it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
+    const root = tempDirs.make("npm-preflight-tooling-pnpm-");
+    const toolingDir = join(root, ".artifacts/plugin-sdk-release-tooling");
+    const binDir = join(root, "bin");
+    const logPath = join(root, "pnpm-cwds.log");
+    mkdirSync(toolingDir, { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ private: true, packageManager: "pnpm@11.2.2" }),
+    );
+    writeFileSync(
+      join(toolingDir, "package.json"),
+      JSON.stringify({ private: true, packageManager: "pnpm@12.1.0" }),
+    );
+    const pnpmPath = join(binDir, "pnpm");
+    writeFileSync(
+      pnpmPath,
+      `#!/bin/sh
+set -eu
+package_manager="$(node -p 'require("./package.json").packageManager')"
+printf '%s\\t%s\\n' "$PWD" "$package_manager" >> "$PNPM_CWD_LOG"
+test "$package_manager" = "pnpm@12.1.0"
+`,
+    );
+    chmodSync(pnpmPath, 0o755);
+
+    const sdkStep = workflowStep(
+      workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm"),
+      "Verify Plugin SDK API changes",
+    );
+    const sdkCommandBlock = (sdkStep.run ?? "").match(
+      /\(\n\s+cd "\$tooling_dir"\n\s+pnpm install --frozen-lockfile --ignore-scripts --filter openclaw\n\s+pnpm run plugin-sdk:api:diff -- "\$\{diff_args\[@\]\}"\n\s*\)/u,
+    )?.[0];
+    expect(sdkCommandBlock).toBeDefined();
+    const installSteps = ["check_dependencies_npm", "check_contents_npm"].map((jobName) =>
+      workflowStep(
+        workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, jobName),
+        "Install trusted qualification dependencies",
+      ),
+    );
+
+    for (const { trustedPnpmCommand, cwd } of [
+      { trustedPnpmCommand: sdkCommandBlock ?? "", cwd: root },
+      ...installSteps.map((step) => ({
+        trustedPnpmCommand: step.run ?? "",
+        cwd: resolve(root, step["working-directory"] ?? "."),
+      })),
+    ]) {
+      const result = spawnSync("bash", ["-c", trustedPnpmCommand], {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PNPM_CWD_LOG: logPath,
+          tooling_dir: toolingDir,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+      Array.from({ length: 4 }, () => `${toolingDir}\tpnpm@12.1.0`),
+    );
+  });
+
   it("keeps Crabbox hydration compatible with local Actions replay", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       actions?: { job?: string };
@@ -4591,6 +4661,16 @@ NODE
     );
     expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
+
+  it.each(["package", "product"])(
+    "schedules updater first-hop compatibility in the %s acceptance profile",
+    (suiteProfile) => {
+      const { outputs, result } = runPackageAcceptanceProfile({ suiteProfile });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
+    },
+  );
 
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
@@ -6832,13 +6912,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
+    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable",
+      label: "canonical stable with Windows omitted",
+      crossOsSuiteFilter: "ubuntu,macos",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -6889,6 +6971,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(result.output).toContain(
         `skip_package_telegram_e2e=${overrides.runReleaseSoak === "true" || overrides.rerunGroup === "ci" || overrides.releaseProfile === "stable" ? "false" : "true"}\n`,
       );
+    },
+  );
+
+  it.each([
+    ["beta", "2026.8.1-beta.3", "false"],
+    ["stable", "2026.8.1", "true"],
+  ])(
+    "rejects %s qualification when the cross-OS selection omits Linux coverage",
+    (releaseProfile, version, runReleaseSoak) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        targetRef: "release/2026.8.1",
+        releaseProfile,
+        version,
+        runReleaseSoak,
+        crossOsSuiteFilter: "windows,macos,ubuntu/packaged-fresh",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Linux");
+      expect(result.output).not.toContain("coverage_policy=");
     },
   );
 
@@ -7427,6 +7528,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       prepublish_plugin_registry_json:
         "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}",
       suite_profile: "custom",
+      published_upgrade_survivor_baseline:
+        "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
       "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
@@ -7479,6 +7582,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "skill-install",
       "update-corrupt-plugin",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "published-upgrade-survivor",
       "root-managed-vps-upgrade",
       "update-restart-auth",
@@ -7546,7 +7650,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(filterValidator).toContain(
       "Repo live_suite_filter selectors require rerun_group=live-e2e",
     );
-    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
     expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
     expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
     expect(workflow).not.toContain(
@@ -7599,15 +7703,20 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const lane of ["mock_parity", "buzz", "telegram", "discord", "whatsapp", "slack"]) {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
+    const manualScenarioGuard =
+      "(github.event_name != 'workflow_dispatch' || inputs.scenario == '')";
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_mock_parity",
+      `(inputs.expected_sha == '' || inputs.run_mock_parity) && ${manualScenarioGuard}`,
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_matrix",
+      `(inputs.expected_sha == '' || inputs.run_matrix) && ${manualScenarioGuard}`,
     );
-    for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram").if).toBe(
+      "inputs.expected_sha == '' || inputs.run_telegram",
+    );
+    for (const channel of ["discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
-        `inputs.expected_sha == '' || inputs.run_${channel}`,
+        `(inputs.expected_sha == '' || inputs.run_${channel}) && ${manualScenarioGuard}`,
       );
     }
     expect(releaseWorkflow).not.toContain("qa_live_matrix_release_checks");
@@ -9723,12 +9832,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib"));
+    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
+      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
       "scripts/lib/plain-gh.mjs",
       "scripts/lib/release-context.mjs",
       "scripts/lib/release-version.mjs",

@@ -47,6 +47,11 @@ Raw archives and [session exports](/tools/slash-commands) remain lossless. Exist
 consult records without the exclusion flag are not rewritten and remain eligible
 for model context.
 
+Stored Chat history shows the spoken answer without a second copy of the
+successful consult answer. The internal answer remains in the raw transcript and
+model context. Tool activity, progress, errors, and interrupted replies retain
+their existing visibility.
+
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out
 of order. Text streams immediately in the call view; late predecessor metadata
@@ -169,6 +174,10 @@ the relay only when the config explicitly selects `gateway-relay`.
 The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
 `talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
 Talk and Voice Wake controls are unavailable.
+
+On Apple clients, relay playback stays active until the device finishes the queued audio, not
+until an estimated duration expires. Playback acknowledgments and microphone echo suppression
+follow that completion; pause, barge-in, and cancellation can still stop playback earlier.
 
 ### When realtime cannot start
 
@@ -365,6 +374,22 @@ to waitlist-enabled Platform access.
   microphone; if it disconnects, the app requests another headset input or
   falls back to the default microphone, restoring the default preference once
   capture stops.
+- Realtime Talk requests Android communication mode and audio focus, using a
+  connected external output or the built-in speaker. Microphone audio is sent
+  during playback only while acoustic echo cancellation is enabled and the
+  communication mode and focus remain active. Without echo cancellation,
+  microphone audio is not sent during playback. Android presentation timestamps
+  estimate playback completion when available. Routes without usable timestamps use
+  approximate playback position plus the nominal PCM duration; this cannot
+  guarantee that all acoustic output has drained on every device.
+- Losing audio focus or encountering a playback-device failure ends realtime
+  Talk with an error. Interruption clears queued output before capture resumes;
+  stopped sessions cannot acknowledge playback through a replacement Gateway.
+- Realtime **Thinking** follows provider response generation or an accepted
+  OpenClaw consult, not input transcription, which may finish after the answer.
+  Direct replies without a provider or Gateway response-start signal stay
+  **Listening** until output arrives. Empty completed responses return to **Listening**;
+  buffered audio stays **Speaking** until playback drains.
 - Dictation and voice-note recording stop when the app leaves the foreground or
   the user leaves Chat.
 - Talk Mode keeps running until toggled off or the node disconnects, using Android's microphone foreground-service type while active.

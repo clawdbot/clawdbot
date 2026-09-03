@@ -315,11 +315,12 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
     };
     try {
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      // Terminal output still belongs to this response until observers retire its owner.
       invoke(() => {
         providerTerminated = this.handleCompletedResponse(event, connection);
       });
+      invoke(() => this.config.onResponseDone?.(outcome));
+      invoke(emitServerEvent);
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.

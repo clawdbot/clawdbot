@@ -69,9 +69,14 @@ describe("sessions cleanup model-run preview", () => {
       });
 
       const preview = result.previewResults[0];
-      expect(preview?.summary).toMatchObject({ modelRunPruned, capped, afterCount: 2 });
+      expect(preview?.summary).toMatchObject({
+        modelRunPruned,
+        capped,
+        afterCount: 3 - modelRunPruned,
+      });
       expect(preview?.modelRunPrunedKeys.has(modelRunSessionKey)).toBe(modelRunPruned === 1);
-      expect(preview?.cappedKeys.has(oldSessionKey)).toBe(capped === 1);
+      expect(preview?.capArchivedKeys?.has(oldSessionKey)).toBe(capped === 1);
+      expect(preview?.cappedKeys.has(oldSessionKey)).toBe(false);
     },
   );
 });
