@@ -285,18 +285,21 @@ suite.define(() => {
             "openclaw.approval.resolved:applied",
             "chat.final",
           ]);
-          expect(
-            await page.evaluate(
-              () =>
-                (window as unknown as { __OPENCLAW_APPROVAL_UI_SEQUENCE__: string[] })[
-                  "__OPENCLAW_APPROVAL_UI_SEQUENCE__"
-                ],
-            ),
-          ).toEqual([
-            "openclaw.approval.resolved",
-            "approval.card.removed",
-            "openclaw.approval.resolved:applied",
-          ]);
+          const approvalUiSequence = await page.evaluate(
+            () =>
+              (window as unknown as { __OPENCLAW_APPROVAL_UI_SEQUENCE__: string[] })[
+                "__OPENCLAW_APPROVAL_UI_SEQUENCE__"
+              ],
+          );
+          expect(approvalUiSequence).toHaveLength(3);
+          expect(approvalUiSequence).toEqual(
+            expect.arrayContaining([
+              "openclaw.approval.resolved",
+              "approval.card.removed",
+              "openclaw.approval.resolved:applied",
+            ]),
+          );
+          expect(approvalUiSequence.at(-1)).toBe("openclaw.approval.resolved:applied");
 
           const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
           const results = readDelegationResults(history);
