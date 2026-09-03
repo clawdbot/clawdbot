@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 import { isHostRootEscapeError } from "./sandbox-paths.js";
@@ -41,7 +42,7 @@ async function captureFailure(
 }
 
 async function hintForHostEscape(
-  containmentSource: Parameters<typeof createApplyPatchTool>[0]["containmentSource"],
+  containmentSource: ApplyPatchContainmentSource | undefined,
 ): Promise<{ hint: string | undefined; message: string }> {
   return await withTempDir(async (dir) => {
     const root = path.join(dir, "workspace");
