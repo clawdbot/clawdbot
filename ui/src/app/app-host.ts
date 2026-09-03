@@ -580,15 +580,11 @@ class OpenClawShell
     this.shellNavigation.exitSettings();
   }
 
-  toggleNavigationSurface(trigger?: HTMLElement) {
-    this.shellChrome.toggleNavigationSurface(trigger);
-  }
+  readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
 
-  closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
-    this.shellChrome.closeNavDrawer(options);
-  }
+  readonly closeNavDrawer = this.shellChrome.closeNavDrawer;
 
-  resizeNavigation = (splitRatio: number) => this.shellChrome.resizeNavigation(splitRatio);
+  readonly resizeNavigation = this.shellChrome.resizeNavigation;
 
   openNewSession(agentId: string, target?: NewSessionTarget) {
     this.shellNavigation.openNewSession(agentId, target);
@@ -610,8 +606,8 @@ class OpenClawShell
   readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
   readonly openApprovals = this.shellChrome.openApprovals;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
-  readonly restorePendingLazyAction = () => this.shellChrome.restorePendingLazyAction();
-  nativeNavCollapsed = () => this.shellChrome.nativeNavCollapsed();
+  readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
+  readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;
   /** Keep the tab/window title on the active destination. Runs after every
    * render so route changes and locale switches both refresh it; before the
    * first committed route the static boot title from index.html stays. */
