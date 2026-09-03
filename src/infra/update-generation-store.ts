@@ -11,6 +11,7 @@ import type {
 } from "./update-generation-contract.js";
 import {
   captureUpdateGenerationManifest,
+  copyUpdateGenerationTree,
   removeUpdateGenerationTree,
   sealUpdateGenerationTree,
   syncUpdateGenerationPath,
@@ -341,14 +342,7 @@ export async function materializeUpdateGeneration(params: {
     // lets a retry discard a partial copy left by process death.
     await removeUpdateGenerationTree(incomingRoot);
     await fs.mkdir(incomingRoot, { mode: 0o700 });
-    await fs.cp(sourceRoot, incomingPayload, {
-      recursive: true,
-      dereference: false,
-      errorOnExist: true,
-      force: false,
-      preserveTimestamps: false,
-      verbatimSymlinks: true,
-    });
+    await copyUpdateGenerationTree(sourceRoot, incomingPayload);
     const [sourceAfter, destination] = await Promise.all([
       captureUpdateGenerationManifest(sourceRoot),
       captureUpdateGenerationManifest(incomingPayload),

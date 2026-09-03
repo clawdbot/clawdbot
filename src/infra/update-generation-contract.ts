@@ -1,5 +1,6 @@
 /** Durable transaction vocabulary for generation-addressed package updates. */
 import { isDeepStrictEqual } from "node:util";
+import { updateGenerationTransactionReceiptSchema } from "./update-generation-contract-schema.js";
 
 export type UpdateGenerationManager = "npm" | "pnpm" | "bun";
 export type UpdateGenerationRole = "previous" | "candidate";
@@ -285,6 +286,7 @@ function assertReceiptTransition(
   record: UpdateGenerationTransactionRecord | null,
   receipt: UpdateGenerationTransactionReceipt,
 ): void {
+  updateGenerationTransactionReceiptSchema.parse(receipt);
   assertReceiptIdentity(receipt);
   if (!record) {
     if (receipt.kind !== "intent" || receipt.sequence !== 0) {

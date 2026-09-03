@@ -158,6 +158,47 @@ describe("immutable update generation activation", () => {
     });
   });
 
+  it("rejects a staging file swapped to an external symlink during copy", async () => {
+    await withGenerationTestDir("openclaw-generation-source-swap-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      const targetPath = path.join(stageRoot, "entry.mjs");
+      const retainedPath = path.join(stageRoot, "entry.original.mjs");
+      const outsidePath = path.join(base, "outside-secret.mjs");
+      await writeRuntime(stageRoot, "1.0.0");
+      await fs.writeFile(outsidePath, 'console.log("outside-secret");\n');
+      const manifest = await captureUpdateGenerationManifest(stageRoot);
+      const generationId = createUpdateGenerationId();
+      const realOpen = fs.open.bind(fs);
+      let targetOpenCount = 0;
+      const open = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        if (path.resolve(String(filePath)) === targetPath && ++targetOpenCount === 2) {
+          await fs.rename(targetPath, retainedPath);
+          await fs.symlink(outsidePath, targetPath);
+        }
+        return await realOpen(filePath, flags, mode);
+      });
+      try {
+        await expect(
+          materializeUpdateGeneration({
+            namespaceRoot,
+            sourceRoot: stageRoot,
+            generationId,
+            expectedManifest: manifest,
+            packageVersion: "1.0.0",
+            entrypointRelativePath: "entry.mjs",
+          }),
+        ).rejects.toThrow();
+      } finally {
+        open.mockRestore();
+      }
+      await expect(
+        fs.stat(path.join(namespaceRoot, "generations", generationId)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(outsidePath, "utf8")).resolves.toContain("outside-secret");
+    });
+  });
+
   it("selects and rolls back generations without moving their bytes", async () => {
     await withGenerationTestDir("openclaw-generation-selector-", async (base) => {
       const namespaceRoot = path.join(base, "managed");

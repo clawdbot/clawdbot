@@ -809,5 +809,14 @@ describe("durable update generation transaction contract", () => {
     const previous = (unsafeIntent.previousSelection as Record<string, unknown>) ?? {};
     previous.entrypointRelativePath = "../outside.mjs";
     expect(() => parseUpdateGenerationTransactionRecord(unsafeEntrypoint)).toThrow();
+    expect(() =>
+      append(null, {
+        ...intent(selection("a"), true),
+        previousSelection: {
+          ...selection("a"),
+          entrypointRelativePath: "../outside.mjs",
+        },
+      }),
+    ).toThrow();
   });
 });
