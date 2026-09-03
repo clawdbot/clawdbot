@@ -11,7 +11,7 @@ vi.mock("./urbit/fetch.js", () => ({
   urbitFetch: vi.fn(),
 }));
 
-import { probeTlonAccount } from "./channel.runtime.js";
+import { probeTlonAccount, tlonRuntimeOutbound } from "./channel.runtime.js";
 
 const account = {
   accountId: "default",
@@ -20,6 +20,40 @@ const account = {
   url: "https://example.com",
   code: "sample-code",
 } as never;
+
+describe("tlonRuntimeOutbound", () => {
+  it.each([
+    {
+      name: "all default account fields",
+      cfg: { channels: { tlon: {} } },
+      accountId: "default",
+      expected: "Tlon account default not configured (missing ship, url, code)",
+    },
+    {
+      name: "one inherited named account field",
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~zod",
+            url: "https://example.com",
+            accounts: { work: { code: "" } },
+          },
+        },
+      },
+      accountId: "work",
+      expected: "Tlon account work not configured (missing code)",
+    },
+  ])("reports $name when outbound setup is incomplete", async ({ cfg, accountId, expected }) => {
+    await expect(
+      tlonRuntimeOutbound.sendText({
+        cfg,
+        to: "~sampel-palnet",
+        text: "hello",
+        accountId,
+      }),
+    ).rejects.toThrow(expected);
+  });
+});
 
 function responseWithCancelableBody(
   status: number,

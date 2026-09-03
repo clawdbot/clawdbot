@@ -91,7 +91,14 @@ function resolveOutboundContext(params: {
 }) {
   const account = resolveTlonAccount(params.cfg, params.accountId ?? undefined);
   if (!account.configured || !account.ship || !account.url || !account.code) {
-    throw new Error("Tlon account not configured");
+    const missingFields = [
+      account.ship ? undefined : "ship",
+      account.url ? undefined : "url",
+      account.code ? undefined : "code",
+    ].filter((field) => field !== undefined);
+    throw new Error(
+      `Tlon account ${account.accountId} not configured (missing ${missingFields.join(", ")})`,
+    );
   }
 
   const parsed = parseTlonTarget(params.to);
