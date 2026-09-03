@@ -601,14 +601,21 @@ describe("renderSessionHovercard", () => {
       "/activity?person=lee",
     ]);
 
-    const participantsTooltip = container.querySelector(
-      "openclaw-tooltip.session-hovercard__participants-tooltip",
+    const participantsTooltip = container.querySelector<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-tooltip.session-hovercard__participants-tooltip");
+    await participantsTooltip?.updateComplete;
+    expect(participantsTooltip?.hasAttribute("open-on-click")).toBe(true);
+    const participantTrigger = participantsTooltip?.querySelector<HTMLButtonElement>(
+      ".session-hovercard__attribution-others",
     );
-    expect(
-      participantsTooltip?.querySelector<HTMLButtonElement>(
-        ".session-hovercard__attribution-others",
-      )?.textContent,
-    ).toContain("4 others");
+    const touchDown = new MouseEvent("pointerdown", { bubbles: true });
+    Object.defineProperty(touchDown, "pointerType", { value: "touch" });
+    participantTrigger?.dispatchEvent(touchDown);
+    participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    participantTrigger?.click();
+    expect(participantsTooltip?.hasAttribute("open")).toBe(true);
+    expect(participantTrigger?.textContent).toContain("4 others");
     expect(
       [
         ...(participantsTooltip?.querySelectorAll<HTMLAnchorElement>(

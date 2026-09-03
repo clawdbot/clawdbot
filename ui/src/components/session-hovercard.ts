@@ -345,6 +345,7 @@ function renderSessionAttribution({
           ? html`<openclaw-tooltip
               class="session-hovercard__participants-tooltip"
               .describe=${false}
+              open-on-click
             >
               <button
                 type="button"
