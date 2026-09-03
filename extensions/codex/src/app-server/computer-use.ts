@@ -29,8 +29,9 @@ import {
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
-  CodexListMcpServerStatusResponse,
+  CodexAppServerRequestResult,
   CodexConfigReadResponse,
+  CodexListMcpServerStatusResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
@@ -841,6 +842,16 @@ async function resolveMarketplaceRef(params: {
   }
 
   const waitUntil = marketplaceDiscoveryWaitUntil(params);
+  if (
+    candidates.length === 0 &&
+    waitUntil > Date.now() &&
+    (await codexNativePluginsDisabled(params.request))
+  ) {
+    return {
+      message:
+        "Codex native plugin support is disabled (features.plugins = false). Enable it in the Codex config, then run /codex computer-use install.",
+    };
+  }
   while (candidates.length === 0) {
     if (Date.now() >= waitUntil) {
       break;
@@ -925,6 +936,15 @@ async function listComputerUseMarketplaceCandidates(
     cwds: [],
   } satisfies CodexRequestObject);
   return findComputerUseMarketplaces(listed, config.pluginName);
+}
+
+async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Promise<boolean> {
+  const response = await request<CodexAppServerRequestResult<"experimentalFeature/list">>(
+    "experimentalFeature/list",
+    {},
+  );
+  // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
+  return response.data.find(({ name }) => name === "plugins")?.enabled === false;
 }
 
 function blockUnsafeAutoInstallStatus(
