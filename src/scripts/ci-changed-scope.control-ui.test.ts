@@ -95,6 +95,7 @@ it.each([
   "scripts/lib/ci-test-timings-schema.mts",
   "config/ci-test-timings.json",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ])("runs Chromium UI tests when %s changes browser test inputs", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });
