@@ -3,51 +3,37 @@
 import { describe, expect, it } from "vitest";
 import { detectTextDirection } from "./text-direction.ts";
 
+// Bidi controls are invisible, so every case names the character it exercises.
+const CASES: [name: string, text: string | null, expected: "rtl" | "ltr"][] = [
+  ["null", null, "ltr"],
+  ["empty string", "", "ltr"],
+  ["hebrew", "\u05E9\u05DC\u05D5\u05DD \u05E2\u05D5\u05DC\u05DD", "rtl"],
+  ["arabic", "\u0645\u0631\u062D\u0628\u0627", "rtl"],
+  ["latin", "Hello world", "ltr"],
+  ["markdown emphasis before hebrew", "**\u05E9\u05DC\u05D5\u05DD", "rtl"],
+  ["markdown heading before arabic", "# \u0645\u0631\u062D\u0628\u0627", "rtl"],
+  ["markdown list before latin", "- hello", "ltr"],
+  ["RLM before hebrew", "\u200F\u05E9\u05DC\u05D5\u05DD \u05E2\u05D5\u05DC\u05DD", "rtl"],
+  ["RLE before hebrew", "\u202B\u05E9\u05DC\u05D5\u05DD \u05E2\u05D5\u05DC\u05DD", "rtl"],
+  ["RLI before hebrew", "\u2067\u05E9\u05DC\u05D5\u05DD \u05E2\u05D5\u05DC\u05DD", "rtl"],
+  ["ALM before arabic", "\u061C\u0645\u0631\u062D\u0628\u0627", "rtl"],
+  ["RLM overriding latin", "\u200FHello", "rtl"],
+  ["RLO overriding latin", "\u202EHello", "rtl"],
+  ["LRM overriding hebrew", "\u200E\u05E9\u05DC\u05D5\u05DD", "ltr"],
+  ["LRE overriding hebrew", "\u202A\u05E9\u05DC\u05D5\u05DD", "ltr"],
+  ["LRO overriding hebrew", "\u202D\u05E9\u05DC\u05D5\u05DD", "ltr"],
+  ["LRI overriding hebrew", "\u2066\u05E9\u05DC\u05D5\u05DD", "ltr"],
+  ["RLI and PDI around hebrew", "\u2067\u05E9\u05DC\u05D5\u05DD\u2069", "rtl"],
+  ["FSI and PDI around hebrew", "\u2068\u05E9\u05DC\u05D5\u05DD\u2069", "rtl"],
+  ["PDF before hebrew", "\u202C\u05E9\u05DC\u05D5\u05DD", "rtl"],
+  ["ZWJ before hebrew", "\u200D\u05E9\u05DC\u05D5\u05DD", "rtl"],
+  ["BOM before hebrew", "\uFEFF\u05E9\u05DC\u05D5\u05DD", "rtl"],
+  ["BOM before latin", "\uFEFFHello", "ltr"],
+  ["format characters only", "\uFEFF\u200D", "ltr"],
+];
+
 describe("detectTextDirection", () => {
-  it("returns ltr for null and empty input", () => {
-    expect(detectTextDirection(null)).toBe("ltr");
-    expect(detectTextDirection("")).toBe("ltr");
-  });
-
-  it("detects rtl when first significant char is rtl script", () => {
-    expect(detectTextDirection("שלום עולם")).toBe("rtl");
-    expect(detectTextDirection("مرحبا")).toBe("rtl");
-  });
-
-  it("detects ltr when first significant char is ltr", () => {
-    expect(detectTextDirection("Hello world")).toBe("ltr");
-  });
-
-  it("skips punctuation and markdown prefix characters before detection", () => {
-    expect(detectTextDirection("**שלום")).toBe("rtl");
-    expect(detectTextDirection("# مرحبا")).toBe("rtl");
-    expect(detectTextDirection("- hello")).toBe("ltr");
-  });
-
-  it("detects rtl behind a leading bidi control character", () => {
-    expect(detectTextDirection("\u200Fשלום עולם")).toBe("rtl"); // RLM
-    expect(detectTextDirection("\u2067שלום עולם")).toBe("rtl"); // RLI
-    expect(detectTextDirection("\u202Bשלום עולם")).toBe("rtl"); // RLE
-    expect(detectTextDirection("\u061Cمرحبا")).toBe("rtl"); // ALM
-  });
-
-  it("honors an explicit directional control over the first strong char", () => {
-    expect(detectTextDirection("\u200FHello")).toBe("rtl"); // RLM
-    expect(detectTextDirection("\u202EHello")).toBe("rtl"); // RLO
-    expect(detectTextDirection("\u200Eשלום")).toBe("ltr"); // LRM
-    expect(detectTextDirection("\u202Aשלום")).toBe("ltr"); // LRE
-    expect(detectTextDirection("\u202Dשלום")).toBe("ltr"); // LRO
-    expect(detectTextDirection("\u2066שלום")).toBe("ltr"); // LRI
-  });
-
-  it("skips direction-neutral format characters before detection", () => {
-    expect(detectTextDirection("\uFEFFשלום")).toBe("rtl"); // BOM
-    expect(detectTextDirection("\u2068שלום\u2069")).toBe("rtl"); // FSI/PDI
-    expect(detectTextDirection("\u200Dשלום")).toBe("rtl"); // ZWJ
-    expect(detectTextDirection("\uFEFFHello")).toBe("ltr");
-  });
-
-  it("returns ltr when the text holds only format characters", () => {
-    expect(detectTextDirection("\uFEFF\u200D")).toBe("ltr");
+  it.each(CASES)("resolves %s", (_name, text, expected) => {
+    expect(detectTextDirection(text)).toBe(expected);
   });
 });
