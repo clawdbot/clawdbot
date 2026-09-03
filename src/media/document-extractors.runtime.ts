@@ -1,5 +1,6 @@
 // Document extractor runtime helpers choose lazy extraction adapters by media type.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   DocumentExtractionRequest,
@@ -11,6 +12,19 @@ import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primiti
 const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
   resolvePluginDocumentExtractors(config ? { config } : undefined),
 );
+const extractionIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const extractionMetadataSchema = z.object({
+  pages: z
+    .object({
+      processed: z.array(extractionIntegerSchema),
+      total: extractionIntegerSchema,
+      selection: z.enum(["automatic", "explicit"]),
+      truncated: z.boolean(),
+    })
+    .optional(),
+  textTruncated: z.boolean(),
+  imagesTruncated: z.boolean(),
+});
 
 /** Runs the first matching plugin document extractor and tags successful results with its extractor id. */
 export async function extractDocumentContent(
@@ -44,8 +58,11 @@ export async function extractDocumentContent(
     try {
       const result = await extractor.extract(request);
       if (result) {
+        const { metadata, ...content } = result;
+        const validatedMetadata = extractionMetadataSchema.safeParse(metadata);
         return {
-          ...result,
+          ...content,
+          ...(validatedMetadata.success ? { metadata: validatedMetadata.data } : {}),
           extractor: extractor.id,
         };
       }
