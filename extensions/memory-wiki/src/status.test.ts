@@ -419,6 +419,7 @@ describe("renderMemoryWikiStatus", () => {
         indexDailyNotes: true,
         indexMemoryRoot: true,
         followMemoryEvents: true,
+        ownership: "sandboxed-only",
       },
       bridgePublicArtifactCount: null,
       obsidianCli: {
