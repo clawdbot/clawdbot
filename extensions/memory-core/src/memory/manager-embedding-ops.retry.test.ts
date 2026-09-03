@@ -132,6 +132,15 @@ describe("memory embedding batch retry boundary", () => {
         `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
+    [
+      "zhipu Chinese item-limit error",
+      () => '{"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
+    ],
+    [
+      "bailian batch size invalid error",
+      () =>
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 20.: input.contents"}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
