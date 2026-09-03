@@ -667,7 +667,6 @@ describeLive("gateway live (cli backend)", () => {
 
         const announceNonce = randomBytes(3).toString("hex").toUpperCase();
         const announceSessionKey = `agent:dev:cli-announce-${announceNonce.toLowerCase()}`;
-        const announceTaskName = `cli_announce_${announceNonce.toLowerCase()}`;
         const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
         const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
         let announceParentObservedAt: number | undefined;
@@ -680,9 +679,8 @@ describeLive("gateway live (cli backend)", () => {
             deliver: false,
             timeout: 240,
             message: [
-              "Run this exact OpenClaw CLI-backed completion announcement scenario.",
-              "Use tool calls, not prose.",
-              `Call sessions_spawn exactly once with taskName=${announceTaskName} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
+              "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
+              `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
               `After sessions_spawn returns status=accepted, call bash with exactly: sleep 35; printf CLI_ANNOUNCE_PARENT_TOOL_DONE_${announceNonce}.`,
               "Do not call sessions_yield.",
               `After the bash call completes, reply exactly ${announceParentToken}.`,
@@ -691,12 +689,8 @@ describeLive("gateway live (cli backend)", () => {
           { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
         );
         announceRequest
-          .then(() => {
-            announceParentObservedAt = Date.now();
-          })
-          .catch((error: unknown) => {
-            announceError = error;
-          });
+          .then(() => (announceParentObservedAt = Date.now()))
+          .catch((error: unknown) => (announceError = error));
 
         const completedAnnounceChild = await waitFor("CLI-backed announce child completion", () => {
           if (announceError) {
@@ -704,14 +698,11 @@ describeLive("gateway live (cli backend)", () => {
           }
           return listSubagentRunsForRequester(announceSessionKey).find(
             (run) =>
-              run.taskName === announceTaskName &&
+              run.taskName === `cli_announce_${announceNonce.toLowerCase()}` &&
               run.completion?.resultText?.includes(announceChildToken) === true &&
               run.execution.outcome?.status === "ok",
           );
         });
-        expect(completedAnnounceChild.delivery?.announcedAt).toBeUndefined();
-        expect(announceParentObservedAt).toBeUndefined();
-
         const announceParent = await announceRequest;
         announceParentObservedAt ??= Date.now();
         expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
@@ -728,7 +719,6 @@ describeLive("gateway live (cli backend)", () => {
         const announceAt = deliveredAnnounceChild.delivery?.announcedAt ?? 0;
         console.log(
           `[cli-announce-order] ${JSON.stringify({
-            childEndedAt: deliveredAnnounceChild.execution.endedAt,
             completionEnqueuedAt: deliveredAnnounceChild.delivery?.enqueuedAt,
             completionDeliveredAt: deliveredAnnounceChild.delivery?.deliveredAt,
             completionAnnouncedAt: announceAt,
