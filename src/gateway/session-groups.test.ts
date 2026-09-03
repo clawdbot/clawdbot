@@ -340,6 +340,37 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
+  it.each(["rename", "delete"])(
+    "preserves member rows when authority expires during group %s planning",
+    async (action) => {
+      putSessionGroups({ cfg, names: ["Old"], env });
+      const sessionKey = "agent:main:dashboard:closing-caller";
+      const storePath = await seedSessionStore({
+        [sessionKey]: { sessionId: "closing-caller", updatedAt: Date.now(), category: "Old" },
+      });
+      let current = true;
+      const params = {
+        cfg,
+        name: "Old",
+        env,
+        assertTargetCurrent: () => {
+          if (!current) {
+            throw new Error("caller authority closed");
+          }
+          queueMicrotask(() => {
+            current = false;
+          });
+        },
+      };
+      await expect(
+        action === "rename"
+          ? renameSessionGroup({ ...params, to: "New" })
+          : deleteSessionGroup(params),
+      ).rejects.toThrow("caller authority closed");
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Old");
+    },
+  );
+
   it("merges a rename into an existing target group", async () => {
     putSessionGroups({
       cfg,

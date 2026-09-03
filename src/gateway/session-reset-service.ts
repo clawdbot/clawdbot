@@ -1506,6 +1506,7 @@ export async function performGatewaySessionReset(params: {
           reason: params.reason,
         });
         const deleted = await deleteSessionEntryLifecycle({
+          commitGuard: params.assertAuthorizedInstance,
           agentId: target.agentId,
           archiveTranscript: false,
           deleteDeliveryArtifacts: true,
@@ -1569,6 +1570,7 @@ export async function performGatewaySessionReset(params: {
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
       let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
+        commitGuard: params.assertAuthorizedInstance,
         archivePreviousTranscript: false,
         agentId: target.agentId,
         resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,

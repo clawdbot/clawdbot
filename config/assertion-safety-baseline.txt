@@ -2065,7 +2065,7 @@ src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-send-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
-src/agents/tools/sessions-tool.ts	2
+src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
 src/agents/tools/structured-output-tool.ts	3

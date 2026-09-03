@@ -227,6 +227,7 @@ export async function resetSessionEntryLifecycle(
     { agentId: resolved.agentId, storePath: params.storePath },
     async (recordCommit) =>
       runExclusiveSqliteSessionWrite(resolved, async () => {
+        params.commitGuard?.();
         const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
         const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
         const current = targetSnapshot[0];
@@ -244,6 +245,7 @@ export async function resetSessionEntryLifecycle(
           ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
         };
         runOpenClawAgentWriteTransaction((transactionDb) => {
+          params.commitGuard?.();
           assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
           if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
             const event = buildSessionResetBoundaryEvent({

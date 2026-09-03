@@ -85,6 +85,32 @@ The owner-gated `sessions` tool exposes bounded self-service surfaces:
 - `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. Ownership is display and responsibility, not access control; see [Multi-user mode](/concepts/multi-user).
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` (`names`) declaratively replaces the catalog: array order becomes sidebar order, new names are created, and existing empty groups left out of the list are deleted — reorder by passing the complete current list in the new order, and prefer `group_delete` to remove a single group. Catalog actions never move sessions; use `action: "patch"` with `group` for membership. `group_set` rejects dropping a group that still has member sessions; use `group_delete` first.
 
+To apply the same patch to several sessions, pass `targets` with 1–100
+`{ sessionKey, expectedSessionId? }` objects instead of top-level `sessionKey`
+and `expectedSessionId`. For example:
+
+```json
+{
+  "action": "patch",
+  "targets": [
+    { "sessionKey": "agent:main:dashboard:review-api" },
+    { "sessionKey": "agent:main:dashboard:review-ui" }
+  ],
+  "group": "Reviews"
+}
+```
+
+Each target uses the same visibility rules as a single patch. Supply its
+`sessions_list` `sessionId` as `expectedSessionId` to reject a stale selection;
+archive and restore require this identity for every target. Valid targets can
+succeed when another target fails. The result's `succeeded` and `failed` arrays
+contain zero-based indexes into `targets`; bounded `errors` explain failures.
+An explicit warning identifies omitted error details. Retry those failed targets
+individually when more detail is needed. Duplicate targets that pass these checks
+reject the batch before mutation. To archive an eligible current session, use a single patch;
+its archive is deferred until the run finishes, while a batch reports that
+current-session target as failed and continues with the others.
+
 Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. Pass `group` to place it in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 An agent-selected model patch stays reversible until that selection completes a successful run. If the selected model is definitively unusable because of authentication, billing, or model-not-found failure, OpenClaw restores the previous model and writes a visible system note. Transient rate-limit, overload, timeout, network, and server failures do not undo the selection.

@@ -468,8 +468,16 @@ async function updateMemberCategories(
 ): Promise<number> {
   let updated = 0;
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+    let changedSessionKeys: string[] = [];
     updated += await applySessionEntryReplacements<number>({
       storePath: target.storePath,
+      assertCommitAllowed: () => {
+        // The replacement writer awaits planning; recheck the same members at
+        // its synchronous commit so a closed caller cannot write stale work.
+        for (const sessionKey of changedSessionKeys) {
+          assertTargetCurrent?.({ agentId: target.agentId, sessionKey });
+        }
+      },
       update: (entries) => {
         const replacements = entries.flatMap(({ sessionKey, entry }) => {
           if (entry.category?.trim() !== from) {
@@ -493,6 +501,7 @@ async function updateMemberCategories(
           }
           return [{ sessionKey, entry: next }];
         });
+        changedSessionKeys = replacements.map(({ sessionKey }) => sessionKey);
         return { replacements, result: replacements.length };
       },
     });

@@ -11,6 +11,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
+  beforeResetHookMocks,
+  beforeResetHookState,
   sessionLifecycleHookMocks,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
@@ -33,6 +35,34 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+});
+
+test("sessions.reset preserves an incognito session when its caller closes during hooks", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:incognito:closing-reset";
+  await writeSessionStore({
+    entries: { [sessionKey]: sessionStoreEntry("incognito-closing-reset", { incognito: true }) },
+  });
+  let current = true;
+  beforeResetHookState.hasBeforeResetHook = true;
+  beforeResetHookMocks.runBeforeReset.mockImplementationOnce(async () => {
+    current = false;
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  await expect(
+    performGatewaySessionReset({
+      key: sessionKey,
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+      workerPlacementContext: {},
+      assertAuthorizedInstance: () => {
+        if (!current) {
+          throw new Error("reset caller closed");
+        }
+      },
+    }),
+  ).rejects.toThrow("reset caller closed");
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("incognito-closing-reset");
 });
 
 test("sessions.reset preserves a concurrent same-id lifecycle replacement", async () => {
