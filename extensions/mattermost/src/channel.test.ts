@@ -1583,7 +1583,7 @@ describe("mattermostPlugin", () => {
       // Gateway option list over itself; the reply path gets it with the payload.
       const renderPresentation = requireMattermostRenderPresentation();
       const cfg = createMattermostTestConfig();
-      const questionId = "01JD3ZK8Q0000000000000000A";
+      const questionId = "ask_0123456789abcdef0123456789abcdef";
       const presentation = {
         blocks: [
           {
@@ -1629,7 +1629,7 @@ describe("mattermostPlugin", () => {
       // whatever this renderer flattens; that body is what the reader sees.
       const renderPresentation = requireMattermostRenderPresentation();
       const cfg = createMattermostTestConfig();
-      const questionId = "01JD3ZK8Q0000000000000000A";
+      const questionId = "ask_0123456789abcdef0123456789abcdef";
       const presentation = {
         blocks: [
           { type: "text" as const, text: "Which environment?" },

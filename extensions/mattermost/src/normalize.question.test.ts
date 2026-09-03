@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { parseMattermostQuestionContext, resolveMattermostPresentation } from "./normalize.js";
 
-const QUESTION_ID = "01JD3ZK8Q0000000000000000A";
+const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
 
 function questionPayload(overrides?: { optionValues?: string[] }) {
   return {

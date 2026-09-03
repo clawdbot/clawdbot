@@ -43,7 +43,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
 
 const { registerMattermostInteractions } = await import("./monitor-interactions.js");
 
-const QUESTION_ID = "01JD3ZK8Q0000000000000000A";
+const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
 
 const resolveChannelInfoMock = vi.fn(async () => ({ id: "chan-1", type: "O" }));
 
@@ -204,8 +204,9 @@ describe("mattermost question interactions", () => {
     expect(authorizeMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the prompt when the question was already answered", async () => {
-    resolveOptionMock.mockResolvedValue({ status: "already-answered" });
+  it("keeps the prompt when the question already reached a terminal state", async () => {
+    // The resolver reports both an answered and an expired question this way.
+    resolveOptionMock.mockResolvedValue({ status: "already-terminal", reason: "already-terminal" });
 
     const response = await captureDispatcher()(questionInteraction(questionContext));
 
