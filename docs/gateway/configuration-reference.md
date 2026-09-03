@@ -878,7 +878,7 @@ Gateway or node host and check `openclaw nodes pending` again.
   Catalog providers can also advertise terminal-based session creation. The method is available only when Labs `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
 
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Disable it on deployments where admin operators should not get a host shell; changing it restarts the Gateway and updates the Control UI content security policy.
-- `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
+- `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
@@ -921,7 +921,7 @@ Gateway or node host and check `openclaw nodes pending` again.
     Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
     and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
-  - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
+  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health probes. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 
 ### Multi-instance isolation
 
