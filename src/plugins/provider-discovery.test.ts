@@ -1,6 +1,7 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
+import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
