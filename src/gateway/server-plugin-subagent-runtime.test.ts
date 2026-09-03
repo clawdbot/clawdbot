@@ -222,6 +222,14 @@ describe("plugin background completions", () => {
       subagent: { allowModelOverride: true, allowedModels: ["test-provider/override"] },
       model: "test-provider/override",
       allowed: true,
+      expectedText: "research:test-provider/override",
+    },
+    {
+      name: "provider-qualified model id",
+      subagent: { allowModelOverride: true, allowedModels: ["openrouter/test-model"] },
+      model: "openrouter/test-model",
+      allowed: true,
+      expectedText: "research:openrouter/openrouter/test-model",
     },
     {
       name: "model outside allowlist",
@@ -237,11 +245,11 @@ describe("plugin background completions", () => {
     },
   ])(
     "applies existing subagent override policy for $name",
-    async ({ subagent, model, allowed }) => {
+    async ({ subagent, model, allowed, expectedText }) => {
       config.plugins = { entries: { [PLUGIN_ID]: { subagent } } };
       const result = complete(createRuntime(), { model });
       if (allowed) {
-        await expect(result).resolves.toEqual({ text: "research:test-provider/override" });
+        await expect(result).resolves.toEqual({ text: expectedText });
         expect(isolated).toHaveBeenCalledOnce();
       } else {
         await expect(result).rejects.toThrow(/not trusted|not allowlisted|none of the entries/u);
