@@ -22,8 +22,12 @@ import {
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
+import { proveHotReloadBrowserLaunch } from "./gateway-config-hot-reload-launch.js";
+import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js";
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
+import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
+import { proveHotReloadWatchPolicy } from "./gateway-config-hot-reload-watch.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-config-hot-reload";
@@ -86,11 +90,13 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let pairingFixture: Awaited<ReturnType<typeof prepareGatewayPairingFixture>> | undefined;
   const asyncErrors: unknown[] = [];
   let summary: unknown;
+  let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
   await runQaGatewayFixture(
     async () => {
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
       pairingFixture = await prepareGatewayPairingFixture(temporaryRoot);
       const catalogPath = await writeCatalogFixture(temporaryRoot);
+      const browserExecutable = await fs.realpath(chromium.executablePath());
       const preload = pathToFileURL(
         path.join(repoRoot, "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs"),
       );
@@ -121,6 +127,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           GH_TOKEN: undefined,
           GITHUB_TOKEN: undefined,
           SHELL: "/bin/sh",
+          DISPLAY: process.env.DISPLAY,
         },
         mutateConfig: (cfg) => ({
           ...cfg,
@@ -135,7 +142,14 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
               },
             },
           },
-          browser: { ...cfg.browser, enabled: false },
+          browser: {
+            ...cfg.browser,
+            enabled: true,
+            headless: true,
+            noSandbox: true,
+            executablePath: browserExecutable,
+            defaultProfile: "openclaw",
+          },
           plugins: {
             ...cfg.plugins,
             allow: [...(cfg.plugins?.allow ?? []), "qa-hot-reload-shell"],
@@ -358,12 +372,14 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         for (const mode of ["auto", "off", "auto"] as const) {
           await patch({ gateway: { nodes: { browser: { mode } } } });
           const before = browserInvocations.length;
-          const request = rpc<{ fixture: string }>("browser.request", {
+          const request = rpc<{ fixture?: string; tabs?: unknown[] }>("browser.request", {
             method: "GET",
             path: "/tabs",
           });
           if (mode === "off") {
-            await assert.rejects(request, /browser control is disabled/);
+            const result = await request;
+            assert(Array.isArray(result.tabs));
+            assert.equal(result.fixture, undefined);
             assert.equal(browserInvocations.length, before);
           } else {
             assert.equal((await request).fixture, "node-browser");
@@ -462,6 +478,24 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         );
       });
 
+      await proveHotReloadNodePolicies({
+        gateway: activeGateway,
+        temporaryRoot,
+        rpc,
+        patch,
+        verifyContinuity,
+        proveGroup,
+      });
+
+      await proveHotReloadWatchPolicy({
+        gateway: activeGateway,
+        temporaryRoot,
+        rpc,
+        patch,
+        verifyContinuity,
+        proveGroup,
+      });
+
       await proveGroup("Control UI browser fixture", async () => {
         await patch(
           {
@@ -486,6 +520,15 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           http,
           proveGroup,
         });
+      });
+
+      await proveHotReloadBrowserLaunch({
+        gateway: activeGateway,
+        temporaryRoot,
+        rpc,
+        patch,
+        verifyContinuity,
+        proveGroup,
       });
 
       await proveGroup("gateway.controlUi.sessionObserver", async () => {
@@ -549,6 +592,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       });
 
       await checkContinuity();
+      security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
+      failures.push(...security.failures);
       // Positive control: startup-owned terminal enablement must replace the boot.
       const beforeControl = await rpc<ConfigResult>("config.get");
       const control = await rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>(
@@ -574,6 +619,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         failures,
         evidence,
         metadataProbes,
+        security,
         startupOnlyControl: {
           prefix: "gateway.terminal.enabled",
           closedPersistentSocket: true,
@@ -650,6 +696,13 @@ async function main() {
       details: `${evidence.length} settings checks retained the original Gateway boot and WebSocket; startup-only positive control restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
+        {
+          kind: "summary",
+          filePath: path.join(outputDir, "gateway-config-hot-reload-security.json"),
+        },
+        ...(artifactFiles.has("control-ui-hot-reload.webm")
+          ? [{ kind: "video", filePath: path.join(outputDir, "control-ui-hot-reload.webm") }]
+          : []),
         ...[
           "environment-teal",
           "environment-amber",

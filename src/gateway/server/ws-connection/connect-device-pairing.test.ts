@@ -418,55 +418,72 @@ describe("gateway connect pairing exemptions", () => {
     }
   });
 
-  test("keeps local pairing pending when automatic approval is disabled before commit", async () => {
-    const auth = { mode: "token", token: "local-pairing-policy-token" } as const;
-    testState.gatewayAuth = auth;
-    await replaceConfigFile({
-      nextConfig: { gateway: { auth, nodes: { pairing: { autoApproveLocal: true } } } },
-      afterWrite: { mode: "auto" },
-    });
-    const started = await startServerWithClient(undefined, { auth });
-    const loaded = loadDeviceIdentity("local-pairing-policy-revoked");
-    const approve = pairingApprovals.approveDevicePairing;
-    const approval = vi
-      .spyOn(pairingApprovals, "approveDevicePairing")
-      .mockImplementation((requestId, options, baseDir) => {
-        const current = getRuntimeConfigSnapshot();
-        if (!current) {
-          throw new Error("expected active Gateway config");
-        }
-        setRuntimeConfigSnapshot({
-          ...current,
+  test.each(["automatic approval", "browser origin"])(
+    "keeps local pairing pending when %s is revoked before commit",
+    async (revokedPolicy) => {
+      const auth = { mode: "token", token: "local-pairing-policy-token" } as const;
+      const origin = "https://browser.example.test";
+      const browser = revokedPolicy === "browser origin";
+      testState.gatewayAuth = auth;
+      testState.gatewayControlUi = { allowedOrigins: [origin] };
+      await replaceConfigFile({
+        nextConfig: {
           gateway: {
-            ...current.gateway,
-            nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } },
+            auth,
+            nodes: { pairing: { autoApproveLocal: true } },
+            controlUi: { allowedOrigins: [origin] },
           },
+        },
+        afterWrite: { mode: "auto" },
+      });
+      const started = await startServerWithClient(undefined, {
+        auth,
+        ...(browser ? { wsHeaders: { origin } } : {}),
+      });
+      const loaded = loadDeviceIdentity("local-pairing-policy-revoked");
+      const approve = pairingApprovals.approveDevicePairing;
+      const approval = vi
+        .spyOn(pairingApprovals, "approveDevicePairing")
+        .mockImplementation((requestId, options, baseDir) => {
+          const current = getRuntimeConfigSnapshot();
+          if (!current) {
+            throw new Error("expected active Gateway config");
+          }
+          setRuntimeConfigSnapshot({
+            ...current,
+            gateway: {
+              ...current.gateway,
+              ...(browser
+                ? { controlUi: { allowedOrigins: ["https://other.example.test"] } }
+                : { nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } } }),
+            },
+          });
+          return approve(requestId, options, baseDir);
         });
-        return approve(requestId, options, baseDir);
-      });
-    try {
-      const response = await connectReq(started.ws, {
-        client: TUI_CLIENT,
-        role: "operator",
-        scopes: ["operator.read"],
-        token: auth.token,
-        deviceIdentityPath: loaded.identityPath,
-        prePairDevice: false,
-      });
-      expect(approval).toHaveBeenCalledOnce();
-      expect(response.ok).toBe(false);
-      expect(response.error?.code).toBe("NOT_PAIRED");
-      expect((await getPairedDevice(loaded.identity.deviceId)) === null).toBe(true);
-      expect((await listDevicePairing()).pending.map((entry) => entry.deviceId)).toContain(
-        loaded.identity.deviceId,
-      );
-    } finally {
-      approval.mockRestore();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
+      try {
+        const response = await connectReq(started.ws, {
+          client: browser ? CONTROL_UI_CLIENT : TUI_CLIENT,
+          role: "operator",
+          scopes: ["operator.read"],
+          token: auth.token,
+          deviceIdentityPath: loaded.identityPath,
+          prePairDevice: false,
+        });
+        expect(approval).toHaveBeenCalledOnce();
+        expect(response.ok).toBe(false);
+        expect(response.error?.code).toBe("NOT_PAIRED");
+        expect((await getPairedDevice(loaded.identity.deviceId)) === null).toBe(true);
+        expect((await listDevicePairing()).pending.map((entry) => entry.deviceId)).toContain(
+          loaded.identity.deviceId,
+        );
+      } finally {
+        approval.mockRestore();
+        started.ws.close();
+        await started.server.close();
+        started.envSnapshot.restore();
+      }
+    },
+  );
 
   test("returns terminal identity details and pauses a rejected real device-token client", async () => {
     const origin = "https://localhost";

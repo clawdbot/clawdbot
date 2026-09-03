@@ -596,17 +596,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
-    if (plan.restartHealthMonitor) {
-      try {
-        state.channelHealthMonitor?.stop();
-        await state.channelHealthMonitor?.waitForIdle();
-        nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
-        params.setState(nextState);
-      } catch (err) {
-        scheduleRecoveryRestart("health monitor reload", err);
-      }
-    }
-
     if (plan.disposeMcpRuntimes) {
       await disposeMcpRuntimesWithTimeout({
         dispose: disposeAllSessionMcpRuntimes,
