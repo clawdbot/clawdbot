@@ -5129,6 +5129,30 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequest?.developerInstructions).not.toContain(replacementGuidance);
   });
 
+  it("rejects a selected instruction source mutated while the native thread starts", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(agentsPath, "Original startup authority.");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "thread/start") {
+        return undefined;
+      }
+      await fs.writeFile(agentsPath, "Mutated startup authority.");
+      return threadStartResult("thread-mutated-instructions", {
+        cwd: workspaceDir,
+        instructionSources: [agentsPath],
+      });
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "changed during native startup",
+    );
+    expect(harness.requests.map((request) => request.method)).toContain("thread/delete");
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
   it("captures native project instructions while upgrading a legacy cold resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -5402,6 +5426,10 @@ describe("runCodexAppServerAttempt", () => {
       (ordinaryStart?.params as { developerInstructions?: string } | undefined)
         ?.developerInstructions,
     ).not.toContain(capturedGuidance);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-2",
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+    });
   });
 
   it("keeps a captured snapshot out of a tool-disabled transient thread", async () => {

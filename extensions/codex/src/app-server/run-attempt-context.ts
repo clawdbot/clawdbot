@@ -48,6 +48,7 @@ export async function prepareCodexAttemptContext(
     effectiveRuntimeProviderId,
     effectiveRuntimeModelId,
     hookChannelId,
+    sandboxExecServerEnabled,
   } = runtime;
   const {
     params,
@@ -172,7 +173,9 @@ export async function prepareCodexAttemptContext(
     // Only a process spawned by this Gateway attests native paths as host-local.
     // Loopback WebSockets and remoteWorkspaceRoot may still terminate elsewhere.
     nativeProjectInstructionSourcesHostLocal:
-      connection.appServer.start.transport === "stdio" && !connection.appServer.remoteWorkspaceRoot,
+      connection.appServer.start.transport === "stdio" &&
+      !connection.appServer.remoteWorkspaceRoot &&
+      !(sandbox?.enabled === true && sandboxExecServerEnabled),
   });
   // Once Codex reports the exact sources that established a same-workspace thread,
   // replay that frozen binding with rediscovery disabled on every cold load.

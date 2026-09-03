@@ -1,6 +1,10 @@
 // Codex tests cover frozen workspace policy across physical thread replacement.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { sessionBindingIdentity } from "./session-binding.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
   createParams,
@@ -47,6 +51,7 @@ describe("Codex app-server rotated workspace policy", () => {
       cwd: workspaceDir,
       dynamicTools: [dynamicTool("workspace-tool-a")],
       developerInstructions,
+      coldDeveloperInstructions: developerInstructions,
       agentWorkspaceDeveloperInstructions: capturedGuidance,
       agentWorkspaceDeveloperInstructionsAllowed: true,
       config: { project_doc_max_bytes: 64_000 },
@@ -57,6 +62,7 @@ describe("Codex app-server rotated workspace policy", () => {
     const replacement = await startOrResumeThread({
       ...common,
       dynamicTools: [dynamicTool("workspace-tool-b")],
+      developerInstructions: `Frozen Codex Project Instructions\n${replacementGuidance}`,
       nativeProjectDocsDisabledOnResume: true,
     });
 
@@ -68,6 +74,22 @@ describe("Codex app-server rotated workspace policy", () => {
     expect(replacementRequest?.developerInstructions).toContain(capturedRootGuidance);
     expect(replacementRequest?.developerInstructions).toContain(capturedNestedGuidance);
     expect(replacementRequest?.developerInstructions).not.toContain(replacementGuidance);
-    expect(replacement).toMatchObject({ threadId: "thread-2" });
+    expect(replacement).toMatchObject({
+      threadId: "thread-2",
+      agentWorkspaceDeveloperInstructions: capturedGuidance,
+    });
+    expect(
+      testCodexAppServerBindingStore.read(
+        sessionBindingIdentity({
+          sessionId: attempt.sessionId,
+          sessionKey: attempt.sessionKey,
+          agentId: attempt.agentId,
+          config: attempt.config,
+        }),
+      ),
+    ).toMatchObject({
+      threadId: "thread-2",
+      agentWorkspaceDeveloperInstructions: capturedGuidance,
+    });
   });
 });

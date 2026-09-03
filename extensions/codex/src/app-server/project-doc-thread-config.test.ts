@@ -1,18 +1,32 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureCodexNativeProjectInstructions } from "./project-doc-thread-config.js";
+import {
+  captureCodexNativeProjectInstructions,
+  snapshotCodexNativeProjectInstructionSourceIdentities,
+} from "./project-doc-thread-config.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+async function captureProjectInstructions(
+  params: Omit<
+    Parameters<typeof captureCodexNativeProjectInstructions>[0],
+    "sourceIdentitiesBeforeRequest"
+  >,
+) {
+  return captureCodexNativeProjectInstructions({
+    ...params,
+    sourceIdentitiesBeforeRequest: await snapshotCodexNativeProjectInstructionSourceIdentities(
+      params.cwd,
+    ),
+  });
+}
 
 describe("Codex native project-document snapshots", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let workspaceDir: string;
 
-  beforeEach(async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-project-doc-snapshot-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+  beforeEach(() => {
+    workspaceDir = tempDirs.make("codex-project-doc-snapshot-");
   });
 
   it("preserves Codex source selection and order while excluding global instructions", async () => {
@@ -30,7 +44,7 @@ describe("Codex native project-document snapshots", () => {
     await fs.writeFile(cwdFallback, "cwd fallback");
 
     await expect(
-      captureCodexNativeProjectInstructions({
+      captureProjectInstructions({
         cwd,
         instructionSources: [globalInstructions, rootFallback, packageOverride, cwdFallback],
       }),
@@ -62,9 +76,17 @@ describe("Codex native project-document snapshots", () => {
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "unselected parent policy");
     await fs.writeFile(selected, "selected custom policy");
 
-    await expect(
-      captureCodexNativeProjectInstructions({ cwd, instructionSources: [selected] }),
-    ).resolves.toContain(`### ${selected}\n\nselected custom policy`);
+    await expect(captureProjectInstructions({ cwd, instructionSources: [selected] })).resolves.toBe(
+      [
+        "## OpenClaw Agent Workspace Instructions",
+        "",
+        "OpenClaw froze the Codex-selected root-to-working-directory project instructions that established this thread.",
+        "",
+        `### ${selected}`,
+        "",
+        "selected custom policy",
+      ].join("\n"),
+    );
   });
 
   it("shares the configured byte budget across Codex-selected sources", async () => {
@@ -76,12 +98,26 @@ describe("Codex native project-document snapshots", () => {
     await fs.writeFile(nestedInstructions, "nested");
 
     await expect(
-      captureCodexNativeProjectInstructions({
+      captureProjectInstructions({
         cwd,
         instructionSources: [rootInstructions, nestedInstructions],
         config: { project_doc_max_bytes: 7 },
       }),
-    ).resolves.toContain(`### ${rootInstructions}\n\nroot\n\n### ${nestedInstructions}\n\nnes`);
+    ).resolves.toBe(
+      [
+        "## OpenClaw Agent Workspace Instructions",
+        "",
+        "OpenClaw froze the Codex-selected root-to-working-directory project instructions that established this thread.",
+        "",
+        `### ${rootInstructions}`,
+        "",
+        "root",
+        "",
+        `### ${nestedInstructions}`,
+        "",
+        "nes",
+      ].join("\n"),
+    );
   });
 
   it("renders a bounded frozen snapshot from the response sources", async () => {
@@ -89,19 +125,29 @@ describe("Codex native project-document snapshots", () => {
     await fs.writeFile(instructions, "custom authority");
 
     await expect(
-      captureCodexNativeProjectInstructions({
+      captureProjectInstructions({
         cwd: workspaceDir,
         instructionSources: [instructions],
         config: { project_doc_max_bytes: 6 },
       }),
-    ).resolves.toContain("### " + instructions + "\n\ncustom");
+    ).resolves.toBe(
+      [
+        "## OpenClaw Agent Workspace Instructions",
+        "",
+        "OpenClaw froze the Codex-selected root-to-working-directory project instructions that established this thread.",
+        "",
+        `### ${instructions}`,
+        "",
+        "custom",
+      ].join("\n"),
+    );
   });
 
   it("fails closed if a Codex-selected source disappears before capture", async () => {
     const missingInstructions = path.join(workspaceDir, "AGENTS.md");
 
     await expect(
-      captureCodexNativeProjectInstructions({
+      captureProjectInstructions({
         cwd: workspaceDir,
         instructionSources: [missingInstructions],
       }),
@@ -110,28 +156,30 @@ describe("Codex native project-document snapshots", () => {
 
   it("fails closed when a selected local source changed after native startup began", async () => {
     const instructions = path.join(workspaceDir, "AGENTS.md");
+    await fs.writeFile(instructions, "original authority");
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities(workspaceDir);
     await fs.writeFile(instructions, "changed authority");
-    const identity = await fs.stat(instructions);
 
     await expect(
       captureCodexNativeProjectInstructions({
         cwd: workspaceDir,
         instructionSources: [instructions],
-        notModifiedSinceMs: Math.max(identity.mtimeMs, identity.ctimeMs) - 1,
+        sourceIdentitiesBeforeRequest,
       }),
     ).rejects.toThrow("changed during native startup");
   });
 
-  it("accepts a selected source whose timestamp equals the startup boundary", async () => {
+  it("accepts a selected source with a legitimate future mtime", async () => {
     const instructions = path.join(workspaceDir, "AGENTS.md");
     await fs.writeFile(instructions, "authority written before startup");
-    const identity = await fs.stat(instructions);
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await fs.utimes(instructions, future, future);
 
     await expect(
-      captureCodexNativeProjectInstructions({
+      captureProjectInstructions({
         cwd: workspaceDir,
         instructionSources: [instructions],
-        notModifiedSinceMs: Math.max(identity.mtimeMs, identity.ctimeMs),
       }),
     ).resolves.toContain("authority written before startup");
   });

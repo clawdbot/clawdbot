@@ -16,6 +16,44 @@ export function buildCodexProjectDocThreadConfig(config?: JsonObject): JsonObjec
   return mergeCodexThreadConfigs(defaults, config) ?? defaults;
 }
 
+export type CodexNativeProjectInstructionSourceIdentitySnapshot = ReadonlyMap<string, Stats>;
+
+/**
+ * Records inspectable file identities from the cwd's ancestor chain without
+ * duplicating Codex's source-selection rules. The response remains authoritative
+ * about which files were selected; a selected path without a baseline fails closed.
+ */
+export async function snapshotCodexNativeProjectInstructionSourceIdentities(
+  cwd: string,
+): Promise<CodexNativeProjectInstructionSourceIdentitySnapshot> {
+  const identities = new Map<string, CodexProjectDocIdentity>();
+  let directory = path.resolve(cwd);
+  while (true) {
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
+        continue;
+      }
+      const filePath = path.join(directory, entry.name);
+      try {
+        const identity = await fs.stat(filePath);
+        if (identity.isFile()) {
+          identities.set(filePath, identity);
+        }
+      } catch {
+        // An unrelated broken or inaccessible entry must not block startup.
+        // If Codex selects it, the missing baseline below still fails closed.
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+  return identities;
+}
+
 /**
  * Freezes the project-document sources selected by Codex for this thread.
  * Source selection remains owned by Codex, including configured root markers,
@@ -26,13 +64,13 @@ export async function captureCodexNativeProjectInstructions(params: {
   cwd: string;
   instructionSources: readonly string[];
   config?: JsonObject;
-  notModifiedSinceMs?: number | undefined;
+  sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<string | undefined> {
   const files = await readCodexNativeProjectInstructionFiles({
     cwd: params.cwd,
     instructionSources: params.instructionSources,
     maxBytes: params.config?.project_doc_max_bytes,
-    notModifiedSinceMs: params.notModifiedSinceMs,
+    sourceIdentitiesBeforeRequest: params.sourceIdentitiesBeforeRequest,
   });
   if (files.length === 0) {
     return undefined;
@@ -53,7 +91,7 @@ async function readCodexNativeProjectInstructionFiles(params: {
   cwd: string;
   instructionSources: readonly string[];
   maxBytes?: unknown;
-  notModifiedSinceMs?: number | undefined;
+  sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<CodexNativeProjectInstructionFile[]> {
   const cwd = path.resolve(params.cwd);
   let remaining = normalizeProjectDocMaxBytes(params.maxBytes);
@@ -68,7 +106,11 @@ async function readCodexNativeProjectInstructionFiles(params: {
       continue;
     }
     seen.add(filePath);
-    const content = await readCodexProjectDoc(filePath, remaining, params.notModifiedSinceMs);
+    const content = await readCodexProjectDoc(
+      filePath,
+      remaining,
+      params.sourceIdentitiesBeforeRequest,
+    );
     if (!content.text.trim()) {
       continue;
     }
@@ -99,13 +141,25 @@ function isProjectInstructionSource(filePath: string, cwd: string): boolean {
 async function readCodexProjectDoc(
   filePath: string,
   maxBytes: number,
-  notModifiedSinceMs?: number,
+  sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot,
 ): Promise<{ text: string; bytesRead: number }> {
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(filePath, "r");
     const identityBefore = await handle.stat();
-    assertStableCodexProjectDocIdentity(filePath, identityBefore, notModifiedSinceMs);
+    assertCodexProjectDocFile(filePath, identityBefore);
+    const identityBeforeRequest = sourceIdentitiesBeforeRequest.get(filePath);
+    if (!identityBeforeRequest) {
+      throw new Error(
+        `Codex-selected project instruction source was not present before native startup: ${filePath}`,
+      );
+    }
+    assertSameCodexProjectDocIdentity(
+      filePath,
+      identityBeforeRequest,
+      identityBefore,
+      "during native startup",
+    );
     const data = Buffer.allocUnsafe(maxBytes);
     let bytesRead = 0;
     while (bytesRead < maxBytes) {
@@ -127,21 +181,9 @@ async function readCodexProjectDoc(
 
 type CodexProjectDocIdentity = Stats;
 
-function assertStableCodexProjectDocIdentity(
-  filePath: string,
-  identity: CodexProjectDocIdentity,
-  notModifiedSinceMs: number | undefined,
-) {
+function assertCodexProjectDocFile(filePath: string, identity: CodexProjectDocIdentity) {
   if (!identity.isFile()) {
     throw new Error(`Codex-selected project instruction source is not a file: ${filePath}`);
-  }
-  if (
-    notModifiedSinceMs !== undefined &&
-    (identity.mtimeMs > notModifiedSinceMs || identity.ctimeMs > notModifiedSinceMs)
-  ) {
-    throw new Error(
-      `Codex-selected project instruction source changed during native startup: ${filePath}`,
-    );
   }
 }
 
@@ -149,6 +191,7 @@ function assertSameCodexProjectDocIdentity(
   filePath: string,
   before: CodexProjectDocIdentity,
   after: CodexProjectDocIdentity,
+  phase = "during capture",
 ) {
   if (
     before.dev !== after.dev ||
@@ -157,8 +200,6 @@ function assertSameCodexProjectDocIdentity(
     before.mtimeMs !== after.mtimeMs ||
     before.ctimeMs !== after.ctimeMs
   ) {
-    throw new Error(
-      `Codex-selected project instruction source changed during capture: ${filePath}`,
-    );
+    throw new Error(`Codex-selected project instruction source changed ${phase}: ${filePath}`);
   }
 }

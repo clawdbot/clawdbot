@@ -1,5 +1,4 @@
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -23,7 +22,10 @@ import {
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
-import { captureCodexNativeProjectInstructions } from "./project-doc-thread-config.js";
+import {
+  captureCodexNativeProjectInstructions,
+  snapshotCodexNativeProjectInstructionSourceIdentities,
+} from "./project-doc-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
@@ -171,8 +173,10 @@ export async function resumeExistingCodexThread(
     const shouldCaptureNativeProjectInstructions =
       params.captureNativeProjectInstructions === true &&
       resumeBinding.agentWorkspaceDeveloperInstructions === undefined;
-    const instructionCaptureNotModifiedSinceMs = shouldCaptureNativeProjectInstructions
-      ? performance.timeOrigin + performance.now()
+    const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
+      ? await lifecycleTiming.measure("project-instructions-preflight", () =>
+          snapshotCodexNativeProjectInstructionSourceIdentities(params.cwd),
+        )
       : undefined;
     // Keep ownership accounting atomic with the resume request: a
     // pre-aborted request retains no subscription, so it must not reserve.
@@ -194,13 +198,16 @@ export async function resumeExistingCodexThread(
     configuration.assertConfigured();
     let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
     if (shouldCaptureNativeProjectInstructions) {
+      if (!instructionSourceIdentitiesBeforeRequest) {
+        throw new Error("Codex project instruction preflight snapshot is missing");
+      }
       capturedAgentWorkspaceDeveloperInstructions =
         (await lifecycleTiming.measure("project-instructions-capture", () =>
           captureCodexNativeProjectInstructions({
             cwd: params.cwd,
             instructionSources: response.instructionSources,
             config: resumeParams.config,
-            notModifiedSinceMs: instructionCaptureNotModifiedSinceMs,
+            sourceIdentitiesBeforeRequest: instructionSourceIdentitiesBeforeRequest,
           }),
         )) ?? null;
       assertHandoffCurrent();
@@ -517,8 +524,10 @@ export async function startFreshCodexThread(
   };
   const shouldCaptureNativeProjectInstructions =
     params.captureNativeProjectInstructions === true && !preserveExistingBinding;
-  const instructionCaptureNotModifiedSinceMs = shouldCaptureNativeProjectInstructions
-    ? performance.timeOrigin + performance.now()
+  const instructionSourceIdentitiesBeforeRequest = shouldCaptureNativeProjectInstructions
+    ? await lifecycleTiming.measure("project-instructions-preflight", () =>
+        snapshotCodexNativeProjectInstructionSourceIdentities(params.cwd),
+      )
     : undefined;
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
@@ -570,6 +579,11 @@ export async function startFreshCodexThread(
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
   if (shouldCaptureNativeProjectInstructions) {
+    if (!instructionSourceIdentitiesBeforeRequest) {
+      return await rejectUncommittedThread(
+        new Error("Codex project instruction preflight snapshot is missing"),
+      );
+    }
     try {
       capturedAgentWorkspaceDeveloperInstructions =
         (await lifecycleTiming.measure("project-instructions-capture", () =>
@@ -577,7 +591,7 @@ export async function startFreshCodexThread(
             cwd: params.cwd,
             instructionSources: response.instructionSources,
             config: startParams.config,
-            notModifiedSinceMs: instructionCaptureNotModifiedSinceMs,
+            sourceIdentitiesBeforeRequest: instructionSourceIdentitiesBeforeRequest,
           }),
         )) ?? null;
       assertCurrent();

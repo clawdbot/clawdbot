@@ -285,6 +285,8 @@ export async function createCanonicalForkFixture(params: {
             webSearchAllowed: preparedTools.toolState.webSearchAllowed,
             persistentWebSearchAllowed: preparedTools.toolState.persistentWebSearchAllowed,
             developerInstructions: options.developerInstructions,
+            coldDeveloperInstructions: options.developerInstructions,
+            agentWorkspaceDeveloperInstructionsAllowed: true,
             bundleMcpThreadConfig,
             sandboxExecServerEnabled: false,
             sandbox: null,

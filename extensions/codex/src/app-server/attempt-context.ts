@@ -299,10 +299,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       inheritsAgentWorkspace ||
       !isPathWithin(params.effectiveCwd ?? params.effectiveWorkspace, params.effectiveWorkspace) ||
       params.params.pluginHarnessToolPolicyRestricted === true;
-    // Selected-environment paths belong to that environment, not necessarily the Gateway host.
-    // Keep native discovery authoritative when an OpenClaw sandbox owns the filesystem.
-    const nativeProjectInstructionSnapshotAllowed =
-      params.sandboxed !== true && params.nativeProjectInstructionSourcesHostLocal;
+    // The transport boundary, not the generic sandbox flag, determines filesystem ownership.
+    // Local stdio still reads host paths; remote and environment-owned transports do not.
+    const nativeProjectInstructionSnapshotAllowed = params.nativeProjectInstructionSourcesHostLocal;
     const agentProjectInstructionFiles =
       agentWorkspaceDeveloperInstructionsAllowed && nativeProjectDocNeedsOpenClawCarrier
         ? agentRootProjectInstructionFiles

@@ -4250,6 +4250,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
       shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
       disableLoginShell: true,
+      nativeProjectDocsDisabledOnResume: true,
       appServer: createThreadLifecycleAppServerOptions(),
       appServerRuntimeFingerprint: "codex-runtime-v1",
     };
@@ -4276,7 +4277,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       excludeTurns: true,
       developerInstructions: agentWorkspaceDeveloperInstructions,
       config: {
-        project_doc_max_bytes: 131_072,
+        project_doc_max_bytes: 0,
         allow_login_shell: false,
         shell_environment_policy: {
           experimental_use_profile: false,
@@ -4298,7 +4299,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
       config: {
-        project_doc_max_bytes: 131_072,
+        project_doc_max_bytes: 0,
         allow_login_shell: false,
         shell_environment_policy: {
           experimental_use_profile: false,
@@ -4381,6 +4382,22 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
     expect(request.mock.calls[4]?.[1]).toMatchObject({
       developerInstructions: agentWorkspaceDeveloperInstructions,
+      config: { project_doc_max_bytes: 0 },
+    });
+    expect(request.mock.calls[3]?.[1]).toMatchObject({
+      threadId: finalThreadId,
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining(agentWorkspaceDeveloperInstructions),
+            },
+          ],
+        },
+      ],
     });
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
