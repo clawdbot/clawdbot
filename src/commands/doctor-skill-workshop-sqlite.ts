@@ -174,115 +174,120 @@ type WorkshopProposalUpdate = {
   ownerAgentId?: string;
 };
 
+type WorkshopRelocationPlan = {
+  entry: LegacyWorkshopProposal;
+  source: string;
+  ownerAgentId?: string;
+  moveKey?: string;
+  staleReason?: string;
+};
+
+type WorkshopMove = {
+  source: string;
+  destination: string;
+  adopted: boolean;
+  updates: WorkshopProposalUpdate[];
+};
+
 async function planWorkshopRelocation(
   records: LegacyWorkshopProposal[],
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<{
-  moves: Array<{
-    source: string;
-    destination: string;
-    adopted: boolean;
-    updates: WorkshopProposalUpdate[];
-  }>;
+  moves: WorkshopMove[];
   updates: WorkshopProposalUpdate[];
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
 }> {
-  const external = records.filter((entry) => {
+  const external = records.flatMap<WorkshopRelocationPlan>((entry) => {
     if (entry.record.status !== "pending" && entry.record.status !== "applied") {
-      return false;
+      return [];
     }
-    if (!entry.ownerAgentId) {
-      return true;
+    const source = path.resolve(entry.record.target.skillDir);
+    if (
+      entry.ownerAgentId &&
+      isPathInside(path.resolve(resolveWorkshopSkillsDir(config, entry.ownerAgentId, env)), source)
+    ) {
+      return [];
     }
-    return !isPathInside(
-      path.resolve(resolveWorkshopSkillsDir(config, entry.ownerAgentId, env)),
-      path.resolve(entry.record.target.skillDir),
-    );
+    return [{ entry, source }];
   });
-  const ownersByProposal = new Map<string, string>();
-  const movesByKey = new Map<string, { source: string; destination: string; adopted: boolean }>();
-  const moveKeysByProposal = new Map<string, string>();
-  const staleReasons = new Map<string, string>();
-  for (const entry of external) {
+  const movesByKey = new Map<string, WorkshopMove>();
+  for (const plan of external) {
+    const { entry } = plan;
     const record = entry.record;
-    const ownerAgentId = inferOwnerAgentId({
+    plan.ownerAgentId = inferOwnerAgentId({
       config,
       env,
       record,
-      workspaceDir: path.dirname(path.dirname(path.resolve(record.target.skillDir))),
+      workspaceDir: path.dirname(path.dirname(plan.source)),
       rowOwnerAgentId: entry.ownerAgentId,
     });
-    if (!ownerAgentId) {
-      staleReasons.set(
-        record.id,
-        "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.",
-      );
+    if (!plan.ownerAgentId) {
+      plan.staleReason =
+        "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.";
       continue;
     }
-    ownersByProposal.set(record.id, ownerAgentId);
     if (record.kind !== "create" || record.status !== "applied") {
       continue;
     }
-    const source = path.resolve(record.target.skillDir);
     const target = resolveSkillProposalTarget({
       skillName: record.target.skillKey,
       config,
-      agentId: ownerAgentId,
+      agentId: plan.ownerAgentId,
       env,
     });
-    const moveKey = `${source}\0${target.skillDir}`;
+    const moveKey = `${plan.source}\0${target.skillDir}`;
+    plan.moveKey = moveKey;
     if (movesByKey.has(moveKey)) {
-      moveKeysByProposal.set(record.id, moveKey);
       continue;
     }
     let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
     try {
-      sourceStat = await fs.lstat(source);
+      sourceStat = await fs.lstat(plan.source);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
       }
     }
     if (sourceStat?.isSymbolicLink()) {
-      staleReasons.set(
-        record.id,
-        `Skill Workshop no longer writes through symlinked skills; ${source} stays a workspace skill.`,
-      );
+      plan.staleReason = `Skill Workshop no longer writes through symlinked skills; ${plan.source} stays a workspace skill.`;
       continue;
     }
     if (!sourceStat) {
       // The move is durable before metadata persistence; on rerun, adopt the existing destination.
       if (await pathExists(target.skillFile)) {
-        movesByKey.set(moveKey, { source, destination: target.skillDir, adopted: true });
-        moveKeysByProposal.set(record.id, moveKey);
+        movesByKey.set(moveKey, {
+          source: plan.source,
+          destination: target.skillDir,
+          adopted: true,
+          updates: [],
+        });
       } else {
-        staleReasons.set(
-          record.id,
-          "Skill Workshop could not find the applied legacy skill; the proposal is stale.",
-        );
+        plan.staleReason =
+          "Skill Workshop could not find the applied legacy skill; the proposal is stale.";
       }
       continue;
     }
     const frontmatter = readSkillFrontmatterSafe({
-      rootDir: source,
-      filePath: path.join(source, "SKILL.md"),
+      rootDir: plan.source,
+      filePath: path.join(plan.source, "SKILL.md"),
       maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
     });
     if (!frontmatter?.description?.trim()) {
-      staleReasons.set(record.id, INVALID_LEGACY_SKILL_REASON);
+      plan.staleReason = INVALID_LEGACY_SKILL_REASON;
       continue;
     }
     if (await pathExists(target.skillDir)) {
-      staleReasons.set(
-        record.id,
-        `Skill Workshop relocation conflict: destination already exists at ${target.skillDir}.`,
-      );
+      plan.staleReason = `Skill Workshop relocation conflict: destination already exists at ${target.skillDir}.`;
       continue;
     }
-    movesByKey.set(moveKey, { source, destination: target.skillDir, adopted: false });
-    moveKeysByProposal.set(record.id, moveKey);
+    movesByKey.set(moveKey, {
+      source: plan.source,
+      destination: target.skillDir,
+      adopted: false,
+      updates: [],
+    });
   }
 
   const movesByDestination = new Map<string, string[]>();
@@ -296,9 +301,10 @@ async function planWorkshopRelocation(
       continue;
     }
     const conflictReason = `Skill Workshop relocation conflict: sources ${sources.toSorted().join(", ")} map to the same destination ${destination}.`;
-    for (const entry of external) {
-      if (sources.includes(path.resolve(entry.record.target.skillDir))) {
-        staleReasons.set(entry.record.id, conflictReason);
+    for (const plan of external) {
+      if (sources.includes(plan.source)) {
+        plan.staleReason = conflictReason;
+        plan.moveKey = undefined;
       }
     }
     for (const [moveKey, move] of movesByKey) {
@@ -309,27 +315,25 @@ async function planWorkshopRelocation(
   }
 
   const updates: WorkshopProposalUpdate[] = [];
-  const updatesByMove = new Map<string, WorkshopProposalUpdate[]>();
-  for (const entry of external) {
+  for (const plan of external) {
+    const { entry } = plan;
     const record = entry.record;
-    const ownerAgentId = ownersByProposal.get(record.id);
-    const moveKey =
-      moveKeysByProposal.get(record.id) ??
-      (record.status === "pending" && record.kind === "update" && ownerAgentId
-        ? `${path.resolve(record.target.skillDir)}\0${
-            resolveSkillProposalTarget({
-              skillName: record.target.skillKey,
-              config,
-              agentId: ownerAgentId,
-              env,
-            }).skillDir
-          }`
-        : undefined);
+    const ownerAgentId = plan.ownerAgentId;
+    const target =
+      ownerAgentId &&
+      record.status === "pending" &&
+      (record.kind === "create" || record.kind === "update")
+        ? resolveSkillProposalTarget({
+            skillName: record.target.skillKey,
+            config,
+            agentId: ownerAgentId,
+            env,
+          })
+        : undefined;
+    const moveKey = plan.moveKey ?? (target ? `${plan.source}\0${target.skillDir}` : undefined);
     const move = moveKey ? movesByKey.get(moveKey) : undefined;
-    const conflictReason = staleReasons.get(record.id);
-    if (move && moveKey) {
-      const moveUpdates = updatesByMove.get(moveKey) ?? [];
-      moveUpdates.push({
+    if (move && !plan.staleReason) {
+      move.updates.push({
         record: retargetWorkshopProposal(record, {
           skillKey: record.target.skillKey,
           skillDir: move.destination,
@@ -337,27 +341,18 @@ async function planWorkshopRelocation(
         }),
         ...(ownerAgentId ? { ownerAgentId } : {}),
       });
-      updatesByMove.set(moveKey, moveUpdates);
       continue;
     }
-    if (conflictReason) {
+    if (plan.staleReason) {
       updates.push({
-        record: staleWorkshopProposal(record, conflictReason),
+        record: staleWorkshopProposal(record, plan.staleReason),
         ...(ownerAgentId ? { ownerAgentId } : {}),
       });
       continue;
     }
-    if (record.status === "pending" && record.kind === "create" && ownerAgentId) {
+    if (record.status === "pending" && record.kind === "create" && ownerAgentId && target) {
       updates.push({
-        record: retargetWorkshopProposal(
-          record,
-          resolveSkillProposalTarget({
-            skillName: record.target.skillKey,
-            config,
-            agentId: ownerAgentId,
-            env,
-          }),
-        ),
+        record: retargetWorkshopProposal(record, target),
         ownerAgentId,
       });
       continue;
@@ -382,18 +377,13 @@ async function planWorkshopRelocation(
     }
   }
   return {
-    moves: [...movesByKey].map(([moveKey, move]) => ({
-      source: move.source,
-      destination: move.destination,
-      adopted: move.adopted,
-      updates: updatesByMove.get(moveKey) ?? [],
-    })),
+    moves: [...movesByKey.values()],
     updates,
     externalProposalCount:
       updates.length +
-      [...updatesByMove.values()].reduce((count, entries) => count + entries.length, 0),
-    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, entry) => {
-      const ownerAgentId = ownersByProposal.get(entry.record.id) ?? "unknown";
+      [...movesByKey.values()].reduce((count, move) => count + move.updates.length, 0),
+    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
+      const ownerAgentId = plan.ownerAgentId ?? "unknown";
       counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
       return counts;
     }, {}),
