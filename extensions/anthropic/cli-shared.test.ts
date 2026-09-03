@@ -28,15 +28,10 @@ const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
 
 describe("Claude CLI adapter equivalence", () => {
   const commonArgs = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--include-partial-messages",
-    "--verbose",
-    "--setting-sources",
-    "user",
-    "--tools", "Skill",
-    "--allowedTools", "mcp__openclaw__*",
+    ...(
+      "-p --output-format stream-json --include-partial-messages --verbose " +
+      "--setting-sources user --tools Skill --allowedTools mcp__openclaw__*"
+    ).split(" "),
     "--disallowedTools",
     CLAUDE_CLI_DISALLOWED_TOOLS,
   ];
