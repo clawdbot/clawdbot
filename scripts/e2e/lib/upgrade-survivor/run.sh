@@ -128,6 +128,17 @@ SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
+WATCH_RUNTIME_ROOT="$RUNTIME_ROOT/watchos-direct-node"
+WATCH_STATE_JSON="$WATCH_RUNTIME_ROOT/state.json"
+WATCH_SETUP_JSON="$WATCH_RUNTIME_ROOT/setup.json"
+WATCH_NODES_JSON="$WATCH_RUNTIME_ROOT/nodes.json"
+WATCH_DEVICES_JSON="$WATCH_RUNTIME_ROOT/devices.json"
+WATCH_BASELINE_CONNECT_JSON="$ARTIFACT_ROOT/watchos-baseline-connect.json"
+WATCH_BASELINE_STATE_JSON="$ARTIFACT_ROOT/watchos-baseline-state.json"
+WATCH_CANDIDATE_CONNECT_JSON="$ARTIFACT_ROOT/watchos-candidate-connect.json"
+WATCH_CANDIDATE_STATE_JSON="$ARTIFACT_ROOT/watchos-candidate-state.json"
+WATCH_RESTART_CONNECT_JSON="$ARTIFACT_ROOT/watchos-restart-connect.json"
+WATCH_RESTART_STATE_JSON="$ARTIFACT_ROOT/watchos-restart-state.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 : >"$PHASE_LOG"
@@ -225,6 +236,12 @@ write_summary() {
     SUMMARY_STATUS_SECONDS="$status_seconds" \
     SUMMARY_FAILURE_PHASE="$FAILURE_PHASE" \
     SUMMARY_CONFIG_COVERAGE="$CONFIG_COVERAGE_JSON" \
+    SUMMARY_WATCH_BASELINE_CONNECT="$WATCH_BASELINE_CONNECT_JSON" \
+    SUMMARY_WATCH_BASELINE_STATE="$WATCH_BASELINE_STATE_JSON" \
+    SUMMARY_WATCH_CANDIDATE_CONNECT="$WATCH_CANDIDATE_CONNECT_JSON" \
+    SUMMARY_WATCH_CANDIDATE_STATE="$WATCH_CANDIDATE_STATE_JSON" \
+    SUMMARY_WATCH_RESTART_CONNECT="$WATCH_RESTART_CONNECT_JSON" \
+    SUMMARY_WATCH_RESTART_STATE="$WATCH_RESTART_STATE_JSON" \
     node <<'NODE'
 const fs = require("node:fs");
 const phaseLog = process.env.SUMMARY_PHASE_LOG;
@@ -268,6 +285,31 @@ const summary = {
   recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
     ? readJsonOrNull(require("node:path").join(require("node:path").dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
     : undefined,
+  watchosDirectNode: process.env.SUMMARY_SCENARIO === "watchos-direct-node"
+    ? {
+        contract: {
+          signature: "v3",
+          clientId: "openclaw-watchos",
+          clientMode: "node",
+          protocolRange: [4, 4],
+          stableInstanceId: "watchos-upgrade-survivor",
+          bootstrapAuthField: "bootstrapToken",
+          reconnectAuthField: "deviceToken",
+        },
+        baseline: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_BASELINE_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_BASELINE_STATE),
+        },
+        candidate: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_CANDIDATE_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_CANDIDATE_STATE),
+        },
+        restart: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_RESTART_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_RESTART_STATE),
+        },
+      }
+    : undefined,
   failure: process.env.SUMMARY_STATUS === "passed"
     ? null
     : {
@@ -294,6 +336,69 @@ stop_gateway() {
     fi
   fi
   rm -f "$SYSTEMCTL_SHIM_PID_FILE"
+}
+
+watchos_gateway_call() {
+  local method="$1"
+  local params="$2"
+  local output="$3"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway call "$method" \
+    --port 18789 \
+    --token "$GATEWAY_AUTH_TOKEN_REF" \
+    --params "$params" \
+    --timeout 20000 \
+    --json >"$output"
+  chmod 600 "$output"
+}
+
+watchos_assert_gateway_state() {
+  local label="$1"
+  local output="$2"
+  watchos_gateway_call node.list '{}' "$WATCH_NODES_JSON"
+  watchos_gateway_call device.pair.list '{}' "$WATCH_DEVICES_JSON"
+  node scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs assert-state \
+    --state "$WATCH_STATE_JSON" \
+    --nodes "$WATCH_NODES_JSON" \
+    --devices "$WATCH_DEVICES_JSON" \
+    --out "$output" \
+    --label "$label"
+}
+
+watchos_connect() {
+  local mode="$1"
+  local credential="$2"
+  local output="$3"
+  local label="$4"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs connect \
+    --mode "$mode" \
+    --base-url http://127.0.0.1:18789/api/nodes/watch \
+    --credential "$credential" \
+    --state "$WATCH_STATE_JSON" \
+    --out "$output" \
+    --label "$label"
+}
+
+watchos_pair_baseline() {
+  mkdir -p "$WATCH_RUNTIME_ROOT"
+  chmod 700 "$WATCH_RUNTIME_ROOT"
+  start_gateway
+  watchos_gateway_call device.pair.setupCode \
+    '{"includeQr":false,"bootstrapProfile":"node","publicUrl":"ws://127.0.0.1:18789"}' \
+    "$WATCH_SETUP_JSON"
+  watchos_connect bootstrap "$WATCH_SETUP_JSON" "$WATCH_BASELINE_CONNECT_JSON" baseline
+  watchos_assert_gateway_state baseline "$WATCH_BASELINE_STATE_JSON"
+  stop_gateway
+}
+
+watchos_reconnect_candidate() {
+  watchos_connect device "$WATCH_STATE_JSON" "$WATCH_CANDIDATE_CONNECT_JSON" candidate
+  watchos_assert_gateway_state candidate "$WATCH_CANDIDATE_STATE_JSON"
+}
+
+watchos_reconnect_restarted_candidate() {
+  watchos_connect device "$WATCH_STATE_JSON" "$WATCH_RESTART_CONNECT_JSON" restart
+  watchos_assert_gateway_state restart "$WATCH_RESTART_STATE_JSON"
 }
 
 cleanup() {
@@ -1327,6 +1432,9 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase watchos-baseline-pair watchos_pair_baseline
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase seed-recovery-state node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs seed
 fi
@@ -1369,6 +1477,15 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase watchos-candidate-reconnect watchos_reconnect_candidate
+  phase gateway-stop stop_gateway
+  phase gateway-restart start_gateway
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-status check_gateway_status
+  phase watchos-restart-reconnect watchos_reconnect_restarted_candidate
+  phase assert-restarted-survival assert_survival
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase recovery-live node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs live
   phase gateway-stop stop_gateway

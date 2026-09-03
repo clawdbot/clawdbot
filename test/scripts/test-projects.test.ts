@@ -635,7 +635,17 @@ describe("scripts/test-projects changed-target routing", () => {
         throw new Error(`Missing recovery test owner: ${file}`);
       }
       expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
+      if (file.endsWith("/run.sh")) {
+        expect(plan.targets).toContain("test/scripts/upgrade-survivor-watchos-direct-node.test.ts");
+      }
     }
+  });
+
+  it("routes the watchOS survivor adapter to its contract test", () => {
+    expectChangedTargets(
+      ["scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs"],
+      ["test/scripts/upgrade-survivor-watchos-direct-node.test.ts"],
+    );
   });
 
   it("keeps force-test runner edits on its safe CLI tests", () => {

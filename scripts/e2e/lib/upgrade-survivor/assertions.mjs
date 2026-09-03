@@ -33,6 +33,7 @@ const SCENARIOS = new Set([
   "sqlite-volume",
   "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
 
 const PERSONA_FILES = new Map([

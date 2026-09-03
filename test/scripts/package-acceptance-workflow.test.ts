@@ -237,6 +237,7 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
     };
@@ -5281,6 +5282,8 @@ test "$package_manager" = "pnpm@12.1.0"
   it("defaults update migration to stable with optional historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const migration = readWorkflow(UPDATE_MIGRATION_WORKFLOW);
+    const job = workflowJob(UPDATE_MIGRATION_WORKFLOW, "update_migration");
 
     expect(workflow).toContain("name: Update Migration");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
@@ -5294,6 +5297,15 @@ test "$package_manager" = "pnpm@12.1.0"
       required: false,
     });
     expect(workflow).toContain("default: plugin-deps-cleanup");
+    expect(migration.on?.schedule).toEqual([{ cron: "41 6 * * 1" }]);
+    expect(job.with).toMatchObject({
+      workflow_ref: "${{ inputs.workflow_ref || 'main' }}",
+      package_ref: "${{ inputs.package_ref || 'main' }}",
+      published_upgrade_survivor_baselines:
+        "${{ github.event_name == 'schedule' && '2026.8.1' || inputs.baselines }}",
+      published_upgrade_survivor_scenarios:
+        "${{ github.event_name == 'schedule' && 'watchos-direct-node' || inputs.scenarios }}",
+    });
     expect(workflow).toContain("telegram_mode: none");
     expect(workflow).toContain("secrets: inherit");
     expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");

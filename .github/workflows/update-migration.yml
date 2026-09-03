@@ -1,6 +1,8 @@
 name: Update Migration
 
 on:
+  schedule:
+    - cron: "41 6 * * 1"
   workflow_dispatch:
     inputs:
       workflow_ref:
@@ -35,13 +37,13 @@ jobs:
     name: Update migration matrix
     uses: ./.github/workflows/package-acceptance.yml
     with:
-      workflow_ref: ${{ inputs.workflow_ref }}
+      workflow_ref: ${{ inputs.workflow_ref || 'main' }}
       source: ref
-      package_ref: ${{ inputs.package_ref }}
+      package_ref: ${{ inputs.package_ref || 'main' }}
       suite_profile: custom
       docker_lanes: update-migration
-      published_upgrade_survivor_baselines: ${{ inputs.baselines }}
-      published_upgrade_survivor_scenarios: ${{ inputs.scenarios }}
+      published_upgrade_survivor_baselines: ${{ github.event_name == 'schedule' && '2026.8.1' || inputs.baselines }}
+      published_upgrade_survivor_scenarios: ${{ github.event_name == 'schedule' && 'watchos-direct-node' || inputs.scenarios }}
       shared_image_artifact_namespace: update-migration
       shared_image_policy: no-push-artifact
       telegram_mode: none
