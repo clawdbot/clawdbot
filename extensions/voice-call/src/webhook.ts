@@ -1122,6 +1122,10 @@ export class VoiceCallWebhookServer {
 
       if (result.error) {
         this.logger.error(`Response generation error: ${result.error}`);
+        const fallback = /429|rate.?limit|too many/i.test(result.error)
+          ? "I'm sorry — my language service is rate limited right now, so I can't respond. Please try again in a little while."
+          : "I'm sorry — I hit a problem generating a response. Please try again.";
+        await speakResponse(fallback);
         return;
       }
 
