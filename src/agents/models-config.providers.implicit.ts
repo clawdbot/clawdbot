@@ -594,10 +594,8 @@ export async function resolveImplicitProviders(
       },
     });
   }
-  if (
-    params.providerDiscoveryEntriesOnly !== true &&
-    discoveryProviders.some(hasRuntimeProviderCatalog)
-  ) {
+  const hasLiveCatalog = discoveryProviders.some(hasRuntimeProviderCatalog);
+  if (params.providerDiscoveryEntriesOnly !== true && hasLiveCatalog) {
     const { prepareProviderDiscoveryAuth } =
       await import("./models-config.providers.discovery-auth.runtime.js");
     const preparedAuth = await prepareProviderDiscoveryAuth(
