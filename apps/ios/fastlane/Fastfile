@@ -1632,6 +1632,16 @@ def select_ci_testflight_internal_group_by_id!(groups:, group_id:)
 
   group = matches.first
   UI.user_error!("The configured TestFlight beta group must be internal.") unless group.is_internal_group == true
+  unsafe_internal_group = groups.any? do |candidate|
+    candidate.id != group_id &&
+      candidate.is_internal_group == true &&
+      candidate.has_access_to_all_builds != false
+  end
+  if unsafe_internal_group
+    UI.user_error!(
+      "Every non-target internal TestFlight group must explicitly disable automatic all-build access."
+    )
+  end
   group
 end
 
@@ -1681,11 +1691,21 @@ def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version
   # Fastlane's groups option matches both names and IDs. Assign the freshly
   # resolved group directly so a concurrent display-name collision cannot widen access.
   build.add_beta_groups(beta_groups: [group])
-  assigned = group.fetch_builds.any? { |candidate| candidate.id == build.id }
-  unless assigned
+  verified_groups = app.get_beta_groups
+  verified_group = select_ci_testflight_internal_group_by_id!(
+    groups: verified_groups,
+    group_id: group_id
+  )
+  assigned_group_ids = verified_groups.select do |candidate_group|
+    candidate_group.fetch_builds.any? { |candidate| candidate.id == build.id }
+  end.map(&:id)
+  unless assigned_group_ids.include?(group_id)
     UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
   end
-  { group: group }
+  unless assigned_group_ids == [group_id]
+    UI.user_error!("Uploaded TestFlight build is assigned outside the configured internal group.")
+  end
+  { group: verified_group }
 end
 
 def finalize_mobile_release_ref!(platform:, gateway_version:, app_store_version:, build_number:, internal_group:, intent_context:, sha:)

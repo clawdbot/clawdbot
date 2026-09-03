@@ -525,12 +525,12 @@ module UI
     raise message
   end
 end
-Group = Struct.new(:id, :name, :is_internal_group)
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds)
 ${configured}
 ${selector}
 base_groups = [
-  Group.new("internal-id", "Internal", true),
-  Group.new("external-id", "External", false)
+  Group.new("internal-id", "Internal", true, false),
+  Group.new("external-id", "External", false, false)
 ]
 cases = [
   ["blank", "   ", base_groups],
@@ -540,7 +540,33 @@ cases = [
   [
     "collision",
     "internal-id",
-    base_groups + [Group.new("other-id", "internal-id", true)]
+    base_groups + [Group.new("other-id", "internal-id", true, false)]
+  ],
+  [
+    "automatic-other",
+    "internal-id",
+    base_groups + [Group.new("automatic-id", "Automatic", true, true)]
+  ],
+  [
+    "unknown-internal",
+    "internal-id",
+    base_groups + [Group.new("unknown-id", "Unknown Internal", true, nil)]
+  ],
+  [
+    "unknown-external",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, false),
+      Group.new("external-id", "External", false, nil)
+    ]
+  ],
+  [
+    "automatic-target",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, true),
+      Group.new("external-id", "External", false, false)
+    ]
   ],
   ["valid", "internal-id", base_groups]
 ]
@@ -564,6 +590,10 @@ end
       "unknown:error:TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.",
       "external:error:The configured TestFlight beta group must be internal.",
       "collision:error:TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.",
+      "automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-internal:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-external:ok:internal-id",
+      "automatic-target:ok:internal-id",
       "valid:ok:internal-id",
     ]);
   });
@@ -583,7 +613,7 @@ module UI
     raise message
   end
 end
-Group = Struct.new(:id, :name, :is_internal_group, :builds) do
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
   def fetch_builds
     builds
   end
@@ -619,10 +649,10 @@ end
 ${selector}
 ${verifier}
 
-def run_case(label, post_group:, app_builds:)
-  pre_group = Group.new("group-id", "Pre-upload Internal", true, [])
+def run_case(label, post_groups:, app_builds:)
+  pre_group = Group.new("group-id", "Pre-upload Internal", true, false, [])
   select_ci_testflight_internal_group_by_id!(groups: [pre_group], group_id: "group-id")
-  $fresh_app = App.new([post_group], app_builds)
+  $fresh_app = App.new(post_groups, app_builds)
   begin
     result = assign_and_verify_ci_testflight_internal_group!(
       group_id: "group-id",
@@ -640,22 +670,22 @@ end
 uploaded = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
 run_case(
   "valid",
-  post_group: Group.new("group-id", "Fresh Internal", true, []),
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
   app_builds: [uploaded]
 )
 run_case(
   "missing-build",
-  post_group: Group.new("group-id", "Fresh Internal", true, []),
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
   app_builds: []
 )
 run_case(
   "wrong-platform",
-  post_group: Group.new("group-id", "Fresh Internal", true, []),
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
   app_builds: [Build.new("build-id", "2026.9.20", "8", "MAC_OS", [], true)]
 )
 run_case(
   "duplicate-builds",
-  post_group: Group.new("group-id", "Fresh Internal", true, []),
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
   app_builds: [
     Build.new("build-id-1", "2026.9.20", "8", "IOS", [], true),
     Build.new("build-id-2", "2026.9.20", "8", "IOS", [], true)
@@ -663,13 +693,30 @@ run_case(
 )
 run_case(
   "missing-assignment",
-  post_group: Group.new("group-id", "Fresh Internal", true, []),
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
   app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], false)]
 )
 run_case(
   "post-upload-external",
-  post_group: Group.new("group-id", "Fresh External", false, []),
+  post_groups: [Group.new("group-id", "Fresh External", false, false, [])],
   app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+run_case(
+  "post-upload-automatic-other",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("automatic-id", "Automatic", true, true, [])
+  ],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+unexpected = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
+run_case(
+  "unexpected-assignment",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("other-id", "Other Internal", true, false, [unexpected])
+  ],
+  app_builds: [unexpected]
 )
 `;
     const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
@@ -682,6 +729,8 @@ run_case(
       "duplicate-builds:error:Uploaded TestFlight build could not be resolved after processing.",
       "missing-assignment:error:Uploaded TestFlight build is not assigned to the configured internal group.",
       "post-upload-external:error:The configured TestFlight beta group must be internal.",
+      "post-upload-automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unexpected-assignment:error:Uploaded TestFlight build is assigned outside the configured internal group.",
     ]);
   });
 

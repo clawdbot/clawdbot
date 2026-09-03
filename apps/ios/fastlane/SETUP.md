@@ -167,10 +167,11 @@ Protected `ios-beta-release` environment variable required:
 The CI lane must distribute the processed build to one pre-approved internal
 TestFlight group. The value is ID-only and is never matched as a display name.
 The lane fails before upload when the ID is blank, unknown, external, duplicated,
-or collides with another group's display name. After processing, it freshly
+collides with another group's display name, or any other internal group does not
+explicitly disable automatic all-build access. After processing, it freshly
 resolves the exact group and uploaded build, then requires that build ID to be
-assigned to the group. External distribution and Beta App Review submission
-remain disabled.
+assigned only to the approved group. External distribution and Beta App Review
+submission remain disabled.
 
 After verified internal distribution, the workflow writes a bounded signed
 intent and records `refs/openclaw/mobile-releases/ios/<app-store-version>-<build>`
