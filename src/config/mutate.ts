@@ -22,15 +22,13 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   collectChangedConfigPaths,
-  hasConfigPathValue,
-  readConfigPathValue,
   resolveIncludeWriteBoundary,
-  writeConfigPathValue,
   type ChangedConfigPaths,
   type IncludeWriteBoundary,
 } from "./include-write-boundary.js";
@@ -425,20 +423,38 @@ function getLegacyTopLevelIncludeBoundary(params: {
   };
 }
 
-function getIncludeMutationBoundary(params: {
+/**
+ * One include-owned write decision for the guarded writer and Doctor's
+ * eligibility check; a split decision lets Doctor advertise an include write
+ * that the writer then declines. Null means the write belongs to the root writer.
+ */
+function resolveIncludeOwnedWriteCandidate(params: {
   snapshot: ConfigFileSnapshot;
-  changed: ChangedConfigPaths;
-}): IncludeWriteBoundary | null {
-  if (params.snapshot.includeProvenance === undefined) {
-    return getLegacyTopLevelIncludeBoundary(params);
+  nextConfig: OpenClawConfig;
+  unsetPaths: readonly string[][] | undefined;
+  persistCanonicalAgentRoster: boolean | undefined;
+}): (IncludeWriteBoundary & { nextConfig: OpenClawConfig }) | null {
+  // A roster-format persist is a root write; an include-only commit cannot carry it.
+  if (params.persistCanonicalAgentRoster === true) {
+    return null;
   }
-  const boundary = resolveIncludeWriteBoundary({
-    provenance: params.snapshot.includeProvenance,
-    changed: params.changed,
-  });
-  return boundary
-    ? { boundaryPath: boundary.boundaryPath, includePath: path.normalize(boundary.includePath) }
-    : null;
+  const nextConfig = applyUnsetPathsForWrite(
+    params.nextConfig,
+    resolveManagedUnsetPathsForWrite(params.unsetPaths),
+  );
+  const changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
+  if (changed.rootChanged || changed.paths.length === 0) {
+    return null;
+  }
+  const boundary =
+    params.snapshot.includeProvenance === undefined
+      ? getLegacyTopLevelIncludeBoundary({ snapshot: params.snapshot, changed })
+      : resolveIncludeWriteBoundary({ provenance: params.snapshot.includeProvenance, changed });
+  // A removed section belongs to the root writer, never a rewrite from an absent value.
+  if (!boundary || getConfigValueAtPath(nextConfig, [...boundary.boundaryPath]) === undefined) {
+    return null;
+  }
+  return { nextConfig, ...boundary, includePath: path.normalize(boundary.includePath) };
 }
 
 /**
@@ -452,31 +468,21 @@ export function configWriteTargetsIncludeBoundary(params: {
   nextConfig: OpenClawConfig;
   persistCanonicalAgentRoster?: boolean;
 }): boolean {
-  // A roster-format persist is a root write in tryWriteIncludeOwnedConfigMutation,
-  // so the include boundary must not be advertised for it.
-  if (params.persistCanonicalAgentRoster === true) {
-    return false;
-  }
-  const nextConfig = applyUnsetPathsForWrite(
-    params.nextConfig,
-    resolveManagedUnsetPathsForWrite(undefined),
-  );
-  const changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
-  if (changed.rootChanged || changed.paths.length === 0) {
-    return false;
-  }
-  const boundary = getIncludeMutationBoundary({ snapshot: params.snapshot, changed });
-  // The writer also needs the boundary value present in the candidate; a removed
-  // section falls back to the root writer there, so it is not eligible here.
-  if (!boundary || !hasConfigPathValue(nextConfig, boundary.boundaryPath)) {
-    return false;
-  }
+  const includeWrite = resolveIncludeOwnedWriteCandidate({
+    snapshot: params.snapshot,
+    nextConfig: params.nextConfig,
+    unsetPaths: undefined,
+    persistCanonicalAgentRoster: params.persistCanonicalAgentRoster,
+  });
   // Eligibility must match the guarded writer: a canonical external target is
   // rejected there, so it must classify as manual repair rather than eligible.
-  return isInternalIncludeWriteTarget({
-    configPath: params.snapshot.path,
-    includePath: boundary.includePath,
-  });
+  return (
+    includeWrite !== null &&
+    isInternalIncludeWriteTarget({
+      configPath: params.snapshot.path,
+      includePath: includeWrite.includePath,
+    })
+  );
 }
 
 function containsConfigIncludeDirective(value: unknown): boolean {
@@ -740,25 +746,16 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
 }): Promise<{ persistedHash: string | null; persistedConfig: OpenClawConfig } | null> {
-  const nextConfig = applyUnsetPathsForWrite(
-    params.nextConfig,
-    resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
-  );
-  const changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
-  // An include-only commit cannot also persist the root roster format.
-  if (
-    params.writeOptions?.persistCanonicalAgentRoster === true ||
-    changed.rootChanged ||
-    changed.paths.length === 0
-  ) {
+  const includeWrite = resolveIncludeOwnedWriteCandidate({
+    snapshot: params.snapshot,
+    nextConfig: params.nextConfig,
+    unsetPaths: params.writeOptions?.unsetPaths,
+    persistCanonicalAgentRoster: params.writeOptions?.persistCanonicalAgentRoster,
+  });
+  if (!includeWrite) {
     return null;
   }
-
-  const boundary = getIncludeMutationBoundary({ snapshot: params.snapshot, changed });
-  if (!boundary || !hasConfigPathValue(nextConfig, boundary.boundaryPath)) {
-    return null;
-  }
-  const { boundaryPath, includePath } = boundary;
+  const { nextConfig, boundaryPath, includePath } = includeWrite;
 
   const writeEnv = params.io?.env ?? process.env;
   const allowedRoots: readonly string[] = [];
@@ -804,7 +801,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
   ) {
     throw new ConfigMutationConflictError("included config changed since last load");
   }
-  let includedValueToWrite = readConfigPathValue(nextConfig, boundaryPath);
+  let includedValueToWrite = getConfigValueAtPath(nextConfig, [...boundaryPath]);
   if (previousIncludeRaw !== null) {
     let authoredIncludeValue: unknown;
     let parsedInclude = false;
@@ -828,7 +825,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       // does not carry, so compare against the pre-migration source when present.
       const authoredSnapshotSource =
         params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
-      const snapshotIncludedValue = readConfigPathValue(authoredSnapshotSource, boundaryPath);
+      const snapshotIncludedValue = getConfigValueAtPath(authoredSnapshotSource, [...boundaryPath]);
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
@@ -854,11 +851,11 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     envForRestore,
   ) as OpenClawConfig;
   applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
-  const runtimeConfigToWrite = resolveConfigEnvVars(
-    writeConfigPathValue(authoredRuntimeCandidate, boundaryPath, includedValueToWrite),
-    runtimeCandidateEnv,
-    { onMissing: () => {} },
-  ) as OpenClawConfig;
+  const runtimeCandidate = structuredClone(authoredRuntimeCandidate);
+  setConfigValueAtPath(runtimeCandidate, [...boundaryPath], includedValueToWrite);
+  const runtimeConfigToWrite = resolveConfigEnvVars(runtimeCandidate, runtimeCandidateEnv, {
+    onMissing: () => {},
+  }) as OpenClawConfig;
   const validated = validateConfigObjectWithPlugins(
     runtimeConfigToWrite,
     params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,

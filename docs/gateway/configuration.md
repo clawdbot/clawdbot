@@ -512,7 +512,8 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
       nested object-map entries. Write-through only targets include files inside
       the top-level config directory; includes admitted through
       `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
-    - **Unsupported write-through**: root includes, actual array-entry includes,
+    - **Unsupported write-through**: root includes (every section of a config
+      whose root object authors `$include`), actual array-entry includes,
       include arrays, sibling overrides, changes spanning ownership boundaries,
       any nested include beneath a merged owner, and any include whose own file
       still authors a nested `$include` directive fail closed instead of

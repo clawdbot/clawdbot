@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectChangedConfigPaths,
-  hasConfigPathValue,
-  readConfigPathValue,
   resolveIncludeWriteBoundary,
-  writeConfigPathValue,
 } from "./include-write-boundary.js";
 
 const alphaInclude = {
@@ -320,28 +317,5 @@ describe("resolveIncludeWriteBoundary", () => {
         changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
       }),
     ).toBeNull();
-  });
-});
-
-describe("keyed config path helpers", () => {
-  it("reads, writes, and probes keyed paths", () => {
-    const value = { agents: { entries: { alpha: { model: "old" } } } };
-    expect(readConfigPathValue(value, ["agents", "entries", "alpha"])).toEqual({ model: "old" });
-    expect(readConfigPathValue(value, ["agents", "missing", "alpha"])).toBeUndefined();
-    expect(hasConfigPathValue(value, ["agents", "entries", "alpha"])).toBe(true);
-    expect(hasConfigPathValue(value, ["agents", "entries", "beta"])).toBe(false);
-    expect(writeConfigPathValue(value, ["agents", "entries", "alpha"], { model: "new" })).toEqual({
-      agents: { entries: { alpha: { model: "new" } } },
-    });
-  });
-
-  it("leaves the source value untouched when writing", () => {
-    const value = { agents: { entries: { alpha: { model: "old" } } } };
-    writeConfigPathValue(value, ["agents", "entries", "alpha", "model"], "new");
-    expect(value.agents.entries.alpha.model).toBe("old");
-  });
-
-  it("returns the replacement for an empty path", () => {
-    expect(writeConfigPathValue({ a: 1 }, [], { b: 2 })).toEqual({ b: 2 });
   });
 });
