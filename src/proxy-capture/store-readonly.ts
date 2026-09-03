@@ -1,6 +1,17 @@
-import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+
+type DebugProxyCaptureDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "capture_events" | "capture_blobs"
+>;
+type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
 
 export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
@@ -8,33 +19,52 @@ export type DebugProxyCaptureReader = {
 };
 
 export function readDebugProxyCaptureSessionEvents(
-  db: DatabaseSync,
+  db: NodeSqliteDatabase,
   sessionId: string,
   limit = 500,
 ): Array<Record<string, unknown>> {
-  return (
-    db
-      .prepare(
-        `SELECT
-         id, session_id AS sessionId, ts, source_scope AS sourceScope, source_process AS sourceProcess,
-         protocol, direction, kind, flow_id AS flowId, method, host, path, status, close_code AS closeCode,
-         content_type AS contentType, headers_json AS headersJson, data_text AS dataText,
-         data_blob_id AS dataBlobId, data_sha256 AS dataSha256, error_text AS errorText, meta_json AS metaJson
-       FROM capture_events
-       WHERE session_id = ?
-       ORDER BY ts DESC, id DESC
-       LIMIT ?`,
-      )
-      // SAFETY: node:sqlite returns one object per projected capture_events row.
-      .all(sessionId, limit) as Array<Record<string, unknown>>
-  );
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DebugProxyCaptureDatabase>(db)
+      .selectFrom("capture_events")
+      .select([
+        "id",
+        "session_id as sessionId",
+        "ts",
+        "source_scope as sourceScope",
+        "source_process as sourceProcess",
+        "protocol",
+        "direction",
+        "kind",
+        "flow_id as flowId",
+        "method",
+        "host",
+        "path",
+        "status",
+        "close_code as closeCode",
+        "content_type as contentType",
+        "headers_json as headersJson",
+        "data_text as dataText",
+        "data_blob_id as dataBlobId",
+        "data_sha256 as dataSha256",
+        "error_text as errorText",
+        "meta_json as metaJson",
+      ])
+      .where("session_id", "=", sessionId)
+      .orderBy("ts", "desc")
+      .orderBy("id", "desc")
+      .limit(limit),
+  ).rows;
 }
 
-export function readDebugProxyCaptureBlob(db: DatabaseSync, blobId: string): string | null {
-  const row = db
-    .prepare(`SELECT encoding, data FROM capture_blobs WHERE blob_id = ?`)
-    // SAFETY: the query projects only the capture_blobs encoding and BLOB columns.
-    .get(blobId) as { data?: Uint8Array; encoding?: string } | undefined;
+export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string): string | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DebugProxyCaptureDatabase>(db)
+      .selectFrom("capture_blobs")
+      .select(["encoding", "data"])
+      .where("blob_id", "=", blobId),
+  );
   if (!row?.data) {
     return null;
   }

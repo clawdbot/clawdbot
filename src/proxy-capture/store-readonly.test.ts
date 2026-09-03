@@ -210,6 +210,119 @@ describe("createDebugProxyCaptureReader", () => {
     }
   });
 
+  it("projects exact camelCase keys with timestamp, id, and limit ordering", () => {
+    const env = makeStateEnv("openclaw-proxy-reader-ordering-");
+    const databasePath = createCaptureDatabase(env, 3);
+    const writer = new DatabaseSync(databasePath);
+    try {
+      const insert = writer.prepare(
+        `INSERT INTO capture_events (
+           id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
+           method, host, path, status, close_code, content_type, headers_json, data_text,
+           data_blob_id, data_sha256, error_text, meta_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run(
+        2,
+        "session-1",
+        5,
+        "openclaw",
+        "candidate",
+        "https",
+        "outbound",
+        "request",
+        "flow-2",
+        "POST",
+        "slack.com",
+        "/api/chat.postMessage",
+        200,
+        1000,
+        "application/json",
+        '{"authorization":"redacted"}',
+        '{"text":"older"}',
+        "blob-1",
+        "sha-2",
+        "error-2",
+        '{"attempt":2}',
+      );
+      insert.run(
+        3,
+        "session-1",
+        5,
+        "openclaw",
+        "candidate",
+        "https",
+        "inbound",
+        "response",
+        "flow-3",
+        "GET",
+        "slack.com",
+        "/api/conversations.history",
+        201,
+        1001,
+        "application/json",
+        '{"accept":"application/json"}',
+        '{"text":"newer"}',
+        "blob-1",
+        "sha-3",
+        "error-3",
+        '{"attempt":3}',
+      );
+      insert.run(
+        4,
+        "session-1",
+        6,
+        "openclaw",
+        "candidate",
+        "https",
+        "inbound",
+        "response",
+        "flow-4",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+    } finally {
+      writer.close();
+    }
+
+    const events = createDebugProxyCaptureReader({ env }).getSessionEvents("session-1", 2);
+
+    expect(events.map((event) => event.id)).toEqual([4, 3]);
+    expect(events[1]).toEqual({
+      id: 3,
+      sessionId: "session-1",
+      ts: 5,
+      sourceScope: "openclaw",
+      sourceProcess: "candidate",
+      protocol: "https",
+      direction: "inbound",
+      kind: "response",
+      flowId: "flow-3",
+      method: "GET",
+      host: "slack.com",
+      path: "/api/conversations.history",
+      status: 201,
+      closeCode: 1001,
+      contentType: "application/json",
+      headersJson: '{"accept":"application/json"}',
+      dataText: '{"text":"newer"}',
+      dataBlobId: "blob-1",
+      dataSha256: "sha-3",
+      errorText: "error-3",
+      metaJson: '{"attempt":3}',
+    });
+  });
+
   it("propagates newer schema errors", () => {
     const env = makeStateEnv("openclaw-proxy-reader-newer-");
     const databasePath = resolveOpenClawStateSqlitePath(env);
