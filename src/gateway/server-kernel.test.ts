@@ -145,7 +145,9 @@ describe("createGatewayKernel", () => {
     const token = "gateway-kernel-direct-close-readiness-token";
     const bootId = "gateway-kernel-direct-close";
     const configReloaderStop = createDeferred();
+    const updateCheckStopped = createDeferred();
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    let closing: Promise<void> | undefined;
     try {
       await state.writeConfig({
         gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
@@ -188,7 +190,10 @@ describe("createGatewayKernel", () => {
       vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
         configReloaderStop.promise,
       );
-      const closing = kernel.createCloseHandler()({ reason: "direct close readiness test" });
+      const stopUpdateCheck = vi
+        .spyOn(kernel.runtimeState, "stopGatewayUpdateCheck")
+        .mockReturnValue(updateCheckStopped.promise);
+      closing = kernel.createCloseHandler()({ reason: "direct close readiness test" });
 
       expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
@@ -197,15 +202,26 @@ describe("createGatewayKernel", () => {
         error: { code: "UNAVAILABLE" },
       });
       configReloaderStop.resolve();
+      await vi.waitFor(() => expect(stopUpdateCheck).toHaveBeenCalled());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closeFirstStop).not.toHaveBeenCalled();
+      updateCheckStopped.resolve();
       await closing;
       expect(closeFirstStop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {
       configReloaderStop.resolve();
+      updateCheckStopped.resolve();
       try {
-        await kernel?.closeOnStartupFailure();
+        await closing;
       } finally {
-        await state.cleanup();
+        try {
+          await kernel?.closeOnStartupFailure();
+        } finally {
+          await state.cleanup();
+        }
       }
     }
   });

@@ -22,6 +22,8 @@ export async function createNodeCarrier(root: string) {
     argv: ["node", "-e", "process.stdout.write('ready')"],
   });
   return {
+    home,
+    binding,
     workspace: initial.workspaceDir,
     async runWorkspaceCommand(
       command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
