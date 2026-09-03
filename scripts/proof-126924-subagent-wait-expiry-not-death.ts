@@ -115,6 +115,20 @@
  *                                 stop evidence: it must promote a row whose
  *                                 child session record is genuinely absent,
  *                                 rather than deferring cleanup forever.
+ * 11. Restart reconciliation   — the rows are reloaded from the real registry
+ *                                 store into a fresh map, exactly as a gateway
+ *                                 restart does, and handed to the production
+ *                                 `reconcileOrphanedRestoredRuns`. An
+ *                                 unconfirmed row with a genuinely absent child
+ *                                 session snapshot must survive; the same
+ *                                 reloaded row with an observed stop must still
+ *                                 be pruned.
+ * 12. Resume, then promotion   — the real exported `resumeSubagentRun` must not
+ *                                 delete that row either, and the child's own
+ *                                 terminal session record must then promote it
+ *                                 out of the provisional state. This is the
+ *                                 half that shows the retention was load-
+ *                                 bearing: a deleted row can never be promoted.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -133,6 +147,10 @@ type SessionReconciliationModule =
   typeof import("../src/agents/subagents/registry/subagent-session-reconciliation.js");
 type SubagentRegistryMemoryModule =
   typeof import("../src/agents/subagents/registry/subagent-registry-memory.js");
+type SubagentRegistryStateModule =
+  typeof import("../src/agents/subagents/registry/subagent-registry-state.js");
+type SubagentRegistryHelpersModule =
+  typeof import("../src/agents/subagents/registry/subagent-registry-helpers.js");
 type DetachedTaskRuntimeModule = typeof import("../src/tasks/detached-task-runtime.js");
 type SessionAccessorModule = typeof import("../src/config/sessions/session-accessor.js");
 type SwarmSchedulerModule = typeof import("../src/agents/subagents/swarm/swarm-scheduler.js");
@@ -243,6 +261,12 @@ try {
   // The live registry row map the sweeper itself reads. Used only to rewind the
   // two retention clocks described in the header; every decision under test is
   // still made by production code against `Date.now()`.
+  const registryState = (await importSource(
+    "src/agents/subagents/registry/subagent-registry-state.js",
+  )) as SubagentRegistryStateModule;
+  const registryHelpers = (await importSource(
+    "src/agents/subagents/registry/subagent-registry-helpers.js",
+  )) as SubagentRegistryHelpersModule;
   const memory = (await importSource(
     "src/agents/subagents/registry/subagent-registry-memory.js",
   )) as SubagentRegistryMemoryModule;
@@ -489,9 +513,9 @@ try {
       `the detached task must stay nonterminal on a deadline-only expiry (${runId} was ${String(taskStatus)})`,
     );
   }
-  log("[1/10] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
+  log("[1/12] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
   log(
-    "[1/10] detached tasks read back through the real task registry: status=running (nonterminal)",
+    "[1/12] detached tasks read back through the real task registry: status=running (nonterminal)",
   );
 
   for (const runId of [LIVE_RUN_ID, ABSENT_RUN_ID]) {
@@ -528,7 +552,7 @@ try {
     "no queued sibling may start beside a collector whose stop was never observed",
   );
   log(
-    "[7/10] swarm slot retention: collector expired child-unconfirmed, slot still held, queued sibling not started",
+    "[7/12] swarm slot retention: collector expired child-unconfirmed, slot still held, queued sibling not started",
   );
 
   // Now the collector's own record reports a stop. The promotion must release
@@ -552,7 +576,7 @@ try {
     "the observed stop must release the slot exactly once",
   );
   assert.equal(swarmScheduler.isSwarmRunActive(COLLECT_RUN_ID), false);
-  log("[7/10] observed collector stop released the slot; the queued sibling started");
+  log("[7/12] observed collector stop released the slot; the queued sibling started");
 
   // ---------------------------------------------------------------- scenario 2
   await sweep();
@@ -578,7 +602,7 @@ try {
     "the child's attachments must survive: a live child may still be writing there",
   );
   log(
-    `[2/10] continued liveness: run retained, child row still "running", attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[2/12] continued liveness: run retained, child row still "running", attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   // ---------------------------------------------------------------- scenario 3
@@ -606,7 +630,7 @@ try {
     "an absent session snapshot must not authorize removing the child's attachments",
   );
   log(
-    `[3/10] absent session snapshot: run retained across repeated sweeps, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[3/12] absent session snapshot: run retained across repeated sweeps, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   // ---------------------------------------------------------------- scenario 9
@@ -641,7 +665,7 @@ try {
     "running",
     "the contradiction under test requires the detached task to still be running here",
   );
-  log(`[9/10] subagents list: active row status="${listedLiveRun.status}", task still running`);
+  log(`[9/12] subagents list: active row status="${listedLiveRun.status}", task still running`);
 
   // ---------------------------------------------------------------- scenario 4
   // The live child's own record now says it finished successfully, at a moment
@@ -675,7 +699,7 @@ try {
     "succeeded",
     "the observed success must be publishable; a published timed_out would have blocked it",
   );
-  log("[4/10] later observed completion: detached task promoted running -> succeeded");
+  log("[4/12] later observed completion: detached task promoted running -> succeeded");
 
   // ---------------------------------------------------------------- scenario 8
   // The durable projection is the one that matters: this is the task a parent
@@ -704,7 +728,7 @@ try {
     PARTIAL_OUTPUT,
     "the registry row must not retain the pre-expiry capture after promotion",
   );
-  log("[8/10] result recapture: the succeeded task exposes the child's FINAL output");
+  log("[8/12] result recapture: the succeeded task exposes the child's FINAL output");
 
   // ---------------------------------------------------------------- scenario 5
   // Control. The same promotion from a published `timed_out` is refused, which
@@ -747,7 +771,7 @@ try {
     "timed_out",
     "a published timeout stays published forever",
   );
-  log("[5/10] control: timed_out -> succeeded rejected by the real task transition rules");
+  log("[5/12] control: timed_out -> succeeded rejected by the real task transition rules");
 
   // --------------------------------------------------------------- scenario 10
   // The kill run is still `child-unconfirmed` and its child session record was
@@ -805,7 +829,7 @@ try {
     15_000,
   );
   log(
-    `[10/10] cancellation recorded at the deadline (endedAt=${String(killEndedAt)} == deadline) promoted the row: endedReason=${String(promotedKillRun.endedReason)}, task=cancelled`,
+    `[10/12] cancellation recorded at the deadline (endedAt=${String(killEndedAt)} == deadline) promoted the row: endedReason=${String(promotedKillRun.endedReason)}, task=cancelled`,
   );
 
   // ---------------------------------------------------------------- scenario 6
@@ -850,7 +874,107 @@ try {
     "suspended-delivery expiry must not delete the child's session either",
   );
   log(
-    `[6/10] suspended-delivery expiry (${SUSPENDED_RETENTION_DAYS + 1}d old): delivery discarded, row retained, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[6/12] suspended-delivery expiry (${SUSPENDED_RETENTION_DAYS + 1}d old): delivery discarded, row retained, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+  );
+
+  // --------------------------------------------------------------- scenario 11
+  // Restart reconciliation. A gateway restart reloads the registry from its own
+  // store into a fresh map and then hands that map to
+  // `reconcileOrphanedRestoredRuns`. Both halves here are the production
+  // functions, and the rows come off the real SQLite registry store this proof
+  // has been writing all along — nothing about the map is synthesized.
+  const restoredRuns = new Map<string, ReturnType<typeof liveRow>>();
+  const restoredCount = registryState.restoreSubagentRunsFromDisk({ runs: restoredRuns });
+  assert.ok(
+    restoredCount > 0 && restoredRuns.has(ABSENT_RUN_ID),
+    "scenario 11 requires the unconfirmed row to have really been persisted and reloaded",
+  );
+  assert.equal(
+    restoredRuns.get(ABSENT_RUN_ID)?.execution.outcome?.timeoutDisposition,
+    "child-unconfirmed",
+    "scenario 11 requires the reloaded row to still be child-unconfirmed",
+  );
+  assert.equal(
+    readChildSessionRow(ABSENT_CHILD_SESSION_KEY),
+    undefined,
+    "scenario 11 requires the child session snapshot to still be genuinely absent",
+  );
+  registryHelpers.reconcileOrphanedRestoredRuns({
+    runs: restoredRuns,
+    resumedRuns: new Set<string>(),
+  });
+  assert.ok(
+    restoredRuns.has(ABSENT_RUN_ID),
+    "restart reconciliation must not delete an unconfirmed row on an absent session snapshot: the row is the only thing a later authoritative stop can promote",
+  );
+  assert.ok(
+    fs.existsSync(artifactFor(ABSENT_RUN_ID)),
+    "restart reconciliation must not remove a possibly-live child's attachments",
+  );
+  // Non-vacuity: the same absent snapshot still prunes a row whose child WAS
+  // observed to stop. Only the disposition differs, so the assertion above pins
+  // the provisional state rather than a blanket refusal to reconcile.
+  const observedStopControl = new Map<string, ReturnType<typeof liveRow>>();
+  registryState.restoreSubagentRunsFromDisk({ runs: observedStopControl });
+  const controlRow = observedStopControl.get(ABSENT_RUN_ID);
+  assert.ok(controlRow, "scenario 11's control needs the same reloaded row");
+  controlRow.execution.outcome = { status: "timeout", timeoutDisposition: "child-stopped" };
+  delete controlRow.delivery;
+  registryHelpers.reconcileOrphanedRestoredRuns({
+    runs: observedStopControl,
+    resumedRuns: new Set<string>(),
+  });
+  assert.equal(
+    observedStopControl.has(ABSENT_RUN_ID),
+    false,
+    "restart reconciliation must still prune an orphaned run whose child stop was observed, or scenario 11 proves nothing",
+  );
+  log(
+    `[11/12] restart reconciliation: ${restoredCount} row(s) reloaded from the real store, unconfirmed row retained, observed-stop control pruned`,
+  );
+
+  // --------------------------------------------------------------- scenario 12
+  // Resume takes the same shared owner through a different door, and this is the
+  // half that has to end in a real promotion: the row survives resume, then the
+  // child's own terminal session record lands and the production sweeper
+  // promotes the run out of the provisional state. A deleted row could not have
+  // received it.
+  registry.resumeSubagentRun(ABSENT_RUN_ID);
+  await sleep(250);
+  assert.ok(
+    memory.subagentRuns.get(ABSENT_RUN_ID),
+    "resume must not delete an unconfirmed row on an absent session snapshot",
+  );
+  assert.equal(
+    sessionDeleteCount(),
+    0,
+    "resume must not delete the child's session while its stop is unconfirmed",
+  );
+  const lateStopEndedAt = Date.now();
+  childTranscript.set(ABSENT_CHILD_SESSION_KEY, FINAL_OUTPUT);
+  await writeChildSessionRow(ABSENT_CHILD_SESSION_KEY, {
+    status: "done",
+    updatedAt: lateStopEndedAt,
+    startedAt: startedAtMs,
+    endedAt: lateStopEndedAt,
+  });
+  await sweep();
+  await waitFor(
+    "the late authoritative stop to promote the retained row",
+    () =>
+      memory.subagentRuns.get(ABSENT_RUN_ID)?.execution.outcome?.timeoutDisposition !==
+      "child-unconfirmed",
+    15_000,
+  );
+  const promotedAbsentRow = memory.subagentRuns.get(ABSENT_RUN_ID);
+  assert.ok(promotedAbsentRow, "the retained row must still exist to be promoted");
+  assert.notEqual(
+    promotedAbsentRow.execution.outcome?.timeoutDisposition,
+    "child-unconfirmed",
+    "the child's own terminal record must promote the retained row out of the provisional state",
+  );
+  log(
+    `[12/12] resume + later promotion: row retained through resume, then promoted by the child's own terminal record (outcome=${JSON.stringify(promotedAbsentRow.execution.outcome)})`,
   );
 
   log("");

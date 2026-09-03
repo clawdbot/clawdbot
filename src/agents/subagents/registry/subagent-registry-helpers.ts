@@ -250,6 +250,12 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 }
 
 function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  // Same fail-closed rule as the async remover, restated at the destructive
+  // call rather than trusted from the caller: attachment removal is the effect
+  // a later promotion can never undo.
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return;
+  }
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return;
   }
@@ -291,6 +297,26 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)) {
+    // Every orphan reason this function is called with is derived from the
+    // child's *best-effort* session entry, and the dominant one —
+    // `missing-session-entry` — also fires when that store is simply
+    // unreadable or already pruned. Deleting the row on that evidence is the
+    // one irreversible move in this lifecycle: the map entry is the only thing
+    // a later authoritative stop can promote, so removing it converts "we never
+    // observed the child stop" into "the child is gone" exactly where this
+    // branch says it must not. Restore, resume and the sweeper's stale-active
+    // path all funnel here, so the guard lives on the shared owner rather than
+    // at three call sites that would each have to remember it.
+    //
+    // Trade-off, stated where it is taken: a row whose child never produces
+    // stop evidence is now retained indefinitely, holding its registry row and
+    // any swarm slot. That is deliberate — the sweeper re-reads the child's own
+    // session entry on every pass (`settleSubagentRunFromSessionStore`) and
+    // promotes the row the moment that entry turns terminal — but it is an
+    // availability trade-off a maintainer may want bounded instead.
+    return false;
+  }
   if (hasRetainedRequiredCompletionDelivery(params.entry)) {
     return false;
   }

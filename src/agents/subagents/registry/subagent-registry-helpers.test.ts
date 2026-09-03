@@ -312,6 +312,46 @@ describe("reconcileOrphanedRestoredRuns", () => {
       expect(resumedRuns.has(entry.runId)).toBe(true);
     },
   );
+
+  // Regression: openclaw-kkv1 round 2. A restored `child-unconfirmed` row whose
+  // best-effort child session entry is absent produced `missing-session-entry`
+  // and was deleted here — the one move a later authoritative stop can never
+  // undo, since the map entry is what promotion needs to find.
+  it("keeps a restored unconfirmed child whose session entry is gone", () => {
+    const entry = createRunEntry({
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(resumedRuns.has(entry.runId)).toBe(true);
+  });
+
+  // Anti-vacuity control: the same absent session entry still prunes a run whose
+  // child WAS observed to stop, so the test above pins the disposition and not a
+  // blanket refusal to reconcile.
+  it("still prunes a restored run whose child stop was observed", () => {
+    const entry = createRunEntry({
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
 });
 
 describe("safeRemoveAttachmentsDir", () => {
@@ -520,6 +560,53 @@ describe("reconcileOrphanedRun", () => {
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
+  // Regression: openclaw-kkv1 round 2. Restore and resume share this owner, so
+  // both sources are pinned here, and the row must survive intact for the later
+  // authoritative stop to have something to promote.
+  it.each(["restore", "resume"] as const)(
+    "keeps an unconfirmed child on %s so a later observed stop can promote it",
+    (source) => {
+      const entry = createRunEntry({
+        execution: {
+          status: "terminal",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+        },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const resumedRuns = new Set([entry.runId]);
+
+      expect(
+        reconcileOrphanedRun({
+          runId: entry.runId,
+          entry,
+          reason: "missing-session-entry",
+          source,
+          runs,
+          resumedRuns,
+        }),
+      ).toBe(false);
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(resumedRuns.has(entry.runId)).toBe(true);
+
+      // The child's own terminal record finally lands; the row is still here to
+      // receive it, and only now may the ordinary owner retire the run.
+      entry.execution.outcome = { status: "timeout", timeoutDisposition: "child-stopped" };
+
+      expect(
+        reconcileOrphanedRun({
+          runId: entry.runId,
+          entry,
+          reason: "missing-session-entry",
+          source,
+          runs,
+          resumedRuns,
+        }),
+      ).toBe(true);
+      expect(runs.has(entry.runId)).toBe(false);
+    },
+  );
 });
 
 describe("logAnnounceGiveUp", () => {
