@@ -1,7 +1,10 @@
+import { existsSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "./resources.js";
@@ -20,6 +23,65 @@ function loadSnapshot(workspace: string) {
 }
 
 describe("prepared workspace skill resources", () => {
+  it.each(["AbortError", "TimeoutError"])(
+    "preserves the exact frozen %s after partial materialization and failed cleanup",
+    async (name) => {
+      const workspace = temps.make("skill-rollback-");
+      const directory = await writeSkill(workspace, "partial");
+      await fs.writeFile(path.join(directory, "reference.md"), "supporting resource");
+      const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
+      const stateDir = temps.make("skill-rollback-worker-");
+      const parent = path.join(stateDir, "skill-resources");
+      const primary = new Error("Prepared turn closed");
+      primary.name = name;
+      Object.freeze(primary);
+      const secret = "synthetic-cleanup-secret";
+      const deletionError = new Error(`EACCES: token=${secret} ${"🦞".repeat(2_000)}`);
+      const originalRm = fs.rm;
+      const rm = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+        if (String(target).startsWith(`${parent}${path.sep}`)) {
+          return Promise.reject(deletionError);
+        }
+        return originalRm(target, options);
+      });
+      const warn = vi.fn();
+      const previousConsole = loggingState.rawConsole;
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+      let retainedFile: string | undefined;
+      try {
+        const result = await materializeSkillResources(delivery!, stateDir, () => {
+          if (!existsSync(parent)) {
+            return;
+          }
+          const turn = readdirSync(parent)[0];
+          const candidate = turn && path.join(parent, turn, "0", "SKILL.md");
+          if (candidate && existsSync(candidate)) {
+            retainedFile = candidate;
+            throw primary;
+          }
+        }).catch((error: unknown) => error);
+        expect.soft(result).toBe(primary);
+        expect(retainedFile).toBeDefined();
+        expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
+        expect(existsSync(path.join(path.dirname(retainedFile!), "reference.md"))).toBe(false);
+        const warning = warn.mock.calls.flat().map(String).join("\n");
+        expect.soft(warning).toContain("Materialized skill cleanup failed");
+        expect.soft(warning).toContain(path.basename(path.dirname(path.dirname(retainedFile!))));
+        expect.soft(warning).toContain("EACCES");
+        expect.soft(warning).not.toContain(secret);
+        expect.soft(warning).not.toContain(markdown);
+        expect.soft(warning.length).toBeLessThanOrEqual(1_200);
+        expect.soft(Buffer.from(warning, "utf8").toString("utf8")).toBe(warning);
+      } finally {
+        rm.mockRestore();
+        loggingState.rawConsole = previousConsole;
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    },
+  );
+
   it.each(["same", "rehydrated"] as const)(
     "delivers current supporting bytes to a fresh worker with the %s catalog snapshot",
     async (reuse) => {

@@ -21,6 +21,7 @@ import {
   NodeClaudeSkillResultSchema,
   type NodeClaudeSkillInit,
 } from "../infra/node-claude-skill-protocol.js";
+import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
@@ -72,12 +73,8 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
     }
   };
   const cleanup = async () => {
-    try {
-      await artifacts?.cleanup();
-    } finally {
-      if (directory) {
-        await fs.rm(directory, { recursive: true, force: true });
-      }
+    if (directory) {
+      await removeTemporaryArtifacts(directory, "Node Claude skill session");
     }
   };
   try {

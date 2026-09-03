@@ -10,6 +10,7 @@ import {
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { ensureAbsoluteDirectory } from "../../infra/fs-safe.js";
+import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { prepareSkillBundle, readSkillBundleTree } from "../library/bundle.js";
 import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
@@ -146,7 +147,7 @@ export async function materializeSkillResources(
   }
   assertCurrent();
   const directory = await fs.mkdtemp(path.join(parent, "turn-"));
-  const cleanup = () => fs.rm(directory, { recursive: true, force: true });
+  const cleanup = () => removeTemporaryArtifacts(directory, "Materialized skill");
   try {
     const pathMappings: Array<[string, string]> = [];
     const resolvedSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];

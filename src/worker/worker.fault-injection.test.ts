@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
@@ -14,6 +17,12 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
+import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
+import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   WorkerAdmissionError,
   WorkerConnectionStoppedError,
@@ -82,6 +91,179 @@ describe("cloud worker milestone 2 fault injection", () => {
     }
     await harness.close();
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
+    ["success", "standalone", "completed", "stop"],
+    ["success", "managed", "completed", "stop"],
+    ["provider failure", "managed", "failed", "error"],
+    ["cancellation", "managed", "failed", "aborted"],
+  ] as const)(
+    "preserves %s through the %s command when materialized skill cleanup gets real EACCES",
+    async (outcome, mode, expectedStatus, stopReason) => {
+      const skillDir = path.join(harness.root, "skills", "cleanup");
+      await fs.mkdir(skillDir, { recursive: true });
+      const markdown = "---\nname: cleanup\ndescription: Cleanup proof\n---\n# Instructions\n";
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), markdown);
+      const descriptor = harness.createDescriptor();
+      descriptor.assignment.skillResources = await prepareSkillResourceDelivery(
+        buildSkillSnapshot(harness.root, {
+          entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
+        }),
+        () => {},
+      );
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      let environmentStateDir: string | undefined;
+      const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
+      const providerStarted = createDeferred();
+      harness.providerPlan = {
+        kind: "pending",
+        release: providerRelease,
+        started: providerStarted,
+      };
+      const finishingGate = harness.addLiveEventGate("after-service", "finishing");
+      const controller = new AbortController();
+      const warn = vi.fn();
+      const previousConsole = loggingState.rawConsole;
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+      const input = new PassThrough();
+      const output = new PassThrough();
+      let stdout = "";
+      output.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      const lifetime = {
+        signal: controller.signal,
+        started: Promise.resolve(true),
+        dispose: vi.fn(),
+        reportConnectionFailure: vi.fn(),
+        terminateOwnedTree: vi.fn(),
+      };
+      const managed = mode === "managed";
+      const command = runWorkerCommand({ input, output, managed, lifetime });
+      void command.catch(() => undefined);
+      if (managed) {
+        input.write(
+          `${JSON.stringify({ type: "turn", turnId: descriptor.assignment.turnId, descriptor })}\n`,
+        );
+      } else {
+        input.end(JSON.stringify(descriptor));
+      }
+      let protectedDirectory: string | undefined;
+      try {
+        await providerStarted.promise;
+        environmentStateDir = process.env.OPENCLAW_STATE_DIR;
+        expect(environmentStateDir).toBeDefined();
+        expect(environmentStateDir).not.toBe(previousStateDir);
+        const parent = path.join(environmentStateDir!, "skill-resources");
+        const turns = await fs.readdir(parent);
+        expect(turns).toHaveLength(1);
+        const turnDirectory = path.join(parent, turns[0]!);
+        protectedDirectory = path.join(turnDirectory, "0");
+        const retainedFile = path.join(protectedDirectory, "SKILL.md");
+        expect(await fs.readFile(retainedFile, "utf8")).toBe(markdown);
+        await fs.chmod(protectedDirectory, 0o500);
+        if (outcome === "cancellation") {
+          input.write(
+            `${JSON.stringify({ type: "cancel", turnId: descriptor.assignment.turnId })}\n`,
+          );
+        } else {
+          providerRelease.resolve(
+            outcome === "provider failure"
+              ? { type: "error", reason: "provider-error", message: "fixture provider failed" }
+              : doneOutcome("paid reply"),
+          );
+        }
+        await finishingGate.entered.promise;
+        if (outcome === "cancellation") {
+          expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
+        }
+        const finishing = harness
+          .requestParams("worker.live-event")
+          .map((params) => params as WorkerLiveEventParams)
+          .filter(({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing");
+        expect(finishing).toHaveLength(1);
+        expect(finishing[0]?.event).toMatchObject({
+          kind: "lifecycle",
+          payload: { phase: "finishing", stopReason },
+        });
+        const payload = finishing[0]!.event.payload;
+        if (outcome === "provider failure") {
+          expect(payload).toHaveProperty("error", "fixture provider failed");
+        } else {
+          expect(payload).not.toHaveProperty("error");
+        }
+        if (outcome === "cancellation") {
+          expect(payload).toHaveProperty("aborted", true);
+        }
+        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+          { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
+        ]);
+        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
+          finishing[0]!.seq,
+        );
+        finishingGate.release.resolve();
+        await expect.soft(command).resolves.toBeUndefined();
+        const settled: unknown = JSON.parse(stdout || "null");
+        const transcript = SessionManager.open(harness.sessionTarget);
+        const messages = transcript
+          .getEntries()
+          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+        expect(messages[1]).toMatchObject({ stopReason });
+        if (outcome === "success") {
+          expect(messages[1]).toMatchObject({ content: [{ type: "text", text: "paid reply" }] });
+        } else if (outcome === "provider failure") {
+          expect(messages[1]).toHaveProperty("errorMessage", "fixture provider failed");
+        }
+        const expectedResult = { status: expectedStatus, transcriptLeafId: transcript.getLeafId() };
+        expect.soft(settled).toMatchObject(
+          managed
+            ? {
+                type: "result",
+                turnId: descriptor.assignment.turnId,
+                retainWorker: false,
+                result: expectedResult,
+              }
+            : expectedResult,
+        );
+        expect(lifetime.dispose).toHaveBeenCalledOnce();
+        expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+        expect(harness.providerCalls).toBe(1);
+        expect(harness.requestParams("worker.inference.start")).toHaveLength(1);
+        expect(harness.requestParams("worker.live-event")).toHaveLength(finishing[0]!.seq);
+        expect(await fs.readFile(retainedFile, "utf8")).toBe(markdown);
+        const warning = warn.mock.calls.flat().map(String).join("\n");
+        expect.soft(warning).toContain("Materialized skill cleanup failed");
+        expect.soft(warning).toContain(turnDirectory);
+        expect.soft(warning).toContain("Worker environment cleanup failed");
+        expect.soft(warning).toContain(environmentStateDir);
+        expect.soft(warning).toContain("EACCES");
+        expect.soft(warning).not.toContain(markdown);
+      } finally {
+        providerRelease.resolve(doneOutcome("fixture teardown"));
+        finishingGate.release.resolve();
+        controller.abort(new Error("fixture teardown"));
+        input.end();
+        await Promise.allSettled([command]);
+        try {
+          // Keep deletion blocked until the command's enclosing teardown has settled.
+          if (protectedDirectory) {
+            await fs.chmod(protectedDirectory, 0o700);
+          }
+          if (environmentStateDir) {
+            await fs.rm(environmentStateDir, { recursive: true, force: true });
+          }
+        } finally {
+          output.destroy();
+          loggingState.rawConsole = previousConsole;
+          setLoggerOverride(null);
+          resetLogger();
+        }
+      }
+    },
+  );
 
   it("replays captured compaction exactly after worker commit and canonical reopen", async () => {
     await runWorkerProviderReplayRoundTrip({
