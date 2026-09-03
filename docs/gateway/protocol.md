@@ -1131,7 +1131,12 @@ return sanitized task summaries, not raw runtime state.
   - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
     `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
     optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
-    `500`, and optional string `cursor`.
+    `500`, optional string `cursor`, and optional `sortBy` (`"updatedAt"` or
+    `"endedAt"`). Ordering is descending; omitted `sortBy` uses last activity.
+    Use `"endedAt"` with terminal status filters when page membership must
+    reflect completion order. Legacy terminal rows without a stored `endedAt`
+    use their recorded terminal activity time, then creation time, as the
+    canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.

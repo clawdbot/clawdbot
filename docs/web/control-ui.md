@@ -467,6 +467,8 @@ This label does not change which request the approval buttons resolve.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
+      Resource meters show Gateway host load, memory, disk, and uptime from `system.info`, and node meters appear when the node reports `hostStats`. The connected page refreshes host stats every 60 seconds and alongside quiet node reloads; node stats also refresh on `node.hostStats` events. Capability chips explain each capability on hover. **Desktop** opens that machine in a standalone desktop window (the docked Desktop panel stays hidden on Settings routes) and appears only when the Gateway reports an available desktop environment. For a node, enable `desktop.host.enabled: true` in its config, add `desktop.stream` to `gateway.nodes.commands.allow`, and restart both the node and Gateway; the node then reconnects with a pending reapproval for the new command, which you approve inline or with `openclaw nodes approve <requestId>`. A dashed Desktop chip explains this setup when only the command is advertised.
+
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>
@@ -788,6 +790,17 @@ Chat error banners, including cloud runner failures, show short messages in full
 
   </Accordion>
 </AccordionGroup>
+
+### Markdown tables
+
+Markdown tables scroll horizontally within the conversation. **Copy table** copies
+tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+file and session links work in either view, including Enter and Space keyboard
+activation. Following a link closes the expanded view so you can use its destination.
+
+The **Ask OpenClaw** panel supports table scrolling, copying, expansion, and web
+links. Its session links open with a click or Enter. Space does not activate
+those links, and workspace-file references do not open a preview.
 
 ### Mermaid diagrams
 

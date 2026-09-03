@@ -7,6 +7,8 @@ export const en: TranslationMap & {
   configPage: TranslationMap;
   configView: TranslationMap;
   debug: TranslationMap & { overlay: TranslationMap };
+  // Lazy en-devices.ts assigns into this namespace.
+  devices: TranslationMap;
   updates: TranslationMap;
 } = {
   capacityMeter: {
@@ -680,6 +682,17 @@ export const en: TranslationMap & {
     },
     inventory: {
       title: "Paired devices",
+      connected: "connected",
+      desktop: "Desktop",
+      desktopOpenWindow: "Open this desktop in a new window",
+      desktopEnableHint:
+        "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart both. The node reconnects with a pending reapproval for desktop.stream; approve it here or with openclaw nodes approve.",
+      uptime: "up {time}",
+      loadLabel: "load {load}",
+      loadTitle: "Load averages (1 / 5 / 15 min): {averages} on {cores} cores",
+      memoryTitle: "Memory: {used} used / {total} total",
+      diskLabel: "{available} free",
+      diskTitle: "Disk: {available} available / {total} total",
       summaryConnected: "{connected} of {total} connected",
       summaryPending: "{count} awaiting approval",
       cleanupStale: "Clean up {count} stale",
@@ -753,6 +766,8 @@ export const en: TranslationMap & {
       requestedAccess: "requested: {access}",
       approvedAccess: "approved now: {access}",
     },
+    // Lazy: en-devices.ts registers this subtree when the Devices page renders chips.
+    capabilities: {},
     execApprovals: {
       title: "Exec approvals",
       subtitlePrefix: "Allowlist and approval policy for",

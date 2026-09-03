@@ -55,6 +55,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
@@ -4103,6 +4104,29 @@ describe("task-registry", () => {
     });
   });
 
+  it("records the transition time when a generic update becomes terminal", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        runId: "run-generic-terminal",
+        task: "Generic terminal transition",
+        status: "running",
+        deliveryStatus: "pending",
+        lastEventAt: 100,
+      });
+      updateTaskStateByRunId({ runId: "run-generic-terminal", endedAt: 150 });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(300);
+
+      updateTaskStateByRunId({ runId: "run-generic-terminal", status: "failed" });
+      nowSpy.mockRestore();
+
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "failed",
+        endedAt: 300,
+        lastEventAt: 300,
+      });
+    });
+  });
+
   it("normalizes restored task timestamps before exposing them", async () => {
     await withTaskRegistryTempDir(async () => {
       configureTaskRegistryRuntime({
@@ -4138,6 +4162,43 @@ describe("task-registry", () => {
         createdAt: 100,
         startedAt: 100,
         lastEventAt: 150,
+      });
+    });
+  });
+
+  it("materializes a restored legacy terminal timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-restored-terminal",
+                {
+                  taskId: "task-restored-terminal",
+                  runtime: "cli",
+                  requesterSessionKey: "agent:main:main",
+                  ownerKey: "agent:main:main",
+                  scopeKind: "session",
+                  runId: "run-restored-terminal",
+                  task: "Restored terminal task",
+                  status: "failed",
+                  deliveryStatus: "not_applicable",
+                  notifyPolicy: "done_only",
+                  createdAt: 100,
+                  lastEventAt: 250,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-restored-terminal"), {
+        endedAt: 250,
+        lastEventAt: 250,
       });
     });
   });
