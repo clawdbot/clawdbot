@@ -64,11 +64,12 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
   return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
 }
 
-/** Resolves one rendered choice or validates a custom-input transition. */
+/** Params for the overload that re-checks access before the resolve write. */
 export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
   authorize: QuestionResolutionAuthorizer;
 };
 
+/** Resolves one rendered choice or validates a custom-input transition. */
 // Only the authorized overload widens the result, so callers that never opt in
 // keep the result union they already exhaust.
 export async function resolveQuestionOverGateway(

@@ -19,6 +19,10 @@ import type { ReplyPayload } from "./runtime-api.js";
 import { registerPluginHttpRoute } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
+type MattermostInteractionDispatch = NonNullable<
+  Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
+>;
+
 /**
  * Answer an ask_user question from the button its own prompt offered.
  *
@@ -27,10 +31,6 @@ import { sendMessageMattermost } from "./send.js";
  * sends; that message would reach the agent as prose while the question stayed
  * open.
  */
-type MattermostInteractionDispatch = NonNullable<
-  Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
->;
-
 function createMattermostQuestionInteractionHandler(
   monitor: MattermostMonitorContext,
 ): MattermostInteractionDispatch {
