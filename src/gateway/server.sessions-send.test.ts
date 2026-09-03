@@ -23,6 +23,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -707,6 +708,10 @@ describe("sessions_send agent targeting", () => {
         });
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
+        // The announce/ping-pong flow is detached from the tool request and keeps
+        // running agent steps for agent:orion:main; drain it so the next row's
+        // mock calls are not polluted by this row's follow-ups.
+        await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS);
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
