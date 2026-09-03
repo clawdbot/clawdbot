@@ -271,6 +271,7 @@ jobs:
           UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
           ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          PACKAGE_PUBLISHED: ${{ inputs.release_package_spec != '' }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -290,6 +291,7 @@ jobs:
             --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \
             --argjson allowFrozenTargetScenarioOmissions "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
             --argjson allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --argjson packagePublished "$PACKAGE_PUBLISHED" \
             --arg sharedImagePolicy "no-push-artifact" \
             '$ARGS.named' > "$input"
           result="$(
@@ -1557,13 +1559,7 @@ jobs:
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
-          CANDIDATE_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          CANDIDATE_UPGRADE_SURVIVOR_BASELINE: openclaw@latest
-          CANDIDATE_UPGRADE_SURVIVOR_BASELINES: ""
-          CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS: ${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}
-          CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.target_context_ref != '' }}
-          CANDIDATE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
-          CANDIDATE_SHARED_IMAGE_POLICY: no-push-artifact
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
         run: |
@@ -1597,17 +1593,7 @@ jobs:
               --arg candidateRequired "$CANDIDATE_REQUIRED" \
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
-              --arg candidateRepository "$GITHUB_REPOSITORY" \
-              --arg candidateTargetSha "$TARGET_SHA" \
-              --arg candidateToolingSha "$GITHUB_SHA" \
-              --arg candidateReleaseProfile "$RELEASE_PROFILE" \
-              --argjson candidateReleaseSoak "$CANDIDATE_RELEASE_SOAK" \
-              --arg candidateUpgradeSurvivorBaseline "$CANDIDATE_UPGRADE_SURVIVOR_BASELINE" \
-              --arg candidateUpgradeSurvivorBaselines "$CANDIDATE_UPGRADE_SURVIVOR_BASELINES" \
-              --arg candidateUpgradeSurvivorScenarios "$CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS" \
-              --argjson candidateAllowFrozenTargetScenarioOmissions "$CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" \
-              --argjson candidateAllowUnreleasedChangelog "$CANDIDATE_ALLOW_UNRELEASED_CHANGELOG" \
-              --arg candidateSharedImagePolicy "$CANDIDATE_SHARED_IMAGE_POLICY" \
+              --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -1662,19 +1648,7 @@ jobs:
                 candidateRequired: $candidateRequired,
                 candidateAcquisitionResult: $candidateAcquisitionResult,
                 candidateEvidence: $candidateEvidence,
-                candidateRequestInput: {
-                  repository: $candidateRepository,
-                  targetSha: $candidateTargetSha,
-                  toolingSha: $candidateToolingSha,
-                  releaseProfile: $candidateReleaseProfile,
-                  releaseSoak: $candidateReleaseSoak,
-                  upgradeSurvivorBaseline: $candidateUpgradeSurvivorBaseline,
-                  upgradeSurvivorBaselines: $candidateUpgradeSurvivorBaselines,
-                  upgradeSurvivorScenarios: $candidateUpgradeSurvivorScenarios,
-                  allowFrozenTargetScenarioOmissions: $candidateAllowFrozenTargetScenarioOmissions,
-                  allowUnreleasedChangelog: $candidateAllowUnreleasedChangelog,
-                  sharedImagePolicy: $candidateSharedImagePolicy
-                },
+                candidateRequestInput: $candidateRequestInput,
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrereleaseIndependent: {result: $pluginPrereleaseIndependentResult, runId: $pluginPrereleaseIndependentRunId, runAttempt: $pluginPrereleaseIndependentRunAttempt, url: $pluginPrereleaseIndependentUrl},

@@ -687,8 +687,9 @@ function runReleaseChecksInputValidation(
   return { outputPath, result };
 }
 
-function releaseCandidateArtifactJson(selectedSha = "a".repeat(40)) {
+function releaseCandidateArtifactJson(selectedSha = "a".repeat(40), packagePublished = false) {
   return JSON.stringify({
+    packagePublished,
     packageArtifactName: "docker-e2e-package-123-1",
     packageArtifactId: "456",
     packageArtifactDigest: "b".repeat(64),
@@ -1200,6 +1201,7 @@ function packageAcceptanceRegistryTuple(overrides: Record<string, string> = {}) 
 }
 
 function runPackageAcceptanceResolveScript(params: {
+  candidateArtifactJson?: string;
   prepublishPluginRegistryJson?: string;
   source: "artifact" | "npm" | "ref" | "trusted-url" | "url";
   telegramMode: "mock-openai" | "none";
@@ -1249,6 +1251,9 @@ fi
       PACKAGE_VERSION: "2026.8.26",
       PATH: `${binDir}:${process.env.PATH}`,
       PREPUBLISH_PLUGIN_REGISTRY_JSON: params.prepublishPluginRegistryJson ?? "",
+      PUBLISHED_ARTIFACT: String(
+        JSON.parse(params.candidateArtifactJson ?? "{}").packagePublished === true,
+      ),
       SOURCE: params.source,
       TELEGRAM_MODE: params.telegramMode,
       TRUSTED_SOURCE_ID: "",
@@ -1256,6 +1261,70 @@ fi
   });
   const args = result.status === 0 ? readFileSync(capturePath, "utf8") : "";
   return { args, result };
+}
+
+function runPackageAcceptanceBaselineStep(params: {
+  candidateArtifactJson?: string;
+  candidateVersion: string;
+  fallbackBaseline?: string;
+  source: "artifact" | "npm" | "ref";
+  targetContextRef?: string;
+}) {
+  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
+  const script = workflowStep(job, "Resolve published upgrade survivor baselines").run;
+  if (!script) {
+    throw new Error("Expected package acceptance baseline script");
+  }
+  const executableScript = script.replace(
+    "node scripts/lib/release-upgrade-baseline.mjs",
+    `node ${JSON.stringify(resolve("scripts/lib/release-upgrade-baseline.mjs"))}`,
+  );
+  const workdir = tempDirs.make("package-acceptance-baseline-");
+  const binDir = resolve(workdir, "bin");
+  const outputPath = resolve(workdir, "github-output");
+  const npmLog = resolve(workdir, "npm.log");
+  mkdirSync(binDir, { recursive: true });
+  symlinkSync(resolve("node_modules"), resolve(workdir, "node_modules"), "dir");
+  symlinkSync(resolve("scripts"), resolve(workdir, "scripts"), "dir");
+  writeFileSync(
+    resolve(binDir, "npm"),
+    `#!/bin/sh
+printf '%s\n' "$*" >> "$NPM_LOG"
+if [ "$1 $2 $3" = "view openclaw versions" ]; then
+  printf '%s\n' '["2026.7.1","2026.7.1-2","2026.8.1","2026.9.1"]'
+elif [ "$1 $2" = "view openclaw@latest" ]; then
+  printf '%s\n' '2026.9.1'
+else
+  exit 64
+fi
+`,
+    { mode: 0o755 },
+  );
+  const result = spawnSync("bash", ["-c", executableScript], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      CANDIDATE_VERSION: params.candidateVersion,
+      CANDIDATE_PUBLISHED: String(
+        params.source === "npm" ||
+          JSON.parse(params.candidateArtifactJson ?? "{}").packagePublished === true,
+      ),
+      FALLBACK_BASELINE: params.fallbackBaseline ?? "openclaw@latest",
+      GH_TOKEN: "",
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      NPM_LOG: npmLog,
+      PATH: `${binDir}:${process.env.PATH}`,
+      REQUESTED_BASELINES: "",
+      RUNNER_TEMP: workdir,
+      TARGET_CONTEXT_REF: params.targetContextRef ?? "",
+    },
+  });
+  return {
+    npmCalls: existsSync(npmLog) ? readFileSync(npmLog, "utf8").trim().split("\n") : [],
+    output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
+    result,
+  };
 }
 
 function runNpmTelegramInputValidation(overrides: Record<string, string>) {
@@ -4833,6 +4902,39 @@ test "$package_manager" = "pnpm@12.1.0"
     });
     expect(telegramDisabled.result.status, telegramDisabled.result.stderr).toBe(0);
     expect(telegramDisabled.args).not.toContain("--plugin-registry-output-dir");
+
+    const publishedArtifact = runPackageAcceptanceResolveScript({
+      candidateArtifactJson: releaseCandidateArtifactJson("a".repeat(40), true),
+      source: "artifact",
+      telegramMode: "mock-openai",
+    });
+    expect(publishedArtifact.result.status, publishedArtifact.result.stderr).toBe(0);
+    expect(publishedArtifact.args).not.toContain("--plugin-registry-output-dir");
+  });
+
+  it("derives the default baseline from the resolved candidate, not a moving latest tag", () => {
+    const result = runPackageAcceptanceBaselineStep({
+      candidateVersion: "2026.8.1",
+      source: "npm",
+    });
+
+    expect(result.result.status, result.result.stderr).toBe(0);
+    expect(result.output).toContain("baseline=openclaw@2026.7.1-2\n");
+    expect(result.npmCalls).toHaveLength(1);
+    expect(result.npmCalls[0]).toContain("view openclaw versions");
+    expect(result.npmCalls[0]).not.toContain("openclaw@latest");
+  });
+
+  it("reuses a propagated artifact baseline without resolving npm metadata again", () => {
+    const result = runPackageAcceptanceBaselineStep({
+      candidateVersion: "2026.8.1",
+      fallbackBaseline: "openclaw@2026.7.1-2",
+      source: "artifact",
+    });
+
+    expect(result.result.status, result.result.stderr).toBe(0);
+    expect(result.output).toContain("baseline=openclaw@2026.7.1-2\n");
+    expect(result.npmCalls).toEqual([]);
   });
 
   it("reuses a supplied registry and keeps generated artifact names distinct from Docker", () => {
@@ -4970,10 +5072,10 @@ test "$package_manager" = "pnpm@12.1.0"
     );
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
+      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
     );
   });
 
@@ -5178,17 +5280,8 @@ test "$package_manager" = "pnpm@12.1.0"
     ]);
     expect(planStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
     expect(planStep.env).toMatchObject({
-      CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "${{ inputs.target_context_ref != '' }}",
-      CANDIDATE_ALLOW_UNRELEASED_CHANGELOG:
-        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
       CANDIDATE_EVIDENCE_JSON: "${{ needs.candidate_acquisition.outputs.binding_json }}",
-      CANDIDATE_RELEASE_SOAK:
-        "${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
-      CANDIDATE_SHARED_IMAGE_POLICY: "no-push-artifact",
-      CANDIDATE_UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
-      CANDIDATE_UPGRADE_SURVIVOR_BASELINES: "",
-      CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS:
-        "${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}",
+      CANDIDATE_REQUEST_JSON: "${{ needs.resolve_target.outputs.candidate_request_json }}",
       EVIDENCE_CHANGED_PATHS: "${{ needs.evidence_reuse.outputs.changed_paths || '[]' }}",
       EVIDENCE_RUN_ID: "${{ needs.evidence_reuse.outputs.evidence_run_id }}",
       TRUSTED_WORKFLOW_JSON: "${{ needs.resolve_target.outputs.trusted_workflow_json }}",
@@ -5199,7 +5292,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(planStep.run).toContain(
       '--argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}"',
     );
-    expect(planStep.run).toContain("candidateRequestInput: {");
+    expect(planStep.run).toContain('--argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON"');
+    expect(planStep.run).toContain("candidateRequestInput: $candidateRequestInput");
+    expect(planStep.run).not.toContain("candidateRequestInput: {");
     expect(planStep.run).toContain('--argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON"');
     expect(planCache.uses).toBe(ACTIONS_CACHE_V6);
     expect(planCache["continue-on-error"]).toBe(true);
@@ -5823,6 +5918,20 @@ describe("package artifact reuse", () => {
       CANDIDATE_REQUEST_JSON: "${{ needs.resolve_target.outputs.candidate_request_json }}",
       PREPARED_NPM_BUNDLE_JSON: "${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}",
     });
+    expect(
+      workflowStep(
+        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+        "Build canonical release candidate request",
+      ).env,
+    ).toMatchObject({
+      PACKAGE_PUBLISHED: "${{ inputs.release_package_spec != '' }}",
+    });
+    expect(
+      workflowStep(
+        workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+        "Build canonical release candidate request",
+      ).run,
+    ).toContain('--argjson packagePublished "$PACKAGE_PUBLISHED"');
     expect(workflowJob(FULL_RELEASE_ARTIFACTS_WORKFLOW, "candidate").uses).toBe(
       "./.github/workflows/full-release-candidate.yml",
     );
@@ -7540,6 +7649,27 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         releasePackageSpec: "openclaw@beta",
       },
     );
+    const missingProvenance = runReleaseChecksInputValidation("beta", "false", "all", "false", "", {
+      candidateArtifactJson: JSON.stringify({
+        ...JSON.parse(releaseCandidateArtifactJson()),
+        packagePublished: undefined,
+      }),
+      phase: "candidate",
+    });
+    const malformedProvenance = runReleaseChecksInputValidation(
+      "beta",
+      "false",
+      "all",
+      "false",
+      "",
+      {
+        candidateArtifactJson: releaseCandidateArtifactJson().replace(
+          '"packagePublished":false',
+          '"packagePublished":"false"',
+        ),
+        phase: "candidate",
+      },
+    );
 
     expect(missing.result.status).toBe(1);
     expect(missing.result.stderr).toContain(
@@ -7551,6 +7681,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(conflictingPublishedRelease.result.stderr).toContain(
       "candidate_artifact_json cannot be combined with release_package_spec.",
     );
+    expect(missingProvenance.result.status).not.toBe(0);
+    expect(malformedProvenance.result.status).not.toBe(0);
   });
 
   it("uses a candidate for release lanes with a separate Package Acceptance override", () => {
@@ -7574,6 +7706,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(output).toContain("cross_os_scheduled=true\n");
     expect(output).toContain("docker_required=true\n");
     expect(output).toContain("package_acceptance_scheduled=true\n");
+  });
+
+  it("preserves published provenance when an immutable candidate is reused", () => {
+    const { outputPath, result } = runReleaseChecksInputValidation(
+      "stable",
+      "false",
+      "all",
+      "false",
+      "",
+      {
+        candidateArtifactJson: releaseCandidateArtifactJson("a".repeat(40), true),
+        phase: "candidate",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const output = readFileSync(outputPath, "utf8");
+    expect(output).toContain("package_mode=artifact\n");
+    expect(output).toContain("candidate_published=true\n");
   });
 
   it.each([
@@ -7716,11 +7867,22 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
       "Summarize validated ref",
     );
+    const packageAcceptanceResolve = workflowStep(
+      workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"),
+      "Resolve package candidate",
+    );
+    const packageAcceptanceBaseline = workflowStep(
+      workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"),
+      "Resolve published upgrade survivor baselines",
+    );
     const dockerAcceptanceJob = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance");
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(packageAcceptanceWorkflow.on?.workflow_call?.inputs).toHaveProperty(
       "allow_frozen_target_scenario_omissions",
+    );
+    expect(packageAcceptanceWorkflow.on?.workflow_call?.inputs).not.toHaveProperty(
+      "published_artifact",
     );
     expect(packageAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
@@ -7732,18 +7894,29 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
       package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
       package_sha256:
-        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       prepublish_plugin_registry_json:
         "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}",
       suite_profile: "custom",
+      target_context_ref:
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && inputs.target_context_ref || '' }}",
       published_upgrade_survivor_baseline:
-        "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
+      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}",
     );
+    expect(packageAcceptanceResolve.env?.PUBLISHED_ARTIFACT).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}",
+    );
+    expect(packageAcceptanceBaseline.env).toMatchObject({
+      CANDIDATE_PUBLISHED:
+        "${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}",
+      CANDIDATE_VERSION: "${{ steps.resolve.outputs.package_version }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+    });
     expect(releaseChecksTargetSummary.env).toMatchObject({
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ steps.inputs.outputs.skip_package_telegram_e2e }}",
     });
@@ -7752,7 +7925,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       allow_frozen_target_scenario_omissions:
         "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
       enable_prepublish_plugin_registry:
-        '${{ contains(fromJSON(\'["artifact","ref"]\'), inputs.source) }}',
+        "${{ contains(fromJSON('[\"artifact\",\"ref\"]'), inputs.source) && fromJSON(inputs.candidate_artifact_json || '{}').packagePublished != true }}",
       prepublish_plugin_registry_manifest_sha256:
         "${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
@@ -7772,17 +7945,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
+      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
     );
     expect(workflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
     );
     expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+      "package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(String(packageAcceptanceJob.with?.docker_lanes ?? "").split(/\s+/u)).toEqual([
@@ -11460,6 +11633,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("executes shared release candidate identity validation with its JSON input", () => {
     const selectedSha = "a".repeat(40);
     const candidate = {
+      packagePublished: false,
       packageArtifactName: "docker-e2e-package-456-1",
       packageArtifactId: "123",
       packageArtifactDigest: "b".repeat(64),
@@ -11522,6 +11696,18 @@ esac
     });
     expect(valid.status, valid.stderr).toBe(0);
 
+    const { packagePublished: _packagePublished, ...missingProvenance } = candidate;
+    for (const invalid of [missingProvenance, { ...candidate, packagePublished: "false" }]) {
+      const rejected = spawnSync("bash", ["-c", validation ?? ""], {
+        encoding: "utf8",
+        env: {
+          ...validationEnv,
+          CANDIDATE_ARTIFACT_JSON: JSON.stringify(invalid),
+        },
+      });
+      expect(rejected.status).not.toBe(0);
+    }
+
     const registryCandidate = {
       ...candidate,
       prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-456-1",
@@ -11573,6 +11759,26 @@ esac
       },
     });
     expect(mismatched.status).not.toBe(0);
+  });
+
+  it("normalizes fresh and reused release package candidate identity", () => {
+    const output = workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package").outputs
+      ?.candidate_artifact_json;
+    expect(output).toContain("needs.resolve_target.outputs.candidate_artifact_json || format");
+    for (const field of [
+      "packagePublished",
+      "packageArtifactDigest",
+      "packageArtifactId",
+      "packageArtifactName",
+      "packageArtifactRunAttempt",
+      "packageArtifactRunId",
+      "packageFileName",
+      "packageSha256",
+      "packageSourceSha",
+      "packageVersion",
+    ]) {
+      expect(output).toContain(`"${field}"`);
+    }
   });
 
   it("keeps release history checks blobless", () => {

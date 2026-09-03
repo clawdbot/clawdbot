@@ -9,6 +9,7 @@ import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runt
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
+import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
 
 // Test-only roots share the invocation generation without changing package entries.
@@ -23,6 +24,7 @@ export const vitestWorkerBuildEntries = {
       ...Object.values(sessionTitleRetentionEntrypoints),
       sessionListCacheRetentionEntrypoint,
       nodeHostConfigRuntimeEntrypoint,
+      channelIngressGatewayRestartEntrypoint,
       persistenceRuntimeEntrypoint,
       qaGatewayCleanupRuntimeEntrypoint,
       stateLeaseProcessExitRuntimeEntrypoint,

@@ -6254,7 +6254,6 @@ export const en: TranslationMap & {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      nativeCodexModel: "Codex-controlled model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
