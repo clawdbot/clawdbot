@@ -410,9 +410,18 @@ export async function adjudicateUpdateGenerationTransaction(
         ? { action: "record-baseline-selected", reason: "baseline selector replacement completed" }
         : { action: "inconsistent", reason: "selected baseline generation is unavailable" };
     }
-    return selectionsEqual(physical.selector, state.intent.previousSelection)
+    return selectionsEqual(physical.selector, state.intent.previousSelection) &&
+      observedGenerationMatches(
+        physical,
+        latest.selection.generationId,
+        latest.selection.manifestSha256,
+        true,
+      )
       ? { action: "select-baseline", reason: "baseline selector replacement is pending" }
-      : { action: "inconsistent", reason: "selector matches neither baseline transition state" };
+      : {
+          action: "inconsistent",
+          reason: "baseline selection target is missing or not durably materialized",
+        };
   }
   if (latest.kind === "baseline-selected") {
     if (!selectionIsPhysicallyRunnable(physical, latest.selection)) {
@@ -474,7 +483,7 @@ export async function adjudicateUpdateGenerationTransaction(
     if (selectionsEqual(physical.selector, latest.from)) {
       return baselineIsPhysicallyRunnable(state, physical) &&
         physical.bindingConverged &&
-        observedGenerationMatches(physical, latest.to.generationId, latest.to.manifestSha256)
+        observedGenerationMatches(physical, latest.to.generationId, latest.to.manifestSha256, true)
         ? { action: "select-candidate", reason: "candidate selector replacement is pending" }
         : {
             action: "inconsistent",

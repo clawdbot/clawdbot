@@ -95,14 +95,25 @@ export async function persistUpdateGenerationReceipt(params: {
   const replay = snapshot?.record.receipts.find(
     (persisted) => persisted.receiptId === receipt.receiptId,
   );
-  if (replay) {
+  if (replay && snapshot) {
     if (!isDeepStrictEqual(replay, receipt)) {
       throw new Error("Update generation receipt id was replayed with different content");
     }
-    if (!snapshot) {
-      throw new Error("Update generation receipt replay is missing its ledger snapshot");
+    const authoritative = await params.ledger.read(snapshot.record.namespaceKey);
+    if (!authoritative || !authoritative.revision.trim()) {
+      throw new Error("Update generation receipt replay is missing from the authoritative ledger");
     }
-    return snapshot;
+    const authoritativeRecord = await authenticateUpdateGenerationTransactionRecord(
+      params.filesystem,
+      authoritative.record,
+    );
+    const authoritativeReceipt = authoritativeRecord.receipts.find(
+      (persisted) => persisted.receiptId === receipt.receiptId,
+    );
+    if (!authoritativeReceipt || !isDeepStrictEqual(authoritativeReceipt, receipt)) {
+      throw new Error("Authoritative update ledger replayed different receipt content");
+    }
+    return Object.freeze({ revision: authoritative.revision, record: authoritativeRecord });
   }
   let priorRecord: UpdateGenerationTransactionRecord | null = snapshot?.record ?? null;
   if (receipt.kind === "intent" && priorRecord) {

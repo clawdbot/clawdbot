@@ -337,6 +337,18 @@ describe("update generation ledger hook", () => {
       }),
     ).rejects.toThrow("replayed different receipt content");
 
+    const fabricatedRecord = appendUpdateGenerationReceipt(null, firstReceipt);
+    const emptyLedger = new MemoryLedger();
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger: emptyLedger,
+        snapshot: { revision: "fabricated", record: fabricatedRecord },
+        receipt: firstReceipt,
+      }),
+    ).rejects.toThrow("missing from the authoritative ledger");
+    await expect(emptyLedger.read(NAMESPACE_KEY)).resolves.toBeNull();
+
     const candidateIntent = receipt("generation-materialization-intent", 1, {
       role: "candidate",
       sourceArtifactId: "stage:candidate",

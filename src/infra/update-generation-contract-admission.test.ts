@@ -70,8 +70,8 @@ function intent(previous: UpdateGenerationSelection) {
   });
 }
 
-function candidateIntent(generationId = selection("b").generationId) {
-  return receipt("generation-materialization-intent", 1, {
+function candidateIntent(generationId = selection("b").generationId, sequence = 1) {
+  return receipt("generation-materialization-intent", sequence, {
     role: "candidate",
     sourceArtifactId: "stage:candidate",
     generationId,
@@ -115,5 +115,21 @@ describe("update generation durable admission", () => {
       appendUpdateGenerationReceipt(record, candidateIntent(previous.generationId)),
     ).toThrow("Candidate materialization requires a distinct retained generation");
     expect(() => appendUpdateGenerationReceipt(record, candidateIntent())).not.toThrow();
+  });
+
+  it("does not let ordinary progress supersede an unresolved failure", () => {
+    const record = appendUpdateGenerationReceipt(null, intent(selection("a")));
+    const failed = appendUpdateGenerationReceipt(
+      record,
+      receipt("failure", 1, {
+        operation: "materialize-generation",
+        reason: "broker outcome requires adjudication",
+        serviceRestored: true,
+      }),
+    );
+    expect(() => appendUpdateGenerationReceipt(failed, candidateIntent(undefined, 2))).toThrow(
+      "Unresolved update generation failure requires explicit adjudication",
+    );
+    expect(failed.receipts).toHaveLength(2);
   });
 });

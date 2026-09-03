@@ -259,12 +259,13 @@ function assertReceiptFollowsLatest(
     }
     return;
   }
-  if (
-    projection.latest.kind === "failure" &&
-    projection.latestTransition.kind === "candidate-selected" &&
-    receipt.kind !== "rollback-intent"
-  ) {
-    throw new Error("Candidate failure must proceed through rollback intent");
+  if (projection.latest.kind === "failure") {
+    if (
+      projection.latestTransition.kind !== "candidate-selected" ||
+      receipt.kind !== "rollback-intent"
+    ) {
+      throw new Error("Unresolved update generation failure requires explicit adjudication");
+    }
   }
   const latest = projection.latestTransition;
   const follows =

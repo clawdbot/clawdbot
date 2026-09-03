@@ -254,6 +254,25 @@ describe("update generation recovery transition matrix", () => {
     record = append(record, baselineIntent);
     await expectRecovery({
       record,
+      physical: physical({ selector: null, generations: [] }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: null,
+        generations: [previous],
+        parentDirectoryDurable: false,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({ selector: null, generations: [previous] }),
+      action: "select-baseline",
+    });
+    await expectRecovery({
+      record,
       physical: physical({
         selector: previous,
         selectorDurable: false,
@@ -319,6 +338,34 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateIntentSelection,
     });
     record = append(record, candidateIntentSelection);
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous],
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous, candidate],
+        parentDirectoryDurable: false,
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous, candidate],
+        bindingConverged: true,
+      }),
+      action: "select-candidate",
+    });
     await expectRecovery({
       record,
       physical: physical({
