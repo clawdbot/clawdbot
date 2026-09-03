@@ -7,6 +7,7 @@ import {
   portableRelativePath,
   publishArtifactFiles,
 } from "./build-artifact-cache.mts";
+import { sanitizeBundlerHelperDtsExports } from "./sanitize-bundler-helper-dts-exports.mts";
 
 function declarationReferences(file: string, contents: string) {
   const source = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest);
@@ -80,7 +81,13 @@ export async function publishStagedDeclarations(
     for (const file of files) {
       const relative = portableRelativePath(source.output, file);
       const target = path.join(staging, relative);
-      const bytes = fs.readFileSync(file);
+      const raw = fs.readFileSync(file);
+      // Strip undeclared bundler helpers (for example __exportAll) before the
+      // staged bytes become the published declaration identity.
+      const sanitizedText = relative.endsWith(".d.ts")
+        ? sanitizeBundlerHelperDtsExports(raw.toString("utf8")).sourceText
+        : raw.toString("utf8");
+      const bytes = Buffer.from(sanitizedText, "utf8");
       // Shared chunks may be identical across groups. A differing owner must
       // fail before publication; last-writer-wins can corrupt nominal identity.
       if (fs.existsSync(target)) {
@@ -98,6 +105,19 @@ export async function publishStagedDeclarations(
     [{ path: ".", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
     fs,
   ).map((file) => portableRelativePath(staging, file));
+  // Invocation-written stages never pass through the source-copy sanitizer above.
+  // Normalize every staged declaration before closure checks and publication.
+  for (const file of files) {
+    if (!file.endsWith(".d.ts") && !file.endsWith(".d.mts") && !file.endsWith(".d.cts")) {
+      continue;
+    }
+    const absolute = path.join(staging, file);
+    const current = fs.readFileSync(absolute, "utf8");
+    const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+    if (sanitized !== current) {
+      fs.writeFileSync(absolute, sanitized);
+    }
+  }
   const emitted = new Set(files);
   for (const entry of required) {
     if (!emitted.has(entry)) {

@@ -31,6 +31,31 @@ function fixture() {
 }
 
 describe("canonical declaration stage", () => {
+  it("strips undeclared __exportAll from staged declaration exports", async () => {
+    const { staging, dist, invocation } = fixture();
+    await publishStagedDeclarations(
+      {
+        env: process.env,
+        maxOldSpaceMb: 8192,
+        heapShortfall: null,
+        invocations: [
+          invocation({
+            "plugin-sdk/core.d.ts":
+              "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+          }),
+        ],
+      },
+      [],
+      staging,
+      dist,
+      ["plugin-sdk/core.d.ts"],
+      ["plugin-sdk/obsolete.d.ts"],
+    );
+    const published = fs.readFileSync(path.join(dist, "plugin-sdk/core.d.ts"), "utf8");
+    expect(published).toContain("keep as k");
+    expect(published).not.toContain("__exportAll");
+  });
+
   it("rejects absolute reference paths even when a staged relative namesake exists", async () => {
     const { staging, dist, invocation } = fixture();
     await expect(

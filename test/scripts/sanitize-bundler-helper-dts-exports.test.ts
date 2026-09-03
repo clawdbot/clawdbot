@@ -1,0 +1,59 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import {
+  findUndeclaredBundlerHelperDtsExports,
+  sanitizeBundlerHelperDtsExports,
+} from "../../scripts/lib/sanitize-bundler-helper-dts-exports.mts";
+
+const fixturePath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../fixtures/published-2026.8.2-undeclared-exportall.d.ts",
+);
+
+describe("sanitizeBundlerHelperDtsExports", () => {
+  it("flags and removes an undeclared __exportAll named export", () => {
+    const source = [
+      "export declare const keepMe: number;",
+      "export { keepMe as km, __exportAll as ud, alsoKeep as ak };",
+      "export declare const alsoKeep: string;",
+      "",
+    ].join("\n");
+
+    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([
+      { name: "__exportAll", line: 2 },
+    ]);
+
+    const sanitized = sanitizeBundlerHelperDtsExports(source);
+    expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 2 }]);
+    expect(sanitized.sourceText).toContain("keepMe as km");
+    expect(sanitized.sourceText).toContain("alsoKeep as ak");
+    expect(sanitized.sourceText).not.toContain("__exportAll");
+    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
+  });
+
+  it("keeps __exportAll when the declaration file declares it", () => {
+    const source = [
+      "declare function __exportAll(target: object, all: object): void;",
+      "export { __exportAll as ud };",
+      "",
+    ].join("\n");
+    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([]);
+    expect(sanitizeBundlerHelperDtsExports(source).sourceText).toBe(source);
+  });
+
+  it("clears the published 2026.8.2 undeclared __exportAll export shape", () => {
+    const source = readFileSync(fixturePath, "utf8");
+    expect(source).toContain("__exportAll as ud");
+    expect(findUndeclaredBundlerHelperDtsExports(source, fixturePath)).toEqual([
+      { name: "__exportAll", line: 5 },
+    ]);
+    const sanitized = sanitizeBundlerHelperDtsExports(source);
+    expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 5 }]);
+    expect(sanitized.sourceText).toContain("SessionDiscussionProvider as uc");
+    expect(sanitized.sourceText).toContain("DispatchReplyWithDispatcher as ui");
+    expect(sanitized.sourceText).not.toContain("__exportAll");
+    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText, fixturePath)).toEqual([]);
+  });
+});
