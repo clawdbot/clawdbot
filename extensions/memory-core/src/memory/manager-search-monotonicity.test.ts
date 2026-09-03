@@ -97,4 +97,57 @@ describe("memory search result monotonicity", () => {
       }
     },
   );
+
+  it.each([
+    { name: "an ordinary search", activeProjectKeys: undefined, files: 40 },
+    { name: "a project-aware search", activeProjectKeys: ["pool-project"], files: 80 },
+  ])(
+    "keeps the top hit stable when $name requests more results than the default",
+    async ({ activeProjectKeys, files }) => {
+      // The contract is prefix-monotonic across every count, not only below the
+      // configured default: growing the request may append rows, never reorder them.
+      await seedGradedCorpus(files);
+      const manager = await getFreshManager(hybridConfig());
+      try {
+        await manager.sync({ reason: "test" });
+        const wide = await manager.search("alpha", {
+          maxResults: 20,
+          minScore: 0,
+          activeProjectKeys,
+        });
+        const narrow = await manager.search("alpha", {
+          maxResults: 6,
+          minScore: 0,
+          activeProjectKeys,
+        });
+        expect(wide[0]).toBeDefined();
+        expect(narrow[0]).toBeDefined();
+        expect(narrow[0]?.path).toBe(wide[0]?.path);
+        expect(narrow[0]?.score).toBeCloseTo(wide[0]?.score ?? 0, 10);
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
+
+  it("retrieves one candidate width above the configured default", async () => {
+    await seedGradedCorpus(40);
+    const manager = await getFreshManager(hybridConfig());
+    try {
+      await manager.sync({ reason: "test" });
+      const knnLimits: number[] = [];
+      const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+      vi.spyOn(knnSubprocess, "runVectorKnnInSubprocess").mockImplementation(async (params) => {
+        knnLimits.push(params.request.limit);
+        return await runKnn(params);
+      });
+      for (const maxResults of [6, 10, 20]) {
+        await manager.search("alpha", { maxResults, minScore: 0 });
+      }
+      expect(new Set(knnLimits).size).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      await manager.close?.();
+    }
+  });
 });
