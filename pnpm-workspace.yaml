@@ -106,7 +106,7 @@ overrides:
   "@hono/node-server": 1.19.14
   axios: 1.20.0
   brace-expansion: 5.0.9
-  fast-uri: 3.1.5
+  fast-uri: 3.1.6
   follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.7.0
