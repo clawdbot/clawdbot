@@ -1,3 +1,4 @@
+import { renameSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -120,6 +121,31 @@ describe("portable complete skill revision identity", () => {
       });
     },
   );
+  it("classifies a root removed after traversal with root path diagnostics", async () => {
+    const parent = await fs.realpath(tempDirs.make("skill-post-walk-root-"));
+    const directory = path.join(parent, "skill");
+    const moved = path.join(parent, "moved");
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "SKILL.md"), markdown.content);
+    let removed = false;
+
+    await expect(
+      readSkillBundleTree(directory, () => {
+        if (!removed) {
+          renameSync(directory, moved);
+          removed = true;
+        }
+        return true;
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_BUNDLE",
+      message: expect.stringMatching(/root=.*skill.*path=.*skill.*not-found/s),
+      rootPath: directory,
+      failedPath: directory,
+      cause: { code: "not-found" },
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "keeps unreadable nested directories fail-closed with path diagnostics",
     async () => {

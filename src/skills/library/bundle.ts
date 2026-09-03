@@ -380,7 +380,9 @@ export async function readSkillBundleTree(
     const failed = walked.failedDirs[0]!;
     throw new SkillTreeDirectoryError(directory, failed.path, failed.error);
   }
-  const safeRoot = await root(directory);
+  const safeRoot = await root(directory).catch((error: unknown) => {
+    throw new SkillTreeDirectoryError(directory, directory, error);
+  });
   const files: SkillLibraryFile[] = [];
   let total = 0;
   for (const entry of walked.entries) {
