@@ -8,11 +8,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import {
-  captureAuthenticatedNodePairingState,
-  type NodePairingGeneration,
-  type NodePairingIdentity,
-} from "../../../infra/device-pairing-node-state.js";
+import { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -52,8 +48,10 @@ import { truncateCloseReason } from "../close-reason.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
+  rejectGatewayConnectOrigin,
   rejectUnavailableProfileConnect,
   resolveEffectiveConnectionScopes,
+  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
@@ -71,10 +69,10 @@ import { prepareGatewayReceiverHandoff } from "./request-start.js";
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
-type AuthenticatedNodePairingAdmission = {
+type AuthenticatedNodePairingAdmission = NonNullable<
+  Awaited<ReturnType<typeof captureAuthenticatedNodePairingState>>
+> & {
   authenticated: { nodeId: string; publicKey: string; token: string };
-  identity: NodePairingIdentity;
-  generation?: NodePairingGeneration;
 };
 
 function isReleasedVersion(version: string): boolean {
@@ -92,7 +90,6 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
-    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -170,9 +167,8 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
     nodePairingAdmission = {
+      ...admittedPairingState,
       authenticated: authenticatedNodePairing,
-      identity: admittedPairingState.identity,
-      ...(admittedPairingState.generation ? { generation: admittedPairingState.generation } : {}),
     };
   }
 
@@ -431,6 +427,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
+    ...(context.browserOrigin ? { browserOrigin: context.browserOrigin } : {}),
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
@@ -529,16 +526,15 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
-  // Authentication may finish before pairing/profile work does. Revalidate at
-  // the registration boundary so a credential rotation cannot miss this client.
-  if (
-    sessionUsesSharedGatewayAuth &&
-    getRequiredSharedGatewaySessionGeneration &&
-    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
-  ) {
-    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+  const policyFailure = resolveGatewayConnectPolicyFailure(context, state);
+  if (policyFailure) {
     await releasePendingNodePairingCleanup();
-    close(4001, "gateway auth changed");
+    if (policyFailure.kind === "auth") {
+      setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+      close(4001, "gateway auth changed");
+    } else {
+      rejectGatewayConnectOrigin(context, policyFailure.reason);
+    }
     return;
   }
   const handoffReceiver = prepareGatewayReceiverHandoff(socket, role);
@@ -624,6 +620,7 @@ export async function attachAuthenticatedGatewayConnect(
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
       pairingIdentity: admittedNodePairing.identity.key,
+      approvedSurface: admittedNodePairing.approvedSurface,
       ...(pairingGeneration ? { pairingGeneration } : {}),
     });
     recordRemoteNodeInfo({

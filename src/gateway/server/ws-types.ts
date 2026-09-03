@@ -6,6 +6,7 @@ import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
+import type { GatewayWsBrowserOrigin } from "./ws-origin-policy.js";
 
 export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
 export const GATEWAY_WS_PREAUTH_BUDGET_PROPERTY = "__openclawPreauthBudget";
@@ -48,6 +49,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     updatedAt: number;
   };
   clientIp?: string;
+  /** Server-attested inputs for rechecking browser-origin policy after config publication. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
