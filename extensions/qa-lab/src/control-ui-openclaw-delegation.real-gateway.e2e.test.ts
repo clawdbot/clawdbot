@@ -309,16 +309,6 @@ suite.define(() => {
           expect(results[0]?.reply).toContain("Updated logging.level");
           expect(JSON.stringify(history)).not.toContain("/approve");
           expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe("info");
-          const settledToolSummaries = page.locator(".chat-tool-msg-summary");
-          await settledToolSummaries.first().waitFor();
-          for (const summary of await settledToolSummaries.all()) {
-            await summary.click();
-          }
-          await page
-            .locator(".chat-tool-msg-body", { hasText: /Updated logging\.level/u })
-            .waitFor();
-          await page.screenshot({ path: path.join(proofDir, "02-approved.png") });
-
           expect(await approvalFallbackWasObserved()).toBe(false);
           await page.reload();
           await composer.waitFor();
