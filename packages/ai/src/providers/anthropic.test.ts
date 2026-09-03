@@ -1232,6 +1232,67 @@ describe("Anthropic provider", () => {
     });
   });
 
+  it("preserves completed Fable output when Anthropic reaches its context window", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_context_limit",
+          model: "claude-fable-5",
+          usage: { input_tokens: 199_997, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "This answer reached the context window." },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: {
+          container: null,
+          stop_details: null,
+          stop_reason: "model_context_window_exceeded",
+          stop_sequence: null,
+        },
+        usage: {
+          input_tokens: 199_997,
+          output_tokens: 3,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+          output_tokens_details: null,
+          server_tool_use: null,
+        },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "Finish the answer.", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+    expect(result.stopReason).toBe("length");
+    expect(result.content).toEqual([
+      { type: "text", text: "This answer reached the context window." },
+    ]);
+    expect(result.usage).toMatchObject({ input: 199_997, output: 3 });
+    expect(result.errorMessage).toBeUndefined();
+  });
+
   it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],

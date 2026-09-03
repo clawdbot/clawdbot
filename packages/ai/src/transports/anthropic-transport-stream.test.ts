@@ -1652,6 +1652,72 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
+  it("preserves completed Fable output when Anthropic reaches its context window", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_context_limit",
+            model: "claude-fable-5",
+            usage: { input_tokens: 199_997, output_tokens: 0 },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "This answer reached the context window." },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: {
+            container: null,
+            stop_details: null,
+            stop_reason: "model_context_window_exceeded",
+            stop_sequence: null,
+          },
+          usage: {
+            input_tokens: 199_997,
+            output_tokens: 3,
+            cache_creation_input_tokens: null,
+            cache_read_input_tokens: null,
+            output_tokens_details: null,
+            server_tool_use: null,
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+        { messages: [{ role: "user", content: "Finish the answer." }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+    expect(result.stopReason).toBe("length");
+    expect(result.content).toEqual([
+      { type: "text", text: "This answer reached the context window." },
+    ]);
+    expect(result.usage).toMatchObject({ input: 199_997, output: 3 });
+    expect(result.errorMessage).toBeUndefined();
+  });
+
   it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic"],
     ["claude-opus-5", "Claude Opus 5", "anthropic"],
