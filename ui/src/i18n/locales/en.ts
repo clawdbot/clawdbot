@@ -3306,6 +3306,7 @@ export const en: TranslationMap & {
   },
   presence: {
     rosterTitle: "Online",
+    idle: "Idle",
     card: {
       details: "Details for {name}",
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",

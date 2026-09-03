@@ -140,6 +140,30 @@ suite.define(() => {
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
       await captureSessionOwnerProof(suite, page, "person-grouping-live-presence.png");
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
+      const adaHeader = adaSection.locator(".sidebar-recent-sessions__head");
+      await adaHeader.hover();
+      await captureSessionOwnerProof(suite, page, "person-grouping-header-hover.png");
+      await page.mouse.move(0, 0);
+      await captureSessionOwnerProof(suite, page, "person-grouping-owner-online.png");
+
+      const textColor = await page.locator(".sidebar-sessions").evaluate((sidebar) => {
+        const probe = document.createElement("span");
+        probe.style.color = getComputedStyle(sidebar).getPropertyValue("--text");
+        sidebar.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await adaHeader.hover();
+      await expectBrowser
+        .poll(() =>
+          adaHeader
+            .locator(".sidebar-recent-sessions__label-text")
+            .evaluate((label) => getComputedStyle(label).color),
+        )
+        .toBe(textColor);
+      await expectBrowser(adaSection.locator(".sidebar-session-group-presence")).toHaveCount(1);
+      await expectBrowser(bobSection.locator(".sidebar-session-group-presence")).toHaveCount(0);
     } finally {
       await context.close();
     }

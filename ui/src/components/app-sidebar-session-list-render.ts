@@ -3,7 +3,9 @@ import { repeat } from "lit/directives/repeat.js";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { isPresenceViewerIdle, projectPresenceViewers } from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
@@ -55,11 +57,19 @@ type SessionCatalogRenderSnapshot = {
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
+  personPresence: ReadonlyMap<string, "active" | "idle"> | undefined;
 }) {
-  const { host, section } = params;
+  const { host, section, personPresence } = params;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
   const personOwner = section.personOwner;
+  const presence =
+    personOwner?.identity?.type === "profile"
+      ? personPresence?.get(personOwner.identity.id)
+      : undefined;
+  const presenceLabel = presence
+    ? t(presence === "idle" ? "presence.idle" : "presence.rosterTitle")
+    : undefined;
   // Pinned rows render in the nav zone; renderHeader records whether this list
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
@@ -161,18 +171,31 @@ function renderSessionSection(params: {
                   >
                 </span>
                 ${personOwner
-                  ? html`<openclaw-viewer-avatar
-                      .identity=${personOwner.identity}
-                      .user=${{
-                        id: personOwner.id,
-                        name: personOwner.label,
-                        avatarUrl: personOwner.avatarUrl,
-                        watchedSessions: [],
-                      }}
-                      .markAsViewer=${false}
-                      variant="session"
-                      aria-hidden="true"
-                    ></openclaw-viewer-avatar>`
+                  ? html`<span
+                      class="sidebar-session-group-toggle__person"
+                      title=${presenceLabel ?? nothing}
+                      ><openclaw-viewer-avatar
+                        .identity=${personOwner.identity}
+                        .user=${{
+                          id: personOwner.id,
+                          name: personOwner.label,
+                          avatarUrl: personOwner.avatarUrl,
+                          watchedSessions: [],
+                        }}
+                        .markAsViewer=${false}
+                        variant="session"
+                        aria-hidden="true"
+                      ></openclaw-viewer-avatar>
+                      ${presence
+                        ? html`<span
+                            class="sidebar-session-group-presence ${presence === "idle"
+                              ? "sidebar-session-group-presence--idle"
+                              : ""}"
+                            role="img"
+                            aria-label=${presenceLabel}
+                          ></span>`
+                        : nothing}
+                    </span>`
                   : nothing}
                 <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
                 ${collapsed && totalRowCount > 0
@@ -408,6 +431,25 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  let personPresence: ReadonlyMap<string, "active" | "idle"> | undefined;
+  if (host.sessionsGrouping === "person") {
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+      presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+      presenceInstanceId: host.sessionData.presenceInstanceId,
+    });
+    const presence = new Map<string, "active" | "idle">();
+    for (const user of projectPresenceViewers(
+      host.sessionData.presencePayload,
+      selfUser,
+      host.sessionData.presenceInstanceId,
+    )) {
+      if (user.identity?.type === "profile") {
+        presence.set(user.identity.id, isPresenceViewerIdle(user) ? "idle" : "active");
+      }
+    }
+    personPresence = presence;
+  }
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
@@ -431,7 +473,7 @@ function renderSessionListBody(params: {
           if (section.totalRowCount === 0) {
             return nothing;
           }
-          return renderSessionSection({ host, section });
+          return renderSessionSection({ host, section, personPresence });
         }
         // Empty Other remains useful only as a collaborator or drag destination.
         if (
@@ -444,7 +486,7 @@ function renderSessionListBody(params: {
         ) {
           return nothing;
         }
-        return renderSessionSection({ host, section });
+        return renderSessionSection({ host, section, personPresence });
       },
     )}
   `;

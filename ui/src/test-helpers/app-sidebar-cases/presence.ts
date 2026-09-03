@@ -7,11 +7,72 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { selectSessionMenuValue } from "./session-ownership.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar viewer presence", () => {
+  it("shows person header presence as online, idle, then absent while excluding self", async () => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gateway = createGatewayHarness(client);
+    const owners = ["self", "ada", "bob"].map((name) => ({
+      type: "human" as const,
+      id: `profile-${name}`,
+      identity: { type: "profile" as const, id: `profile-${name}` },
+      label: name,
+    }));
+    const sessions = createSessionsHarness(
+      "main",
+      owners.map((owner) => `agent:main:${owner.id}`),
+    );
+    const result = sessions.sessions.state.result!;
+    result.owners = owners;
+    result.sessions.forEach((row, index) => {
+      row.owner = { actor: owners[index]! };
+    });
+    sessions.publishList({ result });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.connected = true;
+    await selectSessionMenuValue(sidebar, "grouping:person");
+    const section = (id: string) =>
+      sidebar.querySelector(`[data-session-section="person:profile:profile-${id}"]`)!;
+    for (const id of ["self", "ada", "bob"]) {
+      expect(section(id)).not.toBeNull();
+    }
+    const self = {
+      instanceId: client.instanceId,
+      user: { id: "profile-self", identity: owners[0]!.identity, name: "Self" },
+      lastInputSeconds: 0,
+    };
+    const ada = {
+      instanceId: "ada-instance",
+      user: { id: "profile-ada", identity: owners[1]!.identity, name: "Ada" },
+      lastInputSeconds: 5,
+    };
+    gateway.publishEvent("presence", { presence: [self, ada] });
+    await sidebar.updateComplete;
+    const dot = () => section("ada").querySelector(".sidebar-session-group-presence");
+    expect(dot()?.getAttribute("aria-label")).toBe("Online");
+    expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(false);
+    expect(section("bob").querySelector(".sidebar-session-group-presence")).toBeNull();
+    expect(section("self").querySelector(".sidebar-session-group-presence")).toBeNull();
+
+    gateway.publishEvent("presence", {
+      presence: [self, { ...ada, lastInputSeconds: 600 }],
+    });
+    await sidebar.updateComplete;
+    expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(true);
+    expect(dot()?.getAttribute("aria-label")).toBe("Idle");
+
+    gateway.publishEvent("presence", { presence: [self, { ...ada, reason: "disconnect" }] });
+    await sidebar.updateComplete;
+    expect(dot()).toBeNull();
+    expect(
+      section("ada").querySelector(".sidebar-session-group-toggle__person")?.hasAttribute("title"),
+    ).toBe(false);
+  });
+
   it("shows only other online identities with active-first ordering and idle dimming", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
