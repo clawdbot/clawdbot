@@ -300,7 +300,7 @@ function createPluginUserInputHandler(params: {
           })),
           intro: request.intro?.trim() || "Agent needs input:",
         }),
-        sessionKey: run.runtimePolicySessionKey ?? run.sessionKey ?? run.sessionId,
+        sessionKey: run.sessionKey ?? run.sessionId,
         agentId: run.agentId,
         runId: run.runId,
         timeoutMs: run.timeoutMs,

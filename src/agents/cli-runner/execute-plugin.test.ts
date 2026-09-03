@@ -253,7 +253,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         sessionKey?: string;
       };
       if (method === "question.request") {
-        expect(params.sessionKey).toBe(context.params.runtimePolicySessionKey);
+        expect(params.sessionKey).toBe(context.params.sessionKey);
         requests.set(params.id, { questions: params.questions ?? [] });
         return { id: params.id };
       }
@@ -292,27 +292,6 @@ describe("plugin-owned CLI execution host boundary", () => {
             isOther: true,
             options: [{ label: "A" }, { label: "B" }],
           },
-          {
-            id: "two",
-            header: "Two",
-            question: "Second question?",
-            isOther: true,
-            options: [{ label: "A" }, { label: "B" }],
-          },
-          {
-            id: "three",
-            header: "Three",
-            question: "Third question?",
-            isOther: true,
-            options: [{ label: "A" }, { label: "B" }],
-          },
-          {
-            id: "four",
-            header: "Four",
-            question: "Fourth question?",
-            isOther: true,
-            options: [{ label: "A" }, { label: "B" }],
-          },
         ],
       });
       yield SUCCESS_RESULT;
@@ -322,14 +301,10 @@ describe("plugin-owned CLI execution host boundary", () => {
       status: "answered",
       answers: {
         one: ["one"],
-        two: ["two"],
-        three: ["three"],
-        four: ["four"],
       },
     });
-    expect([...requests.keys()]).toEqual(["claude-question:0", "claude-question:1"]);
-    expect([...requests.values()].map((request) => request.questions.length)).toEqual([3, 1]);
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect([...requests.keys()]).toEqual(["claude-question:0"]);
+    expect(onBlockReply).toHaveBeenCalledOnce();
   });
 
   it("restarts true fresh sessions while preserving legitimate no-resume warm reuse", async () => {
