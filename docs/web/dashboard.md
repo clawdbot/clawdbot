@@ -93,7 +93,7 @@ When the Control UI is served behind a reverse proxy or tunnel, Apps/Widgets may
 
 ### What the sandbox listener is
 
-When `mcp.apps.enabled` is true, OpenClaw starts a second HTTP(S) listener on the Gateway port plus one (default: `18790`). This listener serves only a static, contentless shim at `/mcp-app-sandbox`. It never serves the Control UI, authenticated Gateway routes, or user data.
+OpenClaw starts a second HTTP(S) listener on the Gateway port plus one (default: `18790`) when an admitted HTML widget needs sandbox isolation. This listener serves only a static, contentless shim at `/mcp-app-sandbox`. It never serves the Control UI, authenticated Gateway routes, or user data. `mcp.apps.enabled` is not required for dashboard widgets.
 
 Configure the port with `mcp.apps.sandboxPort`.
 
@@ -109,13 +109,14 @@ If you expose the Control UI through a tunnel (e.g., Cloudflare Tunnel), add a s
 {
   mcp: {
     apps: {
-      enabled: true,
       sandboxOrigin: "https://mcp-apps.example.com",
       sandboxPort: 18790,
     },
   },
 }
 ```
+
+> `mcp.apps.enabled` is only required for MCP Apps. Dashboard widgets can use the sandbox listener with just `sandboxOrigin` and `sandboxPort`.
 
 Then configure your tunnel/proxy to route `https://mcp-apps.example.com` to `127.0.0.1:18790`.
 
