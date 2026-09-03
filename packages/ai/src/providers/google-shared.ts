@@ -13,6 +13,11 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
+import {
+  createRequestImageHistoryProjector,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -211,12 +216,16 @@ export function convertMessages<T extends GoogleApiType>(
           if (item.type === "text") {
             return { text: sanitizeSurrogates(item.text) || " " };
           }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
+          return withRequestImageHistory(
+            {
+              inlineData: {
+                mimeType: item.mimeType,
+                data: item.data,
+              },
             },
-          };
+            readRuntimeImageHistory(item),
+            "google",
+          );
         });
         if (parts.length === 0) {
           parts.push({ text: " " });
@@ -442,11 +451,15 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
+    const imageHistory = createRequestImageHistoryProjector(requestParams, "google");
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
-    const googleStream = await client.models.generateContentStream(requestParams);
+    requestParams = imageHistory.bind(requestParams);
+    const googleStream = await client.models.generateContentStream(
+      imageHistory.project(requestParams),
+    );
     const googleIterator = googleStream[Symbol.asyncIterator]();
     await notifyProviderStreamOpened({
       options,

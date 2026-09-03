@@ -1,6 +1,12 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
+import { prepareEmbeddedAttemptPromptExecution } from "../../agents/embedded-agent-runner/run/prompt-image-preparation.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -9,11 +15,18 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
+import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { readPersistedMediaImageLayout } from "../../sessions/user-turn-transcript.metadata.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
+import type { RuntimeMsgContext } from "../templating.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
+import type { CurrentTurnImages } from "./current-turn-images.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
@@ -28,6 +41,7 @@ import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
+import type { InternalFollowupRun } from "./queue.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   createReplyOperation,
@@ -1860,13 +1874,8 @@ describe("runPreparedReply media-only handling", () => {
       },
     });
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
-    expect(
-      (
-        call.followupRun as typeof call.followupRun & {
-          currentTurnImagesPrepared?: true;
-        }
-      ).currentTurnImagesPrepared,
-    ).toBe(true);
+    const preparedRun: InternalFollowupRun = call.followupRun;
+    expect(preparedRun.currentTurnImagesPrepared).toBe(true);
     expect(resolveCurrentTurnImagesMock).toHaveBeenCalledWith({
       ctx: expect.objectContaining({
         media: [{ path: imagePath, workspaceDir: "/tmp" }],
@@ -2221,13 +2230,8 @@ describe("runPreparedReply media-only handling", () => {
         mimeType: "image/png",
       },
     ]);
-    expect(
-      (
-        call.followupRun as typeof call.followupRun & {
-          mediaImageLayout?: { slots: Array<{ kind: string; factIndex?: number }> };
-        }
-      ).mediaImageLayout,
-    ).toEqual({ slots: [{ kind: "inline", factIndex: 0 }] });
+    const preparedRun: InternalFollowupRun = call.followupRun;
+    expect(preparedRun.mediaImageLayout).toEqual({ slots: [{ kind: "inline", factIndex: 0 }] });
     expect(
       (
         call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
@@ -2236,6 +2240,159 @@ describe("runPreparedReply media-only handling", () => {
       mediaImageLayout: { slots: [{ kind: "inline", factIndex: 1 }] },
     });
   });
+
+  it.each(["ctx", "opts"] as const)(
+    "keeps unbound history separate from one current managed image across prompt projection (%s)",
+    async (mediaOwner) => {
+      await withTestDir({ prefix: "openclaw-prompt-media-history-" }, async (base) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: base }, async () => {
+          const inboundDir = path.join(base, "media", "inbound");
+          const workspaceDir = path.join(base, "workspace");
+          await Promise.all([
+            fs.mkdir(inboundDir, { recursive: true }),
+            fs.mkdir(workspaceDir, { recursive: true }),
+          ]);
+          const historyBytes = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+            "base64",
+          );
+          const currentBytes = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+            "base64",
+          );
+          const historyPath = path.join(inboundDir, "history.png");
+          await Promise.all([
+            fs.writeFile(historyPath, historyBytes),
+            fs.writeFile(path.join(inboundDir, "current.png"), currentBytes),
+          ]);
+          const imageHash = (image: { data: string }) =>
+            createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex");
+          const expectedHashes = [historyBytes, currentBytes].map((bytes) =>
+            createHash("sha256").update(bytes).digest("hex"),
+          );
+          expect(new Set(expectedHashes).size).toBe(2);
+          const now = 1_800_000_000_000;
+          const body = "Compare the retained photo with this current photo.";
+          const currentMedia = [{ url: "media://inbound/current.png", contentType: "image/png" }];
+          const ctx: RuntimeMsgContext = {
+            ...createInboundTurn(body, "webchat", "direct"),
+            OriginatingChannel: "webchat",
+            OriginatingTo: "webchat:local",
+            Timestamp: now,
+            ...(mediaOwner === "ctx" ? { media: currentMedia } : {}),
+            InboundHistory: [
+              {
+                sender: "Ada",
+                body: "A retained photo.",
+                timestamp: now - 1_000,
+                messageId: "history-image",
+                media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+              },
+            ],
+          };
+          const currentTurnOwner = await vi.importActual<typeof import("./current-turn-images.js")>(
+            "./current-turn-images.js",
+          );
+          let resolvedCurrent: CurrentTurnImages | undefined;
+          resolveCurrentTurnImagesMock.mockImplementationOnce(
+            async (params: Parameters<typeof currentTurnOwner.resolveCurrentTurnImages>[0]) => {
+              resolvedCurrent = await currentTurnOwner.resolveCurrentTurnImages(params);
+              return resolvedCurrent;
+            },
+          );
+          const result = await runPrepared({
+            ctx,
+            sessionCtx: { ...ctx, BodyStripped: body },
+            cfg: { agents: { defaults: { workspace: workspaceDir } } },
+            workspaceDir,
+            agentDir: path.join(base, "agent"),
+            isNewSession: false,
+            ...(mediaOwner === "opts" ? { opts: { media: currentMedia } } : {}),
+          });
+          expect(result).toEqual({ text: "ok" });
+          expect(runReplyAgent).toHaveBeenCalledOnce();
+          expect(resolveCurrentTurnImagesMock).toHaveBeenCalledOnce();
+          const current = expectDefined<CurrentTurnImages>(resolvedCurrent, "real image admission");
+          expect(current.images?.map(imageHash)).toEqual([expectedHashes[0]]);
+          expect(current.imageSourceIndexes).toEqual([-1]);
+          expect(readRuntimeImageHistory(current.images?.[0])).toBeDefined();
+          expect(current.imageOrder).toEqual(["inline"]);
+          expect(current.unresolvedSourceIndexes ?? []).toEqual([]);
+          const run: InternalFollowupRun = requireRunReplyAgentCall().followupRun;
+          expect(run.images?.map(imageHash)).toEqual([expectedHashes[0]]);
+          expect(run.media).toHaveLength(1);
+          expect(run.media?.[0]).toMatchObject({
+            url: "media://inbound/current.png",
+            contentType: "image/png",
+          });
+          expect(run.prompt).toContain(body);
+          const recorder = expectDefined(run.userTurnTranscriptRecorder, "actual turn recorder");
+          const message = expectDefined(await recorder.resolveMessage(), "actual turn message");
+          const persistedLayout = readPersistedMediaImageLayout(message);
+          expect(readPersistedMediaFacts(message)).toMatchObject(currentMedia);
+          expect(persistedLayout).toEqual({
+            slots: [{ kind: "offloaded", factIndex: 0 }],
+            suppressedFactIndexes: [],
+          });
+          const localRoots = getDefaultMediaLocalRoots();
+          expect(localRoots).toContain(path.join(base, "media"));
+          const input = {
+            prompt: run.prompt,
+            media: run.media,
+            existingImages: run.images,
+            imageOrder: run.imageOrder,
+            mediaImageLayout: run.mediaImageLayout,
+            model: { input: ["text", "image"] },
+            workspaceDir,
+            localRoots,
+            workspaceOnly: true,
+          };
+          const expected = {
+            imageHashes: expectedHashes,
+            imageFactIndexes: [null, 0],
+            loadedCount: 1,
+            failedMediaCount: 0,
+            skippedCount: 0,
+          };
+          const prompt = await detectAndLoadPromptImages(input);
+          expect(prompt.failedMediaCount).toBe(0);
+          expect(prompt.skippedCount).toBe(0);
+          expect({
+            imageHashes: prompt.images.map(imageHash),
+            imageFactIndexes: prompt.imageFactIndexes,
+            loadedCount: prompt.loadedCount,
+            failedMediaCount: prompt.failedMediaCount,
+            skippedCount: prompt.skippedCount,
+          }).toEqual(expected);
+          const persisted = await prepareEmbeddedAttemptPromptExecution({
+            attempt: {
+              config: { agents: { defaults: { workspace: workspaceDir } } },
+              model: { input: ["text", "image"] },
+              images: run.images,
+              imageOrder: run.imageOrder,
+              media: run.media,
+              userTurnTranscriptRecorder: recorder,
+            },
+            mediaOwnerAgentId: "default",
+            effectiveFsWorkspaceOnly: false,
+            effectiveWorkspace: workspaceDir,
+            prompt: run.prompt,
+            skipPromptSubmission: false,
+          });
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(persisted.failedMediaCount).toBe(0);
+          expect(persisted.skippedCount).toBe(0);
+          expect({
+            imageHashes: persisted.images.map(imageHash),
+            imageFactIndexes: persisted.imageFactIndexes,
+            loadedCount: persisted.loadedCount,
+            failedMediaCount: persisted.failedMediaCount,
+            skippedCount: persisted.skippedCount,
+          }).toEqual(expected);
+        });
+      });
+    },
+  );
 
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPrepared({

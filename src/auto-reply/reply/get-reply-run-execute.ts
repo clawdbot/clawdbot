@@ -238,13 +238,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageOrder: currentTurnImages.imageOrder,
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
   });
-  const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) => {
-    if (sourceIndex === undefined) {
-      return undefined;
-    }
-    const promptIndex = inboundMediaIndexes.indexOf(sourceIndex);
-    return promptIndex >= 0 ? promptIndex : undefined;
-  });
+  // Keep indexOf's -1 for sources outside the projection so positional inference
+  // cannot bind them to a different attachment.
+  const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) =>
+    sourceIndex === undefined ? undefined : inboundMediaIndexes.indexOf(sourceIndex),
+  );
   const promptMediaImageLayout = buildPersistedMediaImageLayout({
     ctx: {},
     media: promptMediaForRun,

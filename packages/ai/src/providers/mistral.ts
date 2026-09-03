@@ -1,4 +1,3 @@
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { randomUUID } from "node:crypto";
 import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
@@ -9,8 +8,14 @@ import type {
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import {
+  createRequestImageHistoryProjector,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
@@ -177,10 +182,13 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       );
 
       let payload = buildChatPayload(model, context, transformedMessages, options);
+      const imageHistory = createRequestImageHistoryProjector(payload, "mistral");
       const nextPayload = await options?.onPayload?.(payload, model);
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
+      payload = imageHistory.bind(payload);
+      payload = imageHistory.project(payload);
       const headers = { ...model.headers, ...options?.headers };
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
@@ -873,7 +881,14 @@ function toChatMessages(
           if (item.type === "text") {
             return { type: "text", text: sanitizeSurrogates(item.text) };
           }
-          return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+          return withRequestImageHistory(
+            {
+              type: "image_url",
+              imageUrl: `data:${item.mimeType};base64,${item.data}`,
+            } satisfies ContentChunk,
+            readRuntimeImageHistory(item),
+            "mistral",
+          );
         });
       if (content.length > 0) {
         result.push({ role: "user", content });

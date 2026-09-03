@@ -70,6 +70,8 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       createInput({ skipPromptSubmission: true }),
     );
     first.images.push({ type: "image", data: "mutated", mimeType: "image/png" });
+    first.imageFactIndexes.push(null);
+    first.mediaImageLayout.slots = [{ kind: "inline" }];
     const second = await prepareEmbeddedAttemptPromptExecution(
       createInput({ skipPromptSubmission: true }),
     );
@@ -77,6 +79,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     expect(second).toEqual({
       images: [],
       imageFactIndexes: [],
+      mediaImageLayout: { slots: [] },
       detectedRefs: [],
       failedMediaCount: 0,
       loadedCount: 0,

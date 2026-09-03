@@ -1,3 +1,4 @@
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionAssistantMessageParam,
@@ -7,6 +8,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { withRequestImageHistory } from "./internal/request-image-history.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
 import type { ProviderMessage } from "./provider-types.js";
 import {
@@ -133,10 +135,14 @@ export function convertMessages(
                 video_url: { url: `data:${item.mimeType};base64,${item.data}` },
               } satisfies ChatCompletionContentPartVideo;
             }
-            return {
-              type: "image_url",
-              image_url: { url: `data:${item.mimeType};base64,${item.data}` },
-            } satisfies ChatCompletionContentPartImage;
+            return withRequestImageHistory(
+              {
+                type: "image_url",
+                image_url: { url: `data:${item.mimeType};base64,${item.data}` },
+              } satisfies ChatCompletionContentPartImage,
+              readRuntimeImageHistory(item),
+              "chat",
+            );
           });
         if (content.length === 0) {
           continue;

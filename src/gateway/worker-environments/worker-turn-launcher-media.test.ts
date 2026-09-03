@@ -252,6 +252,57 @@ describe("cloud turn media boundary", () => {
     expect(rig.tunnel.syncWorkspace).not.toHaveBeenCalled();
   });
 
+  it("keeps transient image order beside recorded current facts while staging a worker turn", async () => {
+    seedActivePlacement();
+    const rig = harness();
+    const historyBytes = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const currentBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const history = {
+      type: "image" as const,
+      data: historyBytes.toString("base64"),
+      mimeType: "image/png",
+    };
+    const saved = await saveMediaBuffer(currentBytes, "image/png", "inbound");
+    const media = [{ url: `media://inbound/${saved.id}`, contentType: "image/png" }];
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...sessionTarget, sessionEntry: undefined },
+      input: {
+        text: "compare retained and current",
+        media,
+        mediaImageLayout: { slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    await rig.execute({
+      ...turn("transient-recorded-images"),
+      prompt: "compare retained and current",
+      images: [history],
+      imageOrder: ["inline", "offloaded"],
+      userTurnTranscriptRecorder: recorder,
+    });
+    const prompt = rig.launches[0]?.assignment.prompt;
+    if (!Array.isArray(prompt)) {
+      throw new Error("Expected prepared multimodal worker input");
+    }
+    expect(prompt.filter((part) => part.type === "image").map((part) => part.data)).toEqual([
+      history.data,
+      currentBytes.toString("base64"),
+    ]);
+    expect(rig.inputFiles().size).toBe(2);
+    expect([...rig.inputFiles().values()]).toEqual(
+      expect.arrayContaining([historyBytes, currentBytes]),
+    );
+    const users = openSessionManager()
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
+      );
+    expect(users).toHaveLength(1);
+    expect(readPersistedMediaFacts(users[0]!)).toMatchObject(media);
+    expect(JSON.stringify(users)).not.toContain("/worker/workspace");
+    expect(rig.runLocal).not.toHaveBeenCalled();
+    expect(rig.tunnel.syncWorkspace).not.toHaveBeenCalled();
+  });
+
   it("restores ordered mixed input without a recorder", async () => {
     seedActivePlacement();
     const rig = harness();

@@ -1,4 +1,5 @@
 import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import { readRuntimeImageHistory, withRuntimeImageHistory } from "@openclaw/media-core";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { getAiTransportHost } from "../host.js";
 
@@ -57,7 +58,13 @@ export async function normalizeAnthropicInlineContent(
       throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
     }
     budget.totalBytes += outputBytes;
-    normalized.push(...normalizedBlocks);
+    for (const normalizedBlock of normalizedBlocks) {
+      normalized.push(
+        normalizedBlock.type === "image"
+          ? withRuntimeImageHistory(normalizedBlock, readRuntimeImageHistory(block))
+          : normalizedBlock,
+      );
+    }
   }
   return normalized;
 }

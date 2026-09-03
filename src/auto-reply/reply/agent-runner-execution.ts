@@ -73,7 +73,7 @@ import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
-import type { FollowupRun } from "./queue.js";
+import type { FollowupRun, InternalFollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -82,12 +82,6 @@ import {
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
-};
 
 function resolveRunStartupPhase(
   phase: EmbeddedAgentExecutionPhase,

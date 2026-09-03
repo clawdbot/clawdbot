@@ -103,7 +103,7 @@ describe("openai transport stream", () => {
           requestTimeoutMs: 900_000,
         } satisfies Model & { requestTimeoutMs: number };
 
-        const stream = await transport.createStream()(
+        const stream = transport.createStream()(
           model,
           {
             messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
@@ -168,7 +168,7 @@ describe("openai transport stream", () => {
         maxTokens: 4_096,
       } satisfies Model<"openai-responses">;
 
-      const stream = await createOpenAIResponsesTransportStreamFn()(
+      const stream = createOpenAIResponsesTransportStreamFn()(
         model,
         {
           messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],

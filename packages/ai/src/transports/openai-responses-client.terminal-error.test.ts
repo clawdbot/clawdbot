@@ -66,15 +66,11 @@ describe("managed Responses transport terminal errors", () => {
       })(),
       response: new Response(null, { status: 200 }),
     });
-    const stream = await createOpenAIResponsesTransportStreamFn()(
-      model,
-      { messages: [], tools: [] },
-      {
-        apiKey: "test-key",
-        sessionId: "session-terminal-error",
-        transport: "sse",
-      } as never,
-    );
+    const stream = createOpenAIResponsesTransportStreamFn()(model, { messages: [], tools: [] }, {
+      apiKey: "test-key",
+      sessionId: "session-terminal-error",
+      transport: "sse",
+    } as never);
     const result = await stream.result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");

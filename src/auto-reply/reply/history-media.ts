@@ -8,7 +8,7 @@ import type { MsgContext } from "../templating.js";
 import type { HistoryEntry } from "./history.types.js";
 
 const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
-const RECENT_HISTORY_IMAGE_LIMIT = 4;
+export const RECENT_HISTORY_IMAGE_LIMIT = 4;
 
 export type RecentInboundHistoryImage = {
   path: string;
@@ -115,6 +115,12 @@ function formatRecentHistoryImageSentAt(sentAtMs: number): string {
   return Number.isFinite(date.getTime()) ? date.toISOString() : `${sentAtMs}ms since epoch`;
 }
 
+export function formatRecentHistoryImageSource(image: RecentInboundHistoryImage): string {
+  const message = image.messageId ? `, message ${image.messageId}` : "";
+  const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
+  return `from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history`;
+}
+
 export function appendRecentHistoryImageContext(params: {
   promptText: string;
   images: RecentInboundHistoryImage[];
@@ -122,11 +128,10 @@ export function appendRecentHistoryImageContext(params: {
   if (params.images.length === 0) {
     return params.promptText;
   }
-  const notes = params.images.map((image, index) => {
-    const message = image.messageId ? `, message ${image.messageId}` : "";
-    const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
-    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history, attached as media.]`;
-  });
+  const notes = params.images.map(
+    (image, index) =>
+      `[Recent image ${index + 1} ${formatRecentHistoryImageSource(image)}, attached as media.]`,
+  );
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");

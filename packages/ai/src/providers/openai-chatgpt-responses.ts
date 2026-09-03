@@ -11,6 +11,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import {
@@ -284,11 +285,13 @@ export const streamOpenAICodexResponses: StreamFunction<
       const accountId = extractOpenAICodexAccountId(apiKey);
       const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
         let body = buildRequestBody(model, context, options, replayMode);
+        const imageHistory = createRequestImageHistoryProjector(body, "responses");
         const nextBody = await options?.onPayload?.(body, model);
         if (nextBody !== undefined) {
           body = nextBody as RequestBody;
         }
-        return body;
+        body = imageHistory.bind(body);
+        return imageHistory.project(body);
       };
       let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
         kind: "initial",

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import {
+  type MediaImageLayout,
+  resolveMediaImageLayout,
+} from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
@@ -12,6 +16,7 @@ import {
 } from "../../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { normalizeMediaFacts, readPersistedMediaFacts } from "../../../media/media-facts.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -20,10 +25,10 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
+import { readPersistedMediaImageLayout } from "../../../sessions/user-turn-transcript.metadata.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -37,6 +42,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import { RECENT_HISTORY_IMAGE_LIMIT } from "../history-media.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
@@ -46,17 +52,16 @@ import {
   isFollowupRunDeferredError,
   retireFollowupRunCancellation,
   type FollowupRun,
+  type InternalFollowupRun,
 } from "./types.js";
 
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  /** Admission-owned layout; fact indexes are relative to this run's media array. */
-  mediaImageLayout?: MediaImageLayout;
-};
+type FollowupPromptMedia = Pick<
+  InternalFollowupRun,
+  "images" | "imageOrder" | "media" | "currentTurnImagesPrepared" | "mediaImageLayout"
+>;
 
-function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
+function hasPreparedCurrentTurnImages(run: FollowupPromptMedia): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -459,53 +464,79 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
 }
 
-function collectQueuedPromptMedia(
-  items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
-  const images: NonNullable<FollowupRun["images"]> = [];
-  const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+function collectQueuedPromptMedia(items: readonly FollowupPromptMedia[]): FollowupPromptMedia {
+  const entries: Array<{
+    image?: NonNullable<FollowupRun["images"]>[number];
+    slot: MediaImageLayout["slots"][number];
+  }> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
-  const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
-    if (item.images) {
-      images.push(...item.images);
-    }
-    if (item.imageOrder) {
-      imageOrder.push(...item.imageOrder);
-    }
-    if (currentTurnImagesPrepared) {
-      const itemSlots: MediaImageLayout["slots"] =
-        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
-      mediaImageSlots.push(
-        ...itemSlots.map((slot) =>
+    media.push(...(item.media ?? []));
+    // Resolve each source before flattening; matching aggregate counts can bind
+    // an unowned inline image to another turn's offloaded attachment.
+    const layout = resolveMediaImageLayout({
+      media: normalizeMediaFacts(item.media),
+      imageOrder: item.imageOrder,
+      mediaImageLayout: item.mediaImageLayout,
+      inlineImageCount: item.images?.length ?? 0,
+    });
+    // Suppression belongs to the admitted media facts, even when every retained
+    // image from this item is already present in the collected batch.
+    suppressedFactIndexes.push(
+      ...(layout.suppressedFactIndexes ?? []).map((factIndex) => factIndex + mediaOffset),
+    );
+    let inlineIndex = 0;
+    for (const slot of layout.slots) {
+      entries.push({
+        image: slot.kind === "inline" ? item.images?.[inlineIndex++] : undefined,
+        slot:
           slot.factIndex === undefined
             ? { kind: slot.kind }
             : { kind: slot.kind, factIndex: slot.factIndex + mediaOffset },
-        ),
-      );
-      suppressedFactIndexes.push(
-        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
-          (factIndex) => factIndex + mediaOffset,
-        ),
-      );
+      });
     }
-    if (item.media) {
-      media.push(...item.media);
+    // Like current-turn admission, images without explicit slots remain inline.
+    for (const image of item.images?.slice(inlineIndex) ?? []) {
+      entries.push({ image, slot: { kind: "inline" } });
     }
   }
+  // Choose the newest identities, then emit them in forward queue order. Current
+  // images and offloaded slots do not consume the retained-history budget.
+  const keptHistoryIdentities = new Set<string>();
+  for (const { image } of entries.toReversed()) {
+    const history = readRuntimeImageHistory(image);
+    if (history && keptHistoryIdentities.size < RECENT_HISTORY_IMAGE_LIMIT) {
+      keptHistoryIdentities.add(history.key);
+    }
+  }
+  const seenHistoryImages = new Set<string>();
+  const keptEntries = entries.filter(({ image }) => {
+    const history = readRuntimeImageHistory(image);
+    if (!history) {
+      return true;
+    }
+    if (!keptHistoryIdentities.has(history.key) || seenHistoryImages.has(history.key)) {
+      return false;
+    }
+    seenHistoryImages.add(history.key);
+    return true;
+  });
+  const images = keptEntries.flatMap(({ image }) => (image ? [image] : []));
+  const imageOrder = keptEntries.map(({ slot }) => slot.kind);
+  const mediaImageSlots = keptEntries.map(({ slot }) => slot);
   const mediaImageLayout =
     mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
       ? { slots: mediaImageSlots, suppressedFactIndexes }
       : undefined;
   return {
     ...(currentTurnImagesPrepared ? { currentTurnImagesPrepared: true as const } : {}),
-    ...(currentTurnImagesPrepared || images.length > 0 ? { images } : {}),
-    ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(currentTurnImagesPrepared || mediaImageLayout || images.length > 0 ? { images } : {}),
+    ...(currentTurnImagesPrepared || mediaImageLayout || imageOrder.length > 0
+      ? { imageOrder }
+      : {}),
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
@@ -589,8 +620,20 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         async (item) => await item.userTurnTranscriptRecorder?.resolveMessage(),
       ),
     );
-    const media = messages.flatMap((message) =>
-      buildPersistedUserTurnMediaInputsFromFields(message),
+    // Prompt media may omit transcribed audio or other facts. Preserve the full
+    // approved fact space and its layout together when the transcript is collected.
+    const { media, mediaImageLayout } = collectQueuedPromptMedia(
+      messages.map((message, index) => ({
+        media: message ? readPersistedMediaFacts(message) : undefined,
+        mediaImageLayout: message
+          ? (transcriptSources[index]?.userTurnTranscriptRecorder?.getRuntimeMediaImageLayout?.() ??
+            readPersistedMediaImageLayout(message))
+          : undefined,
+        // Without an optional layout, source order keeps current images bound to
+        // their facts and history-only images in unbound inline positions.
+        imageOrder: message ? transcriptSources[index]?.imageOrder : undefined,
+        images: message ? transcriptSources[index]?.images : undefined,
+      })),
     );
     const timestamp = messages.reduce<number | undefined>((latest, message) => {
       const candidate = message?.timestamp;
@@ -616,7 +659,8 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
-      ...(media.length === 0 ? {} : { media }),
+      ...(media?.length ? { media } : {}),
+      ...(mediaImageLayout ? { mediaImageLayout } : {}),
     };
   };
   const initialTranscriptPrompt = buildCollectTranscriptPrompt(transcriptSources);

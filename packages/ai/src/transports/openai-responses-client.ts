@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
+import type { ApiStreamSimpleFunction } from "../api-registry.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
@@ -270,7 +272,9 @@ type ResponsesTransportExecutorOptions = {
   ) => ResponsesPricingOptions;
 };
 
-function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
+function createResponsesTransportExecutor(
+  config: ResponsesTransportExecutorOptions,
+): ApiStreamSimpleFunction {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
@@ -320,10 +324,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             turnState?.metadata,
             replayMode,
           );
+          const imageHistory = createRequestImageHistoryProjector(params, "responses");
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
           }
+          params = imageHistory.bind(params);
           if (!isOpenAICodexResponsesModel(model)) {
             params = mergeTransportMetadata(params, turnState?.metadata);
           }
@@ -348,7 +354,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
             assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
-          return params;
+          return imageHistory.project(params);
         };
         const params = await buildRequest("checkpoint");
         if (compactRequest) {
@@ -629,7 +635,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
   };
 }
 
-export function createOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createOpenAIResponsesTransportStreamFn(): ApiStreamSimpleFunction {
   return createResponsesTransportExecutor({
     streamRequest: true,
     httpContinuation: true,
@@ -645,7 +651,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   });
 }
 
-export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createAzureOpenAIResponsesTransportStreamFn(): ApiStreamSimpleFunction {
   return createResponsesTransportExecutor({
     outputApi: "azure-openai-responses",
     firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,

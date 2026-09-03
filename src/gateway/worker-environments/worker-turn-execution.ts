@@ -261,12 +261,6 @@ export async function executeWorkerTurn(
       const canonical = buildPersistedUserTurnMessage({
         text: turn.transcriptPrompt ?? turn.prompt,
         media: turn.media,
-        mediaImageLayout: {
-          slots: media.imageFactIndexes.map((factIndex) => ({
-            kind: "inline" as const,
-            ...(factIndex === null ? {} : { factIndex }),
-          })),
-        },
       });
       const message = {
         ...canonical,
@@ -277,6 +271,7 @@ export async function executeWorkerTurn(
         __openclaw: {
           ...canonical["__openclaw"],
           mediaImageBlockFactIndexes: media.imageFactIndexes,
+          mediaImageLayout: media.mediaImageLayout,
         },
       };
       baseLeafId = manager.appendMessage(message);

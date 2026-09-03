@@ -507,6 +507,21 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+### Prompt images
+
+Use `detectAndLoadAgentHarnessPromptImages(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` with the selected model and the
+attempt's workspace policy. After the native encoder validates and filters
+images, call `appendRuntimeImageHistory(prompt, acceptedImages)` with the
+surviving host image objects. Keep each host image paired with its native
+representation until this final decision.
+
+The helper adds at most four bounded source notes for images retained from
+room history. Ordinary images leave the prompt unchanged. Apply this at both
+initial-input and steering boundaries; adding notes before filtering can tell
+the model it received an image that the runtime omitted. These notes are a
+request projection, not a replacement for the canonical transcript.
+
 ### Paired-device execution
 
 Declare `cloudPlacement.devicePlacement.requiredNodeCommands` for the exact node

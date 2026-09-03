@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { appendRuntimeImageHistory, readRuntimeImageHistory } from "@openclaw/media-core";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import {
@@ -395,12 +396,14 @@ export async function prepareCliPromptImagePayload(params: {
 }> {
   let prompt = params.prompt;
   const imagePrompt = params.imagePrompt ?? prompt;
-  const needsHydration =
+  const needsImagePreparation =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
     Boolean(params.mediaImageLayout) ||
+    // Retained-image notes must follow byte validation, even without a media layout.
+    Boolean(params.images?.some(readRuntimeImageHistory)) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
-  const imageResult = needsHydration
+  const imageResult = needsImagePreparation
     ? await detectAndLoadPromptImages({
         prompt: imagePrompt,
         media: params.media,
@@ -427,6 +430,7 @@ export async function prepareCliPromptImagePayload(params: {
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
+  prompt = appendRuntimeImageHistory(prompt, resolvedImages);
   const imagePaths = imagePayload.paths;
   if (
     !params.backend.imageArg ||

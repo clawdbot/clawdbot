@@ -10,3 +10,4 @@ export * from "./inline-image-data-url.js";
 export * from "./media-source-url.js";
 export * from "./mime.js";
 export * from "./read-byte-stream-with-limit.js";
+export * from "./runtime-image-history.js";

@@ -103,7 +103,7 @@ it.each(
   const { requests, authorization } = server;
   const prepared: Array<Record<string, unknown>> = [];
   const run = async (context: Context, later = false) => {
-    const stream = await createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, {
+    const stream = createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, {
       apiKey: later && scenario.name === "key" ? "synthetic-key-b" : "synthetic-key-a",
       sessionId: `${transport}-${scenario.name}-${later && scenario.name === "session" ? "b" : "a"}`,
       cacheRetention: "none",

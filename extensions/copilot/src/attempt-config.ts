@@ -1,6 +1,7 @@
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type { AgentMessage, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  appendRuntimeImageHistory,
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
@@ -243,38 +244,21 @@ export async function createMessageOptions(
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
-  const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
+  const images = await resolvePromptImages(params, context);
+  const attachments: NonNullable<MessageOptions["attachments"]> = images.map((image, index) => ({
+    type: "blob",
+    data: image.data,
+    mimeType: image.mimeType,
+    displayName: `prompt-image-${index + 1}`,
+  }));
   const providerHeaders = context.provider.provider?.headers;
   const requestHeaders =
     providerHeaders && Object.keys(providerHeaders).length > 0 ? { ...providerHeaders } : undefined;
   return {
-    prompt: params.prompt,
+    prompt: appendRuntimeImageHistory(params.prompt, images),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(requestHeaders ? { requestHeaders } : {}),
   };
-}
-function createPromptImageAttachments(
-  images: unknown[],
-): NonNullable<MessageOptions["attachments"]> {
-  return images.flatMap((image, index) => {
-    if (
-      !image ||
-      typeof image !== "object" ||
-      (image as { type?: unknown }).type !== "image" ||
-      typeof (image as { data?: unknown }).data !== "string" ||
-      typeof (image as { mimeType?: unknown }).mimeType !== "string"
-    ) {
-      return [];
-    }
-    return [
-      {
-        type: "blob" as const,
-        data: (image as { data: string }).data,
-        mimeType: (image as { mimeType: string }).mimeType,
-        displayName: `prompt-image-${index + 1}`,
-      },
-    ];
-  });
 }
 async function resolvePromptImages(
   params: AttemptParamsLike,
@@ -284,7 +268,7 @@ async function resolvePromptImages(
     sandbox: SandboxContext | null;
     workspaceOnly: boolean;
   },
-): Promise<unknown[]> {
+): Promise<NonNullable<AttemptParamsLike["images"]>> {
   const workspaceDir =
     context.effectiveCwd ??
     context.effectiveWorkspaceDir ??

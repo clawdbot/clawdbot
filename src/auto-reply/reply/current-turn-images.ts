@@ -1,4 +1,5 @@
 // Tracks image attachments that belong to the current reply turn.
+import { readRuntimeImageHistory, withRuntimeImageHistory } from "@openclaw/media-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,6 +19,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import {
   collectDescribedImageAttachmentIndexes,
+  hasInboundHistoryMedia,
   resolveAgentTurnAttachments,
 } from "./agent-turn-attachments.js";
 
@@ -132,14 +134,14 @@ export async function resolveCurrentTurnImages(params: {
   }
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
-  if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
-  }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
-  if (undescribedImageAttachments.length === 0) {
+  // Prepared image slots outrank history; the shared resolver owns precedence
+  // for current attachments, including failed reads and described images.
+  const includeRecentHistoryImages = entries.length === 0 && hasInboundHistoryMedia(params.ctx);
+  if (undescribedImageAttachments.length === 0 && !includeRecentHistoryImages) {
     return resolveMergedTurnImages(entries);
   }
 
@@ -148,15 +150,15 @@ export async function resolveCurrentTurnImages(params: {
     const resolved = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
-      includeRecentHistoryImages: false,
+      includeRecentHistoryImages,
       includeAttachmentIndexes: true,
     });
     const images = resolved.attachments.map(
-      (attachment): ImageContent => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mediaType,
-      }),
+      (attachment): ImageContent =>
+        withRuntimeImageHistory(
+          { type: "image", data: attachment.data, mimeType: attachment.mediaType },
+          readRuntimeImageHistory(attachment),
+        ),
     );
     const resolvedIndexes = resolved.attachmentIndexes ?? [];
     if (images.length < undescribedImageAttachments.length) {
@@ -178,6 +180,12 @@ export async function resolveCurrentTurnImages(params: {
         });
       } else {
         unresolvedSourceIndexes.push(attachment.index);
+      }
+    }
+    // History has no current-turn media fact; keep its identity outside that fact space.
+    for (const image of images) {
+      if (readRuntimeImageHistory(image)) {
+        appendOrderedImages({ entries, images: [image], sourceIndex: -1 });
       }
     }
     const merged = resolveMergedTurnImages(entries);

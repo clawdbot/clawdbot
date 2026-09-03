@@ -4,47 +4,70 @@ import { describe, expect, it } from "vitest";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   buildLateMediaAttachedProjection,
-  buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
+import { buildLateResolvedMediaMessage } from "./user-turn-transcript.message.js";
 
-describe("buildPersistedUserTurnMediaInputsFromFields", () => {
-  it("builds media inputs from canonical persisted facts", () => {
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        __openclaw: {
-          media: [
-            { path: "/tmp/a.png", contentType: "image/png" },
-            { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
-          ],
-        },
-      } as never),
-    ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
-      { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image" },
-    ]);
-  });
-
-  it("resolves relative canonical paths against each fact workspace", () => {
-    const workspaceDir = "/tmp/openclaw-user-turn-workspace";
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        __openclaw: {
-          media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
-        },
-      } as never),
-    ).toEqual([
+describe("buildLateResolvedMediaMessage", () => {
+  it("appends newly resolved canonical media as a late user message", () => {
+    const resolvedMessage = {
+      role: "user" as const,
+      content: "inspect",
+      timestamp: 123,
+      idempotencyKey: "media:user",
+      __openclaw: {
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png" },
+          { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
+        ],
+      },
+    };
+    const lateMessage = buildLateResolvedMediaMessage({ resolvedMessage });
+    expect(lateMessage).toEqual({
+      ...resolvedMessage,
+      idempotencyKey: "media:user:late-media",
+      __openclaw: { ...resolvedMessage["__openclaw"], lateMedia: true },
+    });
+    expect(lateMessage && buildLateMediaAttachedProjection(lateMessage).media).toEqual([
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image", transcribed: false },
       {
-        path: path.join(workspaceDir, "media/inbound/a.png"),
-        contentType: "image/png",
+        url: "https://example.test/b.jpg",
+        contentType: "image/jpeg",
         kind: "image",
+        transcribed: false,
       },
     ]);
   });
 
-  it("does not consult legacy top-level fields after the versioned cutover", () => {
-    expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
-    expect(buildPersistedUserTurnMediaInputsFromFields({} as never)).toEqual([]);
+  it("does not append workspace-relative media already admitted by absolute path", () => {
+    const workspaceDir = "/tmp/openclaw-user-turn-workspace";
+    const message = { role: "user" as const, content: "inspect", timestamp: 123 };
+    expect(
+      buildLateResolvedMediaMessage({
+        admittedMessage: {
+          ...message,
+          __openclaw: {
+            media: [
+              { path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" },
+            ],
+          },
+        },
+        resolvedMessage: {
+          ...message,
+          __openclaw: {
+            media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not append a late user message without canonical media", () => {
+    expect(
+      buildLateResolvedMediaMessage({
+        resolvedMessage: { role: "user", content: "inspect", timestamp: 123 },
+      }),
+    ).toBeUndefined();
   });
 });
 

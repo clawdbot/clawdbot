@@ -1,11 +1,11 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import {
@@ -29,7 +29,7 @@ export function buildPersistedMediaImageLayout(params: {
   ctxMediaCount: number;
   imageOrder?: readonly ("inline" | "offloaded")[];
   imageSourceIndexes?: readonly (number | undefined)[];
-}): NonNullable<UserTurnInput["mediaImageLayout"]> | undefined {
+}): MediaImageLayout | undefined {
   const describedAttachmentIndexes = new Set(
     params.ctx.MediaUnderstanding?.flatMap((output) =>
       output.kind === "image.description" ? [output.attachmentIndex] : [],

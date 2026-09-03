@@ -1,12 +1,15 @@
 /** Resolves media attachments available to the current agent turn. */
+import { withRuntimeImageHistory } from "@openclaw/media-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { MsgContext } from "../templating.js";
 import {
+  formatRecentHistoryImageSource,
   type RecentInboundHistoryImage,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
@@ -34,7 +37,8 @@ type AgentTurnAttachmentRuntime = Pick<
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
-function hasInboundHistoryMedia(ctx: MsgContext): boolean {
+/** True when the room kept media on a message that did not start this turn. */
+export function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   return (
     Array.isArray(ctx.InboundHistory) &&
     ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
@@ -125,12 +129,30 @@ export async function resolveAgentTurnAttachments(params: {
       if (!mediaType?.startsWith("image/")) {
         return false;
       }
-      results.push({
-        mediaType,
-        data: buffer.toString("base64"),
-      });
-      resultIndexes.push(attachment.index);
       const historyImage = historyAttachmentByIndex.get(attachment.index);
+      // Bind provenance only after the cache accepts the bytes. Runtime adapters
+      // can then describe exactly the images that survive their own filtering.
+      results.push(
+        withRuntimeImageHistory(
+          { mediaType, data: buffer.toString("base64") },
+          historyImage
+            ? {
+                key: [historyImage.messageId ?? "", historyImage.path].join("\0"),
+                sourceText: truncateUtf8Prefix(
+                  formatRecentHistoryImageSource({
+                    ...historyImage,
+                    sender: truncateUtf8Prefix(historyImage.sender, 32),
+                    messageId: historyImage.messageId
+                      ? truncateUtf8Prefix(historyImage.messageId, 48)
+                      : undefined,
+                  }),
+                  192,
+                ),
+              }
+            : undefined,
+        ),
+      );
+      resultIndexes.push(attachment.index);
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
       }

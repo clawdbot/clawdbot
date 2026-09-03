@@ -99,7 +99,7 @@ describe("failed Responses loopback SSE", () => {
           maxTokens: 4_096,
         } satisfies Model;
 
-        const stream = await transport.createStream()(
+        const stream = transport.createStream()(
           model,
           {
             messages: [{ role: "user", content: "Report failed usage", timestamp: 0 }],

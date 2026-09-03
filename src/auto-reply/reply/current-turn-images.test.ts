@@ -1,11 +1,12 @@
 // Tests current-turn native image hydration from inbound media paths.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import type { MsgContext } from "../templating.js";
+import type { MsgContext, RuntimeMsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
@@ -391,6 +392,55 @@ describe("resolveCurrentTurnImages", () => {
 
     expect(result).toEqual({});
     expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
+  });
+
+  it("hands a room's kept image to a text-only turn with its provenance", async () => {
+    await withTestDir({ prefix: "openclaw-history-image-" }, async (base) => {
+      const now = 1_800_000_000_000;
+      const stateDir = path.join(base, "state");
+      const relativePath = "media/inbound/kept.png";
+      const imagePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(imagePath), { recursive: true });
+      await fs.writeFile(imagePath, PNG_IMAGE_BYTES);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const ctx: RuntimeMsgContext = {
+        Body: "what was in that photo?",
+        Timestamp: now,
+        InboundHistory: [
+          {
+            sender: "Ada",
+            body: "<image>",
+            timestamp: now - 1000,
+            messageId: "m-kept",
+            media: [
+              { path: imagePath, contentType: "image/png", kind: "image", messageId: "m-kept" },
+            ],
+          },
+        ],
+      };
+
+      const result = await resolveCurrentTurnImages({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(result.images).toEqual([
+        { type: "image", data: PNG_IMAGE_BYTES.toString("base64"), mimeType: "image/png" },
+      ]);
+      expect(result.images?.map(readRuntimeImageHistory)).toEqual([
+        {
+          key: `m-kept\0${imagePath}`,
+          sourceText: `from Ada, message m-kept, sent at ${new Date(now - 1000).toISOString()}, message 1 of 1 in available history`,
+        },
+      ]);
+    });
+  });
+
+  it("keeps a text-only turn off the media runtime when the room kept nothing", async () => {
+    const ctx: RuntimeMsgContext = { Body: "hello" };
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+
+    const result = await resolveCurrentTurnImages({ ctx, cfg: {} as OpenClawConfig });
+
+    expect(vi.mocked(resolveAgentTurnAttachments)).not.toHaveBeenCalled();
+    expect(result.images).toBeUndefined();
   });
 
   it("hydrates only current image facts missing prompt descriptions", async () => {
