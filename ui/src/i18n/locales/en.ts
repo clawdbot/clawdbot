@@ -2360,7 +2360,7 @@ export const en: TranslationMap & {
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
-    dashboards: "Sessions that open on their dashboard face.",
+    dashboards: "Tasks with saved dashboards.",
     custodian: "System setup and care.",
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
