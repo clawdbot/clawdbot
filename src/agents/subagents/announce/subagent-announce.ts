@@ -14,7 +14,6 @@ import {
 } from "../../../auto-reply/tokens.js";
 import { logWarn } from "../../../logger.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
@@ -605,7 +604,6 @@ export async function runSubagentAnnounceFlow(params: {
       directOrigin,
       sourceSessionKey: params.childSessionKey,
       sourceRunId: params.childRunId,
-      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,

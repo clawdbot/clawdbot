@@ -84,7 +84,6 @@ function createCompletionUserTurnTranscriptRecorderFactory(params: {
   directIdempotencyKey: string;
   requesterAgentId?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   targetRequesterSessionKey: string;
   triggerMessage: string;
@@ -92,7 +91,7 @@ function createCompletionUserTurnTranscriptRecorderFactory(params: {
   const provenance: InputProvenance = {
     kind: "inter_session",
     ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-    sourceChannel: params.sourceChannel ?? INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
     sourceTool: params.sourceTool ?? "subagent_announce",
   };
   const recorders = new Map<string, UserTurnTranscriptRecorder>();
@@ -148,7 +147,6 @@ export async function deliverSubagentAnnouncement(params: {
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;
   sourceRunId?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
@@ -223,7 +221,7 @@ export async function deliverSubagentAnnouncement(params: {
         inputProvenance: {
           kind: "inter_session",
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-          sourceChannel: params.sourceChannel ?? INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+          sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
           sourceTool: params.sourceTool ?? "subagent_announce",
         },
         sourceReplyDeliveryMode,
@@ -317,7 +315,6 @@ export async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterSessionOrigin: params.requesterSessionOrigin,
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,

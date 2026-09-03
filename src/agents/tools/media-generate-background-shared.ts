@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../sessions/input-provenance.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
@@ -666,7 +665,6 @@ async function wakeMediaGenerationTaskCompletion(params: {
     completionDirectOrigin: params.handle.requesterOrigin,
     directOrigin: params.handle.requesterOrigin,
     sourceSessionKey: `${params.toolName}:${params.handle.taskId}`,
-    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
