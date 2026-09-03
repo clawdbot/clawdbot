@@ -1536,6 +1536,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("proves the public Slack send path stores complete ordered fallback chunks", async () => {
+    vi.useFakeTimers({ now: 0 });
     const probe = testing.buildSlackInvalidBlocksTableProbe();
     const storedPayloads: Array<Record<string, unknown> & { ts: string }> = [];
     const postMessage = vi.fn(async (payload: Record<string, unknown>) => {
@@ -1563,7 +1564,7 @@ describe("Slack live QA runtime helpers", () => {
       },
     );
 
-    const result = await testing.runSlackTableInvalidBlocksFallbackScenario({
+    const resultPromise = testing.runSlackTableInvalidBlocksFallbackScenario({
       cfg,
       channelId: "C123456789",
       sutAccountId: "sut",
@@ -1572,6 +1573,8 @@ describe("Slack live QA runtime helpers", () => {
       sutWriteClient: sutWriteClient as never,
       timeoutMs: 0,
     });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await resultPromise;
 
     expect(postMessage).toHaveBeenCalledTimes(3);
     const fallbackRequests = postMessage.mock.calls.map(([request]) => request);
