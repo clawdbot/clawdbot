@@ -127,6 +127,17 @@ Claude Code subprocess. A changed model, system prompt, or tool policy starts a
 new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
+Normal agent turns go through the Agent SDK, which receives OpenClaw's prompt as
+a full custom system prompt: it replaces Claude Code's `claude_code` preset
+instead of appending to it, so a turn runs with one system prompt rather than
+two. Those runs also pin Claude Code's own memory surfaces off
+(`autoMemoryEnabled: false`, plus `claudeMdExcludes` covering `CLAUDE.md`,
+`CLAUDE.local.md`, and `.claude/rules/`), so an agent sees its own `AGENTS.md`
+and `MEMORY.md` rather than the gateway host's. The `systemPromptFileArg` and
+`systemPromptMode` entries below describe the paired-node direct CLI transport,
+which still passes the prompt as a file argument to append; they do not apply to
+Agent SDK runs.
+
 For local SDK-backed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume; imported visible history and
@@ -141,7 +152,7 @@ claude update
 # Restart the OpenClaw gateway after updating.
 ```
 
-The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
+The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the OpenClaw system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 The Agent SDK always runs with Claude Code's default permission mode.
 OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
@@ -255,13 +266,15 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | agent runtime         | Anthropic Agent SDK with a warm, session-scoped Claude Code query                                                                                                                                             |
 | `imageArg`            | `@`                                                                                                                                                                                                           |
 | `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| `systemPromptFileArg` | `--append-system-prompt-file`  (paired-node direct CLI only)                                                                                                                                                  |
+| `systemPromptMode`    | `append`  (paired-node direct CLI only; Agent SDK runs replace the preset)                                                                                                                                    |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
 `--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
 first CLI execution. Concurrent executions share the probe; API catalog discovery
-does not start it. Older, unknown, or failed probes keep the established argv.
+does not start it. Older, unknown, or failed probes keep the established argv. The flag
+trims the preset's dynamic sections on the paired-node direct CLI path; Agent SDK
+runs replace the preset outright, so there is nothing for it to trim there.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
