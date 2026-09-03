@@ -130,6 +130,16 @@ describe("handleDiscordPresenceAction", () => {
     await expect(setPresence(params)).rejects.toThrow(expectedMessage);
   });
 
+  it.each(["constructor", "__proto__", "toString", "valueOf"])(
+    "rejects Object.prototype activityType %s instead of sending it to the gateway",
+    async (activityType) => {
+      await expect(setPresence({ activityType, activityName: "x" })).rejects.toThrow(
+        /Invalid activityType/,
+      );
+      expect(mockUpdatePresence).not.toHaveBeenCalled();
+    },
+  );
+
   it("defaults status to online", async () => {
     await setPresence({ activityType: "playing", activityName: "test" });
     expect(mockUpdatePresence).toHaveBeenCalledWith({

@@ -64,7 +64,12 @@ export async function handleDiscordPresenceAction(
           `Valid types: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
       );
     }
-    const typeNum = ACTIVITY_TYPE_MAP[normalizeLowercaseStringOrEmpty(activityTypeRaw)];
+    const activityType = normalizeLowercaseStringOrEmpty(activityTypeRaw);
+    // activityType is caller-supplied, so inherited keys such as "constructor"
+    // or "__proto__" must not read through to Object.prototype.
+    const typeNum = Object.hasOwn(ACTIVITY_TYPE_MAP, activityType)
+      ? ACTIVITY_TYPE_MAP[activityType]
+      : undefined;
     if (typeNum === undefined) {
       throw new Error(
         `Invalid activityType "${activityTypeRaw}". Must be one of: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
