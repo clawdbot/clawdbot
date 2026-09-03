@@ -2002,42 +2002,49 @@ describe("readSystemdServiceExecStart", () => {
     });
   });
 
-  it("retains loaded drop-in ownership even when its launcher and environment values equal the base", async () => {
-    const dropInPath = `${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}.d/operator.conf`;
-    mockReadGatewayServiceFile(
-      [
-        "[Service]",
-        "ExecStart=/usr/bin/openclaw gateway run",
-        "WorkingDirectory=/srv/openclaw",
-        "Environment=OPENCLAW_GATEWAY_TOKEN=shared NODE_COMPILE_CACHE=/tmp/cache",
-      ],
-      {
-        [dropInPath]: [
+  it.each(["", "# operator note \\", "; operator note \\"])(
+    "retains loaded drop-in ownership with comment %j even when values equal the base",
+    async (comment) => {
+      const dropInPath = `${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}.d/operator.conf`;
+      mockReadGatewayServiceFile(
+        [
           "[Service]",
-          "ExecStart=",
           "ExecStart=/usr/bin/openclaw gateway run",
           "WorkingDirectory=/srv/openclaw",
           "Environment=OPENCLAW_GATEWAY_TOKEN=shared NODE_COMPILE_CACHE=/tmp/cache",
-        ].join("\n"),
-      },
-    );
-    mockSystemdManagerSnapshot({
-      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-      workingDirectory: "/srv/openclaw",
-      environment: ["OPENCLAW_GATEWAY_TOKEN=shared", "NODE_COMPILE_CACHE=/tmp/cache"],
-      dropInPaths: [dropInPath],
-    });
+        ],
+        {
+          [dropInPath]: [
+            "[Service]",
+            comment,
+            "ExecStart=",
+            comment,
+            "ExecStart=/usr/bin/openclaw gateway run",
+            comment,
+            "WorkingDirectory=/srv/openclaw",
+            comment,
+            "Environment=OPENCLAW_GATEWAY_TOKEN=shared NODE_COMPILE_CACHE=/tmp/cache",
+          ].join("\n"),
+        },
+      );
+      mockSystemdManagerSnapshot({
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/srv/openclaw",
+        environment: ["OPENCLAW_GATEWAY_TOKEN=shared", "NODE_COMPILE_CACHE=/tmp/cache"],
+        dropInPaths: [dropInPath],
+      });
 
-    const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
+      const command = await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME });
 
-    expect(command).toMatchObject({
-      managedDefinition: { environment: { OPENCLAW_GATEWAY_TOKEN: "shared" } },
-      managedOverrides: {
-        launcher: "command",
-        environment: { keys: ["OPENCLAW_GATEWAY_TOKEN", "NODE_COMPILE_CACHE"] },
-      },
-    });
-  });
+      expect(command).toMatchObject({
+        managedDefinition: { environment: { OPENCLAW_GATEWAY_TOKEN: "shared" } },
+        managedOverrides: {
+          launcher: "command",
+          environment: { keys: ["OPENCLAW_GATEWAY_TOKEN", "NODE_COMPILE_CACHE"] },
+        },
+      });
+    },
+  );
 
   it("preserves managed removals while clearing superseded drop-in ownership in directive order", async () => {
     const firstDropIn = `${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}.d/10-file.conf`;
@@ -2394,46 +2401,52 @@ describe("stageSystemdService", () => {
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
   });
 
-  it("removes legacy gateway version metadata without restarting the service", async () => {
-    await withStageFixture(async ({ env, unitPath }) => {
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.writeFile(
-        unitPath,
-        [
-          "[Unit]",
-          "Description=OpenClaw Gateway (v2026.7.1-2)",
-          "",
-          "[Service]",
-          "ExecStart=/usr/bin/openclaw gateway run",
-          "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
-          "Environment=OPENCLAW_SERVICE_KIND=gateway",
-          'Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2 "OTHER_SETTING=kept value"',
-          "Environment=OPENCLAW_GATEWAY_PORT=18789",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      execFileMock.mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+  it.each(["", "# operator note \\", "; operator note \\"])(
+    "removes legacy gateway version metadata with comment %j without restarting",
+    async (comment) => {
+      await withStageFixture(async ({ env, unitPath }) => {
+        await fs.mkdir(path.dirname(unitPath), { recursive: true });
+        await fs.writeFile(
+          unitPath,
+          [
+            "[Unit]",
+            "Description=OpenClaw Gateway (v2026.7.1-2)",
+            "",
+            "[Service]",
+            comment,
+            "ExecStart=/usr/bin/openclaw gateway run",
+            "Environment=OPENCLAW_SERVICE_MARKER=openclaw \\",
+            "  # managed stamps span physical lines",
+            "  OPENCLAW_SERVICE_KIND=gateway",
+            'Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2 "OTHER_SETTING=kept value"',
+            "Environment=OPENCLAW_GATEWAY_PORT=18789",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        execFileMock.mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
 
-      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
+        await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
 
-      const unit = await fs.readFile(unitPath, "utf8");
-      expect(unit).toContain("Description=OpenClaw Gateway\n");
-      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
-      expect(unit).toContain('Environment="OTHER_SETTING=kept value"');
-      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
-      expect(execFileMock).toHaveBeenCalledTimes(1);
-      for (const [, timeoutMs] of assertNoSystemSystemdOwnershipMock.mock.calls) {
-        expect(timeoutMs).toBeGreaterThan(0);
-        expect(timeoutMs).toBeLessThanOrEqual(5_000);
-      }
-      expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(3);
-      expect(execFileMock.mock.calls[0]?.[2]).toMatchObject({
-        killSignal: "SIGKILL",
-        timeout: expect.any(Number),
+        const unit = await fs.readFile(unitPath, "utf8");
+        expect(unit).toContain("Description=OpenClaw Gateway\n");
+        expect(unit.split("\n")).toContain("ExecStart=/usr/bin/openclaw gateway run");
+        expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
+        expect(unit).toContain('Environment="OTHER_SETTING=kept value"');
+        expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+        expect(execFileMock).toHaveBeenCalledTimes(1);
+        for (const [, timeoutMs] of assertNoSystemSystemdOwnershipMock.mock.calls) {
+          expect(timeoutMs).toBeGreaterThan(0);
+          expect(timeoutMs).toBeLessThanOrEqual(5_000);
+        }
+        expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(3);
+        expect(execFileMock.mock.calls[0]?.[2]).toMatchObject({
+          killSignal: "SIGKILL",
+          timeout: expect.any(Number),
+        });
       });
-    });
-  });
+    },
+  );
 
   it("preserves a hand-written unit with the formerly documented version metadata", async () => {
     await withStageFixture(async ({ env, unitPath }) => {
@@ -2962,57 +2975,62 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("sanitizes file-backed managed values out of the backup unit on re-stage", async () => {
-    await withStageFixture(async ({ env, unitPath }) => {
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.writeFile(
-        unitPath,
-        [
-          "[Service]",
-          "ExecStart=/usr/bin/openclaw node run",
-          "Environment=FOO=bar OPENCLAW_GATEWAY_TOKEN=inline-token BAZ=qux",
-          "Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line",
-          "Environment='OPENCLAW_GATEWAY_TOKEN=single-quoted-token' FROM_SINGLE=kept",
-          "Environment=",
-          "Environment=OPENCLAW_GATEWAY_PORT=18789",
-        ].join("\n"),
-        { encoding: "utf8", mode: 0o600 },
-      );
-      await fs.chmod(unitPath, 0o600);
+  it.each(["", "# operator note \\", "; operator note \\"])(
+    "sanitizes file-backed backup values with comment %j on re-stage",
+    async (comment) => {
+      await withStageFixture(async ({ env, unitPath }) => {
+        await fs.mkdir(path.dirname(unitPath), { recursive: true });
+        await fs.writeFile(
+          unitPath,
+          [
+            "[Service]",
+            comment,
+            "ExecStart=/usr/bin/openclaw node run",
+            comment,
+            "Environment=FOO=bar OPENCLAW_GATEWAY_TOKEN=inline-token BAZ=qux",
+            "Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line",
+            "Environment='OPENCLAW_GATEWAY_TOKEN=single-quoted-token' FROM_SINGLE=kept",
+            "Environment=",
+            "Environment=OPENCLAW_GATEWAY_PORT=18789",
+          ].join("\n"),
+          { encoding: "utf8", mode: 0o600 },
+        );
+        await fs.chmod(unitPath, 0o600);
 
-      mockSystemctlStatusOk();
+        mockSystemctlStatusOk();
 
-      await stageSystemdService(
-        nodeSystemdServiceFixture(env, {
-          environment: {
-            OPENCLAW_GATEWAY_TOKEN: "fresh-token",
-            OPENCLAW_GATEWAY_PORT: "18789",
-            OPENCLAW_SERVICE_KIND: "node",
-          },
-          environmentValueSources: {
-            OPENCLAW_GATEWAY_TOKEN: "file",
-          },
-        }),
-      );
+        await stageSystemdService(
+          nodeSystemdServiceFixture(env, {
+            environment: {
+              OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+              OPENCLAW_GATEWAY_PORT: "18789",
+              OPENCLAW_SERVICE_KIND: "node",
+            },
+            environmentValueSources: {
+              OPENCLAW_GATEWAY_TOKEN: "file",
+            },
+          }),
+        );
 
-      const [unit, backupUnit, backupStat] = await Promise.all([
-        fs.readFile(unitPath, "utf8"),
-        fs.readFile(`${unitPath}.bak`, "utf8"),
-        fs.stat(`${unitPath}.bak`),
-      ]);
+        const [unit, backupUnit, backupStat] = await Promise.all([
+          fs.readFile(unitPath, "utf8"),
+          fs.readFile(`${unitPath}.bak`, "utf8"),
+          fs.stat(`${unitPath}.bak`),
+        ]);
 
-      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
-      expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-token");
-      expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line");
-      expect(backupUnit).not.toContain("single-quoted-token");
-      expect(backupUnit).toContain("[Service]");
-      expect(backupUnit).toContain("ExecStart=/usr/bin/openclaw node run");
-      expect(backupUnit).toContain("Environment=FOO=bar BAZ=qux");
-      expect(backupUnit).toContain("Environment=FROM_SINGLE=kept\nEnvironment=\n");
-      expect(backupUnit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
-      expect(backupStat.mode & 0o777).toBe(0o600);
-    });
-  });
+        expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
+        expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-token");
+        expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line");
+        expect(backupUnit).not.toContain("single-quoted-token");
+        expect(backupUnit).toContain("[Service]");
+        expect(backupUnit.split("\n")).toContain("ExecStart=/usr/bin/openclaw node run");
+        expect(backupUnit).toContain("Environment=FOO=bar BAZ=qux");
+        expect(backupUnit).toContain("Environment=FROM_SINGLE=kept\nEnvironment=\n");
+        expect(backupUnit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+        expect(backupStat.mode & 0o777).toBe(0o600);
+      });
+    },
+  );
 
   it("protects tokenless gateway units and backups from legacy credentials", async () => {
     await withStageFixture(async ({ env, unitPath }) => {

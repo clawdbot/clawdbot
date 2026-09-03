@@ -657,7 +657,12 @@ agent reads, and exports.
 
 ## Operator terminal
 
-The operator terminal is enabled by default; set `gateway.terminal.enabled: false` and restart the Gateway to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
+The operator terminal is enabled by default; set `gateway.terminal.enabled: false` to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
+
+Enablement changes hot-apply without restarting the Gateway. Disabling closes
+attached, detached, and conversation-owned terminals and cancels pending opens.
+Re-enabling allows fresh sessions; closed sessions do not return. Reload the
+Control UI page to pick up the updated content security policy.
 
 <Warning>
 The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.

@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
+import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
 import {
   connectHotReloadClient,
   startHotReloadUpstreams,
@@ -27,6 +28,12 @@ import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
+import { proveHotReloadTerminalDeferredRestart } from "./gateway-config-hot-reload-terminal-deferred.js";
+import {
+  proveHotReloadTerminalLifecycle,
+  proveHotReloadTerminalStartup,
+  writeHotReloadTerminalCatalog,
+} from "./gateway-config-hot-reload-terminal.js";
 import { proveHotReloadWatchPolicy } from "./gateway-config-hot-reload-watch.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -37,44 +44,6 @@ const SESSION_KEY = "agent:qa:main";
 type Evidence = { prefix: string; observation: string; bootId: string; samePid: boolean };
 type ConfigResult = { hash: string; config: OpenClawConfig };
 class GatewayContinuityError extends Error {}
-
-async function writeCatalogFixture(root: string): Promise<string> {
-  const directory = path.join(root, "catalog-plugin");
-  await fs.mkdir(directory);
-  await fs.writeFile(
-    path.join(directory, "package.json"),
-    JSON.stringify({
-      name: "qa-hot-reload-shell",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.mjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(directory, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "qa-hot-reload-shell",
-      name: "Hot reload synthetic CLI catalog",
-      activation: { onStartup: true },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(directory, "index.mjs"),
-    `export default {
-    id: "qa-hot-reload-shell",
-    name: "Hot reload synthetic CLI catalog",
-    register(api) {
-      api.registerSessionCatalog({
-        id: "qa-hot-reload-shell", label: "Synthetic shell CLI", supportsProcessHomeIsolation: true,
-        list: async () => [], read: async () => ({ items: [] }),
-        startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["/bin/sh"], cwd, title: "Synthetic CLI" }),
-      });
-    },
-  };`,
-  );
-  return directory;
-}
 
 async function runProof(repoRoot: string, outputDir: string, appendLog: (text: string) => void) {
   const evidence: Evidence[] = [];
@@ -90,12 +59,14 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let pairingFixture: Awaited<ReturnType<typeof prepareGatewayPairingFixture>> | undefined;
   const asyncErrors: unknown[] = [];
   let summary: unknown;
+  let passedChecks = 0;
+  let channels: Awaited<ReturnType<typeof proveHotReloadChannels>> | undefined;
   let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
   await runQaGatewayFixture(
     async () => {
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
       pairingFixture = await prepareGatewayPairingFixture(temporaryRoot);
-      const catalogPath = await writeCatalogFixture(temporaryRoot);
+      const catalogPath = await writeHotReloadTerminalCatalog(temporaryRoot);
       const browserExecutable = await fs.realpath(chromium.executablePath());
       const preload = pathToFileURL(
         path.join(repoRoot, "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs"),
@@ -163,7 +134,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
             ...cfg.gateway,
             bind: "lan",
             reload: { mode: "hybrid" },
-            terminal: { enabled: true, shell: "/bin/sh" },
+            terminal: { enabled: false, shell: "/bin/sh" },
             controlUi: {
               ...cfg.gateway?.controlUi,
               allowedOrigins: [`http://127.0.0.1:${cfg.gateway?.port}`],
@@ -302,6 +273,17 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         appendLog(`PASS chat.metadata ${JSON.stringify(observation)}\n`);
       };
 
+      const terminalProof = {
+        gateway: activeGateway,
+        primary,
+        rpc,
+        patch,
+        http,
+        verifyContinuity,
+        proveGroup,
+      };
+      await proveHotReloadTerminalStartup(terminalProof);
+
       await proveHotReloadRequests({
         gateway: activeGateway,
         primary,
@@ -313,6 +295,9 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         probeMetadata,
         proveGroup,
       });
+
+      browser = await chromium.launch({ headless: true });
+      await proveHotReloadTerminalLifecycle({ ...terminalProof, browser, outputDir });
 
       // Node identities and relay grants are generated for this isolated fixture only.
       const nodeIdentity = loadOrCreateDeviceIdentity({
@@ -507,7 +492,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           },
           ["gateway.nodes.pairing.autoApproveCidrs", "gateway.nodes.pairing.sshVerify.cidrs"],
         );
-        browser = await chromium.launch({ headless: true });
+        assert(browser, "Control UI browser must be running");
         await proveHotReloadBrowserSettings({
           browser,
           gateway: activeGateway,
@@ -592,15 +577,29 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       });
 
       await checkContinuity();
+      channels = await proveHotReloadChannels({ repoRoot, outputDir, appendLog });
+      failures.push(...channels.failures);
       security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
       failures.push(...security.failures);
-      // Positive control: startup-owned terminal enablement must replace the boot.
+      const terminalDeferred = await proveHotReloadTerminalDeferredRestart({
+        repoRoot,
+        outputDir,
+        appendLog,
+      });
+      failures.push(...terminalDeferred.failures);
+      await checkContinuity();
+      passedChecks =
+        evidence.length +
+        channels.evidence.length +
+        security.evidence.length +
+        terminalDeferred.evidence.length;
+      // Positive control: startup-owned Control UI routing must replace the boot.
       const beforeControl = await rpc<ConfigResult>("config.get");
       const control = await rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>(
         "config.patch",
         {
           baseHash: beforeControl.hash,
-          raw: JSON.stringify({ gateway: { terminal: { enabled: false } } }),
+          raw: JSON.stringify({ gateway: { controlUi: { enabled: false } } }),
         },
       );
       assert.equal(control.sentinel.payload.stats.requiresRestart, true);
@@ -610,18 +609,25 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       await waitForHotReloadFact("startup-only replacement boot", () =>
         primary.hellos > 1 && primary.bootId !== bootId ? true : undefined,
       );
-      await assert.rejects(
-        rpc("terminal.open", { agentId: "qa", cols: 80, rows: 24 }),
-        /terminal is disabled/,
-      );
+      assert.equal((await http("/chat/qa")).status, 404);
       summary = {
         passed: failures.length === 0,
         failures,
         evidence,
         metadataProbes,
+        channels,
         security,
+        terminalDeferred,
+        counts: {
+          passed: passedChecks,
+          failed: failures.length,
+          primary: evidence.length,
+          channels: channels.evidence.length,
+          security: security.evidence.length,
+          terminalDeferred: terminalDeferred.evidence.length,
+        },
         startupOnlyControl: {
-          prefix: "gateway.terminal.enabled",
+          prefix: "gateway.controlUi.enabled",
           closedPersistentSocket: true,
           originalBootId: bootId,
           replacementBootId: primary.bootId,
@@ -654,7 +660,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
     () => mock.stop(),
     () => fs.rm(temporaryRoot, { recursive: true, force: true }),
   );
-  return { summary, evidence, failures };
+  return { summary, passedChecks, failures };
 }
 
 async function main() {
@@ -683,7 +689,7 @@ async function main() {
   });
   const started = Date.now();
   try {
-    const { summary, evidence, failures } = await runProof(repoRoot, outputDir, (text) =>
+    const { summary, passedChecks, failures } = await runProof(repoRoot, outputDir, (text) =>
       writer.appendLog(text),
     );
     const summaryPath = path.join(outputDir, "gateway-config-hot-reload-summary.json");
@@ -693,16 +699,16 @@ async function main() {
     await writer.write({
       status: passed ? "pass" : "fail",
       durationMs: Date.now() - started,
-      details: `${evidence.length} settings checks retained the original Gateway boot and WebSocket; startup-only positive control restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
+      details: `${passedChecks} settings checks passed across the primary, channel, security, and deferred-restart Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
-        {
+        ...["security", "channels", "terminal-deferred"].map((name) => ({
           kind: "summary",
-          filePath: path.join(outputDir, "gateway-config-hot-reload-security.json"),
-        },
-        ...(artifactFiles.has("control-ui-hot-reload.webm")
-          ? [{ kind: "video", filePath: path.join(outputDir, "control-ui-hot-reload.webm") }]
-          : []),
+          filePath: path.join(outputDir, `gateway-config-hot-reload-${name}.json`),
+        })),
+        ...["control-ui-hot-reload.webm", "terminal-hot-reload.webm"]
+          .filter((name) => artifactFiles.has(name))
+          .map((name) => ({ kind: "video", filePath: path.join(outputDir, name) })),
         ...[
           "environment-teal",
           "environment-amber",
@@ -712,6 +718,9 @@ async function main() {
           "embed-strict",
           "embed-scripts",
           "embed-trusted",
+          "terminal-enabled",
+          "terminal-disabled",
+          "terminal-reenabled",
         ]
           .filter((name) => artifactFiles.has(`${name}.png`))
           .map((name) => ({ kind: "screenshot", filePath: path.join(outputDir, `${name}.png`) })),

@@ -119,6 +119,7 @@ export function createManagedReloadSecretHandlers(options: {
     | "activateRuntimeSecrets"
     | "assertRuntimeSecurityConfig"
     | "clients"
+    | "commitTerminalConfig"
     | "reconcileRuntimePolicy"
     | "resolveSharedGatewaySessionGenerationForConfig"
     | "sharedGatewaySessionGenerationState"
@@ -419,19 +420,24 @@ export function createManagedReloadSecretHandlers(options: {
                 // prepared layer at the same edge as secrets/runtime state,
                 // before any replacement service or channel starts.
                 transactionOwnership.publishRuntimeEnv();
-                await commit();
-                // PTY and socket eviction cannot roll back. Run them only after
-                // the last fallible runtime commit step has accepted this config.
-                // Failures bubble to applyHotReload's committed-state recovery path.
-                if (!runtimePolicyReconciled) {
-                  await params.reconcileRuntimePolicy(prepared.config, "committed");
-                  runtimePolicyReconciled = true;
-                }
-                if (sharedGatewaySessionGenerationChanged) {
-                  disconnectStaleSharedGatewayAuthClients({
-                    clients: params.clients,
-                    expectedGeneration: nextSharedGatewaySessionGeneration,
-                  });
+                try {
+                  await commit();
+                } finally {
+                  // Published policy remains authoritative if a later service handoff fails.
+                  // Commit terminal admission before irreversible PTY and socket eviction.
+                  if (isCommitted()) {
+                    if (!runtimePolicyReconciled) {
+                      params.commitTerminalConfig(prepared.config);
+                      await params.reconcileRuntimePolicy(prepared.config, "committed");
+                      runtimePolicyReconciled = true;
+                    }
+                    if (sharedGatewaySessionGenerationChanged) {
+                      disconnectStaleSharedGatewayAuthClients({
+                        clients: params.clients,
+                        expectedGeneration: nextSharedGatewaySessionGeneration,
+                      });
+                    }
+                  }
                 }
               } catch (err) {
                 if (!isCommitted()) {

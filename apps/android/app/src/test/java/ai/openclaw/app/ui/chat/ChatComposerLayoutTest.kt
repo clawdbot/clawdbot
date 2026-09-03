@@ -1004,13 +1004,15 @@ class ChatComposerLayoutTest {
           onOpenSidebar = onOpenSidebar,
         )
       composeRule.waitUntil(timeoutMillis = 5_000) {
-        model.chatSessionKey.value == sessionKey &&
-          !model.chatHistoryLoading.value && model.chatHealthOk.value &&
-          model.chatMessages.value.map { message -> message.content.mapNotNull { it.text }.joinToString("\n") } == texts &&
-          model.pendingRunCount.value == 0 && model.chatStreamingAssistantText.value == null &&
-          model.chatPendingToolCalls.value.isEmpty() && model.chatSubagentActivities.value.isEmpty() &&
-          model.chatOutboxItems.value.isEmpty() && model.chatProgressCard.value == null &&
-          questionsForSession(model.chatQuestions.value, sessionKey, model.mainSessionKey.value, "main").isEmpty()
+        composeRule.runOnIdle {
+          model.chatSessionKey.value == sessionKey &&
+            !model.chatHistoryLoading.value && model.chatHealthOk.value &&
+            model.chatMessages.value.map { message -> message.content.mapNotNull { it.text }.joinToString("\n") } == texts &&
+            model.pendingRunCount.value == 0 && model.chatStreamingAssistantText.value == null &&
+            model.chatPendingToolCalls.value.isEmpty() && model.chatSubagentActivities.value.isEmpty() &&
+            model.chatOutboxItems.value.isEmpty() && model.chatProgressCard.value == null &&
+            questionsForSession(model.chatQuestions.value, sessionKey, model.mainSessionKey.value, "main").isEmpty()
+        }
       }
       composeRule.waitForIdle()
       assertions()
@@ -1137,8 +1139,11 @@ class ChatComposerLayoutTest {
       }
     }
     composeRule.waitUntil {
-      viewModel.chatCommands.value.size == 6 && !viewModel.chatHistoryLoading.value &&
-        (if (expectedMessageCount == null) viewModel.chatMessages.value.size >= 24 else viewModel.chatMessages.value.size == expectedMessageCount)
+      // IO can publish after setContent idles; drain Android Main before reading ViewModel bridges.
+      composeRule.runOnIdle {
+        viewModel.chatCommands.value.size == 6 && !viewModel.chatHistoryLoading.value &&
+          (if (expectedMessageCount == null) viewModel.chatMessages.value.size >= 24 else viewModel.chatMessages.value.size == expectedMessageCount)
+      }
     }
     return viewModel
   }
