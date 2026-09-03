@@ -18,6 +18,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import { getPluginCache, getPluginCacheRoot } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
@@ -448,20 +449,29 @@ function loadSetupManifestRecords(params: {
   pluginIds?: readonly string[];
 }) {
   const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
-  if (params.pluginIds?.length === 0) {
-    return [];
+  if (!manifestRegistry) {
+    return loadPluginManifestRegistryForInstalledIndex({ ...params, index, includeDisabled: true })
+      .plugins;
   }
   // Setup consumes descriptors and entry paths, not channel presentation. Keep
   // prepared records intact; the generic registry still normalizes supplied fields.
-  return manifestRegistry
-    ? selectInstalledPluginManifestRecords(
-        index,
-        manifestRegistry,
-        params.pluginIds ? new Set(params.pluginIds) : null,
-        true,
-      )
-    : loadPluginManifestRegistryForInstalledIndex({ ...params, index, includeDisabled: true })
-        .plugins;
+  return tracePluginLifecyclePhase(
+    "manifest registry",
+    () =>
+      params.pluginIds?.length === 0
+        ? []
+        : selectInstalledPluginManifestRecords(
+            index,
+            manifestRegistry,
+            params.pluginIds ? new Set(params.pluginIds) : null,
+            true,
+          ),
+    {
+      includeDisabled: true,
+      pluginIdCount: params.pluginIds?.length,
+      indexPluginCount: index.plugins.length,
+    },
+  );
 }
 
 function findUniqueSetupManifestOwner(params: {
