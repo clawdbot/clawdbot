@@ -330,9 +330,14 @@ describe("plugin update unchanged Docker E2E", () => {
 
   it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
+    const nonCodexRoute =
+      'node "$entry" config set agents.defaults.model anthropic/claude-sonnet-4-6 >/dev/null';
+    const codexOptOut = 'node "$entry" config set plugins.entries.codex.enabled false >/dev/null';
 
     expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
     expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
+    expect(script).toContain(nonCodexRoute);
+    expect(script.indexOf(nonCodexRoute)).toBeLessThan(script.indexOf(codexOptOut));
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
@@ -398,7 +403,12 @@ describe("plugin update unchanged Docker E2E", () => {
     ["non-array allow policy", CORRUPT_PLUGIN_ID, false, "plugins.allow to be an array"],
     ["missing fixture membership", ["memory-core"], false, "exactly once"],
     ["duplicate fixture membership", [CORRUPT_PLUGIN_ID, CORRUPT_PLUGIN_ID], false, "exactly once"],
-    ["loss of the Codex opt-out", [CORRUPT_PLUGIN_ID], true, "explicit Codex opt-out"],
+    [
+      "loss of the Codex opt-out",
+      [CORRUPT_PLUGIN_ID],
+      true,
+      "explicit Codex opt-out to survive, got true",
+    ],
   ])("rejects corrupt update recovery with %s", (_case, allow, codexEnabled, expectedError) => {
     const result = runProbeStatus(
       "assert-corrupt-policy-preserved",

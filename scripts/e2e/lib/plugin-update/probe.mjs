@@ -350,8 +350,11 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
       `expected plugins.allow to contain ${pluginId} exactly once, got ${JSON.stringify(allow)}`,
     );
   }
-  if (config.plugins?.entries?.codex?.enabled !== false) {
-    throw new Error("expected the corrupt plugin fixture's explicit Codex opt-out to survive");
+  const codexEnabled = config.plugins?.entries?.codex?.enabled;
+  if (codexEnabled !== false) {
+    throw new Error(
+      `expected the corrupt plugin fixture's explicit Codex opt-out to survive, got ${JSON.stringify(codexEnabled)}`,
+    );
   }
   console.log(JSON.stringify({ allow, codexEnabled: false }));
 }
