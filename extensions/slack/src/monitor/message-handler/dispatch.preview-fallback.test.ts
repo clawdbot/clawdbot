@@ -2773,6 +2773,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 
+  it("settles failed command attention as recovered after a successful final reply", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", phase: "end", name: "Bash", title: "run checks", exitCode: 1 },
+      ],
+    });
+
+    expect(collectNativeTaskUpdates().filter((task) => task.id === "openclaw_attention")).toEqual([
+      taskUpdate("openclaw_attention", "Bash — exit 1", "error"),
+      taskUpdate("openclaw_attention", "Recovered: Bash — exit 1", "complete"),
+    ]);
+    expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
+  });
+
   it("keeps one native summary through many tool calls and final delivery", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
