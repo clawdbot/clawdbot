@@ -72,15 +72,17 @@ function readLegacyCollectionBackupManifest(
   backupId: string,
 ): LegacyCollectionBackup["manifest"] {
   const record = asNullableRecord(value);
-  const skillDirs = readStringArray(record?.skillDirs);
-  const resultSkillDirs = readStringArray(record?.resultSkillDirs);
+  const skillDirs = record?.skillDirs;
+  const resultSkillDirs = record?.resultSkillDirs;
   if (
     record?.schema !== LEGACY_COLLECTION_BACKUP_SCHEMA ||
     record.id !== backupId ||
     typeof record.createdAt !== "string" ||
     typeof record.workspaceDir !== "string" ||
-    !skillDirs ||
-    !resultSkillDirs
+    !Array.isArray(skillDirs) ||
+    !skillDirs.every((entry): entry is string => typeof entry === "string") ||
+    !Array.isArray(resultSkillDirs) ||
+    !resultSkillDirs.every((entry): entry is string => typeof entry === "string")
   ) {
     throw new Error(`invalid legacy collection backup manifest: ${backupId}`);
   }
@@ -107,12 +109,6 @@ function readLegacyCollectionBackupManifest(
     resultSkillDirs: [...new Set(resultSkillDirs)],
     resultSkillHashes: parsedResultSkillHashes,
   };
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string")
-    ? value
-    : undefined;
 }
 
 async function readLegacyCollectionBackups(backupRoot: string): Promise<LegacyCollectionBackup[]> {
