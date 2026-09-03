@@ -3184,6 +3184,31 @@ describe("createBackupArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a declared absolute target containing a backslash before rewriting it",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-declared-backslash-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("declared-backslash-symlink.tar.gz");
+          const externalConfigPath = state.path("nix\\store", "openclaw-default.json");
+          await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
+          await fs.rename(state.configPath, externalConfigPath);
+          await fs.symlink(externalConfigPath, state.configPath);
+
+          await expect(
+            createBackupArchive({ output: outputPath, includeWorkspace: false }),
+          ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
+          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
   it("skips managed absolute runtime symlinks while preserving adjacent state", async () => {
     if (process.platform === "win32") {
       return;

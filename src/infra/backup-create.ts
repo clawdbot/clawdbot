@@ -331,7 +331,7 @@ function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
   archiveRoot: string;
   assets: readonly BackupAsset[];
 }): string | undefined {
-  if (!params.linkpath || !path.isAbsolute(params.linkpath)) {
+  if (!params.linkpath || !path.isAbsolute(params.linkpath) || params.linkpath.includes("\\")) {
     return params.linkpath;
   }
   // Tar exposes the first link hop, while assets own the final canonical path.
