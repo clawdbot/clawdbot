@@ -4,7 +4,7 @@ import path from "node:path";
 import { decodeIosAppStoreVersion } from "./ios-release-plan.ts";
 import { encodeIosAppStoreVersion } from "./ios-version.ts";
 import { readMobileVersionManifest } from "./mobile-version.ts";
-import { parseReleaseVersion } from "./release-version.mjs";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
 
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
@@ -30,14 +30,6 @@ type ResolvedAndroidVersion = {
 
 function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
-}
-
-function parsePinnedReleaseVersion(rawVersion: string): string | null {
-  const parsed = parseReleaseVersion(rawVersion.trim());
-  if (!parsed || parsed.version !== parsed.baseVersion) {
-    return null;
-  }
-  return parsed.baseVersion;
 }
 
 export function normalizePinnedAndroidVersion(rawVersion: string): string {
