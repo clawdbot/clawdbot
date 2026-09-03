@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
@@ -68,17 +69,6 @@ afterEach(async () => {
   }
 });
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse, text: string, index: number): void {
   const message = {
     type: "message",
@@ -87,7 +77,7 @@ function writeAssistantResponse(response: ServerResponse, text: string, index: n
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,

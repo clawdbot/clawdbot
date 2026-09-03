@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -85,14 +86,7 @@ function writeResponse(res: ServerResponse, text: string): void {
       },
     },
   ];
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(res, events);
 }
 
 async function startMockModelServer(): Promise<MockModelServer> {

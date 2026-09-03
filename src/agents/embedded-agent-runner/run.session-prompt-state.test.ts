@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
+import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
+import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
 
 const assertActive = () => {};
 
@@ -83,6 +86,63 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("owns compaction continuation as an internal persisted prompt", () => {
+    const state = createState();
+
+    state.activateCompactionContinuation("continue after compaction");
+
+    expect(state.activePrompt).toEqual({
+      override: "continue after compaction",
+      persisted: true,
+      internal: true,
+    });
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("preserves exact internal prompt bytes when composing compaction continuation", () => {
+    const state = createState();
+
+    state.activateInternalPrompt("  finish the reasoning exactly  ");
+    state.activateCompactionContinuation("continue after compaction");
+
+    expect(state.activePrompt).toEqual({
+      override: "  finish the reasoning exactly  \n\ncontinue after compaction",
+      persisted: true,
+      internal: true,
+    });
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("keeps a compound internal prompt across a missing-assistant retry", async () => {
+    const state = createState();
+    state.activateInternalPrompt("finish the reasoning");
+    state.activateCompactionContinuation("continue after compaction");
+    const activePrompt = { ...state.activePrompt };
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: undefined,
+        activePromptPersisted: state.activePrompt.persisted,
+        activateInternalPrompt: state.activateInternalPrompt,
+        activateCompactionContinuation: state.activateCompactionContinuation,
+        setSuppressNextUserMessagePersistence: (value) => {
+          state.suppressNextUserMessagePersistence = value;
+        },
+      }),
+    );
+
+    expect(resolved).toEqual({ action: "retry" });
+    expect(state.activePrompt).toEqual(activePrompt);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
   it("adds failed-tool guidance to current-transcript continuation", () => {
     const state = createState();
 

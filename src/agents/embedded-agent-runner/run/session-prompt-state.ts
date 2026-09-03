@@ -103,6 +103,10 @@ export function createEmbeddedRunSessionPromptState(input: {
     activePrompt = { override: prompt, persisted: true, internal: true };
     suppressNextUserMessagePersistence = true;
   };
+  const activateCompactionContinuation = (instruction: string) => {
+    const priorPrompt = activePrompt.internal ? activePrompt.override : undefined;
+    activateInternalPrompt(priorPrompt?.trim() ? `${priorPrompt}\n\n${instruction}` : instruction);
+  };
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
   > = (message) => {
@@ -196,6 +200,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     recordCommittedCompactionSuccessor,
     notifyCompactionSessionAdopted,
     activateInternalPrompt,
+    activateCompactionContinuation,
     markOwnedTranscriptRetry: () => {
       settleOwnedTranscriptProjection = true;
     },

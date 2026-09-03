@@ -101,12 +101,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
-  const basePrompt =
+  const prompt =
     sessionPromptState.activePrompt.override ??
     resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
-  const prompt = terminalRetryState.compactionContinuationInstruction
-    ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
-    : basePrompt;
   const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
     apiKeyInfo: runtime.apiKeyInfo,
     runtimeAuthState: runtime.runtimeAuthState,

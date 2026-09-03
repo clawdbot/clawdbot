@@ -9,6 +9,7 @@ import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -104,17 +105,6 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
   return body ? (JSON.parse(body) as Record<string, unknown>) : {};
 }
 
-function writeSse(res: ServerResponse, events: Record<string, unknown>[]): void {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  res.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeTextResponse(res: ServerResponse, requestIndex: number): void {
   const id = `msg_steer_fifo_${requestIndex}`;
   const text = `TURN_${requestIndex}_COMPLETE`;
@@ -125,7 +115,7 @@ function writeTextResponse(res: ServerResponse, requestIndex: number): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -167,7 +157,7 @@ function writeToolResponse(res: ServerResponse): void {
     arguments: "{}",
     status: "completed",
   };
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -211,7 +201,7 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
       status: "completed",
     },
   ];
-  writeSse(res, [
+  writeOpenAiResponsesSse(res, [
     ...items.flatMap((item, outputIndex) => [
       {
         type: "response.output_item.added",

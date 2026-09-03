@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -287,12 +288,5 @@ function writeMockOpenAiResponse(response: ServerResponse): void {
       },
     },
   ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }
