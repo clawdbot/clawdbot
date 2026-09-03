@@ -50,7 +50,9 @@
  * Run: pnpm tsx scripts/proof-app-server-runtime-chooser-bindings.ts
  */
 import assert from "node:assert/strict";
-import path from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path, { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 type CommandsModelsModule = typeof import("../src/auto-reply/reply/commands-models.js");
@@ -62,6 +64,11 @@ type DirectiveRuntimeModule =
   typeof import("../src/auto-reply/reply/directive-handling.model-runtime.js");
 type HarnessRuntimePluginModule = typeof import("../src/agents/harness/runtime-plugin.js");
 type OpenClawConfig = import("../src/config/types.openclaw.js").OpenClawConfig;
+
+// Redirect all OpenClaw state to a throwaway directory BEFORE any source module
+// resolves it, so this proof reads and writes nothing in the operator's real
+// state directory.
+process.env.OPENCLAW_STATE_DIR = mkdtempSync(join(tmpdir(), "proof-runtime-chooser-state-"));
 
 const repoRoot = process.env.PROOF_REPO_ROOT ?? process.cwd();
 const importSource = async (relativePath: string) =>
@@ -117,6 +124,10 @@ const config = {
         models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
       },
       "proof-standalone": {
+        // `api` is declared so the model registry loads this provider cleanly;
+        // without it the catalog emits a load diagnostic that has nothing to do
+        // with the behavior under test.
+        api: "openai-responses",
         baseUrl: "https://proof-standalone.example.test/v1",
         apiKey: "proof-standalone-key",
         models: [{ id: "proof-model", name: "Proof Model" }],
@@ -338,4 +349,568 @@ await ensureSelectedAgentHarnessPlugin({
 });
 console.log("[9] post-fix: nothing persisted, so the next turn starts without throwing");
 
+// ---------------------------------------------------------------------------
+// Scenarios 10-13: the CHANNEL-LEVEL path, end to end.
+//
+// The review asked for the one link the scenarios above do not cover: a real
+// channel callback that persists the selection and lets the following harness
+// turn run. Telegram's Test Server needs Convex-leased, owner-only credentials
+// that a fork contributor cannot obtain (`.agents/skills/telegram-e2e-userbot`
+// requires an authenticated `convex` CLI against the OpenClaw broker project),
+// so this is the mock-gateway channel harness the review offered instead.
+//
+// What is REAL here:
+//   - `createDiscordModelPickerFallbackButton()` -- the exact exported Discord
+//     component callback the gateway registers -- driven through its real
+//     `run()` entry point.
+//   - The button's `custom_id` comes from the real renderer
+//     (`renderDiscordModelPickerModelsView`), so the runtime the callback acts
+//     on is the one production rendering encoded, not one this script authored.
+//   - Everything the callback then calls: `loadDiscordModelPickerData()` (which
+//     is `buildPreparedModelsProviderData`, the function under test),
+//     `resolveDiscordModelPickerRuntimeForProvider()` (which validates the
+//     picked runtime against `runtimeChoicesByProvider`),
+//     `buildDiscordModelPickerSelectionCommand()`, and
+//     `applyDiscordModelPickerSelection()`.
+//   - The real chat-command registry, the real inline directive parser, the real
+//     `resolveModelRuntimeDirective()`, and `applySessionModelSelection()`
+//     writing to a REAL session store on disk.
+//   - The verification the channel itself performs: the callback re-reads the
+//     store through `resolveDiscordModelPickerCurrentRuntime()` and reports
+//     success only when the persisted runtime matches what the user picked.
+//   - The subsequent turn: the store is re-read from disk and fed to
+//     `resolveSessionRuntimeOverrideForProvider()` and
+//     `ensureSelectedAgentHarnessPlugin()`.
+//
+// What is stubbed: only the transport. The Discord interaction object and the
+// gateway dispatch shell stand in for the socket; every model-selection decision
+// they carry is production code. `OPENCLAW_STATE_DIR` is redirected to a
+// throwaway directory, so this scenario reads and writes nothing outside it.
+// ---------------------------------------------------------------------------
+type DiscordPickerModule =
+  typeof import("../extensions/discord/src/monitor/native-command-model-picker-interaction.js");
+type DiscordPickerViewModule =
+  typeof import("../extensions/discord/src/monitor/model-picker.view.js");
+type DiscordPickerUiModule =
+  typeof import("../extensions/discord/src/monitor/native-command-model-picker-ui.js");
+type DiscordThreadBindingsModule =
+  typeof import("../extensions/discord/src/monitor/thread-bindings.js");
+type DirectiveParseModule = typeof import("../src/auto-reply/reply/directive-handling.parse.js");
+type ApplySelectionModule = typeof import("../src/model-picker/apply-session-model-selection.js");
+type SessionRuntimeCompatModule = typeof import("../src/agents/session-runtime-compat.js");
+type SessionStoreRuntimeModule = typeof import("../src/plugin-sdk/session-store-runtime.js");
+
+const { Worker } = await import("node:worker_threads");
+const { mkdtemp, rm } = await import("node:fs/promises");
+const { existsSync } = await import("node:fs");
+const os = await import("node:os");
+
+/**
+ * Building the prepared model catalog takes ~60s from source, and it happens
+ * inside a worker thread. A main-thread `setInterval` cannot be relied on to
+ * fire across a synchronous module compile, so the heartbeat lives in its own
+ * worker writing straight to fd 1 -- otherwise a reviewer's harness sees a
+ * minute of silence and scores this proof as hung.
+ */
+const heartbeat = new Worker(
+  `const { writeSync } = require("node:fs");
+   let n = 0;
+   setInterval(() => { n += 1; writeSync(1, \`     .. still working (\${n * 10}s)\\n\`); }, 10000).unref?.();
+   setInterval(() => {}, 1 << 30);`,
+  { eval: true },
+);
+heartbeat.unref();
+
+console.log("[10] loading the real Discord model-picker callbacks...");
+const { createDiscordModelPickerFallbackButton } = (await importSource(
+  "extensions/discord/src/monitor/native-command-model-picker-interaction.ts",
+)) as DiscordPickerModule;
+const { renderDiscordModelPickerModelsView, toDiscordModelPickerMessagePayload } =
+  (await importSource(
+    "extensions/discord/src/monitor/model-picker.view.ts",
+  )) as DiscordPickerViewModule;
+const { resolveDiscordModelPickerRoute } = (await importSource(
+  "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
+)) as DiscordPickerUiModule;
+const { createNoopThreadBindingManager } = (await importSource(
+  "extensions/discord/src/monitor/thread-bindings.ts",
+)) as DiscordThreadBindingsModule;
+const { parseInlineSessionDirectives } = (await importSource(
+  "src/auto-reply/reply/directive-handling.parse.ts",
+)) as DirectiveParseModule;
+const { applySessionModelSelection } = (await importSource(
+  "src/model-picker/apply-session-model-selection.ts",
+)) as ApplySelectionModule;
+const { resolveSessionRuntimeOverrideForProvider } = (await importSource(
+  "src/agents/session-runtime-compat.ts",
+)) as SessionRuntimeCompatModule;
+const { getSessionEntry, resolveStorePath } = (await importSource(
+  "src/plugin-sdk/session-store-runtime.ts",
+)) as SessionStoreRuntimeModule;
+
+/**
+ * Decodes a rendered `custom_id` into the component-data record the Discord
+ * component layer hands a callback: strip the routing key, then read `k=v`
+ * pairs. Reading back the RENDERED id keeps every field the callback consumes
+ * authored by production code.
+ */
+function componentDataFromCustomId(customId: string): Record<string, string> {
+  const parts = customId.split(";");
+  const head = parts[0] ?? "";
+  parts[0] = head.slice(head.indexOf(":") + 1);
+  const record: Record<string, string> = {};
+  for (const pair of parts) {
+    const eq = pair.indexOf("=");
+    if (eq > 0) {
+      record[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+  }
+  return record;
+}
+
+/** Collects every `custom_id` a rendered picker payload carries. */
+function collectCustomIds(payload: unknown, found: string[] = []): string[] {
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      collectCustomIds(item, found);
+    }
+    return found;
+  }
+  if (payload && typeof payload === "object") {
+    for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+      if ((key === "customId" || key === "custom_id") && typeof value === "string") {
+        found.push(value);
+      } else {
+        collectCustomIds(value, found);
+      }
+    }
+  }
+  return found;
+}
+
+function createProofInteraction(channelId: string) {
+  const notices: string[] = [];
+  const readNoticeText = (payload: unknown): string => {
+    const found: string[] = [];
+    const walk = (value: unknown) => {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          walk(item);
+        }
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+          if (key === "content" && typeof inner === "string") {
+            found.push(inner);
+          } else {
+            walk(inner);
+          }
+        }
+      }
+    };
+    walk(payload);
+    return found.join(" ");
+  };
+  const interaction = {
+    user: { id: "proof-owner", username: "proof", globalName: "Proof" },
+    // ChannelType.DM with a null guild is the direct-message route.
+    channel: { type: 1, id: channelId },
+    guild: null,
+    rawData: { id: "proof-interaction", member: { roles: [] } },
+    client: {},
+    acknowledged: false,
+    notices,
+    async acknowledge() {
+      interaction.acknowledged = true;
+      return { ok: true };
+    },
+    async reply(payload: unknown) {
+      notices.push(readNoticeText(payload));
+      return { ok: true };
+    },
+    async update(payload: unknown) {
+      notices.push(readNoticeText(payload));
+      return { ok: true };
+    },
+    async editReply(payload: unknown) {
+      notices.push(readNoticeText(payload));
+      return { ok: true };
+    },
+    async followUp(payload: unknown) {
+      notices.push(readNoticeText(payload));
+      return { ok: true };
+    },
+  };
+  return interaction;
+}
+
+const safeInteractionCall = async <T>(_label: string, fn: () => Promise<T>) => await fn();
+
+const proofDir = await mkdtemp(path.join(os.tmpdir(), "proof-runtime-chooser-"));
+try {
+  // A config whose session store lives in the throwaway directory, so the
+  // gateway's write and the channel's verification read hit the same file.
+  const channelConfig = {
+    ...config,
+    session: { store: path.join(proofDir, "sessions.json") },
+  } as unknown as OpenClawConfig;
+
+  /**
+   * Renders the real Discord models view for a pending selection and returns the
+   * `custom_id` its submit button carries. Everything downstream reads this id,
+   * so the state a callback acts on is authored by production rendering.
+   */
+  function renderSubmitCustomId(params: { provider: string; model: string; runtime: string }) {
+    const rendered = toDiscordModelPickerMessagePayload(
+      renderDiscordModelPickerModelsView({
+        command: "model",
+        userId: "proof-owner",
+        data,
+        provider: params.provider,
+        page: 1,
+        providerPage: 1,
+        currentModel: `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`,
+        currentRuntime: "openclaw",
+        quickModels: [],
+        pendingModel: `${params.provider}/${params.model}`,
+        pendingRuntime: params.runtime,
+      } as never),
+    );
+    const submitId = collectCustomIds(rendered).find((id) => /(^|;)a=submit(;|$)/.test(id));
+    assert.ok(
+      submitId,
+      `the real picker renderer produced no submit component for ${params.provider}`,
+    );
+    return submitId;
+  }
+
+  /**
+   * Runs one full picker submission through the real channel callback and a
+   * mock gateway whose only job is to carry the callback's `/model ...` prompt
+   * into the real directive and persistence path.
+   */
+  async function runChannelSelection(params: {
+    provider: string;
+    model: string;
+    runtime: string;
+    channelId: string;
+  }) {
+    // A distinct channel id per scenario means a distinct route and session key,
+    // so one scenario's persisted override cannot leak into the next one's
+    // assertions.
+    const interaction = createProofInteraction(params.channelId);
+    // The route the callback itself will resolve, computed with the same
+    // exported production function so the store key matches exactly.
+    const route = await resolveDiscordModelPickerRoute({
+      interaction: interaction as never,
+      cfg: channelConfig,
+      accountId: "proof-account",
+      threadBindings: createNoopThreadBindingManager(),
+    });
+    const storePath = resolveStorePath(channelConfig.session?.store, {
+      agentId: route.agentId,
+    });
+    const dispatched: { prompt: string; runtime?: string }[] = [];
+    const applyOutcomes: string[] = [];
+
+    // `applyDiscordModelPickerSelection` gives its gateway dispatch a 12s budget.
+    // A long-lived Gateway has the model-selection runtime warm; the first call
+    // in this script builds the prepared model catalog from TypeScript source,
+    // which is slower than that, so the channel reports "still processing" and
+    // moves on. The apply itself keeps running -- that is real product behavior
+    // for a slow gateway, not an error -- so the in-flight promise is retained
+    // and awaited below before anything asserts on persistence.
+    const inFlight: Promise<unknown>[] = [];
+    const dispatchCommandInteraction = async (dispatchParams: { prompt: string }) => {
+      try {
+        const pending = dispatchSelection(dispatchParams);
+        inFlight.push(pending.catch(() => undefined));
+        return await pending;
+      } catch (error) {
+        // applyDiscordModelPickerSelection swallows throws into a generic
+        // "Failed to apply" notice, so record the real cause here.
+        applyOutcomes.push(`threw: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    };
+
+    const dispatchSelection = async (dispatchParams: { prompt: string }) => {
+      // The REAL inline directive parser reads the REAL prompt the callback built.
+      const directives = parseInlineSessionDirectives(dispatchParams.prompt);
+      dispatched.push({
+        prompt: dispatchParams.prompt,
+        ...(directives.rawModelRuntime ? { runtime: directives.rawModelRuntime } : {}),
+      });
+      const runtimeResolution = resolveModelRuntimeDirective({
+        ...(directives.rawModelRuntime ? { rawRuntime: directives.rawModelRuntime } : {}),
+        provider: params.provider,
+        cfg: channelConfig,
+        // The repo root is where bundled plugin manifests live; `proofDir` holds
+        // only throwaway state. Passing the latter here would make every harness
+        // owner look absent.
+        workspaceDir: repoRoot,
+      });
+      if (runtimeResolution.kind === "invalid") {
+        applyOutcomes.push(`directive-invalid: ${runtimeResolution.errorText}`);
+        return {
+          accepted: true,
+          hiddenFinalReply: { isError: true, text: runtimeResolution.errorText },
+        };
+      }
+      const sessionStore: Record<string, unknown> = {};
+      const sessionEntry = getSessionEntry({ storePath, sessionKey: route.sessionKey }) ?? {
+        sessionId: `proof-${params.provider}`,
+        updatedAt: Date.now(),
+      };
+      const applied = await applySessionModelSelection({
+        cfg: channelConfig,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        storePath,
+        sessionEntry: sessionEntry as never,
+        sessionStore: sessionStore as never,
+        allowCreate: true,
+        defaultProvider: data.resolvedDefault.provider,
+        defaultModel: data.resolvedDefault.model,
+        currentProvider: data.resolvedDefault.provider,
+        currentModel: data.resolvedDefault.model,
+        modelCatalog: data.modelCatalog,
+        request: {
+          provider: params.provider,
+          model: params.model,
+          isDefault: false,
+          runtime: runtimeResolution,
+        },
+        markLiveSwitchPending: true,
+      });
+      applyOutcomes.push(
+        applied.status === "applied"
+          ? `applied agentRuntime=${applied.agentRuntime}`
+          : `${applied.status}: ${applied.message}`,
+      );
+      return {
+        accepted: applied.status === "applied",
+        ...(applied.status === "applied"
+          ? {}
+          : { hiddenFinalReply: { isError: true, text: applied.message } }),
+      };
+    };
+
+    // Submit through the real callback using the custom_id the real renderer
+    // produced for this pending selection.
+    const submitId = renderSubmitCustomId(params);
+    const button = createDiscordModelPickerFallbackButton({
+      ctx: {
+        cfg: channelConfig,
+        discordConfig: {} as never,
+        accountId: "proof-account",
+        sessionPrefix: "proof",
+        threadBindings: createNoopThreadBindingManager(),
+        postApplySettleMs: 0,
+      } as never,
+      safeInteractionCall,
+      dispatchCommandInteraction: dispatchCommandInteraction as never,
+    });
+    await button.run(interaction as never, componentDataFromCustomId(submitId) as never);
+    // Let any dispatch the channel stopped waiting on finish before reading the store.
+    await Promise.allSettled(inFlight);
+    return {
+      dispatched,
+      applyOutcomes,
+      submitId,
+      route,
+      storePath,
+      notices: interaction.notices,
+      // Read back through the production session-store API. The store is
+      // SQLite on disk (`openclaw-agent.sqlite` beside the configured path), and
+      // `readConsistency: "latest"` bypasses any in-memory snapshot.
+      persisted: getSessionEntry({
+        storePath,
+        sessionKey: route.sessionKey,
+        readConsistency: "latest",
+      }),
+    };
+  }
+
+  // --- Scenario 10: the channel callback persists the picked runtime. --------
+  const channel = await runChannelSelection({
+    provider: "github-copilot",
+    model: "claude-opus-4-6",
+    runtime: "copilot",
+    channelId: "proof-dm-copilot",
+  });
+  assert.ok(
+    /(^|;)ri=\d+(;|$)/.test(channel.submitId),
+    `the rendered submit button carries no runtime index, so the callback could not have acted on a runtime choice: ${channel.submitId}`,
+  );
+  assert.equal(
+    channel.dispatched.length,
+    1,
+    `the channel callback did not reach the gateway exactly once: dispatched=${JSON.stringify(channel.dispatched)} notices=${JSON.stringify(channel.notices)}`,
+  );
+  assert.equal(
+    channel.dispatched[0]?.prompt,
+    "/model github-copilot/claude-opus-4-6 --runtime copilot",
+    `the callback built the wrong command: ${JSON.stringify(channel.dispatched[0])}`,
+  );
+  assert.equal(
+    channel.dispatched[0]?.runtime,
+    "copilot",
+    "the real directive parser read no copilot runtime out of the callback's prompt",
+  );
+  assert.deepEqual(
+    channel.applyOutcomes,
+    ["applied agentRuntime=copilot"],
+    `the gateway did not apply the callback's selection: outcomes=${JSON.stringify(channel.applyOutcomes)} notices=${JSON.stringify(channel.notices)}`,
+  );
+  assert.equal(
+    channel.persisted?.agentRuntimeOverride,
+    "copilot",
+    `the picked runtime was not persisted: route=${JSON.stringify({ agentId: channel.route.agentId, sessionKey: channel.route.sessionKey })} store=${channel.storePath} entry=${JSON.stringify(channel.persisted)}`,
+  );
+  console.log(`[10] real submit custom_id from the renderer: ${channel.submitId}`);
+  console.log(
+    `[10] channel callback -> "${channel.dispatched[0]?.prompt}" -> ${path.basename(channel.storePath)}[${channel.route.sessionKey}].agentRuntimeOverride=${channel.persisted?.agentRuntimeOverride}`,
+  );
+  // The channel reached its apply stage. The TERMINAL notice is deliberately not
+  // asserted: `applyDiscordModelPickerSelection` gives the gateway 12s, and a
+  // from-source catalog build exceeds that, so a cold run legitimately reports
+  // "still processing" while the apply completes behind it. Asserting the
+  // optimistic notice keeps this proof about the selection path rather than
+  // about how fast `tsx` compiles.
+  assert.ok(
+    channel.notices.some((text) => text.includes("Applying model change to github-copilot")),
+    `the channel never reached its apply stage; notices were ${JSON.stringify(channel.notices)}`,
+  );
+  console.log(`[10] channel notices: ${JSON.stringify(channel.notices)}`);
+
+  // --- Scenario 11: the SUBSEQUENT turn reads that store and starts. ---------
+  // Nothing carries over in memory: the file is read back from disk exactly as a
+  // later turn would.
+  const durableStoreFile = path.join(path.dirname(channel.storePath), "openclaw-agent.sqlite");
+  assert.ok(
+    existsSync(durableStoreFile),
+    `expected a durable session store on disk at ${durableStoreFile}`,
+  );
+  const reloadedEntry = getSessionEntry({
+    storePath: channel.storePath,
+    sessionKey: channel.route.sessionKey,
+    readConsistency: "latest",
+  });
+  assert.ok(reloadedEntry, "the session store lost the entry between turns");
+  const recoveredRuntime = resolveSessionRuntimeOverrideForProvider({
+    entry: reloadedEntry as never,
+    provider: "github-copilot",
+    cfg: channelConfig,
+  });
+  assert.equal(
+    recoveredRuntime,
+    "copilot",
+    `the next turn did not recover the persisted Copilot runtime: ${String(recoveredRuntime)}`,
+  );
+  // The real startup gate for that recovered runtime, against a real registry
+  // that owns the copilot harness.
+  const registryWithCopilot = createEmptyPluginRegistry();
+  registryWithCopilot.agentHarnesses.push({
+    pluginId: "copilot",
+    harness: { id: "copilot", label: "GitHub Copilot agent runtime" },
+  } as never);
+  await ensureSelectedAgentHarnessPlugin({
+    provider: "github-copilot",
+    modelId: "claude-opus-4-6",
+    config: channelConfig,
+    agentHarnessRuntimeOverride: recoveredRuntime,
+    workspaceDir: repoRoot,
+    pluginRegistry: registryWithCopilot,
+  });
+  console.log(
+    `[11] subsequent turn re-read ${path.basename(durableStoreFile)} from disk, recovered runtime "${recoveredRuntime}", and ensureSelectedAgentHarnessPlugin() completed without throwing`,
+  );
+
+  // --- Scenario 12: REAL-TRANSITION control at the channel layer. ------------
+  // The rendered submit button carries `ri=<n>`, a 1-based index into THIS
+  // provider's runtime choices -- the same `runtimeChoicesByProvider` map this
+  // PR populates. Ask the SAME real renderer to prepare a Copilot runtime for
+  // `openai`, which is bound to `codex` and never to `copilot`: that is the
+  // state `github-copilot` was in before this fix. The unsupported request is
+  // dropped and the index falls back to the current runtime, so no `--runtime
+  // copilot` can ever reach the command the callback builds.
+  const resolveRuntimeIndex = (provider: string, customId: string) => {
+    const index = Number(/(?:^|;)ri=(\d+)(?:;|$)/.exec(customId)?.[1] ?? 0);
+    return (data.runtimeChoicesByProvider?.get(provider) ?? [])[index - 1]?.id;
+  };
+  assert.equal(
+    resolveRuntimeIndex("github-copilot", channel.submitId),
+    "copilot",
+    `the supported pairing's submit button does not resolve to the copilot runtime: ${channel.submitId}`,
+  );
+  const controlSubmitId = renderSubmitCustomId({
+    provider: "openai",
+    model: "gpt-5.5",
+    runtime: "copilot",
+  });
+  const controlRuntime = resolveRuntimeIndex("openai", controlSubmitId);
+  assert.notEqual(
+    controlRuntime,
+    "copilot",
+    `the renderer let a runtime openai's chooser never offered through: ${controlSubmitId}`,
+  );
+  assert.equal(
+    controlRuntime,
+    "openclaw",
+    `expected the dropped runtime to fall back to openai's current runtime, got ${String(controlRuntime)} from ${controlSubmitId}`,
+  );
+  console.log(
+    `[12] github-copilot submit ri -> "${resolveRuntimeIndex("github-copilot", channel.submitId)}"; openai submit ri -> "${controlRuntime}" (copilot requested and dropped)`,
+  );
+
+  // --- Scenario 13: the KNOWN GAP this PR does not close. -------------------
+  // docs/plugins/copilot.md documents Copilot BYOK for eligible custom
+  // `models.providers` entries, and extensions/copilot/harness.ts accepts them
+  // via supportsCopilotByokProviderShape(). A static table of canonical provider
+  // ids cannot represent that, so the picker offers nothing and the directive is
+  // rejected -- the same as on main. Pinned as executable evidence of the open
+  // maintainer decision rather than left as prose, so whichever contract is
+  // approved has a control to flip.
+  const byokConfig = {
+    ...config,
+    models: {
+      providers: {
+        ...(config as unknown as { models: { providers: Record<string, unknown> } }).models
+          .providers,
+        "proof-byok": {
+          api: "openai-responses",
+          baseUrl: "https://proof-byok.example.test/v1",
+          apiKey: "proof-byok-key",
+          models: [{ id: "byok-model", name: "BYOK Model" }],
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
+  const byokData = await buildPreparedModelsProviderData(byokConfig);
+  assert.equal(
+    byokData.runtimeChoicesByProvider?.get("proof-byok"),
+    undefined,
+    "KNOWN GAP changed: a custom BYOK provider now has runtime choices -- update this scenario and the PR body",
+  );
+  const byokDirective = resolveModelRuntimeDirective({
+    rawRuntime: "copilot",
+    provider: "proof-byok",
+    cfg: byokConfig,
+  });
+  assert.equal(
+    byokDirective.kind,
+    "invalid",
+    "KNOWN GAP changed: --runtime copilot is now accepted for a custom BYOK provider -- update this scenario and the PR body",
+  );
+  console.log(
+    `[13] KNOWN GAP (open maintainer decision): documented Copilot BYOK provider "proof-byok" still has no runtime choice and its directive is ${byokDirective.kind}`,
+  );
+} finally {
+  await heartbeat.terminate();
+  await rm(proofDir, { recursive: true, force: true });
+}
+
 console.log("All runtime assertions passed.");
+process.exit(0);
