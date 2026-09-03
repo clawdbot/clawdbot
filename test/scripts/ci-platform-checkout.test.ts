@@ -500,7 +500,8 @@ it.concurrent.each([
           }
         }
         if (posix) {
-          expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);
+          // Git tracks only executable state; checkout materialization applies the process umask.
+          expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
         }
         if (workflow !== "same" && workflowOwnsEvidence) {
