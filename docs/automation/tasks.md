@@ -159,6 +159,8 @@ result instead of misreporting the child execution as failed.
 Use `openclaw tasks list --status blocked` to find these tasks. They also remain
 in `--status succeeded` results because the underlying execution succeeded, and
 JSON output preserves the stored status plus the `blocked` terminal outcome.
+Blocked media-generation tasks retain bounded attachment references in the task
+result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 

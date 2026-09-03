@@ -309,6 +309,7 @@
   --menu-item-radius: var(--radius-sm);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
 
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -1110,6 +1111,17 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  wa-dropdown,
+  wa-popover,
+  wa-select {
+    --show-duration: 0ms;
+    --hide-duration: 0ms;
+  }
+
+  .chat-controls__inline-select[open] > wa-popup::part(popup) {
+    animation: none !important;
+  }
+
   *,
   *::before,
   *::after {
