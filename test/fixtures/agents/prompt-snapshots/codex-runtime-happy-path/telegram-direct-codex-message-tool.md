@@ -7,7 +7,7 @@
 - Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
 - A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.
+- This also simulates Codex workspace bootstrap routing: the agent-workspace root `AGENTS.md` through native project-doc discovery without an OpenClaw same-workspace duplicate, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.
 
 ## Scenario Metadata
 
@@ -20,6 +20,7 @@
   "model": "gpt-5.5",
   "modelProvider": "openai",
   "runtime": "codex_app_server",
+  "simulatedNativeAgentWorkspaceProjectInstructionFile": "/tmp/openclaw-happy-path/workspace/AGENTS.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
@@ -182,7 +183,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions when present, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as the native project `AGENTS.md` hierarchy, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -207,7 +208,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   },
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
-    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
+    "Codex-owned native project AGENTS.md hierarchy, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
   ],
   "openClawRuntime": {
     "collaborationModeDeveloperInstructionsFrom": "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions",
@@ -249,16 +250,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 806
   },
   "totalTextOnly": {
-    "chars": 27170,
-    "roughTokens": 6793
+    "chars": 27283,
+    "roughTokens": 6821
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84691,
-    "roughTokens": 21173
+    "chars": 84804,
+    "roughTokens": 21201
   },
   "userInputText": {
-    "chars": 863,
-    "roughTokens": 216
+    "chars": 976,
+    "roughTokens": 244
   }
 }
 ```
@@ -517,7 +518,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads the applicable project AGENTS.md hierarchy natively; OpenClaw does not add a second same-workspace copy on the initial thread start. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.
 
 # Project Context
 
