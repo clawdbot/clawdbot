@@ -336,6 +336,11 @@ bots never count. After the last human leaves, a fixed 30-second grace period
 allows short reconnects without splitting the meeting. A human returning during
 that grace cancels the stop. Otherwise, OpenClaw stops capture and generates notes.
 
+After auto-start retries are exhausted, an empty newly created capture that never
+started successfully is removed; the same cleanup runs when startup is abandoned
+because the room stays empty or the Gateway stops. Reopened meetings, captured
+utterances, saved notes, and explicit exports are retained.
+
 Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
 continue a meeting across a Gateway restart, OpenClaw reopens the most recent
 session for the same provider, account, guild, and channel when it stopped within

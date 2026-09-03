@@ -18,8 +18,11 @@ import type {
   TranscriptStopRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { activeSessions } from "./transcripts-tool-runtime.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
+// Stop paths write SQLite and generate notes; vitest's default 1s waitFor budget flakes under CI load.
+const WAIT_FOR_OPTIONS = { timeout: 15_000 } as const;
 const tempDirs = createTempDirTracker();
 const capturedText = "Private captured decision: keep these notes out of operator logs.";
 const obstruction = "existing file; do not overwrite\n";
@@ -27,11 +30,97 @@ const credential = "fixture-secret-value-1234567890";
 const providerError = `fixture stop failure\n\u001b[31mred\u001b[0m\u0085 token=${credential} ${"🦞".repeat(2_000)}`;
 
 afterEach(() => {
+  vi.useRealTimers();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 describe("transcripts auto-start stop reporting", () => {
+  it.each([
+    { whenOccupied: false, late: false },
+    { whenOccupied: false, late: true },
+    { whenOccupied: true, late: false },
+    { whenOccupied: true, late: true },
+  ])(
+    "retries startup cleanup (occupied=$whenOccupied, late=$late)",
+    async ({ whenOccupied, late }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const stateDir = tempDirs.make("transcripts-start-cleanup-");
+      const entered = createDeferred<TranscriptStartRequest>();
+      const release = createDeferred();
+      const stop = vi
+        .fn<NonNullable<TranscriptSourceProvider["stop"]>>()
+        .mockResolvedValueOnce({ ok: false, error: "cleanup temporarily unavailable" })
+        .mockImplementation(async ({ sessionId }) => ({ ok: true, sessionId }));
+      const provider: TranscriptSourceProvider = {
+        id: "start-cleanup",
+        name: "Start cleanup",
+        sourceKinds: ["live-audio"],
+        async watchOccupancy(request) {
+          request.onOccupied();
+          return { ok: true, value: { stop() {} } };
+        },
+        async start(request) {
+          entered.resolve(request);
+          await release.promise;
+          return { ok: true, session: request.session };
+        },
+        stop,
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.transcriptSourceProviders.push({
+        pluginId: provider.id,
+        provider,
+        source: import.meta.url,
+      });
+      const ctx = {
+        stateDir,
+        config: {
+          transcripts: {
+            autoStart: [{ providerId: provider.id, sessionId: "pending", whenOccupied }],
+          },
+        },
+        caller: { kind: "operator" as const, source: "local" as const },
+        logger: { warn: vi.fn() },
+      };
+      const service = createTranscriptsAutoStartService(ctx);
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        let stopping: Promise<void> | undefined;
+        let request: TranscriptStartRequest | undefined;
+        try {
+          service.start();
+          request = await entered.promise;
+          const sessionId = request.session.sessionId;
+          stopping = service.stop();
+          if (late) {
+            await vi.advanceTimersByTimeAsync(5_000);
+            await stopping;
+          }
+          release.resolve();
+          await stopping;
+          await vi.waitFor(() => {
+            expect(stop.mock.calls.map(([stopRequest]) => stopRequest.sessionId)).toEqual([
+              sessionId,
+              sessionId,
+            ]);
+            expect(activeSessions.has(sessionId)).toBe(false);
+          }, WAIT_FOR_OPTIONS);
+        } finally {
+          release.resolve();
+          await stopping;
+          await service.stop();
+          if (request) {
+            await createTranscriptsTool(ctx).execute("cleanup", {
+              action: "stop",
+              sessionId: request.session.sessionId,
+            });
+          }
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it.each([
     { name: "export failure", blocked: true, outcome: "ok", manual: false },
     { name: "fulfilled provider warning", blocked: false, outcome: "warn", manual: false },
@@ -116,7 +205,7 @@ describe("transcripts auto-start stop reporting", () => {
                 active: expect.arrayContaining([expect.objectContaining({ sessionId: id })]),
               },
             });
-          });
+          }, WAIT_FOR_OPTIONS);
           const request = requests.get(id)!;
           await request.onUtterance({ text: capturedText, final: true });
           await expect(store.readUtterancesForSession(request.session)).resolves.toEqual([

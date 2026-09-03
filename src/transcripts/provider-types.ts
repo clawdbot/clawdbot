@@ -1,13 +1,6 @@
-// Transcript provider contracts for external and manual transcript sources.
 import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-/**
- * Public contracts for transcript source providers.
- *
- * Providers can stream live utterances, import post-hoc transcript text, expose
- * status, and stop active sessions using shared session/source descriptors.
- */
 /** Supported source families for transcript providers. */
 export type TranscriptSourceKind =
   | "live-audio"

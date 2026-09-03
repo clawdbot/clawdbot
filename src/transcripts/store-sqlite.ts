@@ -12,6 +12,11 @@ import type {
   TranscriptSourceLocator,
   TranscriptUtterance,
 } from "./provider-types.js";
+import {
+  safeTranscriptPathSegment,
+  transcriptSessionExportKey,
+  transcriptSessionSelector,
+} from "./store-artifacts.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type MeetingTranscriptsDatabase = Pick<
@@ -41,6 +46,92 @@ export function meetingTranscriptSessionQuery(
     .selectFrom("meeting_transcript_sessions")
     .where("session_id", "=", session.sessionId)
     .where("started_at", "=", session.startedAt);
+}
+
+export function writeMeetingTranscriptSession(
+  database: DatabaseSync,
+  session: TranscriptSessionDescriptor,
+  now: number,
+): boolean {
+  // Admission provenance comes from this writer lock, not an earlier filesystem check.
+  const existing = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).select("session_id"),
+  );
+  const sessionValues = {
+    selector: transcriptSessionSelector(session),
+    export_key: transcriptSessionExportKey(session),
+    session_slug: safeTranscriptPathSegment(session.sessionId),
+    provider_id: session.source.providerId,
+    title: session.title ?? null,
+    source_json: JSON.stringify(session.source),
+    stopped_at: session.stoppedAt ?? null,
+    metadata_json: session.metadata ? JSON.stringify(session.metadata) : null,
+  };
+  executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .insertInto("meeting_transcript_sessions")
+      .values({
+        session_id: session.sessionId,
+        started_at: session.startedAt,
+        ...sessionValues,
+        export_manifest_json: "{}",
+        export_pending_json: "[]",
+        next_utterance_seq: 0,
+        created_at_ms: now,
+        updated_at_ms: now,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["session_id", "started_at"]).doUpdateSet({
+          ...sessionValues,
+          updated_at_ms: now,
+        }),
+      ),
+  );
+  return existing === undefined;
+}
+
+export function deleteEmptyMeetingTranscriptCandidate(
+  database: DatabaseSync,
+  session: TranscriptSessionDescriptor,
+): void {
+  const stored = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).selectAll(),
+  );
+  // Failed-start cleanup cannot consume rewritten history, notes, or exported artifacts.
+  if (
+    !stored ||
+    stored.stopped_at !== (session.stoppedAt ?? null) ||
+    stored.source_json !== JSON.stringify(session.source) ||
+    stored.title !== (session.title ?? null) ||
+    stored.metadata_json !== (session.metadata ? JSON.stringify(session.metadata) : null) ||
+    stored.next_utterance_seq !== 0 ||
+    stored.export_manifest_json !== "{}" ||
+    stored.export_pending_json !== "[]"
+  ) {
+    return;
+  }
+  const db = meetingTranscriptDb(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("meeting_transcript_sessions")
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            db
+              .selectFrom("meeting_transcript_summaries")
+              .select("session_id")
+              .where("session_id", "=", session.sessionId)
+              .where("session_started_at", "=", session.startedAt),
+          ),
+        ),
+      ),
+  );
 }
 
 export function readTranscriptSummaryInputRevision(

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
@@ -14,11 +13,9 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { transcriptSessionSelector } from "../../transcripts/store-artifacts.js";
-import { TranscriptsStore, TranscriptsSummaryChangedError } from "../../transcripts/store.js";
-import { summarizeTranscriptsWithModel } from "../../transcripts/summary-model.js";
-import { summarizeTranscripts } from "../../transcripts/summary.js";
+import type { TranscriptsStore } from "../../transcripts/store.js";
+import { persistTranscriptSummary } from "../../transcripts/summary-persistence.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
 
 const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
 
@@ -32,13 +29,16 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
+};
+
+export type TranscriptsStartCandidate = {
+  session?: TranscriptSessionDescriptor;
+  discardable?: true;
 };
 
 type ActiveTranscriptsSession = {
@@ -69,57 +69,6 @@ const startingSessionIds = new Set<string>();
 
 export function isTranscriptSessionStarting(sessionId: string): boolean {
   return startingSessionIds.has(sessionId);
-}
-
-export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
-  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: ctx.stateDir },
-  });
-}
-
-export async function readTranscriptSummary(params: {
-  config: ReturnType<typeof resolveTranscriptsConfig>;
-  cfg?: OpenClawConfig;
-  store: TranscriptsStore;
-  session: TranscriptSessionDescriptor;
-}) {
-  const utterances = await params.store.readUtterancesForSession(params.session, {
-    maxUtterances: params.config.maxUtterances,
-  });
-  const agentId = params.session.metadata?.agentId;
-  try {
-    if (params.cfg) {
-      const modeled = await summarizeTranscriptsWithModel({
-        cfg: params.cfg,
-        agentId:
-          typeof agentId === "string" && agentId.trim()
-            ? agentId
-            : resolveDefaultAgentId(params.cfg),
-        session: params.session,
-        utterances,
-      });
-      if (modeled) {
-        return modeled;
-      }
-    }
-  } catch {
-    // Historical captures may have no resolvable agent; they still get notes.
-  }
-  // Heuristic notes are the deterministic base; model inference is an enhancement
-  // so an unavailable model never loses the captured meeting notes.
-  return summarizeTranscripts({ session: params.session, utterances });
-}
-
-export async function persistTranscriptSummary(
-  params: Parameters<typeof readTranscriptSummary>[0],
-) {
-  const revision = params.store.readSummaryInputRevision(params.session);
-  if (revision === undefined) {
-    throw new TranscriptsSummaryChangedError();
-  }
-  const summary = await readTranscriptSummary(params);
-  const intendedSummaryPath = await params.store.writeSummary(summary, params.session, revision);
-  return { summary, intendedSummaryPath };
 }
 
 // Retain the exact owner on failure so stop can retry persistence without touching
@@ -229,10 +178,10 @@ export function sourceFromParams(params: Record<string, unknown>): TranscriptSou
   };
 }
 
-export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
+export function resolveSourceProvider(providerId: string, config?: OpenClawConfig) {
   return providerId === manualTranscriptSourceProvider.id
     ? manualTranscriptSourceProvider
-    : getTranscriptSourceProvider(providerId, ctx.config);
+    : getTranscriptSourceProvider(providerId, config);
 }
 
 function bindSourceToTurnAccount(params: {
@@ -240,15 +189,13 @@ function bindSourceToTurnAccount(params: {
   operation: "import" | "start";
   provider: TranscriptSourceProvider;
   source: TranscriptSourceLocator;
-}): {
-  source: TranscriptSourceLocator;
-} {
+}): TranscriptSourceLocator {
   const ownership = params.provider.accessControl;
   if (!ownership) {
-    return { source: params.source };
+    return params.source;
   }
   if (params.ctx.caller?.kind === "operator") {
-    return { source: params.source };
+    return params.source;
   }
   const ownerChannel = ownership.channelId.trim().toLowerCase();
   if (!ownerChannel) {
@@ -259,7 +206,7 @@ function bindSourceToTurnAccount(params: {
   const channel = params.ctx.caller?.channel?.trim().toLowerCase();
   const accountId = params.ctx.caller?.accountId?.trim();
   if (!channel) {
-    return { source: params.source };
+    return params.source;
   }
   if (channel !== ownerChannel) {
     throw new Error(
@@ -273,9 +220,7 @@ function bindSourceToTurnAccount(params: {
   }
   // Same-channel capture stays on the trusted inbound account; model input
   // cannot redirect or later control another configured channel account.
-  return {
-    source: { ...params.source, accountId },
-  };
+  return { ...params.source, accountId };
 }
 
 export async function authorizeTranscriptSource(params: {
@@ -311,9 +256,7 @@ export function resolveTranscriptSourceOwnership(params: {
   provider: TranscriptSourceProvider;
   source: TranscriptSourceLocator;
   configuredLifecycle?: boolean;
-}): {
-  source: TranscriptSourceLocator;
-} {
+}): TranscriptSourceLocator {
   const boundSource = bindSourceToTurnAccount(params);
   const ownership = params.provider.accessControl;
   const trustedAccountId =
@@ -321,8 +264,8 @@ export function resolveTranscriptSourceOwnership(params: {
       ? params.ctx.caller.accountId?.trim()
       : undefined;
   const sourceForResolution = trustedAccountId
-    ? { ...boundSource.source, accountId: trustedAccountId }
-    : boundSource.source;
+    ? { ...boundSource, accountId: trustedAccountId }
+    : boundSource;
   const accountResolution = ownership?.resolveAccountId({
     cfg: params.ctx.config,
     source: sourceForResolution,
@@ -346,7 +289,7 @@ export function resolveTranscriptSourceOwnership(params: {
       `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );
   }
-  return { source: providerSource };
+  return providerSource;
 }
 
 export function toolText(text: string, details?: Record<string, unknown> & { selector?: string }) {
@@ -391,7 +334,7 @@ export async function startTranscripts(params: {
   startupWaitMs?: number;
   configuredLifecycle?: true;
   lifecycleToken?: symbol;
-  existingSession?: TranscriptSessionDescriptor;
+  candidate?: TranscriptsStartCandidate;
   onCaptureEnded?: () => void;
 }) {
   if (params.abortSignal?.aborted) {
@@ -401,18 +344,17 @@ export async function startTranscripts(params: {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx.config);
   if (!provider?.start) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
   }
-  const resolvedSource = resolveTranscriptSourceOwnership({
+  const providerSource = resolveTranscriptSourceOwnership({
     ctx: params.ctx,
     operation: "start",
     provider,
     source: requestedSource,
     configuredLifecycle: params.configuredLifecycle,
   });
-  const providerSource = resolvedSource.source;
   if (!params.configuredLifecycle) {
     await authorizeTranscriptSource({
       action: "start",
@@ -421,18 +363,19 @@ export async function startTranscripts(params: {
       source: providerSource,
     });
   }
+  const previousSession = params.candidate?.session;
   const session: TranscriptSessionDescriptor = {
     sessionId:
-      params.existingSession?.sessionId ??
+      previousSession?.sessionId ??
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
       createTranscriptSessionId(),
     title:
       readTranscriptStringParam(params.rawParams, "title", { trim: true }) ??
-      params.existingSession?.title,
+      previousSession?.title,
     source: sanitizeTranscriptSourceLocator(providerSource),
-    startedAt: params.existingSession?.startedAt ?? new Date().toISOString(),
+    startedAt: previousSession?.startedAt ?? new Date().toISOString(),
     metadata: {
-      ...params.existingSession?.metadata,
+      ...previousSession?.metadata,
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
     },
   };
@@ -448,7 +391,13 @@ export async function startTranscripts(params: {
   };
   const startupAbort = createStartupAbortScope(params.abortSignal);
   try {
-    await params.store.writeSession(session);
+    const inserted = await params.store.writeSession(session);
+    if (params.candidate) {
+      params.candidate.session = session;
+      if (inserted) {
+        params.candidate.discardable = true;
+      }
+    }
     let result: TranscriptsStartResult;
     try {
       result = await provider.start({
@@ -501,6 +450,10 @@ export async function startTranscripts(params: {
     if (!result.ok) {
       entry.phase = "failed";
       throw new Error(result.error);
+    }
+    // Accepted capture is a real meeting even when it ends without any speech.
+    if (params.candidate) {
+      delete params.candidate.discardable;
     }
     activeSessions.set(session.sessionId, entry);
     if (!session.title) {
@@ -570,10 +523,14 @@ export async function startTranscripts(params: {
       }
       await finalizeTranscriptCapture({ ...params, entry });
     }
-    // Failed reopening must not erase the durable stop time: the next bounded
-    // attempt still needs to find this same meeting, not create an empty sibling.
-    if (entry.phase === "failed" && params.existingSession) {
-      await params.store.writeSession(params.existingSession);
+    // Retain one tuple through retries and preserve the stop time of reopened history.
+    if (entry.phase === "failed" && params.candidate) {
+      const stopped = {
+        ...(previousSession ?? session),
+        stoppedAt: previousSession?.stoppedAt ?? new Date().toISOString(),
+      };
+      await params.store.writeSession(stopped);
+      params.candidate.session = stopped;
     }
     throw error;
   } finally {

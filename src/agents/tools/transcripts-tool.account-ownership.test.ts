@@ -29,8 +29,6 @@ function createTool(
     config: { transcripts: { enabled: true } },
     stateDir,
     agentId,
-    ...(origin ? { agentChannel: origin.channel } : {}),
-    ...(origin?.accountId ? { agentAccountId: origin.accountId } : {}),
     caller: origin
       ? {
           kind: "channel",

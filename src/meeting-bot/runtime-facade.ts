@@ -129,6 +129,7 @@ export function createMeetingRuntimeFacade<
         speakViaTransport: async () => undefined,
         durableTranscripts: {
           config: params.fullConfig.transcripts,
+          cfg: params.fullConfig,
           ...options.messages.durableTranscripts,
         },
       });

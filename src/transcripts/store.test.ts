@@ -142,7 +142,7 @@ describe("TranscriptsStore", () => {
     const { store } = createStore();
     await store.writeSession(session(".", "2026-07-01T10:00:00.000Z"));
     await store.writeSession(session(".", "2026-07-02T10:00:00.000Z"));
-    await expect(store.writeSession(session(".."))).resolves.toBeUndefined();
+    await store.writeSession(session(".."));
   });
 
   it("matches bare selector slugs literally and case-sensitively", async () => {
@@ -192,7 +192,7 @@ describe("TranscriptsStore", () => {
     const lower = session("capital", "2026-07-01T11:00:00.000Z");
     await store.writeSession(lower);
     await store.materializeSessionArtifacts(lower, "metadata");
-    await expect(store.writeSession(upper)).resolves.toBeUndefined();
+    await store.writeSession(upper);
 
     if (fs.existsSync(store.sessionDir(upper))) {
       await expect(store.materializeSessionArtifacts(lower, "metadata")).resolves.toMatchObject({
@@ -217,7 +217,7 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(upper, "transcript");
     fs.rmSync(artifacts.metadataPath);
 
-    await expect(store.writeSession(lower)).resolves.toBeUndefined();
+    await store.writeSession(lower);
   });
 
   it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
@@ -251,7 +251,7 @@ describe("TranscriptsStore", () => {
     if (fs.existsSync(path.join(store.sessionDir(lower), "transcript.jsonl"))) {
       await expect(store.writeSession(lower)).rejects.toThrow("run openclaw doctor --fix");
     } else {
-      await expect(store.writeSession(lower)).resolves.toBeUndefined();
+      await store.writeSession(lower);
     }
   });
 
@@ -300,9 +300,7 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(target, "transcript");
     fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
 
-    await expect(
-      store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
-    ).resolves.toBeUndefined();
+    await store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" });
     await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
       stoppedAt: "2026-07-01T11:00:00.000Z",
     });

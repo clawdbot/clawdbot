@@ -95,6 +95,10 @@ suite.define(() => {
           await view.getByText("Ada: prepare the revised prototype.", { exact: true }).isVisible(),
         ).toBe(true);
         expect.soft(await view.locator("details").count()).toBe(0);
+        expect(await view.getByRole("heading", { name: "Participants", exact: true }).count()).toBe(
+          1,
+        );
+        expect.soft(await view.getByText("Participants:", { exact: true }).count()).toBe(0);
         expect(await view.getByRole("heading", { name: "Transcript", exact: true }).count()).toBe(
           1,
         );

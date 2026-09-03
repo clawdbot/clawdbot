@@ -191,7 +191,7 @@ export class DiscordVoiceManager {
   }
 
   watchChannelOccupancy(
-    params: { guildId: string; channelId: string },
+    params: { guildId: string; channelId: string; previouslyOccupied?: boolean },
     listener: (state: { occupied: boolean }) => void,
   ): () => void {
     if (this.destroyed) {
@@ -199,7 +199,7 @@ export class DiscordVoiceManager {
     }
     const guildId = params.guildId.trim();
     const channelId = params.channelId.trim();
-    let wasOccupied = false;
+    let wasOccupied = params.previouslyOccupied ?? false;
     const watcher = {
       guildId,
       refresh: () => {

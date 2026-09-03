@@ -11,7 +11,9 @@ import {
 } from "./transcripts-tool-runtime.js";
 import {
   canAccessTranscriptSession,
+  isTranscriptSelectionCurrent,
   resolveTranscriptToolSession,
+  transcriptSelectionNoLongerActive,
 } from "./transcripts-tool-selection.js";
 
 const TRANSCRIPTS_SHOW_MAX_CHARS = 12_000;
@@ -39,7 +41,7 @@ export async function listPastTranscripts({ ctx, store, rawParams }: ReadParams)
       const { overview: _overview, ...session } = projectTranscriptSession(
         entry,
         isTranscriptSessionActive(entry.session),
-        resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
+        resolveSourceProvider(entry.session.source.providerId, ctx.config)?.name,
       );
       sessions.push(session);
       if (sessions.length === limit) {
@@ -78,6 +80,9 @@ export async function showPastTranscript(params: ReadParams) {
   }
   const notes = await readTranscriptNotes(store, selection.session);
   ctx.assertCallerActive?.();
+  if (!isTranscriptSelectionCurrent(selection, store)) {
+    return transcriptSelectionNoLongerActive(selection);
+  }
   const session = projectTranscriptSession(
     { ...entry, session: selection.session },
     isTranscriptSessionActive(selection.session),
@@ -104,6 +109,7 @@ export async function showPastTranscript(params: ReadParams) {
   return {
     content: [{ type: "text" as const, text }],
     details: {
+      text,
       selector,
       sessionId,
       title,

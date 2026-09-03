@@ -12,11 +12,13 @@ import type {
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { activeSessions, isTranscriptSessionStarting } from "./transcripts-tool-runtime.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => {
+  vi.restoreAllMocks();
   activeSessions.clear();
   vi.useRealTimers();
   closeOpenClawStateDatabaseForTest();
@@ -102,7 +104,225 @@ function harness() {
   };
 }
 
+async function waitForFailedAttempt(h: ReturnType<typeof harness>, count: number) {
+  await vi.waitFor(() => {
+    expect(h.requests).toHaveLength(count);
+    expect(isTranscriptSessionStarting(h.requests[count - 1]!.session.sessionId)).toBe(false);
+  });
+}
+
 describe("occupancy-driven transcript lifecycle", () => {
+  it("retains the admitted descriptor when retry admission fails", async () => {
+    const h = harness();
+    h.provider.start = async (request) => {
+      h.requests.push(request);
+      return { ok: false, error: "capture unavailable" };
+    };
+    await withPluginRuntimeRegistryScope(h.registry, async () => {
+      const service = h.service();
+      try {
+        service.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        await waitForFailedAttempt(h, 1);
+        vi.spyOn(TranscriptsStore.prototype, "writeSession").mockRejectedValue(
+          new Error("retry admission write failed"),
+        );
+        for (let attempt = 1; attempt < 12; attempt++) {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        await vi.waitFor(() => expect(h.logger.warn).toHaveBeenCalledOnce());
+        expect(await h.store.listSessionEntries()).toEqual([]);
+        expect(h.requests).toHaveLength(1);
+      } finally {
+        await service.stop();
+      }
+    });
+  });
+
+  it.each([false, true])(
+    "discards only the empty admitted row after twelve failed starts (occupied=%s)",
+    async (whenOccupied) => {
+      const h = harness();
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        return { ok: false, error: "capture unavailable" };
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service([{ ...h.entry, whenOccupied }]);
+        try {
+          service.start();
+          if (whenOccupied) {
+            await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+            h.watches[0]!.onOccupied();
+          }
+          await waitForFailedAttempt(h, 1);
+          for (let attempt = 1; attempt < 12; attempt++) {
+            expect(await h.store.listSessionEntries()).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(5_000);
+            await vi.waitFor(() =>
+              expect(isTranscriptSessionStarting(h.requests[0]!.session.sessionId)).toBe(false),
+            );
+          }
+          expect(
+            new Set(h.requests.map(({ session }) => `${session.sessionId}/${session.startedAt}`))
+              .size,
+          ).toBe(1);
+          await vi.waitFor(() => expect(h.logger.warn).toHaveBeenCalledOnce());
+          await vi.waitFor(async () => expect(await h.store.listSessionEntries()).toEqual([]));
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(h.provider.start).toHaveBeenCalledTimes(12);
+        } finally {
+          await service.stop();
+        }
+      });
+    },
+  );
+
+  it.each([
+    "reopened empty",
+    "inline utterance",
+    "partial speech after stop-write failure",
+    "concurrent summary",
+    "export",
+  ] as const)("preserves %s evidence after terminal startup failure", async (retained) => {
+    const h = harness();
+    const partialSpeech =
+      retained === "inline utterance" || retained === "partial speech after stop-write failure";
+    const summaryGate = createDeferred();
+    const historical = {
+      sessionId: "existing-empty-meeting",
+      startedAt: "2026-08-01T11:50:00.000Z",
+      stoppedAt: "2026-08-01T11:59:00.000Z",
+      source: {
+        providerId: h.provider.id,
+        accountId: "default",
+        guildId: h.entry.guildId,
+        channelId: h.entry.channelId,
+      },
+    };
+    if (retained === "reopened empty") {
+      await h.store.writeSession(historical);
+    }
+    h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+      h.requests.push(request);
+      if (partialSpeech && h.requests.length === 1) {
+        await request.onUtterance({ text: "Captured before startup failed.", final: true });
+        if (retained === "partial speech after stop-write failure") {
+          vi.spyOn(TranscriptsStore.prototype, "writeSession").mockRejectedValueOnce(
+            new Error("stop timestamp write failed"),
+          );
+        }
+      }
+      if (
+        (retained === "concurrent summary" || retained === "export") &&
+        h.requests.length === 12
+      ) {
+        await summaryGate.promise;
+      }
+      return { ok: false, error: "capture unavailable" };
+    });
+    await withPluginRuntimeRegistryScope(h.registry, async () => {
+      const service = h.service();
+      try {
+        service.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        for (let attempt = 1; attempt <= 12; attempt++) {
+          if ((retained === "concurrent summary" || retained === "export") && attempt === 12) {
+            await vi.waitFor(() => expect(h.requests).toHaveLength(12));
+            const session = h.requests[11]!.session;
+            if (retained === "export") {
+              await h.store.materializeSessionArtifacts(session, "metadata");
+            } else {
+              await h.store.writeSummary(
+                summarizeTranscripts({ session, utterances: [] }),
+                session,
+              );
+            }
+            summaryGate.resolve();
+          }
+          await waitForFailedAttempt(h, attempt);
+          if (attempt < 12) {
+            await vi.advanceTimersByTimeAsync(5_000);
+          }
+        }
+        await vi.waitFor(() => expect(h.logger.warn).toHaveBeenCalledOnce());
+        const entries = await h.store.listSessionEntries();
+        expect(entries).toHaveLength(1);
+        const session = entries[0]!.session;
+        if (retained === "reopened empty") {
+          expect(session).toEqual(historical);
+          expect(await h.store.readUtterancesForSession(session)).toEqual([]);
+          expect(await h.store.readSummary(session)).toEqual({});
+        } else if (partialSpeech) {
+          expect(session.stoppedAt).toEqual(expect.any(String));
+          expect(await h.store.readUtterancesForSession(session)).toMatchObject([
+            { text: "Captured before startup failed.", final: true },
+          ]);
+        } else if (retained === "export") {
+          expect(await h.store.readSummary(session)).toEqual({});
+        } else {
+          expect(await h.store.readSummary(session)).toMatchObject({
+            summary: { utteranceCount: 0 },
+            markdown: expect.stringContaining("No transcript captured yet."),
+          });
+        }
+      } finally {
+        summaryGate.resolve();
+        await service.stop();
+      }
+    });
+  });
+
+  it.each(["empty grace", "shutdown", "late shutdown", "stop-write failure"] as const)(
+    "discards an empty failed start when interrupted by %s",
+    async (interruption) => {
+      const h = harness();
+      const release = createDeferred();
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        await release.promise;
+        return { ok: false, error: "startup interrupted" };
+      });
+      await withPluginRuntimeRegistryScope(h.registry, async () => {
+        const service = h.service();
+        let stopping: Promise<void> | undefined;
+        try {
+          service.start();
+          await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+          h.watches[0]!.onOccupied();
+          await vi.waitFor(() => expect(h.requests).toHaveLength(1));
+          if (interruption === "stop-write failure") {
+            vi.spyOn(TranscriptsStore.prototype, "writeSession").mockRejectedValueOnce(
+              new Error("stop timestamp write failed"),
+            );
+          }
+          if (interruption === "empty grace") {
+            h.watches[0]!.onEmpty();
+            await vi.advanceTimersByTimeAsync(30_000);
+          } else {
+            stopping = service.stop();
+            if (interruption === "late shutdown") {
+              await vi.advanceTimersByTimeAsync(5_000);
+              await stopping;
+            }
+          }
+          release.resolve();
+          await stopping;
+          await waitForFailedAttempt(h, 1);
+          await vi.waitFor(async () => expect(await h.store.listSessionEntries()).toEqual([]));
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(h.provider.start).toHaveBeenCalledOnce();
+        } finally {
+          release.resolve();
+          await stopping;
+          await service.stop();
+        }
+      });
+    },
+  );
+
   it("retains one stopped candidate across failed starts and admits synchronous initial occupancy", async () => {
     const h = harness();
     const identities: Array<{ sessionId: string; startedAt: string }> = [];

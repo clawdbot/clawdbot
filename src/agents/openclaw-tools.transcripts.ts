@@ -4,7 +4,7 @@ import { bindActiveOperatorTurnAuthority } from "./cron-creator-authority-contex
 import type { AnyAgentTool } from "./tools/common.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 
-function resolveTranscriptCaller(options: {
+type TranscriptCallerOptions = {
   agentChannel?: string;
   agentAccountId?: string;
   agentGroupId?: string | null;
@@ -16,7 +16,11 @@ function resolveTranscriptCaller(options: {
   gatewayCallerScheduled?: boolean;
   requesterSenderId?: string | null;
   runId?: string;
-}): { caller: TranscriptToolCaller; assertCallerActive?: () => void } | undefined {
+};
+
+function resolveTranscriptCaller(
+  options: TranscriptCallerOptions,
+): { caller: TranscriptToolCaller; assertCallerActive?: () => void } | undefined {
   const accountId = options.gatewayCallerAccountId ?? options.agentAccountId;
   const channel =
     options.gatewayCallerLocal || options.gatewayCallerChannel === null
@@ -57,21 +61,7 @@ function resolveTranscriptCaller(options: {
 export function resolveTranscriptsTool(
   config: OpenClawConfig | undefined,
   agentId: string,
-  options:
-    | {
-        agentChannel?: string;
-        agentAccountId?: string;
-        gatewayCallerAccountId?: string;
-        gatewayCallerChannel?: string | null;
-        gatewayCallerLocal?: boolean;
-        gatewayCallerScheduled?: boolean;
-        requesterSenderId?: string | null;
-        runId?: string;
-        agentGroupId?: string | null;
-        agentGroupSpace?: string | null;
-        agentMemberRoleIds?: string[];
-      }
-    | undefined,
+  options: TranscriptCallerOptions | undefined,
 ): AnyAgentTool | undefined {
   if (config?.transcripts?.enabled === false) {
     return undefined;
@@ -82,10 +72,6 @@ export function resolveTranscriptsTool(
   }
   return createTranscriptsTool({
     agentId,
-    agentChannel: options?.gatewayCallerLocal
-      ? undefined
-      : (options?.gatewayCallerChannel ?? options?.agentChannel),
-    agentAccountId: options?.gatewayCallerAccountId ?? options?.agentAccountId,
     caller: caller.caller,
     ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
     config,

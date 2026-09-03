@@ -1,6 +1,4 @@
-import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
@@ -12,8 +10,8 @@ import type {
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.js";
-import { TranscriptsStore } from "../transcripts/store.js";
-import { summarizeTranscripts } from "../transcripts/summary.js";
+import { createTranscriptsStore } from "../transcripts/store.js";
+import { persistTranscriptSummary } from "../transcripts/summary-persistence.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
 import type {
@@ -24,7 +22,7 @@ import type {
 
 const CAPTURE_INTERVAL_MS = 5_000;
 
-type ActiveCapture<TSession extends MeetingSessionRecord> = {
+type ActiveCapture = {
   closing: boolean;
   descriptor: TranscriptSessionDescriptor;
   finalCaptureError?: string;
@@ -33,7 +31,6 @@ type ActiveCapture<TSession extends MeetingSessionRecord> = {
   initializationWarned: boolean;
   polling: boolean;
   runCapture(task: () => Promise<void>): Promise<void>;
-  session: TSession;
   timer?: ReturnType<typeof setInterval>;
   utteranceCount: number;
 };
@@ -94,11 +91,8 @@ export function createMeetingDurableTranscriptBridge<
   options: MeetingDurableTranscriptsOptions;
 }): MeetingDurableTranscriptBridge<TSession> {
   const config = resolveTranscriptsConfig(params.options.config);
-  const stateDir = params.options.stateDir ?? resolveStateDir();
-  const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const captures = new Map<string, ActiveCapture<TSession>>();
+  const store = createTranscriptsStore(params.options.stateDir);
+  const captures = new Map<string, ActiveCapture>();
   const pendingSubscribers = new Map<string, Subscriber>();
   const subscribers = new Map<string, Subscriber>();
   const lifecycleTasks = new KeyedAsyncQueue();
@@ -144,18 +138,17 @@ export function createMeetingDurableTranscriptBridge<
           );
           return await result;
         };
-        const active: ActiveCapture<TSession> = {
+        const active: ActiveCapture = {
           closing: false,
           descriptor,
           initialized: false,
           initializationWarned: false,
           polling: false,
           runCapture,
-          session,
           utteranceCount: 0,
         };
         captures.set(session.id, active);
-        // Start and stop share runLifecycle(session.id), so teardown cannot mark
+        // Start and stop share lifecycleTasks, so teardown cannot mark
         // this published capture closing while initialization awaits.
         const initialize = async () => {
           if (active.initialized) {
@@ -323,13 +316,12 @@ export function createMeetingDurableTranscriptBridge<
         try {
           await tasks.enqueue(session.id, async () => {
             await store.writeSession(stopped);
-            const utterances = await store.readUtterancesForSession(stopped, {
-              maxUtterances: config.maxUtterances,
+            await persistTranscriptSummary({
+              config,
+              cfg: params.options.cfg,
+              store,
+              session: stopped,
             });
-            await store.writeSummary(
-              summarizeTranscripts({ session: stopped, utterances }),
-              stopped,
-            );
           });
         } catch (error) {
           params.logger.warn(

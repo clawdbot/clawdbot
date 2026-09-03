@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { resolveStateDir } from "../config/paths.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import {
@@ -42,6 +43,7 @@ import {
 import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
 import {
   appendMeetingTranscriptUtterance,
+  deleteEmptyMeetingTranscriptCandidate,
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
@@ -51,6 +53,7 @@ import {
   sessionFromRow,
   summaryFromRow,
   utteranceFromRow,
+  writeMeetingTranscriptSession,
 } from "./store-sqlite.js";
 import type * as StoreTypes from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
@@ -58,6 +61,12 @@ import { renderTranscriptsMarkdown } from "./summary.js";
 
 export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
+
+export function createTranscriptsStore(stateDir: string = resolveStateDir()): TranscriptsStore {
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
 
 export class TranscriptsSummaryChangedError extends Error {
   constructor() {
@@ -77,11 +86,11 @@ export class TranscriptsStore {
     return openOpenClawStateDatabase(this.databaseOptions);
   }
 
-  private transaction(
+  private transaction<T>(
     operationLabel: string,
-    operation: (database: OpenClawStateDatabase) => void,
-  ): void {
-    runOpenClawStateWriteTransaction(operation, this.databaseOptions, { operationLabel });
+    operation: (database: OpenClawStateDatabase) => T,
+  ): T {
+    return runOpenClawStateWriteTransaction(operation, this.databaseOptions, { operationLabel });
   }
 
   sessionDir(session: TranscriptSessionDescriptor): string {
@@ -348,26 +357,19 @@ export class TranscriptsStore {
     return queryTranscriptReadEntries(this.database().db, options);
   }
 
-  readUtteranceEntries(session: TranscriptSessionDescriptor, maxUtterances: number) {
+  readUtteranceEntries(session: TranscriptSessionDescriptor, maxUtterances?: number) {
     const database = this.database();
+    const query = meetingTranscriptUtteranceQuery(database.db, session).selectAll();
+    if (maxUtterances === undefined) {
+      return executeSqliteQuerySync(database.db, query.orderBy("sequence", "asc")).rows;
+    }
     return executeSqliteQuerySync(
       database.db,
-      meetingTranscriptUtteranceQuery(database.db, session)
-        .select([
-          "sequence",
-          "started_at",
-          "ended_at",
-          "speaker_id",
-          "speaker_label",
-          "text",
-          "final",
-        ])
-        .orderBy("sequence", "desc")
-        .limit(maxUtterances),
+      query.orderBy("sequence", "desc").limit(maxUtterances),
     ).rows.toReversed();
   }
 
-  async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
+  async writeSession(session: TranscriptSessionDescriptor): Promise<boolean> {
     ensureMeetingTranscriptsSchema(this.databaseOptions);
     if (
       !this.readSessionByIdentity(session) &&
@@ -394,40 +396,16 @@ export class TranscriptsStore {
         }
       }
     }
-    const sessionValues = {
-      selector: transcriptSessionSelector(session),
-      export_key: transcriptSessionExportKey(session),
-      session_slug: safeTranscriptPathSegment(session.sessionId),
-      provider_id: session.source.providerId,
-      title: session.title ?? null,
-      source_json: JSON.stringify(session.source),
-      stopped_at: session.stoppedAt ?? null,
-      metadata_json: session.metadata ? JSON.stringify(session.metadata) : null,
-    };
-    const now = Date.now();
-    this.transaction("meeting-transcripts.session.write", ({ db: database }) => {
-      executeSqliteQuerySync(
-        database,
-        meetingTranscriptDb(database)
-          .insertInto("meeting_transcript_sessions")
-          .values({
-            session_id: session.sessionId,
-            started_at: session.startedAt,
-            ...sessionValues,
-            export_manifest_json: "{}",
-            export_pending_json: "[]",
-            next_utterance_seq: 0,
-            created_at_ms: now,
-            updated_at_ms: now,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["session_id", "started_at"]).doUpdateSet({
-              ...sessionValues,
-              updated_at_ms: now,
-            }),
-          ),
-      );
-    });
+    return this.transaction("meeting-transcripts.session.write", ({ db }) =>
+      writeMeetingTranscriptSession(db, session, Date.now()),
+    );
+  }
+
+  deleteEmptySessionCandidate(session: TranscriptSessionDescriptor): void {
+    ensureMeetingTranscriptsSchema(this.databaseOptions);
+    this.transaction("meeting-transcripts.session.discard-empty", ({ db }) =>
+      deleteEmptyMeetingTranscriptCandidate(db, session),
+    );
   }
 
   async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {
@@ -514,20 +492,8 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
-    const database = this.database();
     const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
-    const query = meetingTranscriptUtteranceQuery(database.db, session).selectAll();
-    if (maxUtterances === undefined) {
-      return executeSqliteQuerySync(database.db, query.orderBy("sequence", "asc")).rows.map(
-        utteranceFromRow,
-      );
-    }
-    return executeSqliteQuerySync(
-      database.db,
-      query.orderBy("sequence", "desc").limit(maxUtterances),
-    )
-      .rows.toReversed()
-      .map(utteranceFromRow);
+    return this.readUtteranceEntries(session, maxUtterances).map(utteranceFromRow);
   }
 
   async writeSummary(

@@ -49,7 +49,6 @@ async function createHarness(
       stateDir,
       logger,
       ...(agentId ? { agentId } : {}),
-      ...(origin ? { agentChannel: origin.channel, agentAccountId: origin.accountId } : {}),
       caller: origin
         ? {
             kind: "channel",

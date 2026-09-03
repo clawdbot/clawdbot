@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
@@ -9,6 +10,7 @@ import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-type
 
 export type MeetingDurableTranscriptsOptions = {
   config?: unknown;
+  cfg?: OpenClawConfig;
   providerId: string;
   providerName: string;
   stateDir?: string;

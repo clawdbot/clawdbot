@@ -1,11 +1,9 @@
 // `openclaw transcripts`: SQLite-backed transcript inspector and artifact exporter.
-import path from "node:path";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { resolveStateDir } from "../../config/paths.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
 import {
-  TranscriptsStore,
+  createTranscriptsStore,
   type TranscriptArtifactKind,
   type TranscriptsSessionEntry,
 } from "../../transcripts/store.js";
@@ -19,13 +17,6 @@ type TranscriptsPathOptions = TranscriptsCliOptions & {
   metadata?: boolean;
   transcript?: boolean;
 };
-
-function createStore(): TranscriptsStore {
-  const stateDir = resolveStateDir();
-  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-}
 
 function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
@@ -52,7 +43,7 @@ function formatSessionLine(entry: TranscriptsSessionEntry): string {
 }
 
 async function listCommand(options: TranscriptsCliOptions): Promise<void> {
-  const sessions = await createStore().listSessionEntries();
+  const sessions = await createTranscriptsStore().listSessionEntries();
   if (options.json) {
     writeJson(
       sessions.map((entry) => ({
@@ -80,7 +71,7 @@ async function listCommand(options: TranscriptsCliOptions): Promise<void> {
 }
 
 async function showCommand(sessionSelector: string, options: TranscriptsCliOptions): Promise<void> {
-  const store = createStore();
+  const store = createTranscriptsStore();
   const entry = await store.readSessionEntry(sessionSelector);
   if (!entry) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
@@ -120,7 +111,7 @@ function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifa
 }
 
 async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
-  const store = createStore();
+  const store = createTranscriptsStore();
   const entry = await store.readSessionEntry(selector);
   if (!entry) {
     throw new Error(`transcripts session not found: ${selector}`);

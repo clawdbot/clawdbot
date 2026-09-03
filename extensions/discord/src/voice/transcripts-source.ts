@@ -1,7 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-// Discord plugin module implements transcripts source behavior.
 import type {
   TranscriptSourceProvider,
   TranscriptOccupancyWatchRequest,
@@ -13,6 +12,10 @@ import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
+const occupancyWatchers = new Set<{
+  accountId: string;
+  setManager: (manager: DiscordVoiceManager | undefined) => void;
+}>();
 const managerWaiters = new Set<{
   accountId?: string;
   resolve: () => void;
@@ -45,6 +48,11 @@ export function setDiscordTranscriptsVoiceManager(params: {
     }
   } else {
     managersByAccountId.delete(params.accountId);
+  }
+  for (const watcher of occupancyWatchers) {
+    if (watcher.accountId === params.accountId) {
+      watcher.setManager(params.manager ?? undefined);
+    }
   }
 }
 
@@ -118,7 +126,10 @@ async function waitForManager(
     TranscriptOccupancyWatchRequest,
     "cfg" | "source" | "abortSignal" | "startupWaitMs"
   >,
-): Promise<{ ok: true; value: DiscordVoiceManager | undefined } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; value: { accountId: string; manager: DiscordVoiceManager } | undefined }
+  | { ok: false; error: string }
+> {
   const accountResolution = resolveDiscordTranscriptsAccountId({
     cfg: request.cfg,
     source: request.source,
@@ -128,8 +139,8 @@ async function waitForManager(
   }
   const accountId = accountResolution.value;
   const existing = accountId ? managersByAccountId.get(accountId) : undefined;
-  if (existing) {
-    return { ok: true, value: existing };
+  if (accountId && existing) {
+    return { ok: true, value: { accountId, manager: existing } };
   }
   if (request.abortSignal?.aborted) {
     return { ok: true, value: undefined };
@@ -156,7 +167,8 @@ async function waitForManager(
   if (request.abortSignal?.aborted) {
     return { ok: true, value: undefined };
   }
-  return { ok: true, value: accountId ? managersByAccountId.get(accountId) : undefined };
+  const manager = accountId ? managersByAccountId.get(accountId) : undefined;
+  return { ok: true, value: accountId && manager ? { accountId, manager } : undefined };
 }
 
 export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
@@ -233,18 +245,53 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     if (!guildId || !channelId) {
       return { ok: false, error: "Discord transcripts require guildId and channelId." };
     }
-    const unsubscribe = manager.watchChannelOccupancy({ guildId, channelId }, ({ occupied }) => {
-      if (occupied) {
-        request.onOccupied();
-      } else {
-        request.onEmpty();
-      }
-    });
+    let occupied = false;
+    let attachedManager: DiscordVoiceManager | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const watcher = {
+      accountId: manager.accountId,
+      setManager(nextManager: DiscordVoiceManager | undefined) {
+        if (attachedManager === nextManager) {
+          return;
+        }
+        unsubscribe?.();
+        unsubscribe = undefined;
+        attachedManager = nextManager;
+        if (!nextManager) {
+          return;
+        }
+        // Account restarts replace managers; retain the last known occupancy until
+        // the replacement has a snapshot, so an outage cannot manufacture emptiness.
+        const release = nextManager.watchChannelOccupancy(
+          { guildId, channelId, ...(occupied ? { previouslyOccupied: true } : {}) },
+          ({ occupied: nextOccupied }) => {
+            if (attachedManager !== nextManager) {
+              return;
+            }
+            occupied = nextOccupied;
+            if (occupied) {
+              request.onOccupied();
+            } else {
+              request.onEmpty();
+            }
+          },
+        );
+        // Initial occupancy can synchronously abort or replace this subscription.
+        if (attachedManager === nextManager) {
+          unsubscribe = release;
+        } else {
+          release();
+        }
+      },
+    };
     const stop = () => {
-      unsubscribe();
+      occupancyWatchers.delete(watcher);
+      watcher.setManager(undefined);
       request.abortSignal?.removeEventListener("abort", stop);
     };
+    occupancyWatchers.add(watcher);
     request.abortSignal?.addEventListener("abort", stop, { once: true });
+    watcher.setManager(managersByAccountId.get(watcher.accountId));
     if (request.abortSignal?.aborted) {
       stop();
     }
@@ -255,7 +302,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     if (!managerResolution.ok) {
       return managerResolution;
     }
-    const manager = managerResolution.value;
+    const manager = managerResolution.value?.manager;
     if (!manager) {
       return { ok: false, error: "Discord voice manager is not available." };
     }

@@ -293,8 +293,6 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
-        agentChannel: "telegram",
-        agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
         config: injectedConfig,
       }),
@@ -312,8 +310,6 @@ describe("createOpenClawTools transcript ownership wiring", () => {
 
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: "discord",
-        agentAccountId: "delivery",
         caller: expect.objectContaining({
           kind: "channel",
           channel: "discord",
@@ -361,8 +357,6 @@ describe("createOpenClawTools transcript ownership wiring", () => {
 
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        agentChannel: undefined,
-        agentAccountId: "creator",
         caller: { kind: "operator", source: "scheduled" },
       }),
     );

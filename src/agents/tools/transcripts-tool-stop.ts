@@ -1,11 +1,11 @@
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
+import { persistTranscriptSummary } from "../../transcripts/summary-persistence.js";
 import {
   activeSessions,
   finalizeTranscriptCapture,
   isTranscriptSessionStarting,
-  persistTranscriptSummary,
   readTranscriptStringParam,
   resolveSourceProvider,
   stopPendingTranscriptCapture,
@@ -91,7 +91,7 @@ export async function stopTranscripts(params: {
   try {
     let providerStopError: string | undefined;
     if (selectedActive && selectedActive.phase !== "terminal") {
-      const provider = resolveSourceProvider(selectedActive.providerId, params.ctx);
+      const provider = resolveSourceProvider(selectedActive.providerId, params.ctx.config);
       if (selectedActive.cleanupPending) {
         providerStopError = await stopPendingTranscriptCapture({
           ctx: params.ctx,

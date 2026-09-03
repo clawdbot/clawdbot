@@ -1,8 +1,3 @@
-/**
- * transcripts built-in tool.
- *
- * Manages live capture, manual import, summarization, and process-local transcript sessions.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
@@ -17,20 +12,22 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import {
+  createTranscriptsStore,
   transcriptSessionSelector,
   TranscriptsSummaryChangedError,
   type TranscriptsStore,
 } from "../../transcripts/store.js";
+import {
+  persistTranscriptSummary,
+  readTranscriptSummary,
+} from "../../transcripts/summary-persistence.js";
 import type { AnyAgentTool } from "./common.js";
 import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
 import {
   activeSessions,
   authorizeTranscriptSource,
   createTranscriptSessionId,
-  createTranscriptsStore,
-  persistTranscriptSummary,
   readTranscriptStringParam,
-  readTranscriptSummary,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,
@@ -91,17 +88,16 @@ async function importTranscripts(params: {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx.config);
   if (!provider?.importTranscript) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot import transcripts`);
   }
-  const resolvedSource = resolveTranscriptSourceOwnership({
+  const providerSource = resolveTranscriptSourceOwnership({
     ctx: params.ctx,
     operation: "import",
     provider,
     source: requestedSource,
   });
-  const providerSource = resolvedSource.source;
   await authorizeTranscriptSource({
     action: "import",
     ctx: params.ctx,
@@ -280,8 +276,6 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
 /** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
@@ -293,8 +287,6 @@ export function createTranscriptsTool(options?: {
     stateDir: options?.stateDir ?? resolveStateDir(),
     logger: options?.logger ?? console,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
-    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
     ...(options?.caller ? { caller: options.caller } : {}),
     ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };
@@ -319,7 +311,7 @@ export function createTranscriptsTool(options?: {
       ) {
         throw new Error("selector is only supported for stop, summarize, or show.");
       }
-      const store = createTranscriptsStore(ctx);
+      const store = createTranscriptsStore(ctx.stateDir);
       switch (action) {
         case "list":
           return await listPastTranscripts({ ctx, store, rawParams: params });

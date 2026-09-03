@@ -100,7 +100,7 @@ describe("transcript capture ownership", () => {
             throw new Error("title write unavailable");
           }
         }
-        await originalWrite(session);
+        return await originalWrite(session);
       });
       const start = h
         .createTool()

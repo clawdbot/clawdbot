@@ -43,7 +43,7 @@ export async function canAccessTranscriptSession(
   if (readOnly && ctx.caller?.kind === "operator") {
     return true;
   }
-  const provider = resolveSourceProvider(session.source.providerId, ctx);
+  const provider = resolveSourceProvider(session.source.providerId, ctx.config);
   if (readOnly && (ctx.caller?.kind !== "channel" || !provider?.accessControl)) {
     return false;
   }
@@ -106,7 +106,10 @@ export async function resolveTranscriptToolSession(params: {
     ? exactActive
     : entry && activeSessions.get(entry.session.sessionId);
   const selectedActive =
-    entry && activeCandidate && sameSessionIdentity(entry.session, activeCandidate.session)
+    !durableRead &&
+    entry &&
+    activeCandidate &&
+    sameSessionIdentity(entry.session, activeCandidate.session)
       ? activeCandidate
       : undefined;
   // Reads authorize the durable descriptor that owns the notes. Mutations keep

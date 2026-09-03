@@ -225,12 +225,6 @@ class MeetingsPage extends OpenClawLightDomElement {
                 ? html`<span class="meetings-live">${t("meetings.inProgress")}</span>`
                 : nothing}
             </div>
-            ${detail.summary?.participants.length
-              ? html`<p>
-                  <strong>${t("meetings.participants")}:</strong>
-                  ${detail.summary.participants.join(", ")}
-                </p>`
-              : nothing}
             ${detail.summary
               ? html`<div class="meetings-notes markdown">
                   ${unsafeHTML(toSanitizedMarkdownHtml(detail.summary.markdown))}

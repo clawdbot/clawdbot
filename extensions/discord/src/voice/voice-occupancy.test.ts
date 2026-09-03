@@ -128,6 +128,102 @@ defineDiscordVoiceTests(
       expect(listener).toHaveBeenCalledTimes(3);
     });
 
+    it.each([
+      {
+        label: "empty to occupied",
+        initialOccupied: false,
+        replacementOccupied: true,
+        eventsAfterReplacement: ["occupied"],
+        eventsAfterToggle: ["occupied", "empty"],
+        ending: "stop",
+      },
+      {
+        label: "occupied to empty",
+        initialOccupied: true,
+        replacementOccupied: false,
+        eventsAfterReplacement: ["occupied", "empty"],
+        eventsAfterToggle: ["occupied", "empty", "occupied"],
+        ending: "abort",
+      },
+      {
+        label: "still occupied",
+        initialOccupied: true,
+        replacementOccupied: true,
+        eventsAfterReplacement: ["occupied"],
+        eventsAfterToggle: ["occupied", "empty"],
+        ending: "stop",
+      },
+    ])(
+      "keeps transcript occupancy watching after account restart: $label",
+      async ({
+        initialOccupied,
+        replacementOccupied,
+        eventsAfterReplacement,
+        eventsAfterToggle,
+        ending,
+      }) => {
+        const { discordVoiceTranscriptsSourceProvider, setDiscordTranscriptsVoiceManager } =
+          await import("./transcripts-source.js");
+        const original = fixture();
+        const replacement = fixture();
+        const later = fixture();
+        const watchReplacement = vi.spyOn(replacement.manager, "watchChannelOccupancy");
+        const watchLater = vi.spyOn(later.manager, "watchChannelOccupancy");
+        const controller = new AbortController();
+        const events: string[] = [];
+        let stop: (() => void) | undefined;
+        try {
+          await original.update(voiceState("human", initialOccupied ? "1001" : "1002"));
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: original.manager });
+          const result = await discordVoiceTranscriptsSourceProvider.watchOccupancy?.({
+            source: { providerId: "discord-voice", accountId: "primary", ...room },
+            abortSignal: controller.signal,
+            onOccupied: () => {
+              events.push("occupied");
+            },
+            onEmpty: () => {
+              events.push("empty");
+            },
+          });
+          if (!result?.ok) {
+            throw new Error("expected occupancy subscription");
+          }
+          stop = result.value.stop;
+          expect(events).toEqual(initialOccupied ? ["occupied"] : []);
+
+          await original.manager.destroy();
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: null });
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: replacement.manager });
+          // An unavailable manager or unknown replacement snapshot is not an empty room.
+          expect(events).toEqual(initialOccupied ? ["occupied"] : []);
+          await replacement.update(voiceState("human", replacementOccupied ? "1001" : "1002"));
+          expect(events).toEqual(eventsAfterReplacement);
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: replacement.manager });
+          expect(watchReplacement).toHaveBeenCalledOnce();
+          await replacement.update(voiceState("human", replacementOccupied ? "1002" : "1001"));
+          expect(events).toEqual(eventsAfterToggle);
+
+          if (ending === "abort") {
+            controller.abort();
+          } else {
+            stop();
+          }
+          stop();
+          await replacement.update(voiceState("human", replacementOccupied ? "1001" : "1002"));
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: later.manager });
+          await later.update(voiceState("human", "1001"));
+          expect(events).toEqual(eventsAfterToggle);
+          expect(watchLater).not.toHaveBeenCalled();
+        } finally {
+          stop?.();
+          setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: null });
+          await original.manager.destroy();
+          await replacement.manager.destroy();
+          await later.manager.destroy();
+        }
+      },
+    );
+
     it("returns the joined channel title without another channel lookup or starting realtime", async () => {
       const { discordVoiceTranscriptsSourceProvider, setDiscordTranscriptsVoiceManager } =
         await import("./transcripts-source.js");
