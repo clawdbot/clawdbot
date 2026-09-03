@@ -19,7 +19,6 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -27,6 +26,7 @@ import {
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
 import { resolveSkillsWatchPath, toWatchRoot } from "./refresh-watch-path.js";
+import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "./workshop-refresh-watch.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
@@ -124,12 +124,7 @@ function resolveWatchTargets(
   if (executionSkillsDir) {
     baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
-  if (config && agentId) {
-    baseRoots.push({
-      path: resolveWorkshopSkillsDir(config, agentId),
-      source: "openclaw-workshop",
-    });
-  }
+  baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
     baseRoots.push({
@@ -691,7 +686,7 @@ export function ensureSkillsWatcher(params: {
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = JSON.stringify([workspaceDir, params.executionSkillsDir, params.agentId]);
+  const watcherKey = createWorkshopWatcherKey(workspaceDir, params);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -761,4 +756,3 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     resetSkillsRefreshForTest: () => closeSkillsWatchers(true),
   };
 }
-/* oxlint-disable max-lines -- Agent-specific watcher state stays with the refresh owner. */
