@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -324,6 +325,52 @@ class RoomChatTranscriptCacheTest {
       assertEquals(provenance, loaded[0].provenance)
       assertEquals(marker, loaded[1].transcriptMarker)
       assertTrue(loaded[1].content.isEmpty())
+    }
+
+  @Test
+  fun transcriptRoundTripKeepsObservedAssistantUsage() =
+    runTest {
+      val usage = ChatMessageUsage(input = 12_000, output = 300, cacheRead = 438_400)
+      val cost = ChatMessageCost(input = 0.003, output = 0.018, cacheRead = 0.0015, total = 0.0225)
+      saveTranscript(
+        messages =
+          listOf(
+            message("Usage-backed reply").copy(
+              role = "assistant",
+              provider = "openai",
+              model = "gpt-5.2",
+              usage = usage,
+              cost = cost,
+            ),
+            message("Delivery copy").copy(
+              role = "assistant",
+              deliveryMirror = ChatDeliveryMirror(kind = "channel-final"),
+              usage = ChatMessageUsage(input = 0, output = 0),
+            ),
+            message("discarded display text").copy(
+              role = "assistant",
+              content = emptyList(),
+              provider = "anthropic",
+              model = "claude-opus-4-1",
+              usage = ChatMessageUsage(input = 7_500, output = 450),
+              cost = ChatMessageCost(total = 0.031),
+            ),
+            message("Synthetic fallback").copy(role = "assistant", isSyntheticDisplay = true),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals("openai", loaded[0].provider)
+      assertEquals("gpt-5.2", loaded[0].model)
+      assertEquals(usage, loaded[0].usage)
+      assertEquals(cost, loaded[0].cost)
+      assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertTrue(loaded[2].content.isEmpty())
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
+      assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
+      assertTrue(loaded[3].isSyntheticDisplay)
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
     }
 
   @Test

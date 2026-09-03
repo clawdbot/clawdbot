@@ -42,6 +42,12 @@ private data class CachedMessagePayload(
   val provenance: ChatMessageProvenance? = null,
   @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
 )
 
 /**
@@ -344,6 +350,12 @@ class RoomChatTranscriptCache internal constructor(
         provenance = payload.provenance,
         transcriptMarker = payload.transcriptMarker,
         senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
       )
     }
   }
@@ -429,13 +441,22 @@ class RoomChatTranscriptCache internal constructor(
                 }
               }
             }
-          if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null
+          if (content.isEmpty() && !hasPersistedMetadata) return@mapNotNull null
           val payload =
             CachedMessagePayload(
               content = content,
               provenance = message.provenance,
               transcriptMarker = message.transcriptMarker,
               senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)

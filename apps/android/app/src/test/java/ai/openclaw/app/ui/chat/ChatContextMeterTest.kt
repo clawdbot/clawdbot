@@ -1,8 +1,13 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatMessageCost
+import ai.openclaw.app.chat.ChatMessageUsage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import org.junit.Assert.assertEquals
@@ -129,6 +134,120 @@ class ChatContextMeterTest {
     assertEquals("\u2014", formatContextEstimatedCost(Double.NaN))
     assertEquals("\u2014", formatContextEstimatedCost(-0.5))
   }
+
+  @Test
+  fun optionalUsageUsesNewestRealAssistantAndOnlyObservedValues() {
+    val costs =
+      ChatMessageCost(
+        input = 0.003456,
+        output = 0.018,
+        cacheRead = 0.0015,
+        cacheWrite = 0.0,
+      )
+    val usage = ChatMessageUsage(input = 18_420, output = 840, cacheRead = 76_500)
+    val messages =
+      listOf(
+        message(role = "user"),
+        message(role = "assistant", usage = usage, cost = costs),
+        message(role = "assistant", provider = "openclaw", model = "gateway-injected", cost = ChatMessageCost()),
+      )
+
+    assertEquals(usage, latestChatMessageUsage(messages))
+    assertEquals(costs, latestChatMessageCost(messages))
+    assertEquals(
+      listOf("Input cost" to 0.003456, "Output cost" to 0.018, "Cache read cost" to 0.0015, "Cache write cost" to 0.0),
+      availableChatCostStats(costs),
+    )
+    assertEquals(costs, latestChatMessageCost(messages + message(role = "user")))
+
+    val withoutSessionCost =
+      resolveChatContextUsage(
+        "main",
+        "main",
+        listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L)),
+        listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))),
+      )
+    assertEquals(0.0225, withoutSessionCost.estimatedCostUsd)
+  }
+
+  @Test
+  fun contextBoundaryClearsLatestRunUntilARealAssistantRepopulatesIt() {
+    val session =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 2L,
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        totalTokens = 24_700L,
+        totalTokensFresh = true,
+        contextTokens = 272_000L,
+        estimatedCostUsd = 0.022956,
+      )
+    for (boundaryKind in listOf("compaction", "reset")) {
+      val beforeBoundary = message(role = "assistant", cost = ChatMessageCost(input = 0.003))
+      val boundary = message(role = "system", marker = ChatTranscriptMarker(kind = boundaryKind))
+
+      val reset = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary))
+      assertEquals(ChatContextUsage(totalTokens = 24_700L, totalTokensFresh = true, contextTokens = 272_000L), reset)
+      assertNull(latestChatMessageCost(listOf(beforeBoundary, boundary)))
+
+      val afterBoundary =
+        message(
+          role = "assistant",
+          usage = ChatMessageUsage(input = 2_100L, output = 160L),
+          cost = ChatMessageCost(output = 0.004, total = 0.0045),
+        )
+      val repopulated = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, afterBoundary))
+      assertEquals(2_100L, repopulated.inputTokens)
+      assertEquals(160L, repopulated.outputTokens)
+      assertEquals(0.0045, repopulated.estimatedCostUsd)
+      assertEquals(ChatMessageCost(output = 0.004, total = 0.0045), latestChatMessageCost(listOf(beforeBoundary, boundary, afterBoundary)))
+
+      val partialNextRun = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
+      val partial = resolveChatContextUsage("main", "main", listOf(session), listOf(beforeBoundary, boundary, partialNextRun))
+      assertNull(partial.inputTokens)
+      assertEquals(160L, partial.outputTokens)
+      assertNull(partial.estimatedCostUsd)
+    }
+  }
+
+  @Test
+  fun partialLatestRunDoesNotInheritAggregateSessionTelemetry() {
+    val session =
+      ChatSessionEntry(
+        key = "main",
+        updatedAtMs = 2L,
+        inputTokens = 18_420L,
+        outputTokens = 1_000L,
+        estimatedCostUsd = 0.022956,
+      )
+    val latestRun = message(role = "assistant", usage = ChatMessageUsage(output = 160L))
+
+    val usage = resolveChatContextUsage("main", "main", listOf(session), listOf(latestRun))
+
+    assertNull(usage.inputTokens)
+    assertEquals(160L, usage.outputTokens)
+    assertNull(usage.estimatedCostUsd)
+  }
+
+  private fun message(
+    role: String,
+    provider: String? = null,
+    model: String? = null,
+    usage: ChatMessageUsage? = null,
+    cost: ChatMessageCost? = null,
+    marker: ChatTranscriptMarker? = null,
+  ) = ChatMessage(
+    id = "$role-${provider.orEmpty()}-${model.orEmpty()}",
+    role = role,
+    content = listOf(ChatMessageContent(text = role)),
+    timestampMs = null,
+    provider = provider,
+    model = model,
+    usage = usage,
+    cost = cost,
+    transcriptMarker = marker,
+  )
 
   @Test
   fun gatewayThinkingOptionsAreAuthoritativeForSupport() {

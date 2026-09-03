@@ -602,7 +602,23 @@ class ChatComposerLayoutTest {
     composeRule.onNode(isDialog()).assertDoesNotExist()
 
     model.performClick()
-    composeRule.onNodeWithText(nativeString("Context: \$detail", "24k / 200k · 12%")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Context window")).assertIsDisplayed()
+    composeRule.onNodeWithText("24k / 200k · 12%").assertIsDisplayed()
+    composeRule
+      .onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+      .assert(
+        SemanticsMatcher("has 12 percent context progress") { node ->
+          node.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo)?.current == 0.12f
+        },
+      )
+    composeRule.onNodeWithText(nativeString("Latest run")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Non-cached input")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Non-cached input excludes cache reads.")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Cache read")).assertIsDisplayed()
+    composeRule.onNodeWithText("76.5k").assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Cost breakdown")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Cache read cost")).assertIsDisplayed()
+    composeRule.onNodeWithText("\$0.0015").assertIsDisplayed()
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss) { dismiss -> assertTrue(dismiss()) }
     composeRule.onNode(isDialog()).assertDoesNotExist()

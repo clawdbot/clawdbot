@@ -35,6 +35,11 @@ data class ChatMessage(
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.
@@ -43,6 +48,40 @@ data class ChatMessage(
 
   internal fun matchesFullRead(other: ChatMessage): Boolean = canReadFullMessage && other.canReadFullMessage && entryId == other.entryId && content == other.content
 }
+
+@Serializable
+data class ChatDeliveryMirror(
+  val kind: String,
+)
+
+private val transcriptOnlyOpenClawModels = setOf("delivery-mirror", "gateway-injected")
+private val openClawDeliveryMirrorKinds =
+  setOf(
+    "channel-final",
+    "channel-final-suppressed",
+    "message-tool-source-reply",
+    "cron-direct-delivery-context",
+  )
+
+internal fun ChatMessage.isTranscriptOnlyOpenClawAssistant(): Boolean =
+  role == "assistant" &&
+    ((provider == "openclaw" && model in transcriptOnlyOpenClawModels) || deliveryMirror?.kind in openClawDeliveryMirrorKinds)
+
+@Serializable
+data class ChatMessageUsage(
+  val input: Long? = null,
+  val output: Long? = null,
+  val cacheRead: Long? = null,
+)
+
+@Serializable
+data class ChatMessageCost(
+  val input: Double? = null,
+  val output: Double? = null,
+  val cacheRead: Double? = null,
+  val cacheWrite: Double? = null,
+  val total: Double? = null,
+)
 
 internal sealed interface ChatFullMessageState {
   data object Loading : ChatFullMessageState

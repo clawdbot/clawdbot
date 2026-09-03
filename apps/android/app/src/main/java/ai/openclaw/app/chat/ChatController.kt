@@ -7554,7 +7554,18 @@ class ChatController internal constructor(
       provenance = parseChatMessageProvenance(obj["provenance"]),
       transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
       senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
+      provider = obj["provider"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      model = obj["model"].asJsonStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+      deliveryMirror = parseChatDeliveryMirror(obj["openclawDeliveryMirror"]),
+      usage = parseChatMessageUsage(obj),
+      cost = parseChatMessageCost(obj),
     )
+  }
+
+  private fun parseChatDeliveryMirror(element: JsonElement?): ChatDeliveryMirror? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return ChatDeliveryMirror(kind = kind)
   }
 
   private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
@@ -8360,6 +8371,43 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     transcriptAudio.filterNot { audio ->
       content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
     }
+}
+
+internal fun parseChatMessageUsage(obj: JsonObject): ChatMessageUsage? {
+  val usage = obj["usage"].asObjectOrNull() ?: return null
+
+  fun read(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key -> usage[key].asLongOrNull()?.takeIf { it >= 0L } }
+
+  val parsed =
+    ChatMessageUsage(
+      // Only canonical input is non-cached; provider prompt aliases can include cache
+      // whose split is absent from the display projection. Keep that input unknown.
+      input = read("input"),
+      output = read("output", "outputTokens", "output_tokens", "completionTokens", "completion_tokens"),
+      cacheRead = read("cacheRead", "cache_read_input_tokens"),
+    )
+  return parsed.takeIf { listOf(it.input, it.output, it.cacheRead).any { value -> value != null } }
+}
+
+internal fun parseChatMessageCost(obj: JsonObject): ChatMessageCost? {
+  val direct = obj["cost"].asObjectOrNull()
+  val nested = obj["usage"].asObjectOrNull()?.get("cost").asObjectOrNull()
+
+  fun parse(cost: JsonObject?): ChatMessageCost? {
+    fun read(key: String): Double? = cost?.get(key).asJsonNumberOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
+
+    val parsed =
+      ChatMessageCost(
+        input = read("input"),
+        output = read("output"),
+        cacheRead = read("cacheRead"),
+        cacheWrite = read("cacheWrite"),
+        total = read("total"),
+      )
+    return parsed.takeIf { listOf(it.input, it.output, it.cacheRead, it.cacheWrite, it.total).any { value -> value != null } }
+  }
+
+  return parse(direct) ?: parse(nested)
 }
 
 private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {

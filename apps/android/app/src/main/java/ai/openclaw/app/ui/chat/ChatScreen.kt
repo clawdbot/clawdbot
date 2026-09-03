@@ -18,6 +18,8 @@ import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatMessageCost
+import ai.openclaw.app.chat.ChatMessageUsage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -37,6 +39,7 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
+import ai.openclaw.app.chat.isTranscriptOnlyOpenClawAssistant
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
@@ -150,6 +153,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
@@ -358,7 +362,7 @@ fun ChatScreen(
       selection = thinkingLevelSelection,
       fallbackSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog),
     )
-  val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
+  val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions, messages = messages)
   val activeSession =
     sessions.firstOrNull {
       isActiveSessionChoice(
@@ -1018,6 +1022,7 @@ fun ChatScreen(
       selectedModelLabel = selectedModelLabel,
       modelSelectionLocked = modelSelectionLocked,
       contextUsage = contextUsage,
+      messages = messages,
       permissionMode = activeSession?.permissionMode,
       permissionModePending = permissionModePending,
       permissionPickerEnabled =
@@ -2987,6 +2992,7 @@ private fun ChatModelPickerSheet(
   selectedModelLabel: String,
   modelSelectionLocked: Boolean,
   contextUsage: ChatContextUsage,
+  messages: List<ChatMessage>,
   permissionMode: ChatPermissionMode?,
   permissionModePending: Boolean,
   permissionPickerEnabled: Boolean,
@@ -3035,18 +3041,46 @@ private fun ChatModelPickerSheet(
         contentPadding = PaddingValues(bottom = 24.dp),
       ) {
         item {
-          Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = selectedModelLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
             if (modelSelectionLocked) {
               Text(text = nativeString("Model selection is locked for this session."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
             }
             chatContextSummary(contextUsage)?.let { summary ->
-              Text(text = nativeString("Context: \$detail", summary.detail), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+              Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = nativeString("Context window"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+                Text(text = summary.detail, style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text)
+              }
+              LinearProgressIndicator(
+                progress = { summary.fraction },
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = ClawTheme.colors.primary,
+                trackColor = ClawTheme.colors.surfacePressed,
+              )
             }
-            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              ChatContextStat(label = nativeString("Input"), value = formatContextUsageTokens(contextUsage.inputTokens), modifier = Modifier.weight(1f))
+            Text(text = nativeString("Latest run"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+              ChatContextStat(label = nativeString("Non-cached input"), value = formatContextUsageTokens(contextUsage.inputTokens), modifier = Modifier.weight(1f))
               ChatContextStat(label = nativeString("Output"), value = formatContextUsageTokens(contextUsage.outputTokens), modifier = Modifier.weight(1f))
               ChatContextStat(label = nativeString("Est. cost"), value = formatContextEstimatedCost(contextUsage.estimatedCostUsd), modifier = Modifier.weight(1f))
+            }
+            Text(text = nativeString("Non-cached input excludes cache reads."), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+            latestChatMessageUsage(messages)?.cacheRead?.let { cacheRead ->
+              ChatContextStat(label = nativeString("Cache read"), value = formatContextUsageTokens(cacheRead))
+            }
+            latestChatMessageCost(messages)?.let { cost ->
+              val stats = availableChatCostStats(cost)
+              if (stats.isNotEmpty()) {
+                Text(text = nativeString("Cost breakdown"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+                stats.chunked(2).forEach { row ->
+                  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { (label, value) ->
+                      ChatContextStat(label = label, value = formatContextEstimatedCost(value), modifier = Modifier.weight(1f))
+                    }
+                    if (row.size == 1) Box(modifier = Modifier.weight(1f))
+                  }
+                }
+              }
             }
           }
         }
@@ -3610,6 +3644,34 @@ internal fun formatContextEstimatedCost(value: Double?): String {
   return "\u0024" + String.format(Locale.US, format, cost)
 }
 
+private fun ChatMessage.isContextBoundary(): Boolean =
+  when (transcriptMarker?.kind) {
+    "compaction", "reset" -> true
+    else -> false
+  }
+
+private fun latestRealAssistantMessage(messages: List<ChatMessage>): ChatMessage? {
+  for (message in messages.asReversed()) {
+    if (message.isContextBoundary()) return null
+    if (message.role != "assistant" || message.isSyntheticDisplay) continue
+    if (message.isTranscriptOnlyOpenClawAssistant()) continue
+    return message
+  }
+  return null
+}
+
+internal fun latestChatMessageUsage(messages: List<ChatMessage>): ChatMessageUsage? = latestRealAssistantMessage(messages)?.usage
+
+internal fun latestChatMessageCost(messages: List<ChatMessage>): ChatMessageCost? = latestRealAssistantMessage(messages)?.cost
+
+internal fun availableChatCostStats(cost: ChatMessageCost): List<Pair<String, Double>> =
+  listOf(
+    nativeString("Input cost") to cost.input,
+    nativeString("Output cost") to cost.output,
+    nativeString("Cache read cost") to cost.cacheRead,
+    nativeString("Cache write cost") to cost.cacheWrite,
+  ).mapNotNull { (label, value) -> value?.takeIf { it.isFinite() && it >= 0.0 }?.let { label to it } }
+
 @Composable
 private fun ChatContextStat(
   label: String,
@@ -3846,6 +3908,7 @@ internal fun resolveChatContextUsage(
   sessionKey: String,
   mainSessionKey: String,
   sessions: List<ChatSessionEntry>,
+  messages: List<ChatMessage> = emptyList(),
 ): ChatContextUsage {
   val entry =
     sessions.firstOrNull {
@@ -3855,13 +3918,22 @@ internal fun resolveChatContextUsage(
         mainSessionKey = mainSessionKey,
       )
     }
+  val waitingForPostCompactionUsage =
+    messages.asReversed().firstNotNullOfOrNull { message ->
+      when {
+        message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant() -> false
+        message.isContextBoundary() -> true
+        else -> null
+      }
+    } == true
+  val latestAssistant = latestRealAssistantMessage(messages)
   return ChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
     contextTokens = entry?.contextTokens,
-    inputTokens = entry?.inputTokens,
-    outputTokens = entry?.outputTokens,
-    estimatedCostUsd = entry?.estimatedCostUsd,
+    inputTokens = latestAssistant?.usage?.input.takeUnless { waitingForPostCompactionUsage },
+    outputTokens = latestAssistant?.usage?.output.takeUnless { waitingForPostCompactionUsage },
+    estimatedCostUsd = latestAssistant?.cost?.total.takeUnless { waitingForPostCompactionUsage },
   )
 }
 
