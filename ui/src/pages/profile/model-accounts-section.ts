@@ -18,6 +18,9 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
+
+registerModelAccountsEnglish();
 
 type ModelAccountsContext = {
   gatewayUrl: string;

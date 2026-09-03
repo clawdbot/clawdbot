@@ -9,8 +9,11 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+
+registerModelAccountsEnglish();
 
 type AccountInventory = {
   model: string;
