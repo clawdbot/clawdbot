@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { restoreLatestSkillCollectionBackup } from "../skills/workshop/collection-reconcile.js";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
+import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
 import { inspectSkillProposal, listSkillProposals } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
@@ -93,7 +95,117 @@ afterEach(async () => {
   await testState.cleanup();
   await tempDirs.cleanup();
 });
+
+async function seedLegacyCollectionBackup(params: {
+  workspaceDir: string;
+  backupId: string;
+  backupContent: string;
+  resultContent: string;
+}): Promise<string> {
+  const relativeSkillDir = path.join("skills", "legacy-collection-skill");
+  const legacyRoot = path.join(
+    testState.stateDir,
+    "skill-workshop",
+    "collection-backups",
+    "0000000000000000",
+  );
+  const backupDir = path.join(legacyRoot, params.backupId);
+  const workspaceSkillDir = path.join(params.workspaceDir, relativeSkillDir);
+  await fs.mkdir(path.join(backupDir, "workspace", relativeSkillDir), { recursive: true });
+  await fs.mkdir(workspaceSkillDir, { recursive: true });
+  await fs.writeFile(path.join(workspaceSkillDir, "SKILL.md"), params.resultContent, "utf8");
+  const resultSkillHash = await readSkillProposalTargetTreeSha256(workspaceSkillDir);
+  await fs.writeFile(
+    path.join(backupDir, "workspace", relativeSkillDir, "SKILL.md"),
+    params.backupContent,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(backupDir, "manifest.json"),
+    JSON.stringify({
+      schema: "openclaw.skill-collection-backup.v1",
+      id: params.backupId,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      workspaceDir: params.workspaceDir,
+      skillDirs: [relativeSkillDir],
+      resultSkillDirs: [relativeSkillDir],
+      resultSkillHashes: { [relativeSkillDir]: resultSkillHash },
+    }),
+    "utf8",
+  );
+  return legacyRoot;
+}
+
 describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
+  it("migrates a legacy collection backup so restore can use it", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-legacy-backup-workspace-"),
+    );
+    const backupContent =
+      "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Before cleanup\n";
+    const resultContent =
+      "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# After cleanup\n";
+    const backupId = "2026-09-01T00-00-00.000Z-legacy1";
+    const legacyRoot = await seedLegacyCollectionBackup({
+      workspaceDir,
+      backupId,
+      backupContent,
+      resultContent,
+    });
+    const config = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+
+    const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+
+    expect(result.changes.join("\n")).toContain("migrated 1 legacy collection backup root");
+    await expect(fs.access(legacyRoot)).rejects.toThrow();
+    const workshopSkillDir = path.join(
+      resolveWorkshopSkillsDir(config, "main", testState.env),
+      "legacy-collection-skill",
+    );
+    await fs.mkdir(workshopSkillDir, { recursive: true });
+    await fs.writeFile(path.join(workshopSkillDir, "SKILL.md"), resultContent, "utf8");
+    await expect(
+      restoreLatestSkillCollectionBackup({
+        workspaceDir,
+        config,
+        agentId: "main",
+        env: testState.env,
+      }),
+    ).resolves.toMatchObject({ backupId, restored: ["legacy-collection-skill"] });
+    await expect(fs.readFile(path.join(workshopSkillDir, "SKILL.md"), "utf8")).resolves.toBe(
+      backupContent,
+    );
+  });
+
+  it("preserves a legacy collection backup when its workspace has ambiguous owners", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-ambiguous-backup-workspace-"),
+    );
+    const legacyRoot = await seedLegacyCollectionBackup({
+      workspaceDir,
+      backupId: "2026-09-01T00-00-00.000Z-legacy2",
+      backupContent:
+        "---\nname: legacy-collection-skill\ndescription: Legacy backup\n---\n\n# Backup\n",
+      resultContent:
+        "---\nname: legacy-collection-skill\ndescription: Current skill\n---\n\n# Current\n",
+    });
+    const config = {
+      agents: {
+        list: [
+          { id: "alpha", default: true, workspace: workspaceDir },
+          { id: "beta", workspace: workspaceDir },
+        ],
+      },
+    };
+
+    const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+
+    await expect(fs.access(legacyRoot)).resolves.toBeUndefined();
+    expect(result.warnings.join("\n")).toContain(legacyRoot);
+  });
+
   it("moves an applied legacy skill into the Workshop directory and converges", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-relocation-workspace-"),

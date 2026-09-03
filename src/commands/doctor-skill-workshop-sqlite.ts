@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
@@ -30,6 +29,11 @@ import type { SkillProposalRecord, SkillProposalRollback } from "../skills/works
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
+import {
+  inferWorkspaceOwnerAgentId,
+  listLegacyCollectionBackupRoots,
+  migrateLegacyCollectionBackups,
+} from "./doctor-skill-workshop-collection-backups.js";
 
 const WORKSHOP_DIR = "skill-workshop";
 const PROPOSALS_DIR = `${WORKSHOP_DIR}/proposals`;
@@ -59,7 +63,8 @@ type WorkshopRelocationResult = {
   movedSkills: number;
   retargetedProposals: number;
   staleProposals: number;
-  removedBackupRoots: number;
+  migratedBackupRoots: number;
+  warnings: string[];
 };
 
 export type LegacyWorkshopMigrationInspection = {
@@ -120,19 +125,6 @@ async function moveWorkshopSkillDirectory(source: string, destination: string): 
     });
     await fs.rm(source, { recursive: true, force: false });
   }
-}
-
-async function listLegacyCollectionBackupRoots(
-  env: NodeJS.ProcessEnv,
-): Promise<{ backupRoot: string; names: string[] }> {
-  const backupRoot = path.join(resolveStateDir(env), WORKSHOP_DIR, "collection-backups");
-  if (!(await pathExists(backupRoot))) {
-    return { backupRoot, names: [] };
-  }
-  const names = (await fs.readdir(backupRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/u.test(entry.name))
-    .map((entry) => entry.name);
-  return { backupRoot, names };
 }
 
 export async function inspectLegacySkillWorkshopMigration(params: {
@@ -444,20 +436,13 @@ async function relocateLegacyWorkshopTargets(
     await persistUpdates(move.updates);
   }
   await persistUpdates(plan.updates);
-  const backups = await listLegacyCollectionBackupRoots(env);
-  for (const name of backups.names) {
-    await removePathWithinRoot({
-      rootDir: backups.backupRoot,
-      relativePath: name,
-      recursive: true,
-      force: true,
-    });
-  }
+  const backupMigration = await migrateLegacyCollectionBackups(config, env);
   return {
     movedSkills: plan.moves.filter((move) => !move.adopted).length,
     retargetedProposals,
     staleProposals,
-    removedBackupRoots: backups.names.length,
+    migratedBackupRoots: backupMigration.migrated,
+    warnings: backupMigration.warnings,
   };
 }
 
@@ -480,16 +465,7 @@ function inferOwnerAgentId(params: {
       return normalizeAgentId(sessionAgentId);
     }
   }
-  const agentIds = listAgentIds(params.config);
-  const workspaceMatches = agentIds.filter(
-    (agentId) =>
-      path.resolve(resolveAgentWorkspaceDir(params.config, agentId, params.env)) ===
-      path.resolve(params.workspaceDir),
-  );
-  if (workspaceMatches.length === 1) {
-    return workspaceMatches[0];
-  }
-  return undefined;
+  return inferWorkspaceOwnerAgentId(params.config, params.env, params.workspaceDir);
 }
 
 async function readLegacyRollback(
@@ -726,13 +702,18 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   const env = params.env ?? process.env;
   const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
   const relocation = await relocateLegacyWorkshopTargets(params.config, env);
-  const relocationChanges = Object.values(relocation).some((count) => count > 0)
-    ? [
-        `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and removed ${relocation.removedBackupRoots} legacy collection backup root${relocation.removedBackupRoots === 1 ? "" : "s"}.`,
-      ]
-    : [];
+  const relocationChanges =
+    relocation.movedSkills > 0 ||
+    relocation.retargetedProposals > 0 ||
+    relocation.staleProposals > 0 ||
+    relocation.migratedBackupRoots > 0
+      ? [
+          `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
+        ]
+      : [];
   return {
     ...sidecars,
     changes: [...sidecars.changes, ...relocationChanges],
+    warnings: [...sidecars.warnings, ...relocation.warnings],
   };
 }
