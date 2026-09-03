@@ -1,8 +1,8 @@
 // New-session submit gate table: the single owner of every reason submission
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import { t } from "../../i18n/index.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   readSessionMethodAccess,
