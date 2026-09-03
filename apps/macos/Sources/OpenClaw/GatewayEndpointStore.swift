@@ -992,8 +992,12 @@ extension GatewayEndpointStore {
                     generation: AppStateStore.shared.gatewayRoutingGeneration,
                     tailscaleIP: TailscaleService.shared.tailscaleIP)
             },
-            generationIsCurrent: { generation in
-                AppStateStore.shared.gatewayRoutingGeneration == generation
+            acceptSource: { source in
+                guard AppStateStore.shared.gatewayRoutingGeneration == source.routingGeneration else { return false }
+                // Close the old native transcript owner before a new route can reach
+                // RPC, including disk edits that beat the config watcher.
+                WebChatManager.shared.preparePrimaryGateway(gatewayID: source.deviceAuthGatewayID)
+                return true
             },
             profile: .current,
             beforeConfigRead: {})
@@ -1014,7 +1018,7 @@ extension GatewayEndpointStore {
 
     private static func liveSourceSnapshot(
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
-        generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
+        acceptSource: @escaping @MainActor @Sendable (SourceSnapshot) -> Bool,
         profile: AppProfile,
         beforeConfigRead: @escaping @Sendable () async -> Void) async throws -> SourceSnapshot
     {
@@ -1051,13 +1055,7 @@ extension GatewayEndpointStore {
         } else {
             sshRouteIdentity = nil
         }
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: mode,
-            remoteTransport: remoteResolution.transport,
-            remoteURL: remoteResolution.directURL?.absoluteString
-                ?? GatewayRemoteConfig.resolveUrlString(root: root)
-                ?? "",
-            remoteTarget: sshRouteIdentity?.target ?? "")
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: mode)
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
@@ -1088,7 +1086,7 @@ extension GatewayEndpointStore {
             directRemoteURL: remoteResolution.directURL,
             remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
             sshRouteIdentity: sshRouteIdentity)
-        let selectionIsCurrent = await generationIsCurrent(app.generation)
+        let selectionIsCurrent = await acceptSource(source)
         guard selectionIsCurrent, !Task.isCancelled else {
             // An obsolete read is not an unconfigured selection. Do not publish
             // a fabricated route that can retire the newer selection's authority.
@@ -1327,8 +1325,8 @@ extension GatewayEndpointStore {
                     generation: state.gatewayRoutingGeneration,
                     tailscaleIP: nil)
             },
-            generationIsCurrent: { generation in
-                state.gatewayRoutingGeneration == generation
+            acceptSource: { source in
+                state.gatewayRoutingGeneration == source.routingGeneration
             },
             profile: profile,
             beforeConfigRead: beforeConfigRead)

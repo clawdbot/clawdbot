@@ -1,5 +1,26 @@
 import Foundation
+@testable import OpenClaw
 @testable import OpenClawKit
+
+func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {
+    let session = GatewayTestWebSocketSession(taskFactory: {
+        GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        }, receiveHook: { socket, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect", mainSessionKey: mainSessionKey))
+        })
+    })
+    return GatewayConnection(
+        testEndpointProvider: {
+            GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1)
+        },
+        currentEndpointRevision: { 1 },
+        sessionBox: WebSocketSessionBox(session: session))
+}
 
 extension WebSocketTasking {
     /// Keep unit-test doubles resilient to protocol additions.
@@ -63,11 +84,13 @@ enum GatewayWebSocketTestSupport {
         id: String,
         tickIntervalMs: Int = 30000,
         deviceToken: String? = nil,
+        mainSessionKey: String? = nil,
         canvasPluginSurfaceURL: String? = nil,
         methods: [String] = [],
         capabilities: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let sessionDefaultsField = mainSessionKey.map { #", "sessionDefaults": {"mainSessionKey": "\#($0)"}"# } ?? ""
         let pluginSurfaceField = canvasPluginSurfaceURL.map {
             #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
         } ?? ""
@@ -91,7 +114,7 @@ enum GatewayWebSocketTestSupport {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
+              "uptimeMs": 0\(sessionDefaultsField)
             },
             "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
