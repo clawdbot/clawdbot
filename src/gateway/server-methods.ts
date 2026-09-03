@@ -439,12 +439,6 @@ export function createRequestGatewayMethodRegistry(
     }
   }
   const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
-  for (const descriptor of coreDescriptors) {
-    const extraHandler = extraHandlers?.[descriptor.name];
-    if (extraHandler && !pluginMethodNames.has(descriptor.name)) {
-      descriptor.handler = extraHandler;
-    }
-  }
   const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
     extraHandlerEntries.filter(
