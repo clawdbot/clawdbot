@@ -14,10 +14,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import {
-  listWritableSkillCollection as listWritableSkillCollectionImpl,
-  reconcileSkillCollection as reconcileSkillCollectionImpl,
-} from "./collection-reconcile.js";
+import { reconcileSkillCollection as reconcileSkillCollectionImpl } from "./collection-reconcile.js";
 import { listSkillCollectionReviewOutcomes } from "./collection-review-state.js";
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
@@ -29,6 +26,7 @@ import {
 } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { withSkillCollectionLock } from "./target-lock.js";
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 type CopyDirectoryHook = (
   source: unknown,
@@ -66,8 +64,8 @@ const workshopConfig: OpenClawConfig = {};
 type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
 
 const listWritableSkillCollection = (
-  options?: OptionalWorkshopConfig<Parameters<typeof listWritableSkillCollectionImpl>[0]>,
-) => listWritableSkillCollectionImpl({ config: workshopConfig, agentId: "main", ...options });
+  options?: OptionalWorkshopConfig<Parameters<typeof listWritableWorkshopSkillSummaries>[0]>,
+) => listWritableWorkshopSkillSummaries({ config: workshopConfig, agentId: "main", ...options });
 const reconcileSkillCollection = (
   params: OptionalWorkshopConfig<Parameters<typeof reconcileSkillCollectionImpl>[0]>,
 ) => reconcileSkillCollectionImpl({ config: workshopConfig, agentId: "main", ...params });

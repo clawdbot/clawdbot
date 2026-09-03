@@ -14,13 +14,13 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
-  listWritableSkillCollection as listWritableSkillCollectionImpl,
   reconcileSkillCollection as reconcileSkillCollectionImpl,
   restoreLatestSkillCollectionBackup as restoreLatestSkillCollectionBackupImpl,
 } from "./collection-reconcile.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { applySkillProposal, proposeCreateSkill } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 type CopyDirectoryHook = (
   source: unknown,
@@ -59,10 +59,8 @@ const workshopParams = { config: {}, agentId: "main" };
 type WorkshopOperationParams<T extends object> = Omit<T, keyof typeof workshopParams>;
 
 const listWritableSkillCollection = (
-  options?: WorkshopOperationParams<
-    NonNullable<Parameters<typeof listWritableSkillCollectionImpl>[0]>
-  >,
-) => listWritableSkillCollectionImpl({ ...workshopParams, ...options });
+  options?: WorkshopOperationParams<Parameters<typeof listWritableWorkshopSkillSummaries>[0]>,
+) => listWritableWorkshopSkillSummaries({ ...workshopParams, ...options });
 const reconcileSkillCollection = (
   params: WorkshopOperationParams<Parameters<typeof reconcileSkillCollectionImpl>[0]>,
 ) => reconcileSkillCollectionImpl({ ...workshopParams, ...params });

@@ -57,22 +57,7 @@ import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import {
-  listWritableWorkshopSkillSummaries,
-  type WorkshopSkillReadOptions,
-} from "./workspace-skill-read.js";
-
-/** The editable collection is the active agent's Workshop directory. */
-export function listWritableSkillCollection(
-  options: WorkshopSkillReadOptions,
-): WritableSkillCollectionEntry[] {
-  return listWritableWorkshopSkillSummaries(options).map((skill) => ({
-    name: skill.name,
-    description: skill.description,
-    baseDir: path.resolve(skill.baseDir),
-    filePath: path.resolve(skill.filePath),
-  }));
-}
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 export async function reconcileSkillCollection(params: {
   workspaceDir: string;
@@ -93,11 +78,16 @@ export async function reconcileSkillCollection(params: {
   const commit = await withSkillCollectionLock(
     async () => {
       params.assertCurrent?.();
-      const current = listWritableSkillCollection({
+      const current: WritableSkillCollectionEntry[] = listWritableWorkshopSkillSummaries({
         config,
         agentId,
         env: params.env,
-      });
+      }).map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        baseDir: path.resolve(skill.baseDir),
+        filePath: path.resolve(skill.filePath),
+      }));
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
         throw new Error("Writable skill names must be unique before collection reconciliation.");
