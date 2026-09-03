@@ -438,7 +438,10 @@ describe("nextcloud-talk inbound behavior", () => {
         readStoreForDmPolicy: vi.fn(),
         issueChallenge: vi.fn(),
       });
-      resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+      resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({
+        kind: "group",
+        source: "resolved",
+      });
       const runtime = createRuntimeEnv();
 
       await handleNextcloudTalkInbound({
@@ -536,7 +539,10 @@ describe("nextcloud-talk inbound behavior", () => {
       readStoreForDmPolicy: vi.fn(async () => []),
       issueChallenge: vi.fn(),
     });
-    resolveNextcloudTalkRoomKindMock.mockResolvedValue(group ? "group" : "direct");
+    resolveNextcloudTalkRoomKindResultMock.mockResolvedValue({
+      kind: group ? "group" : "direct",
+      source: "resolved",
+    });
     const account = createAccount({
       config: {
         dmPolicy: "allowlist",
