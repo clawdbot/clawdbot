@@ -1178,12 +1178,12 @@ describe("Slack native command argument menus", () => {
     expect(element).toHaveProperty("confirm");
   });
 
-  it("escapes mrkdwn characters in confirm dialog text", async () => {
+  it("escapes only entities in confirm dialog text", async () => {
     const element = (await getFirstActionElementFromCommand(unsafeConfirmHandler)) as
       | { confirm?: { text?: { text?: string } } }
       | undefined;
     expect(element?.confirm?.text?.text).toContain(
-      "Run */unsafeconfirm* with *mode\\_\\*\\`\\~&lt;&amp;&gt;* set to this value?",
+      "Run */unsafeconfirm* with *mode_*`~&lt;&amp;&gt;* set to this value?",
     );
   });
 
