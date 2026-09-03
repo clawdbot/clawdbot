@@ -342,6 +342,7 @@
   background: var(--theme-chip-accent-2);
 }
 
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
 /* stylelint-disable color-no-hex */
 .settings-theme-card--claw,
 .settings-accent-theme--claw {

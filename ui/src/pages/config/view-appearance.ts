@@ -272,7 +272,16 @@ export function renderAppearanceSection(
   const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
   const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
   const accentProvenance = serverUiPrefProvenanceHint(props.accentProvenance);
+  // The theme swatch is selected whenever resetting would land on the current
+  // accent. A boolean `overridden` cannot express that: the resolver reports an
+  // inherited server or profile accent as overridden too, which is what left the
+  // swatch permanently unselectable and its reset click without a visible effect.
+  // Accepted cost: an override equal to its reset target reads as inherited
+  // until the two diverge, when the swatches correct themselves.
   const defaultAccentSelected = props.accent === props.accentResetValue;
+  // Preview the accent a reset lands on, never var(--accent): the live override
+  // would render this swatch as a duplicate of the selected preset.
+  const themeAccentColor = props.accentResetValue ?? "var(--theme-chip-accent)";
   const customAccentSelected = Boolean(
     !defaultAccentSelected &&
     props.accent &&
@@ -455,7 +464,6 @@ export function renderAppearanceSection(
                   ? defaultAccentSelected
                   : !defaultAccentSelected && preset.hex === props.accent;
                 const label = t(preset.labelKey);
-                const defaultColor = props.accentResetValue ?? "var(--theme-chip-accent)";
                 const themeChipScope = isDefault ? ` settings-accent-theme--${props.theme}` : "";
                 return html`
                   <button
@@ -464,7 +472,7 @@ export function renderAppearanceSection(
                       ? "settings-accent-swatch--active"
                       : ""}"
                     style=${styleMap({
-                      "--settings-accent-swatch": preset.hex ?? defaultColor,
+                      "--settings-accent-swatch": preset.hex ?? themeAccentColor,
                     })}
                     data-accent-preset=${preset.id}
                     aria-label=${label}
