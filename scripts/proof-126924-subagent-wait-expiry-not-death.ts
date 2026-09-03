@@ -829,7 +829,7 @@ try {
     15_000,
   );
   log(
-    `[10/12] cancellation recorded at the deadline (endedAt=${String(killEndedAt)} == deadline) promoted the row: endedReason=${String(promotedKillRun.endedReason)}, task=cancelled`,
+    `[10/12] cancellation recorded at the deadline (endedAt=${String(killEndedAt)} == deadline) promoted the row: endedReason=${promotedKillRun.endedReason}, task=cancelled`,
   );
 
   // ---------------------------------------------------------------- scenario 6
