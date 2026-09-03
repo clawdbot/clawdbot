@@ -7,17 +7,17 @@ import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.j
 import { prepareSessionSharing } from "../session-sharing.js";
 
 function listBoardSessionKeysByAgent(
-  durableTargets: ReadonlyArray<{ agentId: string; storePath: string }>,
+  targets: ReadonlyArray<{ agentId: string; storePath: string }>,
   requestedAgentId?: string,
 ): ReadonlyMap<string, ReadonlySet<string>> {
   const normalizedRequestedAgentId = requestedAgentId
     ? normalizeAgentId(requestedAgentId)
     : undefined;
-  const incognitoTargets = listOpenIncognitoAgentDatabases().filter(
-    (target) => !normalizedRequestedAgentId || target.agentId === normalizedRequestedAgentId,
-  );
   const byAgent = new Map<string, Set<string>>();
-  for (const target of [...durableTargets, ...incognitoTargets]) {
+  for (const target of targets) {
+    if (normalizedRequestedAgentId && target.agentId !== normalizedRequestedAgentId) {
+      continue;
+    }
     const databaseTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     });
@@ -42,6 +42,11 @@ type LoadedSessionStore = {
   durableTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
 };
 
+type BoardSessionKeys = {
+  durable: ReadonlyMap<string, ReadonlySet<string>>;
+  incognito: ReadonlyMap<string, ReadonlySet<string>>;
+};
+
 export function listFilter(input: {
   cfg: Parameters<typeof prepareSessionSharing>[0]["cfg"];
   client: Parameters<typeof prepareSessionSharing>[0]["client"];
@@ -56,11 +61,14 @@ export function listFilter(input: {
     cfg: input.cfg,
   }).entryFilter;
   const excludedKeys = input.options.excludedKeys;
-  const boardSessionKeysByAgent =
+  const boardSessionKeys: BoardSessionKeys | undefined =
     params.hasBoard === undefined
       ? undefined
-      : listBoardSessionKeysByAgent(loaded.durableTargets, params.agentId);
-  if (!visibilityFilter && !boardSessionKeysByAgent && !excludedKeys?.size) {
+      : {
+          durable: listBoardSessionKeysByAgent(loaded.durableTargets, params.agentId),
+          incognito: listBoardSessionKeysByAgent(listOpenIncognitoAgentDatabases(), params.agentId),
+        };
+  if (!visibilityFilter && !boardSessionKeys && !excludedKeys?.size) {
     return undefined;
   }
   return (key, entry) => {
@@ -69,7 +77,9 @@ export function listFilter(input: {
         parseAgentSessionKey(key)?.agentId ??
         input.defaultsAgentId,
     );
-    const hasBoard = boardSessionKeysByAgent?.get(agentId)?.has(key) ?? false;
+    const inventory =
+      entry.incognito === true ? boardSessionKeys?.incognito : boardSessionKeys?.durable;
+    const hasBoard = inventory?.get(agentId)?.has(key) ?? false;
     return (
       !excludedKeys?.has(key) &&
       (visibilityFilter?.(key, entry) ?? true) &&

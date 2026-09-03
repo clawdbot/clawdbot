@@ -175,6 +175,68 @@ describe("DashboardsPage", () => {
     expect(element.textContent).not.toContain("Detached refresh failed");
   });
 
+  it("loads every dashboard page so older dashboards remain searchable", async () => {
+    const first = {
+      ...results([row("agent:main:new", "New dashboard")]),
+      totalCount: 2,
+      hasMore: true,
+      nextOffset: 1,
+      offset: 0,
+    };
+    const second = {
+      ...results([row("agent:main:old", "Old dashboard")]),
+      totalCount: 2,
+      hasMore: false,
+      nextOffset: null,
+      offset: 1,
+    };
+    const snapshot = { result: first, agentId: null, loading: false, error: null };
+    const list = vi.fn(async () => second);
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      sessions: {
+        list,
+        listSnapshot: () => snapshot,
+        subscribeList: () => () => undefined,
+        refreshList: vi.fn(async () => undefined),
+      },
+      agentSelection: {
+        state: { selectedId: "main", scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      agents: { state: { agentsList: null } },
+    } as unknown as ApplicationContext;
+    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
+    element.routeData = {
+      result: first,
+      error: null,
+      basePath: "",
+      fallbackAgentId: "main",
+      mainKey: "main",
+    };
+    const provider = createApplicationContextProvider(context);
+    provider.append(element);
+    document.body.append(provider);
+
+    await vi.waitFor(() =>
+      expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
+    );
+    expect(list).toHaveBeenCalledWith({
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      hasBoard: true,
+      archivedFilter: "all",
+      offset: 1,
+    });
+
+    const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = "old";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await element.updateComplete;
+    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
+    expect(element.textContent).toContain("Old dashboard");
+  });
+
   it("filters by search and author and sorts visible cards by title", async () => {
     const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
     element.routeData = {

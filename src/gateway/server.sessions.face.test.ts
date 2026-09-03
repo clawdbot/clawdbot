@@ -1,5 +1,12 @@
 /** Gateway durable session-face behavior. */
 import { expect, test } from "vitest";
+import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import {
+  listOpenIncognitoAgentDatabases,
+  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { boardStore } from "./board-store.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
@@ -125,4 +132,41 @@ test("sessions.list filters dashboard sessions by board existence instead of sav
   expect(withoutBoards.payload?.sessions).toEqual([
     expect.objectContaining({ key: "agent:main:faceonly" }),
   ]);
+});
+
+test("sessions.list includes boards stored with incognito sessions", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:incognito-board";
+  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  openOpenClawAgentDatabase({ agentId: "main", path: incognitoPath });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey, storePath: incognitoPath },
+    { sessionId: "sess-incognito", updatedAt: 1, incognito: true },
+  );
+  const incognitoBoardStore = new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", path: incognitoPath, sessionKey }),
+  });
+  incognitoBoardStore.applyOps({ sessionKey }, [
+    { kind: "tab_create", tabId: "main", title: "Incognito dashboard" },
+  ]);
+  expect(listOpenIncognitoAgentDatabases()).toContainEqual({
+    agentId: "main",
+    storePath: incognitoPath,
+  });
+
+  const client = { connect: { scopes: ["operator.admin"] } } as never;
+  const unfiltered = await directSessionReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {},
+    { client },
+  );
+  expect(unfiltered.payload?.sessions).toEqual([expect.objectContaining({ key: sessionKey })]);
+
+  const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { hasBoard: true },
+    { client },
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions).toEqual([expect.objectContaining({ key: sessionKey })]);
 });
