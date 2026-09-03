@@ -75,6 +75,7 @@ function physical(params: {
   selectorDurable?: boolean;
   generations: UpdateGenerationSelection[];
   bindingConverged?: boolean;
+  serviceState?: { running: boolean; enabled?: boolean } | null;
 }): UpdateGenerationPhysicalState {
   return {
     selector: params.selector,
@@ -84,6 +85,7 @@ function physical(params: {
       manifestSha256,
     })),
     bindingConverged: params.bindingConverged ?? false,
+    serviceState: params.serviceState ?? null,
   };
 }
 
@@ -343,6 +345,7 @@ describe("update generation recovery transition matrix", () => {
         selector: previous,
         generations: [previous, candidate],
         bindingConverged: true,
+        serviceState: { running: true },
       }),
       action: "complete",
       nextReceipt: cleanupIntent,
@@ -354,6 +357,7 @@ describe("update generation recovery transition matrix", () => {
         selector: previous,
         generations: [previous, candidate],
         bindingConverged: true,
+        serviceState: { running: true },
       }),
       action: "resume-cleanup",
       nextReceipt: cleanupCompleted,
@@ -365,6 +369,7 @@ describe("update generation recovery transition matrix", () => {
         selector: previous,
         generations: [previous, candidate],
         bindingConverged: true,
+        serviceState: { running: true },
       }),
       action: "complete",
     });

@@ -18,19 +18,19 @@ import {
   syncUpdateGenerationTree,
   updateGenerationPathIsEqualOrNested,
 } from "./update-generation-manifest.js";
+import {
+  assertUpdateGenerationNamespaceIdentity,
+  resolveUpdateGenerationNamespace,
+  type UpdateGenerationNamespace,
+  updateGenerationNamespaceIdentityIsCurrent,
+} from "./update-generation-namespace.js";
 
 export { captureUpdateGenerationManifest };
 
 const GENERATION_ID = /^[a-f0-9]{32}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SELECTOR_FILE_NAME = "selector.json";
-const GENERATIONS_DIRECTORY_NAME = "generations";
 export const UPDATE_GENERATION_LAUNCHER_FILE_NAME = "launcher.mjs";
-
-type UpdateGenerationNamespace = {
-  root: string;
-  generationsRoot: string | null;
-};
 
 export type MaterializedUpdateGeneration = {
   generation: UpdateGenerationDescriptor;
@@ -184,80 +184,6 @@ function generationPaths(
   return { generationsRoot, generationRoot, payloadRoot: path.join(generationRoot, "payload") };
 }
 
-async function resolveUpdateGenerationNamespace(params: {
-  namespaceRoot: string;
-  create: boolean;
-  requireGenerations: boolean;
-}): Promise<UpdateGenerationNamespace | null> {
-  const requestedRoot = path.resolve(params.namespaceRoot);
-  if (params.create) {
-    let createdRoot = false;
-    await fs.mkdir(requestedRoot, { mode: 0o700 }).then(
-      () => {
-        createdRoot = true;
-      },
-      (error: unknown) => {
-        if (!hasErrnoCode(error, "EEXIST")) {
-          throw error;
-        }
-      },
-    );
-    if (createdRoot) {
-      await syncUpdateGenerationPath(path.dirname(requestedRoot));
-    }
-  }
-  const rootStat = await fs.lstat(requestedRoot).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
-  if (!rootStat) {
-    return null;
-  }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    throw new Error(`Invalid update generation namespace: ${requestedRoot}`);
-  }
-  const root = await fs.realpath(requestedRoot);
-  const requestedGenerationsRoot = path.join(root, GENERATIONS_DIRECTORY_NAME);
-  if (params.create) {
-    let createdGenerationsRoot = false;
-    await fs.mkdir(requestedGenerationsRoot, { mode: 0o700 }).then(
-      () => {
-        createdGenerationsRoot = true;
-      },
-      (error: unknown) => {
-        if (!hasErrnoCode(error, "EEXIST")) {
-          throw error;
-        }
-      },
-    );
-    if (createdGenerationsRoot) {
-      await syncUpdateGenerationPath(root);
-    }
-  }
-  const generationsStat = await fs.lstat(requestedGenerationsRoot).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
-  if (!generationsStat) {
-    if (params.requireGenerations) {
-      throw new Error(`Update generation namespace is incomplete: ${requestedGenerationsRoot}`);
-    }
-    return { root, generationsRoot: null };
-  }
-  if (!generationsStat.isDirectory() || generationsStat.isSymbolicLink()) {
-    throw new Error(`Invalid update generations directory: ${requestedGenerationsRoot}`);
-  }
-  const generationsRoot = await fs.realpath(requestedGenerationsRoot);
-  if (path.dirname(generationsRoot) !== root) {
-    throw new Error(`Update generations directory escapes its namespace: ${generationsRoot}`);
-  }
-  return { root, generationsRoot };
-}
-
 export function createUpdateGenerationId(): string {
   return randomBytes(16).toString("hex");
 }
@@ -293,6 +219,7 @@ export async function materializeUpdateGeneration(params: {
   if (!namespace) {
     throw new Error(`Unable to create update generation namespace: ${namespaceRoot}`);
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   const paths = generationPaths(namespace, params.generationId);
   const generationsRootReal = paths.generationsRoot;
   if (
@@ -315,8 +242,10 @@ export async function materializeUpdateGeneration(params: {
       label: "Existing update generation",
     });
     await assertGenerationEntrypoint(paths.payloadRoot, entrypointRelativePath);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await removeUpdateGenerationTree(incomingRoot);
     await syncUpdateGenerationPath(paths.generationsRoot);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     return {
       generation: {
         formatVersion: 1,
@@ -340,8 +269,10 @@ export async function materializeUpdateGeneration(params: {
   try {
     // The authoritative ledger serializes one namespace. A deterministic name
     // lets a retry discard a partial copy left by process death.
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await removeUpdateGenerationTree(incomingRoot);
     await fs.mkdir(incomingRoot, { mode: 0o700 });
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await copyUpdateGenerationTree(sourceRoot, incomingPayload);
     const [sourceAfter, destination] = await Promise.all([
       captureUpdateGenerationManifest(sourceRoot),
@@ -366,8 +297,10 @@ export async function materializeUpdateGeneration(params: {
     });
     await assertGenerationEntrypoint(incomingPayload, entrypointRelativePath);
     await syncUpdateGenerationTree(incomingRoot);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await fs.rename(incomingRoot, paths.generationRoot);
     await syncUpdateGenerationPath(paths.generationsRoot);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     return {
       generation: {
         formatVersion: 1,
@@ -380,7 +313,9 @@ export async function materializeUpdateGeneration(params: {
       payloadRoot: paths.payloadRoot,
     };
   } catch (error) {
-    await removeUpdateGenerationTree(incomingRoot).catch(() => undefined);
+    if (await updateGenerationNamespaceIdentityIsCurrent(namespace)) {
+      await removeUpdateGenerationTree(incomingRoot).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -452,6 +387,7 @@ export async function stabilizeUpdateGenerationSelector(params: {
   if (!selectionsEqual(selected, params.expected)) {
     throw new Error("Update generation selector changed before durability repair");
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   await syncUpdateGenerationPath(namespace.root);
 }
 
@@ -528,6 +464,7 @@ export async function replaceUpdateGenerationSelector(params: {
   if (!namespace) {
     throw new Error(`Unable to create update generation namespace: ${params.namespaceRoot}`);
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   const paths = generationPaths(namespace, params.next.generationId);
   await assertOwnedGenerationRoot(paths.generationRoot);
   const manifest = await captureUpdateGenerationManifest(paths.payloadRoot);
@@ -546,6 +483,7 @@ export async function replaceUpdateGenerationSelector(params: {
   );
   const contents = `${JSON.stringify(params.next)}\n`;
   try {
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     const handle = await fs.open(temporaryPath, "wx", 0o600);
     try {
       await handle.writeFile(contents, "utf8");
@@ -557,12 +495,24 @@ export async function replaceUpdateGenerationSelector(params: {
     if (!selectionsEqual(rechecked, params.expected)) {
       throw new Error("Update generation selector changed during replacement");
     }
+    await assertUpdateGenerationNamespaceIdentity(namespace, {
+      includeGenerationsParentRevision: false,
+    });
     // Regular-file rename is the only commit point on POSIX and Windows. Never
     // unlink the prior selector as a fallback: failure must retain old routing.
     await fs.rename(temporaryPath, selectorPath);
     await syncUpdateGenerationPath(namespace.root);
+    await assertUpdateGenerationNamespaceIdentity(namespace, {
+      includeGenerationsParentRevision: false,
+    });
   } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    if (
+      await updateGenerationNamespaceIdentityIsCurrent(namespace, {
+        includeGenerationsParentRevision: false,
+      })
+    ) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -576,9 +526,11 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
   if (!namespace) {
     throw new Error(`Unable to create update generation namespace: ${namespaceRoot}`);
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   const root = namespace.root;
   const launcherPath = path.join(root, UPDATE_GENERATION_LAUNCHER_FILE_NAME);
   const verifyLauncher = async (): Promise<void> => {
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     const stat = await fs.lstat(launcherPath);
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(`Refusing to use an invalid generation launcher: ${launcherPath}`);
@@ -587,6 +539,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     if (contents !== UPDATE_GENERATION_LAUNCHER_SOURCE) {
       throw new Error(`Refusing to use an unknown generation launcher: ${launcherPath}`);
     }
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await fs.chmod(launcherPath, 0o500);
     await syncUpdateGenerationPath(launcherPath);
   };
@@ -599,11 +552,13 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
   if (existingStat) {
     await verifyLauncher();
     await syncUpdateGenerationPath(root);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     return launcherPath;
   }
   const temporaryPath = path.join(root, `.launcher-${randomBytes(8).toString("hex")}.tmp`);
   let launcherCommitted = false;
   try {
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     const handle = await fs.open(temporaryPath, "wx", 0o500);
     try {
       await handle.writeFile(UPDATE_GENERATION_LAUNCHER_SOURCE, "utf8");
@@ -611,12 +566,24 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     } finally {
       await handle.close();
     }
+    await assertUpdateGenerationNamespaceIdentity(namespace, {
+      includeGenerationsParentRevision: false,
+    });
     await fs.rename(temporaryPath, launcherPath);
     launcherCommitted = true;
     await syncUpdateGenerationPath(root);
+    await assertUpdateGenerationNamespaceIdentity(namespace, {
+      includeGenerationsParentRevision: false,
+    });
     return launcherPath;
   } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    if (
+      await updateGenerationNamespaceIdentityIsCurrent(namespace, {
+        includeGenerationsParentRevision: false,
+      })
+    ) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
     if (launcherCommitted) {
       throw error;
     }
@@ -653,6 +620,7 @@ export async function removeObsoleteUpdateGeneration(params: {
   if (!namespace) {
     return false;
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   const selected = await readUpdateGenerationSelectorAtRoot(namespace.root);
   if (selected?.generationId === params.generationId) {
     throw new Error(`Refusing to remove active update generation ${params.generationId}`);
@@ -669,8 +637,10 @@ export async function removeObsoleteUpdateGeneration(params: {
     if (!retired.isDirectory() || retired.isSymbolicLink()) {
       throw new Error(`Refusing to remove invalid retired generation ${retiredRoot}`);
     }
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await removeUpdateGenerationTree(retiredRoot);
     await syncUpdateGenerationPath(paths.generationsRoot);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     return true;
   }
   if (!existing.isDirectory() || existing.isSymbolicLink()) {
@@ -681,14 +651,19 @@ export async function removeObsoleteUpdateGeneration(params: {
       `Update generation has conflicting active and retired paths: ${params.generationId}`,
     );
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   await fs.rename(paths.generationRoot, retiredRoot);
   const rechecked = await readUpdateGenerationSelectorAtRoot(namespace.root);
   if (rechecked?.generationId === params.generationId) {
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     await fs.rename(retiredRoot, paths.generationRoot);
     await syncUpdateGenerationPath(paths.generationsRoot);
+    await assertUpdateGenerationNamespaceIdentity(namespace);
     throw new Error(`Active update generation changed during cleanup: ${params.generationId}`);
   }
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   await removeUpdateGenerationTree(retiredRoot);
   await syncUpdateGenerationPath(paths.generationsRoot);
+  await assertUpdateGenerationNamespaceIdentity(namespace);
   return true;
 }

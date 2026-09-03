@@ -12,6 +12,8 @@ export type UpdateGenerationPhysicalState = {
   selectorDurable: boolean;
   generations: Array<{ generationId: string; manifestSha256: string }>;
   bindingConverged: boolean;
+  /** Required to accept a terminal success or rollback receipt. */
+  serviceState?: { running: boolean; enabled?: boolean } | null;
 };
 
 export type UpdateGenerationRecoveryAction =
@@ -108,6 +110,10 @@ function terminalGenerationStateMatches(params: {
 }): boolean {
   return (
     params.physical.bindingConverged &&
+    params.state.terminalServiceState !== null &&
+    params.physical.serviceState != null &&
+    params.state.terminalServiceState.running === params.physical.serviceState.running &&
+    params.state.terminalServiceState.enabled === params.physical.serviceState.enabled &&
     selectionIsPhysicallyRunnable(params.physical, params.selection) &&
     durableGenerationPairMatchesPhysical(params.state, params.physical)
   );

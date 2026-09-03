@@ -101,6 +101,23 @@ function failNextOpenForPath(targetPath: string, message: string) {
   });
 }
 
+async function listGenerationResidue(root: string): Promise<string[]> {
+  const residue: string[] = [];
+  const walk = async (current: string): Promise<void> => {
+    for (const child of await fs.readdir(current, { withFileTypes: true })) {
+      const childPath = path.join(current, child.name);
+      if (/^\.(?:incoming|retired|selector|launcher)-/u.test(child.name)) {
+        residue.push(childPath);
+      }
+      if (child.isDirectory() && !child.isSymbolicLink()) {
+        await walk(childPath);
+      }
+    }
+  };
+  await walk(root);
+  return residue;
+}
+
 describe("immutable update generation activation", () => {
   it("uses locale-independent manifest ordering", async () => {
     await withGenerationTestDir("openclaw-generation-manifest-order-", async (base) => {
@@ -394,6 +411,114 @@ describe("update generation fail-closed boundaries", () => {
           }),
         ).rejects.toThrow(/Invalid update generation(?:s directory| namespace)/u);
         await expect(fs.readdir(outsideRoot)).resolves.toEqual([]);
+      });
+    },
+  );
+
+  it.each(["namespace", "generations"] as const)(
+    "rejects a swapped-back %s root even when its original inode returns",
+    async (rootKind) => {
+      await withGenerationTestDir("openclaw-generation-root-swap-back-", async (base) => {
+        const namespaceRoot = path.join(base, "managed");
+        const generationsRoot = path.join(namespaceRoot, "generations");
+        const stageRoot = path.join(base, "stage");
+        const outsideRoot = path.join(base, "outside");
+        await Promise.all([
+          fs.mkdir(generationsRoot, { recursive: true }),
+          writeRuntime(stageRoot, "1.0.0"),
+          fs.mkdir(outsideRoot),
+        ]);
+        const targetRoot = rootKind === "namespace" ? namespaceRoot : generationsRoot;
+        const heldRoot = `${targetRoot}.held`;
+        const parentRoot = path.dirname(targetRoot);
+        const generationId = createUpdateGenerationId();
+        const expectedManifest = await captureUpdateGenerationManifest(stageRoot);
+        const realRealpath = fs.realpath.bind(fs);
+        let swapped = false;
+        const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (requestedPath) => {
+          if (!swapped && path.resolve(String(requestedPath)) === path.resolve(targetRoot)) {
+            swapped = true;
+            await fs.rename(targetRoot, heldRoot);
+            await fs.symlink(
+              outsideRoot,
+              targetRoot,
+              process.platform === "win32" ? "junction" : undefined,
+            );
+            await fs.rm(targetRoot, { force: true });
+            await fs.rename(heldRoot, targetRoot);
+            await fs.utimes(parentRoot, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+          }
+          return await realRealpath(requestedPath);
+        });
+        try {
+          await expect(
+            materializeUpdateGeneration({
+              namespaceRoot,
+              sourceRoot: stageRoot,
+              generationId,
+              expectedManifest,
+              packageVersion: "1.0.0",
+              entrypointRelativePath: "entry.mjs",
+            }),
+          ).rejects.toThrow("changed during path resolution");
+        } finally {
+          realpath.mockRestore();
+        }
+        expect(swapped).toBe(true);
+        await expect(fs.lstat(path.join(generationsRoot, generationId))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(listGenerationResidue(namespaceRoot)).resolves.toEqual([]);
+      });
+    },
+  );
+
+  it.each(["namespace", "generations"] as const)(
+    "rejects an equal-content replacement of the %s root with a different inode",
+    async (rootKind) => {
+      await withGenerationTestDir("openclaw-generation-root-inode-swap-", async (base) => {
+        const namespaceRoot = path.join(base, "managed");
+        const generationsRoot = path.join(namespaceRoot, "generations");
+        const stageRoot = path.join(base, "stage");
+        await Promise.all([
+          fs.mkdir(generationsRoot, { recursive: true }),
+          writeRuntime(stageRoot, "1.0.0"),
+        ]);
+        const targetRoot = rootKind === "namespace" ? namespaceRoot : generationsRoot;
+        const heldRoot = `${targetRoot}.held`;
+        const replacementRoot = `${targetRoot}.replacement`;
+        await fs.cp(targetRoot, replacementRoot, { recursive: true, preserveTimestamps: true });
+        const generationId = createUpdateGenerationId();
+        const expectedManifest = await captureUpdateGenerationManifest(stageRoot);
+        const realRealpath = fs.realpath.bind(fs);
+        let swapped = false;
+        const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (requestedPath) => {
+          if (!swapped && path.resolve(String(requestedPath)) === path.resolve(targetRoot)) {
+            swapped = true;
+            await fs.rename(targetRoot, heldRoot);
+            await fs.rename(replacementRoot, targetRoot);
+          }
+          return await realRealpath(requestedPath);
+        });
+        try {
+          await expect(
+            materializeUpdateGeneration({
+              namespaceRoot,
+              sourceRoot: stageRoot,
+              generationId,
+              expectedManifest,
+              packageVersion: "1.0.0",
+              entrypointRelativePath: "entry.mjs",
+            }),
+          ).rejects.toThrow("changed during path resolution");
+        } finally {
+          realpath.mockRestore();
+        }
+        expect(swapped).toBe(true);
+        await expect(fs.lstat(path.join(generationsRoot, generationId))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(listGenerationResidue(namespaceRoot)).resolves.toEqual([]);
       });
     },
   );

@@ -100,6 +100,7 @@ export type UpdateGenerationTransactionReceipt =
       packageVersion: string;
       launcherVersion: string;
       serviceRunning: boolean;
+      serviceEnabled?: boolean;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "rollback-intent";
@@ -112,6 +113,7 @@ export type UpdateGenerationTransactionReceipt =
       selection: UpdateGenerationSelection;
       launcherVersion: string;
       serviceRunning: boolean;
+      serviceEnabled?: boolean;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "cleanup-intent";
@@ -189,6 +191,7 @@ export type UpdateGenerationProjection = {
   completed: boolean;
   rolledBack: boolean;
   cleanupCompleted: boolean;
+  terminalServiceState: { running: boolean; enabled?: boolean } | null;
 };
 
 const RECEIPT_ID_SAFE = /^[A-Za-z0-9._:@/-]+$/u;
@@ -404,7 +407,8 @@ function assertReceiptTransition(
     if (
       receipt.packageVersion !== candidate.packageVersion ||
       receipt.launcherVersion !== candidate.packageVersion ||
-      receipt.serviceRunning !== projection.intent.serviceBefore.running
+      receipt.serviceRunning !== projection.intent.serviceBefore.running ||
+      receipt.serviceEnabled !== projection.intent.serviceBefore.enabled
     ) {
       throw new Error("Completion does not prove candidate and service convergence");
     }
@@ -434,7 +438,8 @@ function assertReceiptTransition(
     if (
       !previousPackageVersion ||
       receipt.launcherVersion !== previousPackageVersion ||
-      receipt.serviceRunning !== projection.intent.serviceBefore.running
+      receipt.serviceRunning !== projection.intent.serviceBefore.running ||
+      receipt.serviceEnabled !== projection.intent.serviceBefore.enabled
     ) {
       throw new Error(
         "Rollback completion does not prove previous runtime and service convergence",
@@ -500,11 +505,31 @@ export function appendUpdateGenerationReceipt(
   };
 }
 
+function assertUpdateGenerationTransactionRecordIsValid(
+  record: UpdateGenerationTransactionRecord,
+): void {
+  let rebuilt: UpdateGenerationTransactionRecord | null = null;
+  for (const receipt of record.receipts) {
+    rebuilt = appendUpdateGenerationReceipt(rebuilt, receipt);
+  }
+  if (
+    !rebuilt ||
+    rebuilt.formatVersion !== record.formatVersion ||
+    rebuilt.transactionId !== record.transactionId ||
+    rebuilt.namespaceKey !== record.namespaceKey
+  ) {
+    throw new TypeError("Update generation transaction snapshot is invalid");
+  }
+}
+
 export async function persistUpdateGenerationReceipt(params: {
   ledger: UpdateGenerationLedgerHook;
   snapshot: UpdateGenerationTransactionSnapshot | null;
   receipt: UpdateGenerationTransactionReceipt;
 }): Promise<UpdateGenerationTransactionSnapshot> {
+  if (params.snapshot) {
+    assertUpdateGenerationTransactionRecordIsValid(params.snapshot.record);
+  }
   if (
     params.snapshot &&
     params.receipt.kind === "intent" &&
@@ -582,6 +607,7 @@ export function projectUpdateGenerationTransaction(
     completed: false,
     rolledBack: false,
     cleanupCompleted: false,
+    terminalServiceState: null,
   };
   for (const receipt of record.receipts.slice(1)) {
     projection.latest = receipt;
@@ -600,8 +626,16 @@ export function projectUpdateGenerationTransaction(
       projection.candidateSelection = receipt.selection;
     } else if (receipt.kind === "completion") {
       projection.completed = true;
+      projection.terminalServiceState = {
+        running: receipt.serviceRunning,
+        enabled: receipt.serviceEnabled,
+      };
     } else if (receipt.kind === "rolled-back") {
       projection.rolledBack = true;
+      projection.terminalServiceState = {
+        running: receipt.serviceRunning,
+        enabled: receipt.serviceEnabled,
+      };
     } else if (receipt.kind === "cleanup-completed") {
       projection.cleanupCompleted = true;
     }

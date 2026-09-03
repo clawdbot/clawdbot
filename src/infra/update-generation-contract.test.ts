@@ -9,6 +9,7 @@ import {
   type UpdateGenerationLedgerHook,
   type UpdateGenerationManifest,
   type UpdateGenerationSelection,
+  type UpdateGenerationServiceIntent,
   type UpdateGenerationTransactionReceipt,
   type UpdateGenerationTransactionRecord,
   type UpdateGenerationTransactionSnapshot,
@@ -66,18 +67,60 @@ function selection(character: string): UpdateGenerationSelection {
   };
 }
 
-function intent(previousSelection: UpdateGenerationSelection | null, stable: boolean) {
+function intent(
+  previousSelection: UpdateGenerationSelection | null,
+  stable: boolean,
+  serviceBefore: UpdateGenerationServiceIntent = {
+    managed: true,
+    running: true,
+    enabled: true,
+  },
+) {
   return receipt("intent", 0, {
     manager: "pnpm",
     namespaceKey: NAMESPACE_KEY,
     namespaceRoot: "/manager/.openclaw-generations",
     selectorPath: "/manager/.openclaw-generations/selector.json",
     stagingRoot: "/manager/.openclaw-stage",
-    serviceBefore: { managed: true, running: true, enabled: true },
+    serviceBefore,
     previousSelection,
     previousPackageVersion: previousSelection ? "1.0.0" : null,
     stableBindingAlreadyVerified: stable,
   });
+}
+
+function candidateSelectedRecord(serviceBefore: UpdateGenerationServiceIntent): {
+  record: UpdateGenerationTransactionRecord;
+  previous: UpdateGenerationSelection;
+  candidate: UpdateGenerationSelection;
+} {
+  const previous = selection("a");
+  const candidate = selection("b");
+  let record = append(null, intent(previous, true, serviceBefore));
+  record = append(
+    record,
+    receipt("generation-materialization-intent", 1, {
+      role: "candidate",
+      sourceRoot: "/stage/candidate",
+      generationId: candidate.generationId,
+      manifest: manifest("b"),
+      packageVersion: "2.0.0",
+      entrypointRelativePath: candidate.entrypointRelativePath,
+    }),
+  );
+  record = append(
+    record,
+    receipt("generation-materialized", 2, {
+      role: "candidate",
+      generation: { ...candidate, packageVersion: "2.0.0" },
+    }),
+  );
+  record = append(
+    record,
+    receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
+  );
+  record = append(record, receipt("candidate-selected", 4, { selection: candidate }));
+  return { record, previous, candidate };
 }
 
 function append(
@@ -130,6 +173,158 @@ class MemoryLedger implements UpdateGenerationLedgerHook {
 }
 
 describe("durable update generation transaction contract", () => {
+  it.each([
+    {
+      label: "enabled-running",
+      serviceBefore: { managed: true, running: true, enabled: true },
+    },
+    {
+      label: "enabled-stopped",
+      serviceBefore: { managed: true, running: false, enabled: true },
+    },
+    {
+      label: "disabled-stopped",
+      serviceBefore: { managed: true, running: false, enabled: false },
+    },
+  ] as const)(
+    "requires $label service convergence for success, rollback, restart, and replay",
+    async ({ serviceBefore }) => {
+      const {
+        record: selectedRecord,
+        previous,
+        candidate,
+      } = candidateSelectedRecord(serviceBefore);
+      const completion = receipt("completion", 5, {
+        packageVersion: "2.0.0",
+        launcherVersion: "2.0.0",
+        serviceRunning: serviceBefore.running,
+        serviceEnabled: serviceBefore.enabled,
+      });
+      const missingEnablement = { ...completion, serviceEnabled: undefined };
+      const flippedEnablement = { ...completion, serviceEnabled: !serviceBefore.enabled };
+      expect(() => append(selectedRecord, missingEnablement)).toThrow(
+        "does not prove candidate and service convergence",
+      );
+      expect(() => append(selectedRecord, flippedEnablement)).toThrow(
+        "does not prove candidate and service convergence",
+      );
+
+      const completed = append(selectedRecord, completion);
+      for (const invalidCompletion of [missingEnablement, flippedEnablement]) {
+        const invalidRecord = {
+          ...completed,
+          receipts: [...completed.receipts.slice(0, -1), invalidCompletion],
+        };
+        expect(() =>
+          parseUpdateGenerationTransactionRecord(
+            // oxlint-disable-next-line unicorn/prefer-structured-clone -- malformed durable JSON is under test.
+            JSON.parse(JSON.stringify(invalidRecord)),
+          ),
+        ).toThrow("service convergence");
+        await expect(
+          persistUpdateGenerationReceipt({
+            ledger: new MemoryLedger({ revision: "6", record: invalidRecord }),
+            snapshot: { revision: "6", record: invalidRecord },
+            receipt: invalidCompletion,
+          }),
+        ).rejects.toThrow("service convergence");
+      }
+      const restarted = parseUpdateGenerationTransactionRecord(
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- durable JSON restart is under test.
+        JSON.parse(JSON.stringify(completed)),
+      );
+      const physical = {
+        selector: candidate,
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
+        ],
+        bindingConverged: true,
+        serviceState: { running: serviceBefore.running, enabled: serviceBefore.enabled },
+      };
+      expect(adjudicateUpdateGenerationTransaction(restarted, physical)).toMatchObject({
+        action: "complete",
+      });
+      expect(
+        adjudicateUpdateGenerationTransaction(restarted, {
+          ...physical,
+          serviceState: { running: serviceBefore.running },
+        }),
+      ).toMatchObject({ action: "inconsistent" });
+      expect(
+        adjudicateUpdateGenerationTransaction(restarted, {
+          ...physical,
+          serviceState: { running: serviceBefore.running, enabled: !serviceBefore.enabled },
+        }),
+      ).toMatchObject({ action: "inconsistent" });
+      const snapshot = { revision: "6", record: restarted };
+      await expect(
+        persistUpdateGenerationReceipt({
+          ledger: new MemoryLedger(snapshot),
+          snapshot,
+          receipt: completion,
+        }),
+      ).resolves.toEqual(snapshot);
+
+      let rollbackRecord = append(
+        selectedRecord,
+        receipt("rollback-intent", 5, {
+          from: candidate,
+          to: previous,
+          reason: "verification failed",
+        }),
+      );
+      const rolledBack = receipt("rolled-back", 6, {
+        selection: previous,
+        launcherVersion: "1.0.0",
+        serviceRunning: serviceBefore.running,
+        serviceEnabled: serviceBefore.enabled,
+      });
+      const rollbackMissingEnablement = { ...rolledBack, serviceEnabled: undefined };
+      const rollbackFlippedEnablement = {
+        ...rolledBack,
+        serviceEnabled: !serviceBefore.enabled,
+      };
+      expect(() => append(rollbackRecord, rollbackMissingEnablement)).toThrow(
+        "does not prove previous runtime and service convergence",
+      );
+      expect(() => append(rollbackRecord, rollbackFlippedEnablement)).toThrow(
+        "does not prove previous runtime and service convergence",
+      );
+      rollbackRecord = append(rollbackRecord, rolledBack);
+      for (const invalidRollback of [rollbackMissingEnablement, rollbackFlippedEnablement]) {
+        const invalidRecord = {
+          ...rollbackRecord,
+          receipts: [...rollbackRecord.receipts.slice(0, -1), invalidRollback],
+        };
+        expect(() =>
+          parseUpdateGenerationTransactionRecord(
+            // oxlint-disable-next-line unicorn/prefer-structured-clone -- malformed durable JSON is under test.
+            JSON.parse(JSON.stringify(invalidRecord)),
+          ),
+        ).toThrow("service convergence");
+        await expect(
+          persistUpdateGenerationReceipt({
+            ledger: new MemoryLedger({ revision: "7", record: invalidRecord }),
+            snapshot: { revision: "7", record: invalidRecord },
+            receipt: invalidRollback,
+          }),
+        ).rejects.toThrow("service convergence");
+      }
+      const restartedRollback = parseUpdateGenerationTransactionRecord(
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- durable JSON restart is under test.
+        JSON.parse(JSON.stringify(rollbackRecord)),
+      );
+      expect(
+        adjudicateUpdateGenerationTransaction(restartedRollback, {
+          ...physical,
+          selector: previous,
+        }),
+      ).toMatchObject({ action: "complete" });
+    },
+  );
+
   it("serializes a complete existing-binding activation without methods", () => {
     const previous = selection("a");
     const candidate = selection("b");
@@ -142,6 +337,7 @@ describe("durable update generation transaction contract", () => {
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
         ],
         bindingConverged: true,
+        serviceState: { running: true, enabled: true },
       }),
     ).toMatchObject({ action: "resume-materialization", role: "candidate" });
     record = append(
@@ -171,6 +367,7 @@ describe("durable update generation transaction contract", () => {
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
+        serviceState: { running: true, enabled: true },
       }),
     ).toMatchObject({ action: "persist-candidate-selection-intent", role: "candidate" });
     record = append(
@@ -184,6 +381,7 @@ describe("durable update generation transaction contract", () => {
         packageVersion: "2.0.0",
         launcherVersion: "2.0.0",
         serviceRunning: true,
+        serviceEnabled: true,
       }),
     );
 
@@ -204,6 +402,7 @@ describe("durable update generation transaction contract", () => {
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
+        serviceState: { running: true, enabled: true },
       }),
     ).toEqual({ action: "complete", reason: "completion receipt and selector agree" });
     expect(
@@ -462,6 +661,7 @@ describe("durable update generation transaction contract", () => {
           selection: previous,
           launcherVersion: "2.0.0",
           serviceRunning: true,
+          serviceEnabled: true,
         }),
       ),
     ).toThrow("does not prove previous runtime and service convergence");
@@ -471,6 +671,7 @@ describe("durable update generation transaction contract", () => {
         selection: previous,
         launcherVersion: "1.0.0",
         serviceRunning: true,
+        serviceEnabled: true,
       }),
     );
 
@@ -483,6 +684,7 @@ describe("durable update generation transaction contract", () => {
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
+        serviceState: { running: true, enabled: true },
       }),
     ).toMatchObject({ action: "complete" });
     expect(
@@ -614,6 +816,7 @@ describe("durable update generation transaction contract", () => {
         packageVersion: "2.0.0",
         launcherVersion: "2.0.0",
         serviceRunning: true,
+        serviceEnabled: true,
       }),
     );
     priorRecord = append(
@@ -692,6 +895,7 @@ describe("durable update generation transaction contract", () => {
           packageVersion: "2.0.0",
           launcherVersion: "2.0.0",
           serviceRunning: true,
+          serviceEnabled: true,
         }),
       ),
     ).toThrow("completion cannot follow intent");

@@ -153,6 +153,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       packageVersion: nonEmptyStringSchema,
       launcherVersion: nonEmptyStringSchema,
       serviceRunning: z.boolean(),
+      serviceEnabled: z.boolean().optional(),
     })
     .strict(),
   z
@@ -171,6 +172,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       selection: updateGenerationSelectionSchema,
       launcherVersion: nonEmptyStringSchema,
       serviceRunning: z.boolean(),
+      serviceEnabled: z.boolean().optional(),
     })
     .strict(),
   z
