@@ -19,7 +19,8 @@ const MIN_SEVERITY = "high";
 /** Maximum advisory error body characters retained in messages. */
 const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
-const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 120_000;
+const BULK_ADVISORY_REQUEST_ATTEMPTS = 2;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
@@ -880,6 +881,30 @@ export async function fetchBulkAdvisories({
   });
 }
 
+function isBulkAdvisoryTimeoutError(error) {
+  return (
+    error instanceof Error && error.message.startsWith("Bulk advisory request exceeded timeout of ")
+  );
+}
+
+export async function fetchBulkAdvisoriesWithRetry({
+  attempts = BULK_ADVISORY_REQUEST_ATTEMPTS,
+  onRetry = () => {},
+  ...options
+}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetchBulkAdvisories(options);
+    } catch (error) {
+      if (attempt === attempts || !isBulkAdvisoryTimeoutError(error)) {
+        throw error;
+      }
+      onRetry({ attempt, error });
+    }
+  }
+  throw new Error("Bulk advisory retry loop exhausted unexpectedly");
+}
+
 /** @param {PnpmAuditOptions} [options] */
 export async function runPnpmAuditProd({
   rootDir = process.cwd(),
@@ -903,9 +928,12 @@ export async function runPnpmAuditProd({
   const advisoryResults = {};
   for (const payloadChunk of chunkEntries(payloadEntries, 400)) {
     const chunkPayload = Object.fromEntries(payloadChunk);
-    const chunkResults = await fetchBulkAdvisories({
+    const chunkResults = await fetchBulkAdvisoriesWithRetry({
       payload: chunkPayload,
       fetchImpl,
+      onRetry: () => {
+        stderr.write("[pnpm-audit-prod] Bulk advisory request timed out; retrying once.\n");
+      },
     });
     Object.assign(advisoryResults, chunkResults);
   }

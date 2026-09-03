@@ -3,12 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectAllResolvedPackagesFromLockfile,
   collectProdResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
+  fetchBulkAdvisoriesWithRetry,
   filterFindingsBySeverity,
   parseArgs,
   parseSnapshotKey,
@@ -339,6 +340,47 @@ snapshots:
     expect(signal?.aborted).toBe(true);
   });
 
+  it("retries one timed-out bulk advisory request", async () => {
+    let calls = 0;
+    const onRetry = vi.fn();
+    const result = await fetchBulkAdvisoriesWithRetry({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      onRetry,
+      fetchImpl: ((_url, init) => {
+        calls += 1;
+        if (calls === 2) {
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      }) as typeof fetch,
+    });
+
+    expect(result).toEqual({});
+    expect(calls).toBe(2);
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry non-timeout bulk advisory failures", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response("registry failure", { status: 500, statusText: "Internal Error" }),
+    );
+
+    await expect(
+      fetchBulkAdvisoriesWithRetry({
+        payload: { axios: ["1.0.0"] },
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/Bulk advisory request failed \(500 Internal Error\)/u);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("clamps oversized bulk advisory request timers before scheduling", async () => {
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
@@ -491,7 +533,9 @@ snapshots:
         const exitCode = await runPnpmAuditProd({
           rootDir: tempDir,
           fetchImpl: async (input) => {
-            expect(String(input)).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
+            const url =
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
             return new Response(
               JSON.stringify(
                 blocked
