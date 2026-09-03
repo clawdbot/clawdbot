@@ -10,6 +10,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
@@ -496,14 +497,58 @@ describe("TwitchClientManager", () => {
       expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
     });
 
-    it("should throw error when token is missing", async () => {
+    it("should name the default account accessToken path when token is missing", async () => {
       // Override the mock to return empty token
       resolveTwitchTokenMock.mockReturnValue({
         token: "",
         source: "none" as const,
       });
+      const cfg: OpenClawConfig = {
+        channels: {
+          twitch: { ...testAccount, accessToken: "" },
+        },
+      };
 
-      await expect(manager.getClient(testAccount)).rejects.toThrow("Missing Twitch token");
+      await expect(manager.getClient(testAccount, cfg)).rejects.toThrow("Missing Twitch token");
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        "Missing Twitch token for account default (set channels.twitch.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      );
+    });
+
+    it("should name the multi-account default accessToken path when token is missing", async () => {
+      resolveTwitchTokenMock.mockReturnValue({
+        token: "",
+        source: "none" as const,
+      });
+      const cfg: OpenClawConfig = {
+        channels: {
+          twitch: { accounts: { default: { ...testAccount, accessToken: "" } } },
+        },
+      };
+
+      await expect(manager.getClient(testAccount, cfg)).rejects.toThrow("Missing Twitch token");
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        "Missing Twitch token for account default (set channels.twitch.accounts.default.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      );
+    });
+
+    it("should normalize a selected account in missing-token guidance", async () => {
+      resolveTwitchTokenMock.mockReturnValue({
+        token: "",
+        source: "none" as const,
+      });
+      const cfg: OpenClawConfig = {
+        channels: {
+          twitch: { accounts: { "stream-team": { ...testAccount, accessToken: "" } } },
+        },
+      };
+
+      await expect(manager.getClient(testAccount, cfg, " Stream-Team ")).rejects.toThrow(
+        "Missing Twitch token",
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        "Missing Twitch token for account stream-team (set channels.twitch.accounts.stream-team.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
+      );
     });
 
     it("should set up message handlers on client connection", async () => {
