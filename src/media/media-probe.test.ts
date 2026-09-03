@@ -157,22 +157,31 @@ describe("probeMediaFile", () => {
     expect(runFfprobe).toHaveBeenCalledOnce();
   });
 
-  it("falls back to pipe input when older ffprobe lacks the fd protocol", async () => {
-    runFfprobe
-      .mockRejectedValueOnce(
-        Object.assign(new Error("ffprobe failed"), { stderr: "fd:: Protocol not found" }),
-      )
-      .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
+  it.each([
+    ["fd protocol missing", "fd:: Protocol not found"],
+    [
+      "fd option unrecognized",
+      "Unrecognized option 'fd'.\nError splitting the argument list: Option not found",
+    ],
+    // ffprobe 4.4 (Ubuntu 22.04) and 5.x report the `-fd` option this way.
+    ["fd option value rejected", "Failed to set value '0' for option 'fd': Option not found"],
+  ])(
+    "falls back to pipe input when older ffprobe lacks fd support (%s)",
+    async (_label, stderr) => {
+      runFfprobe
+        .mockRejectedValueOnce(Object.assign(new Error("ffprobe failed"), { stderr }))
+        .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
-      durationMs: 2000,
-    });
-    expect(runFfprobe).toHaveBeenNthCalledWith(
-      2,
-      expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),
-      { stdinFileDescriptor: 17 },
-    );
-  });
+      await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+        durationMs: 2000,
+      });
+      expect(runFfprobe).toHaveBeenNthCalledWith(
+        2,
+        expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),
+        { stdinFileDescriptor: 17 },
+      );
+    },
+  );
 
   it("uses stream duration when the container duration is absent", async () => {
     runFfprobe.mockResolvedValueOnce(
