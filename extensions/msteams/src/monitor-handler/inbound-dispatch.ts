@@ -149,7 +149,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const boundIngress = await resolveMSTeamsSenderAccess({
     cfg,
     activity,
-    hasControlCommand: admission.isControlCommand,
+    shouldComputeCommandAuthorized: admission.shouldComputeCommandAuthorized,
     conversationThreadId: facts.threadId,
     contextBinding: {
       agentId: route.agentId,

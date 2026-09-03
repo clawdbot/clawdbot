@@ -118,7 +118,7 @@ function formatMSTeamsSenderReason(params: {
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
-  hasControlCommand?: boolean;
+  shouldComputeCommandAuthorized?: boolean;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
 }) {
@@ -220,7 +220,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     groupAllowFrom,
     command: {
       allowTextCommands: true,
-      hasControlCommand: params.hasControlCommand === true,
+      hasControlCommand: params.shouldComputeCommandAuthorized === true,
       directGroupAllowFrom: isDirectMessage ? "effective" : "none",
     },
   });
@@ -258,10 +258,13 @@ export async function admitMSTeamsMessage(params: {
   });
   const isControlCommand =
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
+  const shouldComputeCommandAuthorized =
+    allowTextCommands &&
+    core.channel.commands.shouldComputeCommandAuthorized(params.text, params.cfg);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
     activity: params.activity,
-    hasControlCommand: isControlCommand,
+    shouldComputeCommandAuthorized,
   });
   const {
     dmPolicy,
@@ -394,7 +397,7 @@ export async function admitMSTeamsMessage(params: {
     }
   }
 
-  if (commandAccess.shouldBlockControlCommand) {
+  if (isControlCommand && !commandAccess.authorized) {
     logInboundDrop({
       log: params.logVerboseMessage,
       channel: "msteams",
@@ -416,6 +419,7 @@ export async function admitMSTeamsMessage(params: {
     ...access,
     allowTextCommands,
     isControlCommand,
+    shouldComputeCommandAuthorized,
     commandAuthorized: commandAccess.requested ? commandAccess.authorized : undefined,
     effectiveDmAllowFrom,
     effectiveGroupAllowFrom,

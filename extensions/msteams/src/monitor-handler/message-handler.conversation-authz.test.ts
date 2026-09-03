@@ -2,8 +2,9 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
@@ -34,7 +35,13 @@ vi.mock("../team-identity.js", () => ({
   resolveTeamGroupId: vi.fn(async () => "group-1"),
 }));
 
-function createDeps(cfg: OpenClawConfig) {
+function createDeps(
+  cfg: OpenClawConfig,
+  options: {
+    isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+    shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  } = {},
+) {
   return createMessageHandlerDeps(cfg, {
     readAllowFromStore: vi.fn(async () => ["attacker-aad"]),
     upsertPairingRequest: vi.fn(async () => null),
@@ -44,6 +51,8 @@ function createDeps(cfg: OpenClawConfig) {
       agentId: "default",
       accountId: "default",
     })),
+    isControlCommandMessage: options.isControlCommandMessage,
+    shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
   });
 }
 
@@ -119,6 +128,72 @@ async function dispatchBotFrameworkActivityOverHttp(params: {
 }
 
 describe("msteams group conversation allowlist authorization", () => {
+  afterEach(() => {
+    clearPluginCommands();
+  });
+
+  it("carries the final authorization boundary for allowed and unauthorized registered commands", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    registerPluginCommand("msteams-test-plugin", {
+      name: "msteams-plugin-auth",
+      description: "Test Microsoft Teams plugin command authorization.",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+    const { deps } = createDeps(
+      {
+        commands: { useAccessGroups: true },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            groupAllowFrom: ["member-aad"],
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        isControlCommandMessage: vi.fn(() => false),
+        shouldComputeCommandAuthorized: vi.fn(() => true),
+      },
+    );
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "allowed-plugin-command-message",
+        text: "/msteams-plugin-auth check",
+        from: { id: "member-bot-framework-id", aadObjectId: "member-aad", name: "Group Member" },
+        conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+      }),
+    );
+    await handler(
+      createMessageActivity({
+        id: "unauthorized-plugin-command-message",
+        text: "/msteams-plugin-auth check",
+        from: {
+          id: "unlisted-bot-framework-id",
+          aadObjectId: "unlisted-aad",
+          name: "Unlisted Member",
+        },
+        conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+      }),
+    );
+
+    const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls.map(
+      ([params]) => params as { ctx?: { CommandAuthorized?: boolean; SenderId?: string } },
+    );
+    expect(dispatched).toHaveLength(2);
+    expect(
+      dispatched.map(({ ctx }) => ({
+        CommandAuthorized: ctx?.CommandAuthorized,
+        SenderId: ctx?.SenderId,
+      })),
+    ).toEqual([
+      { CommandAuthorized: true, SenderId: "member-aad" },
+      { CommandAuthorized: false, SenderId: "unlisted-aad" },
+    ]);
+  });
+
   it.each([
     {
       label: "a group chat",
