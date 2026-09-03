@@ -461,6 +461,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
       config?: OpenClawConfig;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
+      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
     },
   ) {
     const sessionKey = "main";
@@ -501,7 +502,10 @@ describe("runReplyAgent auto-compaction token update", () => {
         reasoningLevel: "on",
       },
       reply: {
-        opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+        opts: {
+          onBlockReply: options?.onBlockReply,
+          onAgentRunTerminalOutcome: options?.onAgentRunTerminalOutcome,
+        },
         sessionEntry,
         sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
@@ -730,6 +734,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
+    [
+      "with only a reply directive",
+      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
+      true,
+    ],
     ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }, true],
     [
       "after an intentional terminal tool batch",
@@ -739,7 +748,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "accounts for empty interactive direct replies %s",
     async (_label, agentResult, fallback) => {
-      const result = await runEmptyDirectReply(agentResult);
+      const onAgentRunTerminalOutcome = vi.fn();
+      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(fallback ? "failed" : "completed");
       if (!fallback) {
         expect(result).toBeUndefined();
         return;

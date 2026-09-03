@@ -674,6 +674,8 @@ Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-ben
 
 <Accordion title="Gateway startup (scripts/bench-gateway-startup.ts)">
 
+Gateway startup, restart, and agent concurrency benchmark fixtures use temporary home and state directories, loopback binding, and `discovery.mdns.mode: "off"` so synthetic Gateways do not advertise on the LAN, including on macOS.
+
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
 ```bash

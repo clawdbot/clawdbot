@@ -680,6 +680,7 @@ function runCiManifestFixture(options: {
         GH_TOKEN: "",
         GITHUB_TOKEN: "",
         GITHUB_OUTPUT: outputPath,
+        GITHUB_RUN_ATTEMPT: "1",
         GITHUB_STEP_SUMMARY: summaryPath,
         RUNNER_TEMP: root,
         PATH: options.remoteTagRefs
@@ -3534,7 +3535,7 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
-    "bounds Windows project overlap to existing self-hosted capacity",
+    "keeps Windows projects serial on each runner while both jobs remain parallel",
     () => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs["checks-windows"];
@@ -3569,9 +3570,7 @@ NODE
             },
           });
           expect(result.status, result.stdout + result.stderr).toBe(0);
-          expect(result.stdout).toContain(
-            `project_parallelism=${runner === "self-hosted" ? 2 : 1}`,
-          );
+          expect(result.stdout).toContain("project_parallelism=1");
         }
       }
       expect(job.strategy["max-parallel"]).toBe(2);
@@ -11599,29 +11598,39 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(14);
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
-    const expectedUiE2eMatrix = {
-      include: Array.from({ length: 13 }, (_, index) => {
+    const expectedUiE2eMatrices = [6, 12].map((vitestShardCount) => ({
+      include: Array.from({ length: vitestShardCount + 1 }, (_, index) => {
         const shard = index + 1;
         return {
           shard,
-          shard_count: 13,
-          task: shard === 13 ? "browser-extension" : "control-ui",
-          vitest_shard_count: 12,
+          shard_count: vitestShardCount + 1,
+          task: shard === vitestShardCount + 1 ? "browser-extension" : "control-ui",
+          vitest_shard_count: vitestShardCount,
         };
       }),
-    };
+    }));
     for (const runnerBackend of ["blacksmith", "github", "hybrid"] as const) {
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
-        eventName: "push",
-        historicalCompatibility: false,
-        runnerBackend,
-        uiE2eProjectsCapability: true,
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      expect(
-        JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} UI E2E matrix`)),
-      ).toEqual(expectedUiE2eMatrix);
+      for (const eventName of ["push", "pull_request"] as const) {
+        for (const runAttempt of ["1", "2", ""]) {
+          const manifest = runCiManifestFixture({
+            bundledPlanner: true,
+            changedPaths: [],
+            eventName,
+            historicalCompatibility: false,
+            runnerBackend,
+            uiE2eProjectsCapability: true,
+            scopeEnv: { GITHUB_RUN_ATTEMPT: runAttempt },
+          });
+          const assertionName = `${runnerBackend} ${eventName} attempt ${runAttempt || "missing"}`;
+          expect(manifest.status, manifest.output).toBe(0);
+          expect(
+            JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, assertionName)),
+            assertionName,
+          ).toEqual(
+            expectedUiE2eMatrices[runnerBackend === "blacksmith" && runAttempt === "1" ? 0 : 1],
+          );
+        }
+      }
     }
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
@@ -11659,19 +11668,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
 
-    // Exercise every emitted row: only Control UI needs the larger host, while
-    // both E2E owners retain the same backend, retry and contributor boundaries.
+    // Failed-job retries reuse the six-row matrix while live routing selects
+    // hosted runners. Both widths must retain the cache and contributor boundaries.
     const routedUiE2eJobs = [
-      ...expectedUiE2eMatrix.include.map((matrix) => ({
-        job: uiE2e,
-        name: `checks-ui-e2e (${matrix.shard}/${matrix.shard_count})`,
-        setup: uiE2eSetup,
-        matrix,
-        blacksmithRunner:
-          matrix.task === "control-ui"
-            ? "blacksmith-32vcpu-ubuntu-2404"
-            : "blacksmith-8vcpu-ubuntu-2404",
-      })),
+      ...expectedUiE2eMatrices
+        .flatMap(({ include }) => include)
+        .map((matrix) => ({
+          job: uiE2e,
+          name: `checks-ui-e2e (${matrix.shard}/${matrix.shard_count})`,
+          setup: uiE2eSetup,
+          matrix,
+          blacksmithRunner:
+            matrix.task === "control-ui"
+              ? "blacksmith-32vcpu-ubuntu-2404"
+              : "blacksmith-8vcpu-ubuntu-2404",
+        })),
       {
         job: uiE2eRealGateway,
         name: "checks-ui-e2e-real-gateway",

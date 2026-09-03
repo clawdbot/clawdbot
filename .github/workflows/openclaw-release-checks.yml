@@ -110,7 +110,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
         required: false
         default: ""
         type: string

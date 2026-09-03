@@ -480,6 +480,36 @@ ${command}
     }
   });
 
+  it("routes npm through both registry environment spellings after replacing a parent registry", () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-routing-");
+    writeFileSync(path.join(root, "fixture.tgz"), "fixture package archive");
+    const result = runPluginsSweepShell(
+      `
+set -euo pipefail
+source scripts/e2e/lib/plugins/fixtures.sh
+unset NPM_CONFIG_REGISTRY npm_config_registry
+export NPM_CONFIG_REGISTRY=http://127.0.0.1:1 npm_config_registry=http://127.0.0.1:1
+start_npm_fixture_registry fixture-pkg 1.0.0 "$REGISTRY_ROOT/fixture.tgz" "$REGISTRY_ROOT"
+# Duplicate-case precedence depends on environment order; exercise each accepted spelling.
+for registry_key in NPM_CONFIG_REGISTRY npm_config_registry; do
+  env -u "$registry_key" npm view fixture-pkg@1.0.0 version --json --fetch-retries=0 --fetch-timeout=1000 --cache "$REGISTRY_ROOT/cache"
+done
+`,
+      {
+        HOME: root,
+        REGISTRY_ROOT: root,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual(["1.0.0", "1.0.0"]);
+  });
+
   it("cleans npm fixture registry children when readiness times out", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-cleanup-"));
     try {

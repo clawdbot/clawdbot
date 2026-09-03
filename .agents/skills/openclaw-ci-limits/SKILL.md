@@ -236,22 +236,24 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   existing 90-file job budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
-- Plugin fallback pairs retain separate child processes, including process-bounded
-  configs. Their budget remains 150 predicted seconds while expanded compact
-  jobs use 210. Runtime preparation stays separate; no process/file/worker
-  limits are relaxed. The complete supplemental boundary list runs in one job
+- Plugin fallback groups retain separate child processes, including process-bounded
+  configs. Different compatible configs share up to 150 predicted seconds without
+  a pair-count limit; expanded compact jobs use 210. Runtime preparation stays
+  separate; no process/file/worker limits are relaxed. The complete supplemental boundary list runs in one job
   with four concurrent checks and one full-root focused-rule scan.
 - Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
   outliers reuse the existing file splitter. Preserve serial execution, worker
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith compact bins with multiple ordinary groups request the existing
-  32-vCPU class and two child slots while retaining their logical names, 200/276s
-  packing and complete inventories. Exclusive groups and jobs with runtime
-  preparation stay serial. The canonical shard executor admits two CI children
+  32-vCPU class and two child slots with a 300s aggregate budget. Serial bins retain
+  200/276s, exclusive bins retain 150s, and groups above their serial cap stay alone.
+  Runtime consumers share preparation only with other consumers; ordinary groups
+  do not inherit the slower serial host. Complete inventories remain intact.
+  The canonical shard executor admits two CI children
   only with at least eight available CPUs and 24 GiB actual memory; otherwise it
   admits one. Inner project parallelism stays one and each child keeps two
-  Vitest workers. Hosted and hybrid plans remain serial. This adds no jobs;
-  elapsed time, peak memory and cleanup still need native proof.
+  Vitest workers. Hosted and hybrid plans remain serial. Fewer jobs must retain
+  native elapsed-time, memory and cleanup proof.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
 - Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
@@ -261,11 +263,16 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   comparison; capacity alone is not a measured speedup.
 - The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
   scheduler and serial declaration compiler policy stay unchanged.
-- Eligible Control UI E2E rows request the 32-vCPU class, retaining the same
-  backend/event/contributor routing, twelve current shards and two/one-worker
-  project limits. The browser-extension row stays on 8 and real-Gateway on 16.
-  The measured two-CPU UI tails require native timing on the larger class;
-  this adds no registrations and does not refresh stale timing weights.
+- Eligible Control UI E2E rows request the 32-vCPU class with unchanged live
+  backend/event/contributor routing and two/one-worker project limits. Targets
+  with the named-project contract use six shards on non-frozen Blacksmith first
+  attempts; other fresh plans retain twelve. Historical targets without that
+  contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
+  including the browser-extension row. Failed-job-only PR retries of the six-shard
+  plan retain that width on hosted Ubuntu with the existing 25-minute timeout.
+  The browser-extension row stays on 8 and real-Gateway
+  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
+  native timing proof and does not refresh stale timing weights.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
   jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
