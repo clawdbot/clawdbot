@@ -76,6 +76,7 @@ type SessionChangedEventInfo = {
   reason: string | null;
   sessionId?: string;
   updatedAt: number | null;
+  hasPermissionMode: boolean;
   thinkingLevel?: string | null;
   agentId: string | null;
   runId: string | null;
@@ -327,6 +328,7 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       reason,
       sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      hasPermissionMode: Object.hasOwn(source, "permissionMode"),
       thinkingLevel:
         typeof thinkingLevel === "string"
           ? thinkingLevel

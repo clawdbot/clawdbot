@@ -11,9 +11,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
-import { formatCliCommand } from "../command-format.js";
+import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { quoteCliArg } from "../quote-cli-arg.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -27,8 +26,6 @@ import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-
-const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -145,19 +142,6 @@ function isPendingApprovalState(
   state: NodeApprovalState | null,
 ): state is "pending-approval" | "pending-reapproval" {
   return state === "pending-approval" || state === "pending-reapproval";
-}
-
-function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
-  const requestId = normalizeOptionalString(raw);
-  if (!requestId) {
-    return null;
-  }
-  const args = ["openclaw", "nodes", "approve", requestId];
-  const timeout = normalizeOptionalString(opts.timeout);
-  if (timeout && timeout !== String(DEFAULT_NODES_RPC_TIMEOUT_MS)) {
-    args.push("--timeout", timeout);
-  }
-  return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
 function parseSinceMs(raw: string | undefined, label: string): number | undefined {
@@ -354,8 +338,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
           for (const node of filtered) {
             const approvalState = formatNodeApprovalState(node.approvalState);
-            const approveCommand = formatPendingApprovalCommand(node.pendingRequestId, opts);
-            if (isPendingApprovalState(approvalState) && approveCommand) {
+            const requestId = normalizeOptionalString(node.pendingRequestId);
+            if (isPendingApprovalState(approvalState) && requestId) {
+              const approveCommand = formatPairingApproveCommand("nodes", requestId, {
+                timeout: opts.timeout,
+              });
               const action = approvalState === "pending-reapproval" ? "Reapproval" : "Approval";
               defaultRuntime.log(
                 warn(
@@ -409,9 +396,10 @@ export function registerNodesStatusCommands(nodes: Command) {
             ? obj.pendingDeclaredCommands.map(String).filter(Boolean).toSorted()
             : [];
           const pendingPerms = formatPermissions(obj.pendingDeclaredPermissions);
-          const approveCommand = isPendingApprovalState(approvalState)
-            ? formatPendingApprovalCommand(pendingRequestId, opts)
-            : null;
+          const approveCommand =
+            isPendingApprovalState(approvalState) && pendingRequestId
+              ? formatPairingApproveCommand("nodes", pendingRequestId, { timeout: opts.timeout })
+              : null;
           const connectionReminder = approveCommand ? formatConnectionFlagReminder(opts) : null;
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;

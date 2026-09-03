@@ -15,7 +15,6 @@ import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
-const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
 type LifecycleData = {
   phase?: string;
@@ -314,7 +313,7 @@ describe("subagent registry lifecycle error grace", () => {
       childSessionKey: `agent:main:subagent:${childSuffix}`,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterAgentId: "main",
-      requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
+      requesterDisplayKey: "main",
       task,
       cleanup: "keep",
       expectsCompletionMessage,
@@ -434,6 +433,7 @@ describe("subagent registry lifecycle error grace", () => {
       label: "Visible child",
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId,

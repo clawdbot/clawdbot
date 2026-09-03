@@ -2,12 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, it, vi } from "vitest";
-import {
-  resolveVitestCliEntry,
-  resolveVitestNodeArgs,
-  resolveVitestSpawnParams,
-  spawnWatchedVitestProcess,
-} from "../../scripts/run-vitest.mts";
+import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";

@@ -590,7 +590,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await delivery.deliverPendingStreamFallback(finalStream, err);
-        if (!streamFallbackDelivered) {
+        if (!streamFallbackDelivered && !finalStream.stoppedBySlack) {
           dispatchError ??= err;
         }
       } else {
@@ -603,6 +603,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
       }
     }
+  }
+
+  if (finalStream?.stoppedBySlack) {
+    delivery.acknowledgeStoppedStreamedDeliveries(finalStream);
   }
 
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {

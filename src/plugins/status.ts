@@ -29,6 +29,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
@@ -356,39 +357,38 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-export function buildPluginInspectReport(params: {
-  id: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
+type PluginInspectParams = Pick<
+  PluginReportParams,
+  "config" | "workspaceDir" | "env" | "logger"
+> & {
   report?: PluginStatusReportLike;
-  resolvedConfig?: OpenClawConfig;
-}): PluginInspectReport | null {
-  const rawConfig = params.config ?? getRuntimeConfig();
-  const config =
-    params.resolvedConfig ??
-    resolvePluginRuntimeLoadContext({
-      config: rawConfig,
-      env: params.env,
-      logger: params.logger,
-      workspaceDir: params.workspaceDir,
-    }).config;
-  const report =
-    params.report ??
-    buildPluginDiagnosticsReport({
-      config: rawConfig,
-      logger: params.logger,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
-  const plugin =
-    report.plugins.find((entry) => entry.id === params.id) ??
-    report.plugins.find((entry) => entry.name === params.id);
-  if (!plugin) {
-    return null;
-  }
+};
 
+function resolvePluginInspectContext({ report, ...params }: PluginInspectParams) {
+  const { rawConfig, config } = resolvePluginRuntimeLoadContext(params);
+  return {
+    report: report ?? buildPluginDiagnosticsReport({ ...params, config: rawConfig }),
+    entries: normalizePluginsConfig(config.plugins).entries,
+  };
+}
+
+export function buildPluginInspectReport({
+  id,
+  ...params
+}: PluginInspectParams & {
+  id: string;
+}): PluginInspectReport | null {
+  const context = resolvePluginInspectContext(params);
+  const plugin =
+    context.report.plugins.find((entry) => entry.id === id) ??
+    context.report.plugins.find((entry) => entry.name === id);
+  return plugin ? buildPluginInspectRecord(plugin, context) : null;
+}
+
+function buildPluginInspectRecord(
+  plugin: PluginRegistry["plugins"][number],
+  { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+): PluginInspectReport {
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -410,7 +410,7 @@ export function buildPluginInspectReport(params: {
       optional: entry.optional,
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
-  const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
+  const policyEntry = entries[normalizePluginPolicyId(plugin.id)];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
   const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
@@ -509,61 +509,20 @@ export function buildPluginInspectReport(params: {
   };
 }
 
-export function buildAllPluginInspectReports(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReportLike;
-}): PluginInspectReport[] {
-  const rawConfig = params?.config ?? getRuntimeConfig();
-  const config = resolvePluginRuntimeLoadContext({
-    config: rawConfig,
-    env: params?.env,
-    logger: params?.logger,
-    workspaceDir: params?.workspaceDir,
-  }).config;
-  const report =
-    params?.report ??
-    buildPluginDiagnosticsReport({
-      config: rawConfig,
-      logger: params?.logger,
-      workspaceDir: params?.workspaceDir,
-      env: params?.env,
-    });
-
-  return report.plugins
-    .map((plugin) =>
-      buildPluginInspectReport({
-        id: plugin.id,
-        config: rawConfig,
-        logger: params?.logger,
-        workspaceDir: params?.workspaceDir,
-        env: params?.env,
-        resolvedConfig: config,
-        report,
-      }),
-    )
-    .filter((entry): entry is PluginInspectReport => entry !== null);
+export function buildAllPluginInspectReports(
+  params: PluginInspectParams = {},
+): PluginInspectReport[] {
+  const context = resolvePluginInspectContext(params);
+  return context.report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
 }
 
-export function buildPluginCompatibilityWarnings(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReportLike;
-}): string[] {
+export function buildPluginCompatibilityWarnings(params?: PluginInspectParams): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
-export function buildPluginCompatibilityNotices(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReportLike;
-}): PluginCompatibilityNotice[] {
+export function buildPluginCompatibilityNotices(
+  params?: PluginInspectParams,
+): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
 }
 

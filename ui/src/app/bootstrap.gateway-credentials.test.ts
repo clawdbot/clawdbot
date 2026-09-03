@@ -36,7 +36,7 @@ describe("pending Gateway credentials", () => {
       password: "old-password",
     });
     window.history.replaceState({}, "", `/#gatewayUrl=${encodeURIComponent(nextGatewayUrl)}`);
-    runtime = bootstrapApplication({ sessionPathBuilderReady: new Promise<void>(() => {}) });
+    runtime = bootstrapApplication();
 
     runtime.confirmPendingGatewayConnection();
 
@@ -55,7 +55,7 @@ describe("pending Gateway credentials", () => {
       "",
       `/#gatewayUrl=${encodeURIComponent(nextGatewayUrl)}&bootstrapToken=next-bootstrap`,
     );
-    runtime = bootstrapApplication({ sessionPathBuilderReady: new Promise<void>(() => {}) });
+    runtime = bootstrapApplication();
 
     expect(runtime.context.gateway.connection.bootstrapToken).toBe("");
 

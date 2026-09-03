@@ -92,7 +92,7 @@ vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
 });
 
 type SlashHarnessMocks = {
-  dispatchMock: ReturnType<typeof vi.fn>;
+  dispatchMock: typeof mocks.dispatchMock;
   turnPlanMock: ReturnType<typeof vi.fn>;
   readAllowFromStoreMock: ReturnType<typeof vi.fn>;
   upsertPairingRequestMock: ReturnType<typeof vi.fn>;

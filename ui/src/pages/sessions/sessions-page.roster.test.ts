@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
   createContext,
   createGateway,
@@ -39,6 +41,83 @@ afterEach(() => {
 });
 
 describe("sessions page managed roster", () => {
+  it.each(["startup", "same-client reconnect"])(
+    "retains the current query when a route started before %s completes late",
+    async (ordering) => {
+      const config = deferred<void>();
+      const sidebar = deferred<SessionsListResult>();
+      const result = (key: string): SessionsListResult => ({
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key, kind: "direct", updatedAt: 1 }],
+      });
+      let pageRequests = 0;
+      const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        return params?.includeUnknown === false
+          ? result(`agent:main:current-${++pageRequests}`)
+          : sidebar.promise;
+      });
+      const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+      if (ordering === "startup") {
+        mutableGateway.emit({ phase: "connecting" });
+      }
+      const sessions = createSessionCapability(mutableGateway.gateway);
+      const context = createContext(mutableGateway.gateway, sessions);
+      context.runtimeConfig.ensureLoaded = () => config.promise;
+      const pendingRoute = sessionsRoute.loader!(context, {
+        signal: new AbortController().signal,
+        shouldRun: () => true,
+        revalidating: false,
+        location: { pathname: "/sessions", search: "", hash: "" },
+        deps: "",
+        cause: "navigation",
+      });
+      mutableGateway.emit({ phase: "connected" });
+      const page = await createPage(context);
+      try {
+        await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
+        if (ordering === "same-client reconnect") {
+          mutableGateway.emit({ phase: "reconnecting" });
+          mutableGateway.emit({ phase: "connected", hello: sessionMutationGatewayHello() });
+          sidebar.resolve(result("agent:main:sidebar"));
+          await vi.waitFor(() =>
+            expect(page.result?.sessions[0]?.key).toBe("agent:main:current-2"),
+          );
+        }
+        const expectedRequests = ordering === "startup" ? 1 : 2;
+        expect(pageRequests).toBe(expectedRequests);
+
+        config.resolve();
+        page.routeData = (await pendingRoute) as SessionsRouteData;
+        await page.updateComplete;
+        expect(pageRequests).toBe(expectedRequests);
+
+        sidebar.resolve(result("agent:main:sidebar"));
+        await vi.waitFor(() =>
+          expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:sidebar"),
+        );
+        mutableGateway.emit({ sessionKey: "agent:main:other" });
+        page.context = { ...context };
+        await page.updateComplete;
+        expect(pageRequests).toBe(expectedRequests);
+        expect(page.result?.sessions[0]?.key).toBe(`agent:main:current-${expectedRequests}`);
+      } finally {
+        config.resolve();
+        sidebar.resolve(result("agent:main:sidebar"));
+        page.remove();
+        sessions.dispose();
+      }
+    },
+  );
+
   it.each([
     {
       name: "offers person grouping for multiple session owners despite a single-identity handshake",
@@ -88,50 +167,6 @@ describe("sessions page managed roster", () => {
 
     const personOption = page.querySelector('.session-groupby__select option[value="person"]');
     expect(personOption !== null).toBe(available);
-  });
-
-  it("rejects route data from an earlier same-client connection epoch", async () => {
-    const client = {} as GatewayBrowserClient;
-    const mutableGateway = createGateway(client);
-    const staleGatewaySnapshot = mutableGateway.gateway.snapshot;
-    const refresh = deferred<void>();
-    const refreshList = vi.fn(() => refresh.promise);
-    const managed = createManagedSessions({ refreshList });
-    const context = createContext(mutableGateway.gateway, managed.sessions);
-    const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-    page.context = context;
-    page.render = () => nothing;
-    page.routeData = {
-      gateway: mutableGateway.gateway,
-      gatewaySnapshot: staleGatewaySnapshot,
-      sessions: managed.sessions,
-      result: { count: 1, sessions: [{ key: "stale" }] } as SessionsListResult,
-      loading: false,
-      error: null,
-      expandedSessionKey: null,
-      statusFilter: "active",
-    };
-
-    mutableGateway.emit({ phase: "reconnecting", client });
-    mutableGateway.emit({ phase: "connected", client, hello: sessionMutationGatewayHello() });
-    document.body.append(page);
-    await page.updateComplete;
-    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledOnce());
-
-    expect(page.result).toBeNull();
-    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
-    if (!query) {
-      throw new Error("Expected the current managed query subscription");
-    }
-    managed.publish(query, {
-      result: { count: 1, sessions: [{ key: "current" }] } as SessionsListResult,
-      agentId: "main",
-      loading: false,
-      error: null,
-    });
-    refresh.resolve();
-
-    await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("current"));
   });
 
   it("preserves rows across a same-client reconnect and adopts the refreshed managed list", async () => {

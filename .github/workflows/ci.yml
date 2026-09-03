@@ -1129,20 +1129,6 @@ jobs:
             throw new Error("CI target does not export a supported Node test shard planner");
           }
 
-          let changedNodeTestPlan = {};
-          const changedNodeTestPlanPath = existsSync(
-            "./scripts/lib/ci-changed-node-test-plan.mts",
-          )
-            ? "./scripts/lib/ci-changed-node-test-plan.mts"
-            : "./scripts/lib/ci-changed-node-test-plan.mjs";
-          if (existsSync(changedNodeTestPlanPath)) {
-            try {
-              changedNodeTestPlan = await import(changedNodeTestPlanPath);
-            } catch (error) {
-              console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
-            }
-          }
-
           const importTargetPlan = async (path) => {
             if (existsSync(path)) {
               return import(path);
@@ -1152,6 +1138,11 @@ jobs:
             }
             return {};
           };
+          const changedNodeTestPlan = await importTargetPlan(
+            existsSync("./scripts/lib/ci-changed-node-test-plan.mts")
+              ? "./scripts/lib/ci-changed-node-test-plan.mts"
+              : "./scripts/lib/ci-changed-node-test-plan.mjs",
+          );
           const channelContractPlan = await importTargetPlan(
             existsSync("./scripts/lib/channel-contract-test-plan.mts")
               ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -1290,10 +1281,10 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // The registration envelope already charges 14 UI rows on every backend.
-          // Private source servers and resource-sensitive files retain their
-          // single-worker phase inside each weighted Control UI shard.
-          const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
+          // Twelve combined shards reduce repeated checkout/setup while retaining
+          // the target-owned two-worker and single-worker phases. Older configs
+          // retain their existing serial width.
+          const uiE2eJobCount = supportsUiE2eProjects ? 13 : usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1383,27 +1374,20 @@ jobs:
                 : undefined;
           let changedNodeTestShards = null;
           let changedExtensionFallbackShards = [];
-          if (
-            compactPullRequest &&
-            changedPaths &&
-            typeof changedNodeTestPlan.createChangedNodeTestShards === "function"
-          ) {
-            try {
-              changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
-            } catch (error) {
-              console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+          if (compactPullRequest && runNodeFull) {
+            // Compact core excludes plugins; a failed planner is not a complete fallback.
+            if (changedPaths === null) {
+              throw new Error("Current PR CI requires complete changed paths for Node test planning");
             }
-            if (
-              changedNodeTestShards === null &&
-              typeof changedNodeTestPlan.createChangedExtensionFallbackShards === "function"
-            ) {
-              try {
-                changedExtensionFallbackShards =
-                  changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
-              } catch (error) {
-                console.warn(`Changed extension fallback planning failed; using compact full suite: ${error}`);
-                changedExtensionFallbackShards = [];
+            for (const name of ["createChangedNodeTestShards", "createChangedExtensionFallbackShards"]) {
+              if (typeof changedNodeTestPlan[name] !== "function") {
+                throw new Error(`Current PR CI target does not export ${name}`);
               }
+            }
+            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            if (changedNodeTestShards === null) {
+              changedExtensionFallbackShards =
+                changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -1513,6 +1497,13 @@ jobs:
                   ),
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
+          // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
+          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
+          if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
+            throw new Error(
+              `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
+            );
+          }
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
           // through imports. Keep the full boundary gate inside build-artifacts
@@ -1746,7 +1737,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: ".github/actions\n.github/zizmor.yml"
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -1806,11 +1797,23 @@ jobs:
           else
             cp .ci-harness/.github/zizmor.yml "$trusted_policy"
           fi
+          # The key scanner is repo code, so pull requests run the exact-base
+          # copy: a candidate must not be able to neuter the guard that scans it.
+          trusted_scanner="$RUNNER_TEMP/detect-private-keys.mts"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:scripts/detect-private-keys.mts" > "$trusted_scanner" 2>/dev/null; then
+              rm -f "$trusted_scanner"
+              echo "::error title=trusted private-key scanner unavailable::Could not read scripts/detect-private-keys.mts from exact base ${BASE_SHA}; land the scanner on the base branch first."
+              exit 1
+            fi
+          else
+            cp .ci-harness/scripts/detect-private-keys.mts "$trusted_scanner"
+          fi
+          echo "PRIVATE_KEY_SCANNER_PATH=$trusted_scanner" >> "$GITHUB_ENV"
           cat > "$RUNNER_TEMP/security-fast-pre-commit.yaml" <<EOF
           repos:
             - repo: local
               hooks:
-                - { id: detect-private-key, name: detect private key, entry: detect-private-key, language: system, types: [text], exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)' }
                 - id: zizmor
                   name: zizmor
                   entry: zizmor
@@ -1823,11 +1826,23 @@ jobs:
           EOF
           echo "PRE_COMMIT_CONFIG_PATH=$RUNNER_TEMP/security-fast-pre-commit.yaml" >> "$GITHUB_ENV"
 
-      - name: Install security scanners
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 pre-commit-hooks==6.0.0 zizmor==1.29.0
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      # First-party scan before any package install: the scan itself uses no
+      # network and no third-party hook code, so a PyPI outage cannot stop it.
+      # Node 24 comes from the runner tool cache; the shared helper downloads
+      # only on images that lack it.
       - name: Detect committed private keys
-        run: GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" --all-files detect-private-key
+        run: node "$PRIVATE_KEY_SCANNER_PATH"
+
+      - name: Install security scanners
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.29.0
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -1856,14 +1871,6 @@ jobs:
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
-
-      - name: Setup Node.js
-        env:
-          REQUESTED_NODE_VERSION: "24.x"
-        run: |
-          set -euo pipefail
-          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
@@ -2415,9 +2422,10 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # Hybrid attempt 1 uses Blacksmith; github mode, hybrid retries, manual
-    # dispatches, forks, and same-repo PR retries use GitHub-hosted capacity.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Backend and contributor routing stays shared with real-Gateway tests.
+    # UI's two workers received two CPUs on the 8-vCPU label; request the measured
+    # eight-CPU class only for Control UI, retaining browser-extension placement.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.task == 'control-ui' && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     # Source-server and runtime-budget owners retain serial Chromium execution.
     timeout-minutes: 25
     env:
@@ -2513,6 +2521,7 @@ jobs:
           ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -3030,9 +3039,9 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # Canonical main admits only one complete run at a time, so widen this
-      # matrix within the current runner-registration budget.
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 96 || 28 }}
+      # Compact and PR manifest caps bound registrations; parallelism bounds
+      # active jobs. Canonical main retains two non-canceling parity slots.
+      max-parallel: 96
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -3181,6 +3190,16 @@ jobs:
             [[ -f "$runner" ]]
           fi
           node --import tsx "$runner"
+
+      - &runner_memory_peak_step
+        name: Record runner memory peak
+        if: always()
+        shell: bash
+        run: |
+          # This includes setup and every child process, not just the test step.
+          if peak_memory="$(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"; then
+            echo "runner cgroup peak memory bytes=$peak_memory"
+          fi
 
       - name: Save docs i18n Go cache
         if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
@@ -3423,14 +3442,14 @@ jobs:
                   hosted_extension_stripe="6/6"
                   lint_args=(--only=scripts --threads=1)
                 fi
-                export GOMAXPROCS=2
-                # Match local Go GC policy; thread limits alone leave the
-                # extension semantic graph too large for a 16GB runner.
-                export GOGC=30 GOMEMLIMIT=3GiB
               elif [ "$(nproc)" -lt 8 ]; then
-                # Fork PRs build each semantic Program once. Bound both oxlint
-                # and its Go helper within the 4-core/16GB hosted runner.
+                # Fork PRs build each semantic Program once on small runners.
                 lint_args=(--threads=1)
+              fi
+              if [ "$FROZEN_TARGET" = "true" ] &&
+                { [ "$HOSTED_RUNNER_STRIPES" = "true" ] || [ "$(nproc)" -lt 8 ]; }; then
+                # Frozen wrappers can predate native resource policy. Current
+                # wrappers limit lint without throttling declaration preparation.
                 export GOMAXPROCS=2
                 export GOGC=30 GOMEMLIMIT=3GiB
               fi
@@ -3622,12 +3641,16 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
-          GOMAXPROCS: "2"
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
         run: |
           set -euo pipefail
+          if [ "$FROZEN_TARGET" = "true" ]; then
+            # Older wrappers lack the current constrained-host Go policy.
+            export GOMAXPROCS=2
+          fi
           # Older candidates run their complete lint set in check-lint; their
           # runner predates core-stripe, so these five new-only jobs are redundant.
           if [[ ! -f scripts/run-oxlint-shards.mts ]]; then
@@ -3694,13 +3717,8 @@ jobs:
       max-parallel: 12
       matrix:
         include:
-          - check_name: check-additional-boundaries-a
+          - check_name: check-additional-boundaries
             group: boundaries
-            boundary_shard: 1/4
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-boundaries-bcd
-            group: boundaries
-            boundary_shard: 2/4,3/4,4/4
             runner: blacksmith-8vcpu-ubuntu-2404
           # Prompt snapshot regeneration evaluates the full agent tool/prompt
           # import graph and used to own the boundaries-a wall clock; keep it
@@ -3713,9 +3731,6 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
-            runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-session-transcript-reader-boundary
-            group: session-transcript-reader-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
@@ -3842,7 +3857,7 @@ jobs:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
-          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           # Keep the existing CI worker budget; the requested runner label is not a CPU count.
           # The script's resource-based default caps at 6 outside this explicit override.
@@ -3907,8 +3922,6 @@ jobs:
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
-              ;;
-            session-transcript-reader-boundary)
               if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
@@ -5215,7 +5228,7 @@ jobs:
     name: docker-seed-e2e
     needs: [preflight]
     if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
       - *linux_node_checkout_step
@@ -5228,6 +5241,10 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || runner.environment != 'self-hosted' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
 
+      - name: Report runner resources
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+
       - name: Run changed Docker seed owner lanes
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
@@ -5236,6 +5253,8 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
+
+      - *runner_memory_peak_step
 
   ci-gate:
     permissions:

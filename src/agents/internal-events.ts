@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
@@ -33,6 +34,7 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
@@ -169,6 +171,7 @@ function formatTaskCompletionEvent(
     },
   );
   const result = formatChildResultDataBlock(event.result);
+  const modelRouteChange = normalizeAgentRunRouteChange(event.modelRouteChange);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
   const lines =
@@ -188,6 +191,9 @@ function formatTaskCompletionEvent(
     "",
     result,
   );
+  if (modelRouteChange) {
+    lines.push("", modelRouteChange);
+  }
   if (attachmentLines.length > 0) {
     lines.push("", ...attachmentLines);
   }

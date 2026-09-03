@@ -54,7 +54,7 @@ export type SystemAgentTurnRunner = (params: {
   surface: "cli" | "gateway";
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
-  /** Delegated sessions can only resolve approvals in the operator UI. */
+  /** The host authorizes delegated proposals; chat replies cannot self-approve. */
   operatorApprovalOnly?: boolean;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;

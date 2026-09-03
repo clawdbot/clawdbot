@@ -1268,6 +1268,7 @@ describe("spawnSubagentDirect seam flow", () => {
       label: "",
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: controllerSessionKey,
         completionOwnerKey: "agent:main:main",
@@ -2376,8 +2377,10 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.message).toContain("[Subagent Task]");
     expect(params.message).toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
     expect(params.message).toContain("  keep indentation");
-    expect(params.message).not.toContain("**Your Role**");
-    expect(params.extraSystemPrompt).toBe("system-prompt");
+    expect(params.message).not.toContain("## Your Role");
+    expect(params.message?.match(/UNIQUE_LONG_SUBAGENT_TASK_TOKEN/g)).toHaveLength(1);
+    expect(params.extraSystemPrompt).toContain("completion event");
+    expect(params.extraSystemPrompt).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
   });
 
   it.each([

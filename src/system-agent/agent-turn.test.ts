@@ -833,7 +833,7 @@ describe("runSystemAgentTurn", () => {
     );
   });
 
-  it("threads operator-approval-only into the real ring-zero tool and returns the delegated refusal", async () => {
+  it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {
     useTempStateDir();
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -879,10 +879,11 @@ describe("runSystemAgentTurn", () => {
         systemAgentTool: expect.objectContaining({ operatorApprovalOnly: true }),
       }),
     );
-    expect(reply?.text).toContain("OpenClaw operator UI");
-    expect(reply?.text).toContain("cannot be applied from this chat");
+    expect(reply?.text).toContain("requesting session's permission policy");
+    expect(reply?.text).toContain("returns the final outcome");
+    expect(reply?.text).not.toContain("OpenClaw operator UI");
     expect(reply?.text).not.toContain("ask the user to reply yes");
-    // The refusal still registers the exact proposal for the operator registry.
+    // Staging still registers the exact proposal for host authorization.
     expect(session.proposalRef.current).toBeDefined();
   });
 

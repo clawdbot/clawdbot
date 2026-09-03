@@ -233,6 +233,7 @@ export async function getWorkboardTaskPollBatch(
   tasks: WorkboardTaskSummary[];
   missingTaskIds: Set<string>;
   nextUnfilteredCursor?: string | null;
+  rejectedUnfilteredCursor?: string;
   error: string | null;
 }> {
   const results = await Promise.allSettled([
@@ -263,8 +264,9 @@ export async function getWorkboardTaskPollBatch(
   const tasks: WorkboardTaskSummary[] = [];
   const missingTaskIds = new Set<string>();
   let nextUnfilteredCursor: string | null | undefined;
+  let rejectedUnfilteredCursor: string | undefined;
   let error: string | null = null;
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
     if (result.status === "fulfilled") {
       tasks.push(...result.value.tasks);
       if ("missingTaskId" in result.value && result.value.missingTaskId) {
@@ -274,10 +276,28 @@ export async function getWorkboardTaskPollBatch(
         nextUnfilteredCursor = result.value.nextUnfilteredCursor;
       }
     } else {
+      // Promise.allSettled preserves input order, so discovery failures retain
+      // the exact query provenance needed to retire only a rejected stored cursor.
+      const discoveryQuery = discoveryQueries[index - taskIds.length];
+      if (
+        discoveryQuery?.cursor &&
+        !discoveryQuery.sessionKey &&
+        result.reason instanceof GatewayRequestError &&
+        result.reason.gatewayCode === "INVALID_REQUEST"
+      ) {
+        rejectedUnfilteredCursor = discoveryQuery.cursor;
+      }
       error ??= formatError(result.reason);
     }
   }
-  return { tasks, missingTaskIds, nextUnfilteredCursor, error };
+  return rejectedUnfilteredCursor
+    ? {
+        tasks: [],
+        missingTaskIds: new Set(),
+        rejectedUnfilteredCursor,
+        error,
+      }
+    : { tasks, missingTaskIds, nextUnfilteredCursor, error };
 }
 
 type WorkboardTaskIndex = {

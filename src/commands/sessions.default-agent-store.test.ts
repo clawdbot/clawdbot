@@ -1,5 +1,6 @@
 // Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -179,12 +180,14 @@ describe("sessionsCommand default store agent selection", () => {
     });
     const { runtime } = createRuntime();
 
-    await sessionsCommand({}, runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const result = sessionsCommand({}, runtime);
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({
+      message:
+        "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("uses all configured agent stores with --all-agents", async () => {

@@ -517,7 +517,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Filters" }).click();
       await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
-      await page.getByRole("button", { name: "New group…" }).click();
+      await page.getByRole("button", { name: "New group" }).click();
       const field = page.locator("openclaw-modal-dialog input");
       await field.waitFor({ state: "visible" });
       await field.fill("X".repeat(513));
@@ -606,9 +606,9 @@ suite.define(() => {
       });
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await groupMenuButton.click();
-      await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Rename group" }).waitFor({ state: "visible" });
       await captureUiProof(suite, page, "sidebar-group-menu.png");
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
       // The rename runs in the owned dialog, prefilled with the name it is
       // changing; a native prompt here would be a regression.
       const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
@@ -642,7 +642,7 @@ suite.define(() => {
       });
       await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
       await projectsMenuButton.click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Delete group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Delete group" }));
       // The confirm names the group and what happens to its sessions, and only
       // the operator's answer sends sessions.groups.delete.
       await page
@@ -774,7 +774,7 @@ suite.define(() => {
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
       await submitInputDialog(page, "Projects");
       await gateway.waitForRequest("sessions.groups.rename");
       await gateway.rejectDeferred("sessions.groups.rename", {
@@ -847,7 +847,7 @@ suite.define(() => {
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-all-sessions.png");
 
-      // New groups are created from a session's menu (Move to group → New group…),
+      // New groups are created from a session's menu (Move to group → New group),
       // which files that session into the new group.
       const sessionTen = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
@@ -855,7 +855,7 @@ suite.define(() => {
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       await openSessionMenuSubmenu(page, "Move to group");
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       await submitInputDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
@@ -985,7 +985,7 @@ suite.define(() => {
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       await submitInputDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",

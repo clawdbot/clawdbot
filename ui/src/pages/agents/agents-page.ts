@@ -321,10 +321,19 @@ class AgentsPage
     this.syncCurrentAgentFiles(agents);
   }
 
-  private ensureSelectedAgentInList(agentsList: AgentsListResult) {
-    const selected = this.agentsSelectedId;
-    if (!selected || !agentsList.agents.some((entry) => entry.id === selected)) {
-      this.agentsSelectedId = agentsList.defaultId ?? agentsList.agents[0]?.id ?? null;
+  private ensureSelectedAgentInList(
+    agentsList: AgentsListResult,
+    selected = this.routeData?.requestedAgentId ?? this.agentsSelectedId,
+  ) {
+    // Route intent survives hello/reconnect; only the roster is connection-scoped.
+    // Unknown explicit ids retain their URL while the picker uses the default.
+    const nextSelectedId =
+      selected && agentsList.agents.some((entry) => entry.id === selected)
+        ? selected
+        : (agentsList.defaultId ?? agentsList.agents[0]?.id ?? null);
+    if (nextSelectedId !== this.agentsSelectedId) {
+      this.agentsSelectedId = nextSelectedId;
+      this.resetSelectionState();
     }
   }
 
@@ -394,18 +403,11 @@ class AgentsPage
       return;
     }
     this.routeDataInitialized = true;
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      return;
-    }
-    if (data.agentsList) {
+    if (this.gateway.isRouteDataCurrent(data) && data.agentsList) {
       this.agentsList = data.agentsList;
-      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
-      if (nextSelectedId !== this.agentsSelectedId) {
-        this.agentsSelectedId = nextSelectedId;
-        // Route-driven agent switches (chip menu "Agent settings") must not
-        // carry per-agent panel caches or identity drafts across agents.
-        this.resetSelectionState();
-      }
+    }
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList, data.requestedAgentId);
     }
   }
 

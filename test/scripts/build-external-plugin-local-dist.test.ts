@@ -15,16 +15,42 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
+import { hasChannelPackageState } from "../../src/channels/plugins/package-state-probes.js";
+import { resetPluginCache } from "../../src/plugins/plugin-cache.js";
+import { resolvePluginRuntimeArtifact } from "../../src/plugins/plugin-runtime-artifact-resolution.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(resetPluginCache);
+
+const channelStateFixtures = {
+  configuredState: {
+    specifier: "./configured-state",
+    exportName: "hasConfiguredChannelState",
+    env: { allOf: ["DEMO_TOKEN"] },
+  },
+  persistedAuthState: {
+    specifier: "./auth-presence.ts",
+    exportName: "hasPersistedChannelAuth",
+  },
+};
+
+function writeChannelStateFixtures(pluginRoot: string) {
+  for (const { specifier, exportName } of Object.values(channelStateFixtures)) {
+    fs.writeFileSync(
+      path.join(pluginRoot, `${specifier.replace(/\.ts$/u, "")}.ts`),
+      `export function ${exportName}({ cfg }) { return cfg.ready === true; }\n`,
+    );
+  }
+}
 
 describe("external plugin local dist build", () => {
   it("keeps excluded plugin graphs isolated and their runtime metadata loadable", async () => {
     const repoRoot = fs.realpathSync(tempDirs.make("openclaw-isolated-plugin-graphs-"));
     const plugins = [
-      { id: "external-esm", runtimeFormat: "esm", publishToNpm: true, bundledDist: true },
       { id: "external-cjs", runtimeFormat: "cjs", publishToNpm: true, bundledDist: true },
+      { id: "external-esm", runtimeFormat: "esm", publishToNpm: true, bundledDist: true },
       { id: "external-only", runtimeFormat: "cjs", publishToNpm: true, bundledDist: false },
       { id: "private-plugin", runtimeFormat: "esm", publishToNpm: false, bundledDist: true },
     ];
@@ -49,12 +75,14 @@ describe("external plugin local dist build", () => {
           openclaw: {
             extensions: ["./index.ts"],
             setupEntry: "./setup-entry.ts",
+            channel: { id, label: id, ...channelStateFixtures },
             build: { runtimeFormat, bundledDist },
             release: { publishToNpm },
           },
         }),
       );
       fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify({ id }));
+      writeChannelStateFixtures(pluginRoot);
       fs.writeFileSync(
         path.join(pluginRoot, "runtime-api.ts"),
         `export const identity = ${JSON.stringify(id)};`,
@@ -73,13 +101,28 @@ describe("external plugin local dist build", () => {
     });
     copyBundledPluginMetadata({ repoRoot, env: {} });
     expect(fs.readdirSync(path.join(repoRoot, "dist"))).toEqual(["extensions"]);
-    for (const { id, runtimeFormat } of plugins) {
+    for (const { id, runtimeFormat, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "dist/extensions", id);
       const metadata = JSON.parse(fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"));
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
       expect(metadata.openclaw.extensions).toEqual([`./index${extension}`]);
       expect(metadata.openclaw.setupEntry).toBe(`./setup-entry${extension}`);
       expect(fs.existsSync(path.join(repoRoot, "extensions", id, "dist"))).toBe(false);
+      fs.writeFileSync(
+        path.join(pluginRoot, runtimeFormat === "cjs" ? "index.js" : "index.cjs"),
+        'throw new Error("stale format must not execute");\n',
+      );
+      const selected = resolvePluginRuntimeArtifact({
+        pluginId: id,
+        entryKind: "runtime",
+        source: path.join(repoRoot, "extensions", id, "index.ts"),
+        rootDir: path.join(repoRoot, "extensions", id),
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest: { build: { bundledDist } },
+        registry: createEmptyPluginRegistry(),
+      });
+      expect(selected.source).toBe(path.join(pluginRoot, `index${extension}`));
       const probe = spawnSync(
         process.execPath,
         [
@@ -88,17 +131,95 @@ describe("external plugin local dist build", () => {
           `
         import assert from "node:assert/strict";
         import { readFileSync } from "node:fs";
+        import { createRequire } from "node:module";
         import { pathToFileURL } from "node:url";
         const root = pathToFileURL(process.cwd() + "/");
+        const require = createRequire(new URL("package.json", root));
         const pkg = JSON.parse(readFileSync(new URL("package.json", root)));
         for (const entry of [...pkg.openclaw.extensions, pkg.openclaw.setupEntry]) {
           assert.equal((await import(new URL(entry, root))).identity, ${JSON.stringify(id)});
+        }
+        for (const key of ["configuredState", "persistedAuthState"]) {
+          const state = pkg.openclaw.channel[key];
+          const checker = require(require.resolve(state.specifier))[state.exportName];
+          assert.equal(checker({ cfg: {} }), false);
+          assert.equal(checker({ cfg: { ready: true } }), true);
         }
       `,
         ],
         { cwd: pluginRoot, encoding: "utf8" },
       );
       expect(probe.status, probe.stdout + probe.stderr).toBe(0);
+      expect(metadata.openclaw.channel).toEqual({
+        id,
+        label: id,
+        configuredState: {
+          ...channelStateFixtures.configuredState,
+          specifier: `./configured-state${extension}`,
+        },
+        persistedAuthState: {
+          ...channelStateFixtures.persistedAuthState,
+          specifier: `./auth-presence${extension}`,
+        },
+      });
+      const sourcePackagePath = path.join(repoRoot, "extensions", id, "package.json");
+      const sourceText = fs.readFileSync(sourcePackagePath, "utf8");
+      const sourcePackage = JSON.parse(sourceText);
+      expect(sourcePackage.openclaw.channel).toEqual({ id, label: id, ...channelStateFixtures });
+      // Reuse the built graphs: partial pairs must retain env semantics, not require a sidecar.
+      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
+        for (const partial of [
+          {},
+          { specifier: "./absent-probe" },
+          { specifier: "./absent-probe", exportName: " \t" },
+          { exportName: "hasState" },
+          { specifier: " \t", exportName: "hasState" },
+        ]) {
+          for (const env of [undefined, { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] }]) {
+            const declaration = { ...partial, ...(env ? { env } : {}) };
+            sourcePackage.openclaw.channel = {
+              id,
+              label: id,
+              ...channelStateFixtures,
+              [metadataKey]: declaration,
+            };
+            fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
+            copyBundledPluginMetadata({ repoRoot, env: {} });
+            const channel = JSON.parse(
+              fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"),
+            ).openclaw.channel;
+            expect(channel).toEqual({ ...metadata.openclaw.channel, [metadataKey]: declaration });
+            const stateProbe = {
+              entry: { channel, pluginId: id, rootDir: pluginRoot, origin: "bundled" as const },
+              metadataKey,
+              cfg: {},
+            };
+            expect(hasChannelPackageState({ ...stateProbe, env: {} })).toBe(false);
+            expect(
+              hasChannelPackageState({
+                ...stateProbe,
+                env: { SYNTHETIC_PLUGIN_TOKEN: "synthetic-test-value" },
+              }),
+            ).toBe(Boolean(env));
+          }
+        }
+        sourcePackage.openclaw.channel = {
+          id,
+          label: id,
+          ...channelStateFixtures,
+          [metadataKey]: {
+            env: { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] },
+            specifier: "./missing-state",
+            exportName: "hasState",
+          },
+        };
+        fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
+        expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow(
+          `channel ${metadataKey} specifier './missing-state' has no runtime output for ${id}`,
+        );
+      }
+      fs.writeFileSync(sourcePackagePath, sourceText);
+      copyBundledPluginMetadata({ repoRoot, env: {} });
     }
 
     const distRoot = path.join(repoRoot, "dist");
@@ -409,6 +530,7 @@ describe("external plugin local dist build", () => {
             extensions: ["./index.ts"],
             setupEntry: "./setup-entry.ts",
             build: { bundledDist: id !== "demo", runtimeFormat: "cjs" },
+            channel: { id, ...channelStateFixtures },
             release: { publishToNpm: true },
           },
         }),
@@ -416,6 +538,7 @@ describe("external plugin local dist build", () => {
       for (const entry of ["index.ts", "setup-entry.ts"]) {
         fs.writeFileSync(path.join(pluginRoot, entry), "export {};\n");
       }
+      writeChannelStateFixtures(pluginRoot);
     }
     // Evaluate the real compiler config against synthetic plugins. These links
     // expose existing read-only config inputs; no core graph is compiled.
@@ -452,8 +575,12 @@ describe("external plugin local dist build", () => {
     expect(compiler.status, compiler.stderr).toBe(0);
     const compilerEntries: string[] = JSON.parse(compiler.stdout);
     expect(compilerEntries).toEqual([
+      "extensions/demo/auth-presence",
+      "extensions/demo/configured-state",
       "extensions/demo/index",
       "extensions/demo/setup-entry",
+      "extensions/packaged/auth-presence",
+      "extensions/packaged/configured-state",
       "extensions/packaged/index",
       "extensions/packaged/setup-entry",
     ]);
@@ -469,6 +596,17 @@ describe("external plugin local dist build", () => {
     );
     expect(builtPackage.openclaw.extensions).toEqual(["./index.js"]);
     expect(builtPackage.openclaw.setupEntry).toBe("./setup-entry.js");
+    expect(builtPackage.openclaw.channel).toEqual({
+      id: "demo",
+      configuredState: {
+        ...channelStateFixtures.configuredState,
+        specifier: "./configured-state.js",
+      },
+      persistedAuthState: {
+        ...channelStateFixtures.persistedAuthState,
+        specifier: "./auth-presence.js",
+      },
+    });
     expect(fs.existsSync(path.join(distRoot, "extensions/unselected"))).toBe(false);
     expect(listExternalPluginLocalDistPackageDirs({ repoRoot, env })).toEqual([]);
     const distEntry = path.join(distRoot, "entry.js");

@@ -181,9 +181,8 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   if (entry?.enabled === false) {
     return decision("disabled", { cause: "disabled-in-config" });
   }
-  // `channels.<id>.enabled: false` is the operator's channel-level off switch. It must win over
-  // `plugins.entries.<id>.enabled: true` left behind by install/enable flows, or the channel
-  // plugin keeps importing (and can fail) for a channel the operator turned off.
+  // An owner-wide channel disable wins over plugin enablement left by install/enable flows.
+  // Enabled or unspecified sibling channels must still be able to load their shared plugin.
   if (
     params.resolveChannelConfigEnablement(
       activationSource.rootConfig ?? params.rootConfig,

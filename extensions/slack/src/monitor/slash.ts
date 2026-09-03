@@ -66,6 +66,7 @@ import {
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
   type SlackExternalArgMenuChoice,
 } from "./external-arg-menu-store.js";
+import { resolveSlackRoutingContext } from "./message-handler/prepare-routing.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
@@ -400,43 +401,29 @@ const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({
   kind: "non-plugin" as const,
 }) satisfies PluginCommandCatalogDecision;
 
-export async function registerSlackMonitorSlashCommands(params: {
+export function createSlackCommandHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   trackEvent?: () => void;
-}): Promise<SlackCommandRegistration> {
+  supportsExternalArgMenus?: () => boolean;
+}) {
   const { ctx, account, trackEvent } = params;
-  const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) =>
-    resolveSlackListenerEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
-      onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
-    });
-
-  const supportsInteractiveArgMenus =
-    typeof (ctx.app as { action?: unknown }).action === "function";
-  let supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
-
+  const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
   );
-  // App Home and argument handlers must share the registered command mode;
-  // explicit single-command mode also avoids loading inactive native runtimes.
-  let registration: SlackCommandRegistration = slashCommand.enabled
-    ? { mode: "single", name: slashCommand.name }
-    : { mode: "disabled" };
 
-  const handleSlashCommand = async (p: {
-    command: SlackCommandMiddlewareArgs["command"];
+  return async (p: {
+    command: Pick<
+      SlackCommandMiddlewareArgs["command"],
+      "user_id" | "user_name" | "channel_id" | "channel_name"
+    > &
+      Partial<Pick<SlackCommandMiddlewareArgs["command"], "trigger_id">>;
+    threadTs?: string;
+    eventTs?: string;
+    builtInCommand?: "stop";
+    onAdmitted?: () => void;
     ack: SlackCommandMiddlewareArgs["ack"];
     respond: SlackCommandMiddlewareArgs["respond"];
     responseTransport?: "response-url" | "web-api";
@@ -609,6 +596,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         senderName,
         channelType: channelType ?? "channel",
         channelId: command.channel_id,
+        threadId: p.threadTs,
         ownerAllowFromLower: effectiveAllowFromLower,
         channelUsers: isRoom ? channelConfig?.users : undefined,
         allowTextCommands: false,
@@ -647,6 +635,28 @@ export async function registerSlackMonitorSlashCommands(params: {
       let resolvedSlashRoute: ResolvedAgentRoute | undefined;
       const resolveSlashRoute = async () => {
         if (resolvedSlashRoute) {
+          return resolvedSlashRoute;
+        }
+        if (p.threadTs) {
+          const routing = resolveSlackRoutingContext({
+            ctx: { ...ctx, cfg },
+            account,
+            message: {
+              type: "message",
+              channel: command.channel_id,
+              user: command.user_id,
+              ts: p.eventTs,
+              thread_ts: p.threadTs,
+            },
+            isDirectMessage,
+            isGroupDm,
+            isRoom,
+            isRoomish,
+            channelConfig,
+            agentViewThreadTs: p.threadTs,
+            eventScope,
+          });
+          resolvedSlashRoute = { ...routing.route, sessionKey: routing.sessionKey };
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -708,7 +718,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             arg: menu.arg.name,
             choices: menu.choices,
             userId: command.user_id,
-            supportsExternalSelect: supportsExternalArgMenus,
+            supportsExternalSelect: params.supportsExternalArgMenus?.() ?? false,
             createExternalMenuToken: (choices) =>
               storeSlackExternalArgMenu({ choices, userId: command.user_id }),
           });
@@ -728,25 +738,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         dispatchChannelInboundTurn,
         finalizeInboundContext,
         isChannelPartialDeliveryError,
-        resolveAgentRoute,
         resolveChunkMode,
         resolveConversationLabel,
         resolveMarkdownTableMode,
         sanitizeSlackMonitorReplyPayload,
       } = await loadSlashDispatchRuntime();
 
-      const route =
-        resolvedSlashRoute ??
-        resolveAgentRoute({
-          cfg,
-          channel: "slack",
-          accountId: account.accountId,
-          teamId: routingTeamId,
-          peer: {
-            kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
-            id: routeTarget.peerId,
-          },
-        });
+      const route = await resolveSlashRoute();
 
       const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
         isRoomish,
@@ -804,7 +802,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         Provider: "slack" as const,
         Surface: "slack" as const,
         WasMentioned: true,
-        MessageSid: command.trigger_id,
+        MessageSid: p.eventTs ?? command.trigger_id,
+        MessageThreadId: p.threadTs,
         Timestamp: Date.now(),
         SessionKey: sessionKey,
         CommandTargetSessionKey: commandTargetSessionKey,
@@ -812,7 +811,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "slack" as const,
-        OriginatingTo: slashReplyTarget,
+        OriginatingTo: p.threadTs
+          ? resolveSlackDeferredActionTarget({
+              eventScope,
+              kind: "channel",
+              id: command.channel_id,
+            }).target
+          : slashReplyTarget,
       });
 
       const messageSentHookTarget = ctxPayload.OriginatingTo ?? ctxPayload.To ?? slashReplyTarget;
@@ -823,7 +828,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         await deliverSlackSlashReplies({
           replies,
           respond,
-          ephemeral: slashCommand.ephemeral,
+          ephemeral: p.threadTs ? false : slashCommand.ephemeral,
           textLimit: ctx.textLimit,
           messageSentHookTarget,
           accountId: route.accountId,
@@ -846,6 +851,15 @@ export async function registerSlackMonitorSlashCommands(params: {
       }> = [];
       const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
+      const builtInDispatch = p.builtInCommand
+        ? {
+            [(await loadPluginCommandRuntime()).PLUGIN_COMMAND_DISPATCH]:
+              NON_PLUGIN_COMMAND_DISPATCH,
+          }
+        : undefined;
+      if (commandAuthorized) {
+        p.onAdmitted?.();
+      }
       await dispatchChannelInboundTurn({
         cfg,
         channel: "slack",
@@ -924,6 +938,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         replyOptions: {
           skillFilter: channelConfig?.skills,
           ...pluginCommandReplyOptions,
+          ...builtInDispatch,
         },
       });
     } catch (err) {
@@ -936,6 +951,49 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     }
   };
+}
+
+export async function registerSlackMonitorSlashCommands(params: {
+  ctx: SlackMonitorContext;
+  account: ResolvedSlackAccount;
+  trackEvent?: () => void;
+}): Promise<SlackCommandRegistration> {
+  const { ctx, account, trackEvent } = params;
+  const startupCfg = ctx.cfg;
+  const runtime = ctx.runtime;
+  const resolveEventScope = (args: {
+    body: unknown;
+    context: AllMiddlewareArgs["context"];
+    client: AllMiddlewareArgs["client"];
+  }) =>
+    resolveSlackListenerEventScope({
+      identity: ctx.installationIdentity,
+      body: args.body,
+      context: args.context,
+      client: args.client,
+      clientOptions: ctx.app.webClientOptions,
+      onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
+    });
+
+  const supportsInteractiveArgMenus =
+    typeof (ctx.app as { action?: unknown }).action === "function";
+  let supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
+
+  const slashCommand = resolveSlackSlashCommandConfig(
+    ctx.slashCommand ?? account.config.slashCommand,
+  );
+  // App Home and argument handlers must share the registered command mode;
+  // explicit single-command mode also avoids loading inactive native runtimes.
+  let registration: SlackCommandRegistration = slashCommand.enabled
+    ? { mode: "single", name: slashCommand.name }
+    : { mode: "disabled" };
+
+  const handleSlashCommand = createSlackCommandHandler({
+    ctx,
+    account,
+    trackEvent,
+    supportsExternalArgMenus: () => supportsExternalArgMenus,
+  });
 
   let nativeCommands: SlackNativeCommandSpec[] = [];
   let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
@@ -1275,9 +1333,10 @@ function createSlackSlashResponderWithFallback(params: {
   };
 }
 
-async function deliverSlackSlashResponseWithWebApi(params: {
+export async function deliverSlackSlashResponseWithWebApi(params: {
   client: AllMiddlewareArgs["client"];
-  command: SlackCommandMiddlewareArgs["command"];
+  command: Pick<SlackCommandMiddlewareArgs["command"], "channel_id" | "user_id">;
+  threadTs?: string;
   message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0];
 }): Promise<Response> {
   const payload = typeof params.message === "string" ? { text: params.message } : params.message;
@@ -1290,6 +1349,7 @@ async function deliverSlackSlashResponseWithWebApi(params: {
     const postSlackMessage = params.client.chat.postMessage;
     const response = await postSlackMessage({
       channel: params.command.channel_id,
+      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
       text,
       ...(blocks ? { blocks } : {}),
       ...(mrkdwn !== undefined ? { mrkdwn } : {}),
@@ -1298,6 +1358,7 @@ async function deliverSlackSlashResponseWithWebApi(params: {
   } else {
     await params.client.chat.postEphemeral({
       channel: params.command.channel_id,
+      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
       user: params.command.user_id,
       text,
       ...(blocks ? { blocks } : {}),

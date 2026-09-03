@@ -264,9 +264,9 @@ suite.define(() => {
                   scroller: boolean;
                   pending: ReturnType<typeof pendingAboveReader>;
                 };
-                let resolveReady!: () => void;
+                let resolveReady!: (position: Pick<InputArrival, "top" | "max">) => void;
                 let rejectReady!: (error: Error) => void;
-                const ready = new Promise<void>((resolve, reject) => {
+                const ready = new Promise<Pick<InputArrival, "top" | "max">>((resolve, reject) => {
                   resolveReady = resolve;
                   rejectReady = reject;
                 });
@@ -286,7 +286,10 @@ suite.define(() => {
                   }
                   scroller.removeEventListener("scroll", onScroll);
                   document.addEventListener(eventType, onInput, { capture: true, passive: true });
-                  resolveReady();
+                  resolveReady({
+                    top: scroller.scrollTop,
+                    max: scroller.scrollHeight - scroller.clientHeight,
+                  });
                 };
                 const onInput = (event: Event) => {
                   // Sample the real input before the scroller's takeover handler cancels motion.
@@ -319,7 +322,7 @@ suite.define(() => {
               // Arm before START; its post-click bookkeeping must not delay native input.
               const interrupt = input
                 .evaluate((observation) => observation.ready)
-                .then(async () => {
+                .then(async (position) => {
                   if (wheel) {
                     await page.mouse.move(
                       track!.x + track!.width / 2,
@@ -329,8 +332,9 @@ suite.define(() => {
                   } else {
                     await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
                   }
+                  return position;
                 });
-              const [arrival] = await Promise.all([
+              const [arrival, started] = await Promise.all([
                 input.evaluate((observation) => observation.arrived),
                 interrupt,
                 page.locator(".chat-scroll-to-bottom").click(),
@@ -338,16 +342,16 @@ suite.define(() => {
               expect(arrival).toMatchObject({ trusted: true, scroller: true });
               await fs.writeFile(
                 path.join(artifactDir, "native-input.json"),
-                JSON.stringify(arrival, null, 2),
+                JSON.stringify({ started, arrival }, null, 2),
               );
-              if (!wheel || reducedMotion === "no-preference") {
-                expect(arrival.top).toBeGreaterThan(0);
-              }
+              // A passive wheel listener can run after the compositor scrolls.
+              // Prove motion started from its pre-input native scroll sample.
+              during = wheel ? started : arrival;
+              expect(during.top).toBeGreaterThan(0);
               if (!wheel) {
                 expect(arrival.pending).not.toBeNull();
                 expect(arrival.pending!.bottom).toBeLessThanOrEqual(arrival.pending!.viewportTop);
               }
-              during = arrival;
             } finally {
               await input.evaluate((observation) => observation.dispose());
               await input.dispose();

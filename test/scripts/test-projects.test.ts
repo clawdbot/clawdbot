@@ -328,6 +328,7 @@ describe("scripts/test-projects changed-target routing", () => {
         for (const result of parsed) {
           expect(result).toStrictEqual({
             forwardedArgs: ["--changed", "origin/main"],
+            nonTargetArgs: ["--changed", "origin/main"],
             targetArgs: [],
             watchMode: false,
           });
@@ -2267,7 +2268,6 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit-fast-isolated.config.ts",
         forwardedArgs: [],
         includePatterns: [
-          "test/scripts/android-version.test.ts",
           "test/scripts/ci-git-prerequisites.test.ts",
           "test/scripts/ios-release-plan.test.ts",
           "test/scripts/mac-native-fixtures.test.ts",
@@ -2302,6 +2302,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(toolingPlans.length).toBeGreaterThan(1);
     expect(toolingPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 60)).toBe(true);
+    expect(toolingTargets).toContain("test/scripts/android-version.test.ts");
     expect(toolingTargets).toContain("test/scripts/run-opengrep.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");

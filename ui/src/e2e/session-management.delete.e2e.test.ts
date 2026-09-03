@@ -300,7 +300,7 @@ suite.define(() => {
       const confirmModal = await waitForConfirmModal(page);
       await captureUiProof(suite, page, "sessions-bulk-delete-original-confirm.png");
 
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse([replacement]));
+      await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
       await gateway.emitGatewayEvent("sessions.changed", {
         ...replacement,
         reason: "update",

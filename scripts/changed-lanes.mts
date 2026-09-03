@@ -69,6 +69,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "apps/mobile/version.json",
   "docs/.generated/config-baseline.counts.json",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",

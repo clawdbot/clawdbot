@@ -109,10 +109,8 @@ export async function createGatewayHttpTransport(params: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  openAiChatCompletionsEnabled?: boolean;
+  openResponsesEnabled?: boolean;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth: () => ResolvedGatewayAuth;
@@ -331,9 +329,7 @@ export async function createGatewayHttpTransport(params: {
       controlUiBasePath: params.controlUiBasePath,
       controlUiRoot: params.controlUiRoot,
       openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
-      openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
       openResponsesEnabled: params.openResponsesEnabled,
-      openResponsesConfig: params.openResponsesConfig,
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleWatchNodeRequest: params.handleWatchNodeRequest,
       handleHooksRequest,

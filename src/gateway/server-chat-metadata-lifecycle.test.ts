@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   readStartup: vi.fn(),
   refreshPreparedModels: vi.fn(),
   refresh: vi.fn(),
+  stop: vi.fn(),
   registerAuthListener: vi.fn(),
   registerModelListener: vi.fn(),
   registerSkillsListener: vi.fn(),
@@ -56,6 +58,7 @@ beforeEach(() => {
     read: mocks.read,
     readStartup: mocks.readStartup,
     refresh: mocks.refresh,
+    stop: mocks.stop,
   });
   mocks.refresh.mockResolvedValue(undefined);
   mocks.registerAuthListener.mockReturnValue(mocks.unregisterAuthListener);
@@ -194,7 +197,98 @@ describe("gateway chat metadata lifecycle", () => {
     );
   });
 
-  it("keeps minimal Gateway attachment lazy and sidecar-free", async () => {
+  it.each([true, false])(
+    "joins pending metadata work before Gateway lifetime shutdown (minimal=%s)",
+    async (minimalTestGateway) => {
+      const actual = await vi.importActual<
+        typeof import("./server-methods/chat-metadata-runtime.js")
+      >("./server-methods/chat-metadata-runtime.js");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const events: string[] = [];
+      const owner = createChatMetadataOwner(config, "shutdown-model");
+      let ownerAvailable = true;
+      let revision = 0;
+      let held = false;
+      const holdWork = async () => {
+        if (held) {
+          entered.resolve();
+          await release.promise;
+          events.push("work settled");
+        }
+      };
+      mocks.refreshPreparedModels.mockImplementation(holdWork);
+      const buildProjection = vi.fn(async () => {
+        if (!minimalTestGateway) {
+          await holdWork();
+        }
+        return {
+          modelCatalog: owner.modelCatalog.entries,
+          read: () => ({ models: owner.modelCatalog.entries }),
+          isCurrent: () => true,
+        };
+      });
+      mocks.createRuntime.mockImplementation(
+        (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) =>
+          actual.createGatewayChatMetadataRuntime({
+            ...params,
+            deps: {
+              getPreparedOwner: () => (ownerAvailable ? owner : undefined),
+              getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
+              getAuthStoreRevision: () => revision,
+              getSkillsVersion: () => 0,
+              getPluginRegistryVersion: () => 0,
+              buildCommands: async () => ({ commands: [] }),
+              buildProjection,
+            },
+          }),
+      );
+      const { lifecycle: pendingLifecycle, warn } = createLifecycle(minimalTestGateway);
+      const lifecycle = await pendingLifecycle;
+      const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
+      const broadcast = vi.fn();
+      await lifecycle.attachContext({ broadcast } as unknown as GatewayRequestContext, sidecars);
+      held = true;
+      revision += 1;
+      if (!minimalTestGateway) {
+        mocks.registerModelListener.mock.calls[0]![0]({ phase: "published" });
+      }
+      const read = lifecycle.read({ agentId: "main" }).then(
+        (result) => {
+          events.push("read settled");
+          return result;
+        },
+        (error: unknown) => {
+          events.push("read settled");
+          return error;
+        },
+      );
+      try {
+        await entered.promise;
+        const stopping = Promise.all(
+          sidecars.map((sidecar) => Promise.resolve(sidecar.stop())),
+        ).then(() => {
+          ownerAvailable = false;
+          events.push("shutdown completed");
+        });
+        release.resolve();
+        await stopping;
+        const result = await read;
+
+        expect(events).toEqual(["work settled", "read settled", "shutdown completed"]);
+        expect(result).toBeInstanceOf(ChatMetadataSnapshotUnavailableError);
+        await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("stopped");
+        await expect(lifecycle.refresh()).rejects.toThrow("stopped");
+        await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await read;
+      }
+    },
+  );
+
+  it("keeps minimal Gateway attachment lazy while owning shutdown", async () => {
     const { lifecycle: pendingLifecycle } = createLifecycle(true);
     const lifecycle = await pendingLifecycle;
     const sidecars: Array<{ stop: () => Promise<void> }> = [];
@@ -211,7 +305,9 @@ describe("gateway chat metadata lifecycle", () => {
     expect(mocks.registerAuthListener).not.toHaveBeenCalled();
     expect(mocks.registerModelListener).not.toHaveBeenCalled();
     expect(mocks.registerSkillsListener).not.toHaveBeenCalled();
-    expect(sidecars).toEqual([]);
+    expect(sidecars).toHaveLength(1);
+    await sidecars[0]!.stop();
+    expect(mocks.stop).toHaveBeenCalledOnce();
   });
 
   it("treats an unavailable catch-up snapshot as expected before owner publication", async () => {

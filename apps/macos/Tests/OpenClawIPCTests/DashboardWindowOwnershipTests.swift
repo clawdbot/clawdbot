@@ -49,19 +49,32 @@ private actor DashboardWindowOwnershipEndpointGate {
     }
 }
 
-private actor DashboardWindowOwnershipPresentationGate {
+actor DashboardWindowOwnershipPresentationGate {
     private var requested = false
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
-    func waitForRelease() async {
+    init(released: Bool = false) {
+        self.released = released
+    }
+
+    func hold() {
+        self.requested = false
+        self.released = false
+    }
+
+    @discardableResult
+    func waitForRelease() async -> Int {
         self.requested = true
         self.requestCount += 1
-        guard !self.released else { return }
-        await withCheckedContinuation { continuation in
-            self.continuations.append(continuation)
+        let request = self.requestCount
+        if !self.released {
+            await withCheckedContinuation { continuation in
+                self.continuations.append(continuation)
+            }
         }
+        return request
     }
 
     func waitUntilRequested() async {
@@ -103,7 +116,7 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowOwnershipTests {
-    private static let primaryGateway = DashboardGatewayEntry(
+    static let primaryGateway = DashboardGatewayEntry(
         id: "primary",
         name: "Local Gateway",
         kind: "local",

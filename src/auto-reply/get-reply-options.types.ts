@@ -351,8 +351,10 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  /** Called when context auto-compaction completes. */
-  onCompactionEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when context auto-compaction ends; omitted outcome means completed for legacy callers. */
+  onCompactionEnd?: (payload?: {
+    completed: boolean;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
