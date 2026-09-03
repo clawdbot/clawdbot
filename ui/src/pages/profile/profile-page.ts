@@ -481,15 +481,17 @@ export class ProfilePage extends OpenClawLightDomElement {
             ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>
         </div>
-        ${this.selfUser
-          ? html`<button
-              class="btn profile-refresh"
-              ?disabled=${this.identityLoading || this.identityBusy !== null}
-              @click=${() => this.refreshManually()}
-            >
-              ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
-            </button>`
-          : nothing}
+        ${
+          this.selfUser
+            ? html`<button
+                class="btn profile-refresh"
+                ?disabled=${this.identityLoading || this.identityBusy !== null}
+                @click=${() => this.refreshManually()}
+              >
+                ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
+              </button>`
+            : nothing
+        }
       </section>
       ${renderSettingsWorkspace(this.renderBody())}
     `;

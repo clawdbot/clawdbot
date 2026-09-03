@@ -665,15 +665,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
       ),
     ).toBe(true);
-    timings.mockImplementation(
-      (runner): Readonly<Record<string, number>> =>
-        runner === "blacksmith"
-          ? {
-              "agentic-agents-core-models": 123,
-              "core-unit-fast-1": 100,
-              "core-runtime-hooks": 80,
-            }
-          : {},
+    timings.mockImplementation((runner): Readonly<Record<string, number>> =>
+      runner === "blacksmith"
+        ? {
+            "agentic-agents-core-models": 123,
+            "core-unit-fast-1": 100,
+            "core-runtime-hooks": 80,
+          }
+        : {},
     );
     const updated = createNodeTestShardBundles(options);
     const tail = updated.find((shard) =>

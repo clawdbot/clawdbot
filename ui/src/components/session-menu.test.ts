@@ -93,15 +93,16 @@ async function mountMenu(
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${options.deleteAllowed ??
-      (session.archived || (options.archiveAllowed ?? true))}
+      .deleteAllowed=${
+        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
+      }
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .currentOwner=${options.currentOwner ?? null}
       .work=${options.work ?? null}
-      .workboard=${options.workboard === undefined
-        ? { captured: false, busy: false }
-        : options.workboard}
+      .workboard=${
+        options.workboard === undefined ? { captured: false, busy: false } : options.workboard
+      }
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
     ></openclaw-session-menu>`,

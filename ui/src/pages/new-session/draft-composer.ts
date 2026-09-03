@@ -111,9 +111,11 @@ export function renderNewSessionBody(options: {
       @mousedown=${beginNativeWindowDragFromTopInset}
     >
       ${options.error ? renderDraftError(options.error) : nothing}
-      ${pendingMessage
-        ? renderNewSessionSubmission(pendingMessage, options.onOpenImage)
-        : options.renderDraft()}
+      ${
+        pendingMessage
+          ? renderNewSessionSubmission(pendingMessage, options.onOpenImage)
+          : options.renderDraft()
+      }
     </div>
   `;
 }
@@ -145,16 +147,18 @@ function renderNewSessionSubmission(
         >
           ${renderMessageImages(images, imageOptions)}
           ${renderAssistantAttachments(attachments, imageOptions, undefined, undefined, false)}
-          ${json
-            ? renderMessageJson(json)
-            : markdown
-              ? renderMessageMarkdown(
-                  markdown,
-                  key,
-                  { role: "user", isStreaming: false },
-                  { codeBlockChrome: "none" },
-                )
-              : nothing}
+          ${
+            json
+              ? renderMessageJson(json)
+              : markdown
+                ? renderMessageMarkdown(
+                    markdown,
+                    key,
+                    { role: "user", isStreaming: false },
+                    { codeBlockChrome: "none" },
+                  )
+                : nothing
+          }
         </div>
       </div>
     </div>

@@ -401,10 +401,11 @@ export function renderSessionProgressCard(
     >
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
         <span
-          class="session-progress-card__summary-indicator session-progress-card__current-marker${complete ||
-          effectiveSessionStatus === "done"
-            ? " session-progress-card__summary-indicator--complete"
-            : ""}"
+          class="session-progress-card__summary-indicator session-progress-card__current-marker${
+            complete || effectiveSessionStatus === "done"
+              ? " session-progress-card__summary-indicator--complete"
+              : ""
+          }"
           data-status=${presentedCurrentStatus ?? "pending"}
           data-outcome=${effectiveSessionStatus ?? nothing}
           aria-hidden="true"
@@ -414,15 +415,17 @@ export function renderSessionProgressCard(
         <span class="session-progress-card__summary-collapsed">
           <span class="session-progress-card__current">${stepLabel}</span>
         </span>
-        ${counts
-          ? html`<span
-              class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
-              data-outcome=${effectiveSessionStatus ?? nothing}
-              >${terminalOutcomeKey
-                ? t(terminalOutcomeKey)
-                : `${currentPosition}/${counts.total}`}</span
-            >`
-          : nothing}
+        ${
+          counts
+            ? html`<span
+                class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
+                data-outcome=${effectiveSessionStatus ?? nothing}
+                >${
+                  terminalOutcomeKey ? t(terminalOutcomeKey) : `${currentPosition}/${counts.total}`
+                }</span
+              >`
+            : nothing
+        }
         <span class="session-progress-card__summary-expanded">
           <span class="session-progress-card__summary-title"
             >${t("sessionProgressCard.composerTitle")}</span

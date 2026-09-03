@@ -5,12 +5,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 type SlashCommandTier = "essential" | "standard" | "power";
-type ChatIconName = string;
 
 export type SlashCommandDef = {
   key: string;
@@ -19,7 +19,7 @@ export type SlashCommandDef = {
   description: string;
   descriptionKey?: string;
   args?: string;
-  icon?: ChatIconName;
+  icon?: IconName;
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
@@ -68,7 +68,7 @@ const MAX_REMOTE_NAME_LENGTH = 200;
 const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
 const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
-const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
+const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   help: "book",
   status: "barChart",
   usage: "barChart",
@@ -231,7 +231,7 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): ChatIconName | undefined {
+function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 

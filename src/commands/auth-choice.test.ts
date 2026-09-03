@@ -736,21 +736,19 @@ describe("applyAuthChoice", () => {
           id: "setup-token",
           label: "Anthropic setup-token",
           kind: "token",
-          run: vi.fn(
-            async (): Promise<ProviderAuthResult> => ({
-              profiles: [
-                {
-                  profileId: "anthropic:default",
-                  credential: {
-                    type: "token",
-                    provider: "anthropic",
-                    token: `sk-ant-oat01-${"a".repeat(80)}`,
-                  },
+          run: vi.fn(async (): Promise<ProviderAuthResult> => ({
+            profiles: [
+              {
+                profileId: "anthropic:default",
+                credential: {
+                  type: "token",
+                  provider: "anthropic",
+                  token: `sk-ant-oat01-${"a".repeat(80)}`,
                 },
-              ],
-              defaultModel: "anthropic/claude-sonnet-4-6",
-            }),
-          ),
+              },
+            ],
+            defaultModel: "anthropic/claude-sonnet-4-6",
+          })),
         },
       }),
     ]);

@@ -74,9 +74,11 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                   }
                 }}
               >
-                ${props.busy === "avatar"
-                  ? t("profilePage.identity.processingAvatar")
-                  : t("profilePage.identity.chooseAvatar")}
+                ${
+                  props.busy === "avatar"
+                    ? t("profilePage.identity.processingAvatar")
+                    : t("profilePage.identity.chooseAvatar")
+                }
               </button>
               <input
                 type="file"
@@ -174,11 +176,13 @@ export function renderIdentitySection(props: IdentitySectionProps) {
           disabled: props.busy !== null || !githubIdentity,
           onChange: props.onGitCoauthorChange,
         })}
-        ${props.error
-          ? html`<div class="settings-row identity-error" role="alert">
-              <span class="settings-row__desc">${props.error}</span>
-            </div>`
-          : nothing}
+        ${
+          props.error
+            ? html`<div class="settings-row identity-error" role="alert">
+                <span class="settings-row__desc">${props.error}</span>
+              </div>`
+            : nothing
+        }
       `,
     )}
   </div>`;

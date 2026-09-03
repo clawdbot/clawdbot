@@ -2181,7 +2181,7 @@
     "marked": "18.0.11",
     "minipass": "7.1.3",
     "nostr-tools": "2.25.0",
-    "oxfmt": "0.60.0",
+    "oxfmt": "0.65.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
     "pako": "3.0.1",

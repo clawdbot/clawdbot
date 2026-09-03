@@ -127,21 +127,19 @@ async function buildSessionTranscriptIndex(
   }
   const entries = selectArchiveTranscriptEntries(records)
     .filter((entry) => isVisibleTranscriptRecord(entry.record))
-    .map(
-      (entry, index): IndexedTranscriptEntry => ({
-        byteLength: entry.byteLength,
-        id: entry.id,
-        recoveredImageData: entry.recoveredImageData,
-        record: entry.record,
-        seq: index + 1,
-        transcriptPosition: createTranscriptDisplayPosition(
-          displaySource,
-          entry.rawSeq,
-          entry.record.message,
-          (id) => rawSeqById.get(id),
-        ),
-      }),
-    );
+    .map((entry, index): IndexedTranscriptEntry => ({
+      byteLength: entry.byteLength,
+      id: entry.id,
+      recoveredImageData: entry.recoveredImageData,
+      record: entry.record,
+      seq: index + 1,
+      transcriptPosition: createTranscriptDisplayPosition(
+        displaySource,
+        entry.rawSeq,
+        entry.record.message,
+        (id) => rawSeqById.get(id),
+      ),
+    }));
   return {
     entries,
     byId: new Map(entries.flatMap((entry) => (entry.id ? [[entry.id, entry] as const] : []))),

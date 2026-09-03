@@ -184,31 +184,36 @@ function renderStatus(
         .floorMax=${20}
       ></openclaw-debug-sparkline>
     </div>
-    ${status.disks?.length
-      ? html`<div class="debug-overlay__vitals debug-overlay__disks">
-          ${repeat(
-            status.disks ?? [],
-            (disk) => disk.path,
-            (disk) => html`<openclaw-debug-sparkline
-              class="debug-overlay__vital debug-overlay__vital--disk"
-              title=${disk.path}
-              .label=${`${t("debug.overlay.disk")} ${disk.path}`}
-              .sub=${t("debug.overlay.totalShort", { value: formatStorageBytes(disk.totalBytes) })}
-              .samples=${collectSamples(
-                history,
-                (sample) => sample.disks?.find((entry) => entry.path === disk.path)?.availableBytes,
-              )}
-              .format=${formatFreeBytes}
-              autorange
-            ></openclaw-debug-sparkline>`,
-          )}
-        </div>`
-      : nothing}
-    ${typeof status.uptimeMs === "number"
-      ? html`<div class="debug-overlay__vitals-footer mono">
-          ${t("debug.overlay.uptime")} ${formatDurationHuman(status.uptimeMs)}
-        </div>`
-      : nothing}
+    ${
+      status.disks?.length
+        ? html`<div class="debug-overlay__vitals debug-overlay__disks">
+            ${repeat(
+              status.disks ?? [],
+              (disk) => disk.path,
+              (disk) => html`<openclaw-debug-sparkline
+                class="debug-overlay__vital debug-overlay__vital--disk"
+                title=${disk.path}
+                .label=${`${t("debug.overlay.disk")} ${disk.path}`}
+                .sub=${t("debug.overlay.totalShort", { value: formatStorageBytes(disk.totalBytes) })}
+                .samples=${collectSamples(
+                  history,
+                  (sample) =>
+                    sample.disks?.find((entry) => entry.path === disk.path)?.availableBytes,
+                )}
+                .format=${formatFreeBytes}
+                autorange
+              ></openclaw-debug-sparkline>`,
+            )}
+          </div>`
+        : nothing
+    }
+    ${
+      typeof status.uptimeMs === "number"
+        ? html`<div class="debug-overlay__vitals-footer mono">
+            ${t("debug.overlay.uptime")} ${formatDurationHuman(status.uptimeMs)}
+          </div>`
+        : nothing
+    }
   `;
 }
 
@@ -217,14 +222,16 @@ function renderActiveRuns(sessions: ActiveSession[]): TemplateResult {
     <div class="debug-overlay__count">
       ${t("debug.overlay.activeRunsCount", { count: String(sessions.length) })}
     </div>
-    ${sessions.length > 0
-      ? html`<ul class="debug-overlay__list">
-          ${sessions.map((session) => {
-            const id = session.sessionId ?? session.key ?? t("common.unknown");
-            return html`<li class="mono" title=${id}>${truncateUtf16Safe(id, 32)}</li>`;
-          })}
-        </ul>`
-      : html`<div class="debug-overlay__empty">${t("debug.overlay.noActiveRuns")}</div>`}
+    ${
+      sessions.length > 0
+        ? html`<ul class="debug-overlay__list">
+            ${sessions.map((session) => {
+              const id = session.sessionId ?? session.key ?? t("common.unknown");
+              return html`<li class="mono" title=${id}>${truncateUtf16Safe(id, 32)}</li>`;
+            })}
+          </ul>`
+        : html`<div class="debug-overlay__empty">${t("debug.overlay.noActiveRuns")}</div>`
+    }
   `;
 }
 

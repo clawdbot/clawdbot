@@ -3856,7 +3856,7 @@ ui/src/components/config-form-collection-draft.ts	5
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	3
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/config-form.node.collection.ts	5
+ui/src/components/config-form.node.collection.ts	2
 ui/src/components/config-form.node.scalar.ts	5
 ui/src/components/config-form.node.shared.ts	3
 ui/src/components/config-form.node.ts	1
@@ -3986,7 +3986,6 @@ ui/src/pages/chat/chat-thread-grouping.ts	2
 ui/src/pages/chat/chat-thread-items.ts	3
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
-ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6

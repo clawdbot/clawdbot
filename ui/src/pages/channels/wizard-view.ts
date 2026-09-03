@@ -58,11 +58,13 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
     ${message ? html`<div class=${outputClass}>${message}</div>` : nothing}
     <div class="channels-wizard__footer">
-      ${stepIsBusy(props)
-        ? renderWizardBusyButton(t("channels.setup.working"))
-        : html`<button type="button" class="btn primary" @click=${() => props.onAnswer(null)}>
-            ${t("channels.setup.continue")}
-          </button>`}
+      ${
+        stepIsBusy(props)
+          ? renderWizardBusyButton(t("channels.setup.working"))
+          : html`<button type="button" class="btn primary" @click=${() => props.onAnswer(null)}>
+              ${t("channels.setup.continue")}
+            </button>`
+      }
     </div>
   `;
 }
@@ -101,58 +103,72 @@ function renderWhatsAppLinking(props: ChannelWizardViewProps) {
     <div class="channels-wizard__message">
       ${connected ? t("channels.setup.whatsappLinked") : t("channels.setup.whatsappScanTitle")}
     </div>
-    ${props.whatsappMessage
-      ? html`<div class="channels-wizard__note">${props.whatsappMessage}</div>`
-      : nothing}
-    ${connected
-      ? nothing
-      : html`
-          <div class="channels-wizard__qr">
-            ${props.whatsappQrDataUrl
-              ? html`<img
-                  src=${props.whatsappQrDataUrl}
-                  alt=${t("channels.setup.whatsappQrAlt")}
-                />`
-              : props.whatsappBusy
-                ? nothing
-                : html`<div class="channels-wizard__spinner">
-                    ${t("channels.setup.whatsappQrHint")}
-                  </div>`}
-          </div>
-          <div class="channels-wizard__note">${t("channels.setup.whatsappScanHelp")}</div>
-        `}
-    <div class="channels-wizard__footer">
-      ${connected
-        ? html`
-            <button type="button" class="btn primary" @click=${() => props.onClose()}>
-              ${t("channels.setup.finish")}
-            </button>
-          `
+    ${
+      props.whatsappMessage
+        ? html`<div class="channels-wizard__note">${props.whatsappMessage}</div>`
+        : nothing
+    }
+    ${
+      connected
+        ? nothing
         : html`
-            ${props.whatsappBusy
-              ? renderWizardBusyButton(t("channels.setup.whatsappQrLoading"))
-              : html`
-                  <button type="button" class="btn" @click=${() => props.onWhatsAppStart(true)}>
-                    ${props.whatsappQrDataUrl
-                      ? t("channels.setup.regenerateQr")
-                      : t("common.showQr")}
-                  </button>
-                  ${props.whatsappQrDataUrl
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn primary"
-                          @click=${() => props.onWhatsAppWait()}
-                        >
-                          ${t("common.waitForScan")}
-                        </button>
-                      `
-                    : nothing}
-                `}
-            <button type="button" class="btn" @click=${() => props.onClose()}>
-              ${t("channels.setup.linkLater")}
-            </button>
-          `}
+            <div class="channels-wizard__qr">
+              ${
+                props.whatsappQrDataUrl
+                  ? html`<img
+                      src=${props.whatsappQrDataUrl}
+                      alt=${t("channels.setup.whatsappQrAlt")}
+                    />`
+                  : props.whatsappBusy
+                    ? nothing
+                    : html`<div class="channels-wizard__spinner">
+                        ${t("channels.setup.whatsappQrHint")}
+                      </div>`
+              }
+            </div>
+            <div class="channels-wizard__note">${t("channels.setup.whatsappScanHelp")}</div>
+          `
+    }
+    <div class="channels-wizard__footer">
+      ${
+        connected
+          ? html`
+              <button type="button" class="btn primary" @click=${() => props.onClose()}>
+                ${t("channels.setup.finish")}
+              </button>
+            `
+          : html`
+              ${
+                props.whatsappBusy
+                  ? renderWizardBusyButton(t("channels.setup.whatsappQrLoading"))
+                  : html`
+                      <button type="button" class="btn" @click=${() => props.onWhatsAppStart(true)}>
+                        ${
+                          props.whatsappQrDataUrl
+                            ? t("channels.setup.regenerateQr")
+                            : t("common.showQr")
+                        }
+                      </button>
+                      ${
+                        props.whatsappQrDataUrl
+                          ? html`
+                              <button
+                                type="button"
+                                class="btn primary"
+                                @click=${() => props.onWhatsAppWait()}
+                              >
+                                ${t("common.waitForScan")}
+                              </button>
+                            `
+                          : nothing
+                      }
+                    `
+              }
+              <button type="button" class="btn" @click=${() => props.onClose()}>
+                ${t("channels.setup.linkLater")}
+              </button>
+            `
+      }
     </div>
   `;
 }
@@ -224,9 +240,11 @@ export function renderChannelWizard(
     body = renderDoneBody(wizard.channels, props);
   } else if (step) {
     body = html`
-      ${wizard.phase === "step" && wizard.validationError
-        ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
-        : nothing}
+      ${
+        wizard.phase === "step" && wizard.validationError
+          ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
+          : nothing
+      }
       ${renderStepBody(step, props)}
     `;
   }
@@ -248,15 +266,17 @@ export function renderChannelWizard(
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted channels-wizard__subtitle">
               <span>${t("channels.setup.subtitle")}</span>
-              ${channel
-                ? html`<a
-                    class="channels-wizard__link"
-                    href=${channelDocsUrl(channel)}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    >${t("channels.setup.viewDocs")}</a
-                  >`
-                : nothing}
+              ${
+                channel
+                  ? html`<a
+                      class="channels-wizard__link"
+                      href=${channelDocsUrl(channel)}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      >${t("channels.setup.viewDocs")}</a
+                    >`
+                  : nothing
+              }
             </div>
           </div>
         </div>

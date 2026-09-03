@@ -468,25 +468,27 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${!showEffortPicker
-        ? nothing
-        : renderChatEffortPicker({
-            disabled: effortDisabled,
-            disabledReason: props.effortMutationDisabledReason,
-            fastMode: {
-              ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-            },
-            sessionKey: props.sessionKey,
-            thinkingDisabled,
-            thinking,
-            onFastModeSelect: async (next, targetSessionKey) =>
-              props.onFastModeSelect?.(next, targetSessionKey),
-            onRequestUpdate: props.onRequestUpdate,
-            onThinkingSelect: async (next, targetSessionKey) =>
-              props.onThinkingSelect?.(next, targetSessionKey),
-            reserved: reserveEffortPicker,
-          })}
+      ${
+        !showEffortPicker
+          ? nothing
+          : renderChatEffortPicker({
+              disabled: effortDisabled,
+              disabledReason: props.effortMutationDisabledReason,
+              fastMode: {
+                ...fastMode,
+                disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+              },
+              sessionKey: props.sessionKey,
+              thinkingDisabled,
+              thinking,
+              onFastModeSelect: async (next, targetSessionKey) =>
+                props.onFastModeSelect?.(next, targetSessionKey),
+              onRequestUpdate: props.onRequestUpdate,
+              onThinkingSelect: async (next, targetSessionKey) =>
+                props.onThinkingSelect?.(next, targetSessionKey),
+              reserved: reserveEffortPicker,
+            })
+      }
     </div>
   `;
 }

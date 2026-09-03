@@ -551,8 +551,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(this)}
           <div class="sidebar-shell__content">
             <div
-              class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
-                .sessionsScrollState}"
+              class="sidebar-shell__body sidebar-shell__body--scroll-${
+                this.sessionData.sessionsScrollState
+              }"
               @scroll=${(event: Event) =>
                 this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
             >
@@ -585,20 +586,24 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               </nav>
               ${renderAppSidebarOnline(this)} ${this.renderSessions()}
             </div>
-            ${this.sessionsStatusFilter === "archived"
-              ? nothing
-              : renderPanelRefreshStatus({
-                  status: this.sessionData.sessionCatalogRefreshStatus,
-                  onRetry: () => void this.sessionData.refreshSessionCatalogs(),
-                  className: "sidebar-session-error sidebar-session-catalog-error",
-                })}
+            ${
+              this.sessionsStatusFilter === "archived"
+                ? nothing
+                : renderPanelRefreshStatus({
+                    status: this.sessionData.sessionCatalogRefreshStatus,
+                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
+                    className: "sidebar-session-error sidebar-session-catalog-error",
+                  })
+            }
           </div>
           <div class="sidebar-shell__invite">
-            ${this.communityInviteEligible && this.communityInviteCardLoaded
-              ? html`<openclaw-community-invite-card
-                  .onDismiss=${this.dismissCommunityInvite}
-                ></openclaw-community-invite-card>`
-              : nothing}
+            ${
+              this.communityInviteEligible && this.communityInviteCardLoaded
+                ? html`<openclaw-community-invite-card
+                    .onDismiss=${this.dismissCommunityInvite}
+                  ></openclaw-community-invite-card>`
+                : nothing
+            }
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(
@@ -613,16 +618,18 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ></openclaw-lobster-pet>
           </div>
           <div class="sidebar-shell__footer">
-            ${this.devGitBranch
-              ? html`<openclaw-tooltip .content=${this.devGitBranch}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true"
-                      >${icons.gitBranch}</span
-                    >
-                    <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>`
-              : nothing}
+            ${
+              this.devGitBranch
+                ? html`<openclaw-tooltip .content=${this.devGitBranch}>
+                    <div class="sidebar-footer-branch">
+                      <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                        >${icons.gitBranch}</span
+                      >
+                      <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                    </div>
+                  </openclaw-tooltip>`
+                : nothing
+            }
             ${renderAppSidebarFooterBar(this)}
           </div>
         </div>

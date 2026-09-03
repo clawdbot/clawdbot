@@ -110,14 +110,12 @@ const slashCommandFixtures = vi.hoisted(() => {
       choices: ["on", "off"],
     }),
   ];
-  const specs = commands.map(
-    (command): NativeCommandSpec => ({
-      name: command.nativeName!,
-      description: command.description,
-      acceptsArgs: true,
-      args: command.args,
-    }),
-  );
+  const specs = commands.map((command): NativeCommandSpec => ({
+    name: command.nativeName!,
+    description: command.description,
+    acceptsArgs: true,
+    args: command.args,
+  }));
   return {
     commandsByName: new Map(commands.map((command) => [command.nativeName!, command])),
     specs: [

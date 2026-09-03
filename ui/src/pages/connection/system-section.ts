@@ -67,9 +67,9 @@ function renderSystemStat(stat: SystemStat) {
           : nothing}
       </div>
       <div class="config-host__stat-value">
-        ${stat.value}${stat.unit
-          ? html` <span class="config-host__stat-unit">${stat.unit}</span>`
-          : nothing}
+        ${stat.value}${
+          stat.unit ? html` <span class="config-host__stat-unit">${stat.unit}</span>` : nothing
+        }
       </div>
       ${stat.usedFraction == null ? nothing : renderSystemMeter(label, stat.usedFraction)}
       ${stat.detail ? html`<div class="config-host__stat-detail">${stat.detail}</div>` : nothing}
@@ -195,12 +195,14 @@ export function renderSystemSection(props: SystemSectionProps) {
                 ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
               </div>
               <div class="config-host__meta">
-                ${info
-                  ? t("quickSettings.system.runtime", {
-                      version: info.nodeVersion,
-                      pid: String(info.pid),
-                    })
-                  : placeholder}
+                ${
+                  info
+                    ? t("quickSettings.system.runtime", {
+                        version: info.nodeVersion,
+                        pid: String(info.pid),
+                      })
+                    : placeholder
+                }
               </div>
               ${address ? html`<code class="config-host__address">${address}</code>` : nothing}
             </div>
