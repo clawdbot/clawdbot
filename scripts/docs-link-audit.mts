@@ -487,6 +487,8 @@ function auditDocsLinks(
   const broken: Array<{ file: string; line: number; link: string; reason: string }> = [];
   let checked = 0;
 
+  // The publisher writes physical/index routes; frontmatter permalinks do not
+  // create pages. Only emitted pages and configured redirects can prove fragments.
   const pages = new Map<string, ReturnType<typeof parseDocsDocument>>();
   const pageRoute = (rel: string) =>
     normalizeRoute(rel.replace(/\.mdx?$/i, "").replace(/(?:^|\/)index$/, ""));

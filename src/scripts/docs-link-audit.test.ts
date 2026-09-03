@@ -80,7 +80,7 @@ describe("docs-link-audit", () => {
         "[raw Markdown](/page.md#connection)",
         "[root](/#root)",
         "[missing root alias](/index#missing)",
-        "[unpublished permalink](/unpublished#missing)",
+        "[unpublished permalink](/unpublished#connection)",
         "[dropped incoming fragment](/drops#missing)",
         "[redirect](/legacy#wrong-incoming-fragment)",
         "[chain](/middle#also-wrong)",
@@ -154,6 +154,7 @@ describe("docs-link-audit", () => {
       expect(result.stdout).not.toContain("/hidden-");
       if (anchors) {
         expect(result.stdout).toContain("#missing :: fragment not found");
+        expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
       }
       if (broken && !anchors) {
         expect(result.stdout).toContain(
