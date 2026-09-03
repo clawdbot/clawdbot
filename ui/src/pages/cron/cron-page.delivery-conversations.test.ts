@@ -386,6 +386,126 @@ describe("CronPage lifecycle", () => {
     expect(page.cron.cronForm.deliveryThreadId).toBe("42");
   });
 
+  it.each([
+    ["mode", { deliveryMode: "none" }],
+    ["account", { deliveryAccountId: "other-account" }],
+    ["account to the inherited default", { deliveryAccountId: undefined }],
+    ["channel", { deliveryChannel: "discord" }],
+    ["agent", { agentId: "other-agent" }],
+  ] as const)(
+    "clears a selected topic route when the delivery %s changes",
+    async (_name, patch) => {
+      const fallbackRequest = createRequest();
+      const request = vi.fn(async (method: string) => {
+        if (method === "conversations.list") {
+          return {
+            conversations: [
+              {
+                conversationRef: "conv_telegram_bound_topic",
+                channel: "telegram",
+                accountId: "bound-account",
+                kind: "group",
+                target: "-1009876543210",
+                threadId: "42",
+                firstSeenAt: 0,
+                lastSeenAt: 0,
+              },
+            ],
+          };
+        }
+        return fallbackRequest(method);
+      });
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+      const page = createPage(createContext(gateway, "writer"));
+
+      await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+      page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+      await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+      page.patchForm({ deliveryTo: "-1009876543210" });
+      expect(page.cron.cronForm.deliveryThreadId).toBe("42");
+
+      page.patchForm(patch);
+
+      expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
+    },
+  );
+
+  it("keeps a newly selected topic route when its account changes in the same patch", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_bound_topic",
+              channel: "telegram",
+              accountId: "bound-account",
+              kind: "group",
+              target: "-1009876543210",
+              threadId: "42",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+
+    page.patchForm({
+      deliveryAccountId: "bound-account",
+      deliveryTo: "-1009876543210",
+    });
+
+    expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account");
+    expect(page.cron.cronForm.deliveryThreadId).toBe("42");
+  });
+
+  it("clears a selected topic route when same-patch reselection does not resolve", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_bound_topic",
+              channel: "telegram",
+              accountId: "bound-account",
+              kind: "group",
+              target: "-1009876543210",
+              threadId: "42",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+    page.patchForm({ deliveryTo: "-1009876543210" });
+    expect(page.cron.cronForm.deliveryThreadId).toBe("42");
+
+    page.patchForm({
+      deliveryAccountId: "other-account",
+      deliveryTo: "-1009876543210",
+    });
+
+    expect(page.cron.cronForm.deliveryAccountId).toBe("other-account");
+    expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
+  });
+
   it("omits targets whose account or thread route is ambiguous", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {

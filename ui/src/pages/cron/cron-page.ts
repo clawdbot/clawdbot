@@ -301,7 +301,16 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
-    let resolvedPatch = patch;
+    const current = this.cron.cronForm;
+    const deliveryIdentityChanged =
+      ("deliveryMode" in patch && patch.deliveryMode !== current.deliveryMode) ||
+      ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
+      ("deliveryAccountId" in patch && patch.deliveryAccountId !== current.deliveryAccountId) ||
+      ("agentId" in patch && patch.agentId !== current.agentId);
+    let resolvedPatch =
+      deliveryIdentityChanged && patch.deliveryThreadId === undefined
+        ? { ...patch, deliveryThreadId: undefined }
+        : patch;
     if (typeof patch.deliveryTo === "string") {
       const target = patch.deliveryTo.trim();
       const requestedAccountId = (
