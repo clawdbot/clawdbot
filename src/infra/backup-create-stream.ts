@@ -2,6 +2,7 @@ import fsSync, { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -112,7 +113,7 @@ export async function writeArchiveStreamToFile(params: {
       idleTimer?.refresh() ??
       setTimeout(() => {
         const entrySuffix = lastEntryPath
-          ? `, entry=${JSON.stringify(lastEntryPath.slice(-512))}`
+          ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
           : "";
         idleTimeoutError = new Error(
           `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,

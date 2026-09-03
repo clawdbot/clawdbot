@@ -188,6 +188,7 @@ describe("writeArchiveStreamToFile", () => {
       const archivePath = path.join(tempDir, "partial.tar.gz");
       const archiveStream = new PassThrough();
       const entry = new Minipass();
+      const stalledEntryPath = `🤖${"x".repeat(511)}`;
       let reportProgress: ReportBackupProgress | undefined;
       const writePromise = writeArchiveStreamToFile({
         archivePath,
@@ -197,14 +198,14 @@ describe("writeArchiveStreamToFile", () => {
         },
       });
       observeBackupTarEntryProgress(entry, (bytes) => {
-        reportProgress?.({ phase: "raw", entryPath: "/source/stalled.pack", bytes });
+        reportProgress?.({ phase: "raw", entryPath: stalledEntryPath, bytes });
       });
       entry.on("data", () => {});
       entry.write(Buffer.alloc(16));
       archiveStream.write("partial archive");
 
       const rejection = expect(writePromise).rejects.toThrow(
-        'Backup archive write stalled: no progress observed for 300000ms (phase=output, entry="/source/stalled.pack", rawBytes=16, outputBytes=15)',
+        `Backup archive write stalled: no progress observed for 300000ms (phase=output, entry=${JSON.stringify("x".repeat(511))}, rawBytes=16, outputBytes=15)`,
       );
       await vi.advanceTimersByTimeAsync(300_001);
       await rejection;
