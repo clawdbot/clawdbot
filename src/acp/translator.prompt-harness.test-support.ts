@@ -42,7 +42,7 @@ export function createSessionAgentHarness(
     sessionId,
     sessionKey,
     sessionStore,
-    sessionUpdate: connection.__sessionUpdateMock,
+    sessionUpdate: connection["__sessionUpdateMock"],
   };
 }
 
