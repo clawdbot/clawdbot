@@ -129,12 +129,22 @@ describe("ci workflow guards", () => {
     expect(historicalTargetStep.run).toContain(
       "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}.",
     );
+    expect(historicalTargetStep.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(historicalTargetStep.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha',
+    );
+    expect(historicalTargetStep.run).not.toContain("git ls-remote");
     const releaseCandidateStep = preflightSteps.find(
       (step) => step.name === "Validate release candidate target",
     );
     expect(releaseCandidateStep.run).toContain(
       "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}.",
     );
+    expect(releaseCandidateStep.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(releaseCandidateStep.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha',
+    );
+    expect(releaseCandidateStep.run).not.toContain("git ls-remote");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
@@ -358,8 +368,88 @@ describe("ci workflow guards", () => {
     expect(action).not.toContain("if ! git fetch --no-tags");
   });
 
-  it("bounds early unauthenticated checkout fetches", () => {
+  it("keeps manual source checkouts authenticated, scoped, and bounded", () => {
     const workflow = readCiWorkflow();
+
+    const sourceCheckouts = Object.entries(workflow.jobs)
+      .map(([jobName, job]) => [jobName, job.steps.find((step) => step.name === "Checkout")])
+      .filter(([, step]) => step?.env?.CHECKOUT_REPO);
+    expect(sourceCheckouts).toHaveLength(18);
+
+    for (const [jobName, checkoutStep] of sourceCheckouts) {
+      expect(checkoutStep.env.CHECKOUT_TOKEN, jobName).toBe("${{ github.token }}");
+      expect(checkoutStep.run, jobName).toContain(
+        "auth_header=\"$(printf 'x-access-token:%s' \"$CHECKOUT_TOKEN\" | base64 | tr -d '\\n')\"",
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        '-c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false"',
+      );
+    }
+
+    const guardsStep = workflow.jobs["check-shard"].steps.find(
+      (step) => step.name === "Run check shard",
+    );
+    expect(guardsStep.env.CHECKOUT_TOKEN).toBe("${{ github.token }}");
+    expect(guardsStep.run).toContain(
+      '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+    );
+
+    for (const [workflowPath, jobName] of [
+      [".github/workflows/ci-check-testbox.yml", "check"],
+      [".github/workflows/ci-check-arm-testbox.yml", "check-arm"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "build-artifacts"],
+    ]) {
+      const testboxWorkflow = parse(readFileSync(workflowPath, "utf8"));
+      const prepareStep = testboxWorkflow.jobs[jobName].steps.find(
+        (step) => step.name === "Prepare Testbox shell",
+      );
+      const checkoutStep = testboxWorkflow.jobs[jobName].steps.find(
+        (step) => step.name === "Checkout",
+      );
+
+      expect(prepareStep.env.CHECKOUT_TOKEN, workflowPath).toBe("${{ github.token }}");
+      expect(checkoutStep.run, workflowPath).toContain(
+        'remote add origin "https://github.com/${CHECKOUT_REPO}.git"',
+      );
+      expect(prepareStep.run, workflowPath).toContain(
+        '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+      );
+    }
+
+    const workflowSanity = readWorkflowSanityWorkflow();
+    for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
+      const checkoutStep = workflowSanity.jobs[jobName].steps.find(
+        (step) => step.name === "Checkout",
+      );
+
+      expect(checkoutStep.env.CHECKOUT_TOKEN, jobName).toBe("${{ github.token }}");
+      expect(checkoutStep.run, jobName).toContain(
+        '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        '-c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false"',
+      );
+    }
+
+    const workflowAuditStep = workflowSanity.jobs.actionlint.steps.find(
+      (step) => step.name === "Prepare trusted workflow audit configs",
+    );
+    expect(workflowAuditStep.env.CHECKOUT_TOKEN).toBe("${{ github.token }}");
+    expect(workflowAuditStep.run).toContain(
+      '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+    );
+
+    const ensureBaseAction = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
+    expect(ensureBaseAction).toContain("CHECKOUT_TOKEN: ${{ github.token }}");
+    expect(ensureBaseAction).toContain(
+      '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+    );
+    expect(ensureBaseAction).toContain(
+      '-c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false"',
+    );
 
     for (const jobName of ["preflight", "security-fast", "skills-python"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
@@ -383,6 +473,27 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("keeps security-fast scanner hooks local and its PR policy immutable", () => {
+    const workflow = readCiWorkflow();
+    const steps = workflow.jobs["security-fast"].steps;
+    const prepareStep = steps.find((step) => step.name === "Prepare trusted scanner config");
+    const installStep = steps.find((step) => step.name === "Install security scanners");
+    const privateKeyStep = steps.find((step) => step.name === "Detect committed private keys");
+    const zizmorStep = steps.find(
+      (step) => step.name === "Audit changed GitHub workflows with zizmor",
+    );
+
+    expect(prepareStep.run).toContain('git show "${BASE_SHA}:.github/zizmor.yml"');
+    expect(prepareStep.run).toContain("::error title=trusted zizmor policy unavailable::");
+    expect(prepareStep.run).toContain("repo: local");
+    expect(prepareStep.run).toContain("entry: detect-private-key");
+    expect(prepareStep.run).toContain("entry: zizmor");
+    expect(prepareStep.run).not.toContain(".pre-commit-config.yaml");
+    expect(installStep.run).toContain("pre-commit==4.2.0 pre-commit-hooks==6.0.0 zizmor==1.22.0");
+    expect(privateKeyStep.run).toContain("GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0");
+    expect(zizmorStep.run).toContain("GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0");
   });
 
   it("retries workflow sanity checkout fetch timeouts", () => {

@@ -62,7 +62,7 @@ jobs:
             reset_checkout_dir
             git init "$workdir" >/dev/null
             git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
@@ -189,11 +189,17 @@ jobs:
 
       - name: Prepare Testbox shell
         shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
           timeout --signal=TERM --kill-after=10s 120s git \
             -c protocol.version=2 \
+            -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
             fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
             "+refs/heads/main:refs/remotes/origin/main"
 

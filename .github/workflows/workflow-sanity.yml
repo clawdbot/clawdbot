@@ -29,6 +29,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -36,9 +37,13 @@ jobs:
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
           fetch_checkout_ref() {
             local fetch_status
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
                 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
@@ -88,6 +93,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -95,9 +101,13 @@ jobs:
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
           fetch_checkout_ref() {
             local fetch_status
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
                 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
@@ -124,6 +134,8 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
@@ -133,8 +145,13 @@ jobs:
             local ref="$1"
             local target="$2"
             local fetch_status
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
             for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git fetch --no-tags --depth=1 origin \
+              timeout --signal=TERM --kill-after=10s 30s git \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+                fetch --no-tags --depth=1 origin \
                 "+${ref}:${target}" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -232,6 +249,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -239,9 +257,13 @@ jobs:
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
           fetch_checkout_ref() {
             local fetch_status
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
                 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
