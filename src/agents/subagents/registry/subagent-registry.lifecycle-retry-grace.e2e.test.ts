@@ -50,6 +50,7 @@ type GatewayRequest = Omit<CallGatewayOptions, "params"> & { params?: GatewayAge
 let lifecycleHandler: ((evt: LifecycleEvent) => void) | undefined;
 let agentCallPlan: Array<"ok" | "throw"> = [];
 let agentCallGates = new Map<string, Promise<void>>();
+let releaseAgentCallGate: (() => void) | undefined;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 
@@ -75,7 +76,12 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (next === "throw") {
       throw new Error("announce delivery failed");
     }
-    return { result: { payloads: [{ text: "completion delivered" }] } };
+    return {
+      result: {
+        payloads: [{ text: "completion delivered" }],
+        deliveryStatus: { status: "sent", resultCount: 1 },
+      },
+    };
   }
   return {};
 });
@@ -202,7 +208,11 @@ describe("subagent registry lifecycle error grace", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Failed assertions must also release the delivery owned by this test.
+    releaseAgentCallGate?.();
+    releaseAgentCallGate = undefined;
+    await vi.advanceTimersByTimeAsync(0);
     lifecycleHandler = undefined;
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
@@ -362,16 +372,7 @@ describe("subagent registry lifecycle error grace", () => {
   }
 
   function readFirstAnnounceOutcome() {
-    const first = getAgentCalls()[0];
-    const internalEvents = first?.params?.internalEvents;
-    const event =
-      Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
-        ? (internalEvents[0] as { status?: string; statusLabel?: string })
-        : undefined;
-    return {
-      status: event?.status,
-      error: event?.statusLabel,
-    };
+    return getAgentCalls()[0]?.params?.internalEvents?.[0];
   }
 
   function setAssistantOutput(sessionKey: string, text: string) {
@@ -568,11 +569,10 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput(alphaSessionKey, "alpha complete");
     setAssistantOutput(betaSessionKey, "beta complete");
 
-    let releaseBetaDelivery: (() => void) | undefined;
     agentCallGates.set(
       betaSessionKey,
       new Promise<void>((resolve) => {
-        releaseBetaDelivery = resolve;
+        releaseAgentCallGate = resolve;
       }),
     );
 
@@ -582,6 +582,7 @@ describe("subagent registry lifecycle error grace", () => {
       terminalReply: { disposition: "visible", text: "alpha complete" },
     });
     await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup("run-yield-alpha", { allowPendingRequesterSettleWake: true });
 
     emitLifecycleEvent("run-yield-beta", {
       phase: "end",
@@ -619,8 +620,7 @@ describe("subagent registry lifecycle error grace", () => {
       ],
     });
 
-    await vi.advanceTimersByTimeAsync(0);
-    await flushAsync();
+    await waitForDeliveredCleanup("run-yield-alpha");
 
     const yieldedBatch = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
     expect(
@@ -651,7 +651,7 @@ describe("subagent registry lifecycle error grace", () => {
     expect(getRequesterWakeCalls()).toHaveLength(1);
 
     agentCallGates.delete(betaSessionKey);
-    releaseBetaDelivery?.();
+    releaseAgentCallGate?.();
     await waitForDeliveredCleanup("run-yield-alpha");
     await waitForDeliveredCleanup("run-yield-beta");
 
@@ -785,7 +785,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
-    expect(readFirstAnnounceOutcome()?.error).toContain("fatal failure");
+    expect(readFirstAnnounceOutcome()?.statusLabel).toContain("fatal failure");
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {
