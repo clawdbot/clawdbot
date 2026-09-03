@@ -159,12 +159,18 @@ suite.define(() => {
           }),
         )
         .toBeLessThanOrEqual(11);
+      await expect
+        .poll(() =>
+          configureModels.locator("svg").evaluate((icon) => icon.getBoundingClientRect().width),
+        )
+        .toBeLessThanOrEqual(12);
       await configureModels.hover();
+      await page.waitForTimeout(800);
       const configureModelsTooltip = page.locator("wa-tooltip[open]").filter({
         hasText: "Configure models",
       });
-      await expect.poll(() => configureModelsTooltip.count()).toBe(1);
-      await screenshot(page, "09-configure-models-tooltip.png");
+      await expect.poll(() => configureModelsTooltip.count()).toBe(0);
+      await screenshot(page, "09-configure-models-no-tooltip.png");
       await configureModels.tap();
       await expect.poll(() => page.url()).toContain("model-setup");
       await page.locator("openclaw-model-setup-page .model-setup").waitFor({ state: "visible" });

@@ -7065,12 +7065,12 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    ["session", "This session", "Selecting a model changes only this session."],
-    ["agent", "Agent default", "Selecting a model updates this agent's default."],
-    ["global", "Global default", "Selecting a model updates the global default."],
+    ["session", "Selecting a model changes only this session."],
+    ["agent", "Selecting a model updates this agent's default."],
+    ["global", "Selecting a model updates the global default."],
   ] as const)(
-    "does not expose the internal $target write target in the picker",
-    (target, scopeLabel, scopeDescription) => {
+    "keeps the $target write target accessible without rendering a status row",
+    (target, scopeDescription) => {
       const { state } = createOpenAiHeaderState();
       state.sessionsResult = {
         ...expectDefined(state.sessionsResult, "sessions result"),
@@ -7086,9 +7086,7 @@ describe("chat model controls", () => {
       const trigger = getChatModelSelect(container);
       expect(trigger.title).toBe(scopeDescription);
       expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
-      const scope = container.querySelector<HTMLElement>("[data-chat-model-selection-scope]");
-      expect(scope?.textContent?.trim()).toBe(scopeLabel);
-      expect(scope?.getAttribute("aria-label")).toBe(scopeDescription);
+      expect(container.querySelector("[data-chat-model-selection-scope]")).toBeNull();
       const modelOption = Array.from(
         container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
       ).find((button) => button.getAttribute("aria-selected") === "false");
@@ -7548,6 +7546,7 @@ describe("chat model controls", () => {
       "[data-chat-model-provider-settings]",
     );
     expect(providerSettings?.getAttribute("aria-label")).toBe("Configure models");
+    expect(providerSettings?.closest("openclaw-tooltip")).toBeNull();
     expect(providerSettings?.closest('[role="listbox"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(

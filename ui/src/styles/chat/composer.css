@@ -3016,43 +3016,6 @@
   flex: 0 0 auto;
 }
 
-.chat-controls__model-selection-scope-row {
-  display: flex;
-  justify-content: flex-end;
-  padding: 0 10px 2px;
-}
-
-.chat-controls__model-selection-scope {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 22px;
-  padding: 2px 6px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  cursor: help;
-}
-
-.chat-controls__model-selection-scope:hover,
-.chat-controls__model-selection-scope:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-controls__model-selection-scope:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.chat-controls__model-selection-scope svg {
-  width: 12px;
-  height: 12px;
-}
-
 .chat-controls__model-search {
   width: 100%;
   min-width: 0;
@@ -3148,8 +3111,8 @@
 }
 
 .chat-controls__provider-settings svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 /* Mask/brand-color rules live on .provider-brand-icon (components.css). */
@@ -4226,6 +4189,14 @@
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     color: var(--muted);
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .agent-chat__composer-footer
+    .chat-controls__provider-settings
+    svg {
+    width: 12px;
+    height: 12px;
   }
 
   .agent-chat__input--mobile-toolbar

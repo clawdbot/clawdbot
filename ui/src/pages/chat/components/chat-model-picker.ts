@@ -34,7 +34,7 @@ type ChatModelPickerParams = {
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
-  selectionScope?: { label: string; description: string };
+  selectionScopeDescription?: string;
   modelOptions: ChatModelPickerOption[];
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
@@ -387,11 +387,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
         aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
-          params.selectionScope ? `. ${params.selectionScope.description}` : ""
+          params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
         }`}
         aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || params.selectionScope?.description || triggerTitle}
+        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
@@ -476,22 +476,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       </div>
                     `
                   : nothing}
-                ${params.selectionScope && params.modelOptions.length > 0
-                  ? html`<div class="chat-controls__model-selection-scope-row">
-                      <openclaw-tooltip .content=${params.selectionScope.description}>
-                        <button
-                          class="chat-controls__model-selection-scope"
-                          data-chat-model-selection-scope
-                          type="button"
-                          aria-label=${params.selectionScope.description}
-                          @click=${(event: MouseEvent) => event.stopPropagation()}
-                        >
-                          ${icons.info}
-                          <span>${params.selectionScope.label}</span>
-                        </button>
-                      </openclaw-tooltip>
-                    </div>`
-                  : nothing}
                 ${renderChatModelCatalogState(
                   params.modelCatalogState,
                   params.modelOptions.length > 0,
@@ -521,22 +505,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                   >${providerDisplayLabel(provider)}</span
                                 >
                                 ${params.onModelSetup
-                                  ? html`<openclaw-tooltip
-                                      .content=${t("chat.modelControls.configureModels")}
+                                  ? html`<button
+                                      class="chat-controls__provider-settings"
+                                      data-chat-model-provider-settings
+                                      type="button"
+                                      aria-label=${t("chat.modelControls.configureModels")}
+                                      @click=${(event: MouseEvent) => {
+                                        event.stopPropagation();
+                                        params.onModelSetup?.();
+                                      }}
                                     >
-                                      <button
-                                        class="chat-controls__provider-settings"
-                                        data-chat-model-provider-settings
-                                        type="button"
-                                        aria-label=${t("chat.modelControls.configureModels")}
-                                        @click=${(event: MouseEvent) => {
-                                          event.stopPropagation();
-                                          params.onModelSetup?.();
-                                        }}
-                                      >
-                                        ${icons.settings}
-                                      </button>
-                                    </openclaw-tooltip>`
+                                      ${icons.settings}
+                                    </button>`
                                   : nothing}
                               </div>
                               <div

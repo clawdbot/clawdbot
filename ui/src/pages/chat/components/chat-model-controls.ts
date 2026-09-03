@@ -163,25 +163,16 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function resolveModelSelectionScope(
+function resolveModelSelectionScopeDescription(
   target: SessionsListResult["defaults"]["modelSelectionTarget"],
-): { label: string; description: string } | undefined {
+): string | undefined {
   switch (target) {
     case "session":
-      return {
-        label: t("chat.modelControls.selectionScopeSessionLabel"),
-        description: t("chat.modelControls.selectionScopeSession"),
-      };
+      return t("chat.modelControls.selectionScopeSession");
     case "agent":
-      return {
-        label: t("chat.modelControls.selectionScopeAgentLabel"),
-        description: t("chat.modelControls.selectionScopeAgent"),
-      };
+      return t("chat.modelControls.selectionScopeAgent");
     case "global":
-      return {
-        label: t("chat.modelControls.selectionScopeGlobalLabel"),
-        description: t("chat.modelControls.selectionScopeGlobal"),
-      };
+      return t("chat.modelControls.selectionScopeGlobal");
     default:
       return undefined;
   }
@@ -449,7 +440,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        selectionScope: resolveModelSelectionScope(props.modelSelectionTarget),
+        selectionScopeDescription: resolveModelSelectionScopeDescription(
+          props.modelSelectionTarget,
+        ),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
