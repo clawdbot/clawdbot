@@ -550,7 +550,7 @@ final class MacNodeModeCoordinator: NSObject {
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
-                let failure = Self.nodeHostWorkerFailure(error)
+                let failure = Self.nodeGatewayConnectionFailure(error)
                 self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
@@ -1033,6 +1033,14 @@ extension MacNodeModeCoordinator {
             return (reason, diagnostic)
         }
         return (error.localizedDescription, nil)
+    }
+
+    static func nodeGatewayConnectionFailure(_ error: Error) -> (reason: String, diagnostic: String?) {
+        guard let problem = GatewayConnectionProblemMapper.map(error: error),
+              problem.needsPairingApproval
+        else { return self.nodeHostWorkerFailure(error) }
+        let reason = problem.actionLabel.map { "\(problem.statusText) — \($0)" } ?? problem.statusText
+        return (reason, problem.message)
     }
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {

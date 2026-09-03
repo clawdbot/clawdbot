@@ -3055,7 +3055,6 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `bootstrap hello stores additional device tokens`() async throws {
-        let gatewayID = "bootstrap-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3080,9 +3079,7 @@ struct GatewayNodeSessionTests {
             ],
         ])
         let gateway = GatewayNodeSession()
-        let options = nodeConnectOptions(
-            includeDeviceIdentity: true,
-            deviceAuthGatewayID: gatewayID)
+        let options = nodeConnectOptions(includeDeviceIdentity: true)
 
         try await gateway.connectForTest(
             testURL("wss://example.invalid"),
@@ -3090,14 +3087,8 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        let nodeEntry = try #require(DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "node",
-            gatewayID: gatewayID))
-        let operatorEntry = try #require(DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID))
+        let nodeEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node"))
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
         #expect(nodeEntry.token == "node-device-token")
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "operator-device-token")
@@ -3272,9 +3263,9 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `owner-bound bootstrap persists handoff tokens when lookup is disabled`() async throws {
-        let gatewayID = "private-lan-gateway"
+        let gatewayID = "loopback-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
-        let url = try #require(URL(string: "ws://192.168.50.164:18889"))
+        let url = try #require(URL(string: "ws://127.0.0.1:18889"))
         let bootstrapSession = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "lan-node-token",
             "role": "node",

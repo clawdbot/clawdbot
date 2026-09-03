@@ -184,6 +184,26 @@ private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
     }
 }
 
+struct MacNodeModeCoordinatorDeviceAuthTests {
+    @Test
+    @MainActor
+    func `unproven legacy token failure exposes gateway re-pair action`() throws {
+        let failure = MacNodeModeCoordinator.nodeGatewayConnectionFailure(
+            GatewayConnectAuthError(
+                message: "pairing required",
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                canRetryWithDeviceToken: false))
+
+        #expect(failure.reason == "This device is not approved yet — Approve on gateway")
+        let status = try #require(MacNodeChannelState.unavailable(
+            reason: failure.reason,
+            diagnostic: failure.diagnostic).operatorStatusLine)
+        #expect(status.label == "Mac node unavailable — This device is not approved yet — Approve on gateway")
+        #expect(status.diagnostic == "The gateway received the connection request, "
+            + "but this device must be approved first.")
+    }
+}
+
 struct MacNodeModeCoordinatorTests {
     private func nodeDeviceAuthBinding(
         deviceAuthGatewayID: String?) throws -> (allowStoredDeviceAuth: Bool, gatewayID: String?)

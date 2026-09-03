@@ -2,6 +2,7 @@
 import CryptoKit
 import Foundation
 import Network
+@testable import OpenClawKit
 
 @MainActor
 final class NativeGatewayWebSocketFixture {
@@ -9,6 +10,17 @@ final class NativeGatewayWebSocketFixture {
         let token: String?
         let bootstrapToken: String?
         let deviceToken: String?
+    }
+
+    struct ConnectFailure: Sendable {
+        let message: String
+        let detailCode: String
+        let requestId: String
+
+        static let pairingRequired = ConnectFailure(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            requestId: "native-pairing-request")
     }
 
     private struct Client {
@@ -26,16 +38,23 @@ final class NativeGatewayWebSocketFixture {
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     private let listener: NWListener
     private let issuedDeviceTokens: [String?]
+    private let connectFailures: [Int: ConnectFailure]
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
     private var nextConnectionIndex = 0
     private var stopped = false
     nonisolated let port: UInt16
 
-    private init(listener: NWListener, port: UInt16, issuedDeviceTokens: [String?]) {
+    private init(
+        listener: NWListener,
+        port: UInt16,
+        issuedDeviceTokens: [String?],
+        connectFailures: [Int: ConnectFailure])
+    {
         self.listener = listener
         self.port = port
         self.issuedDeviceTokens = issuedDeviceTokens
+        self.connectFailures = connectFailures
         self.listener.newConnectionHandler = { [weak self] connection in
             MainActor.assumeIsolated {
                 guard let self else {
@@ -47,7 +66,10 @@ final class NativeGatewayWebSocketFixture {
         }
     }
 
-    static func start(issuedDeviceTokens: [String?]) async throws -> NativeGatewayWebSocketFixture {
+    static func start(
+        issuedDeviceTokens: [String?],
+        connectFailures: [Int: ConnectFailure] = [:]) async throws -> NativeGatewayWebSocketFixture
+    {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
@@ -65,7 +87,8 @@ final class NativeGatewayWebSocketFixture {
                     return NativeGatewayWebSocketFixture(
                         listener: listener,
                         port: port.rawValue,
-                        issuedDeviceTokens: issuedDeviceTokens)
+                        issuedDeviceTokens: issuedDeviceTokens,
+                        connectFailures: connectFailures)
                 case let .failed(error):
                     throw error
                 case .cancelled:
@@ -241,7 +264,11 @@ final class NativeGatewayWebSocketFixture {
             deviceToken: auth?["deviceToken"] as? String))
         client.phase = .open
         self.clients[index] = client
-        self.sendConnectOK(id: id, index: index)
+        if let failure = self.connectFailures[index] {
+            self.sendConnectFailure(id: id, failure: failure, index: index)
+        } else {
+            self.sendConnectOK(id: id, index: index)
+        }
     }
 
     private func sendChallenge(_ index: Int) {
@@ -297,6 +324,23 @@ final class NativeGatewayWebSocketFixture {
                     "tickIntervalMs": 30000,
                 ],
                 "auth": auth,
+            ],
+        ]
+        self.sendJSON(frame, index: index)
+    }
+
+    private func sendConnectFailure(id: String, failure: ConnectFailure, index: Int) {
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": false,
+            "error": [
+                "code": "AUTH_UNAUTHORIZED",
+                "message": failure.message,
+                "details": [
+                    "code": failure.detailCode,
+                    "requestId": failure.requestId,
+                ],
             ],
         ]
         self.sendJSON(frame, index: index)
