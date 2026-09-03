@@ -285,9 +285,10 @@ async function maybeCreateSessionSqliteGithubIssue(
       : created.reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable."
         : "GitHub issue creation is unavailable.";
-  const { openUrl } = await import("../infra/browser-open.js");
-  const opened = await openUrl(created.url).catch(() => false);
-  if (!opened) {
+  const { detectBrowserOpenSupport, openUrl } = await import("../infra/browser-open.js");
+  const browserSupport = await detectBrowserOpenSupport().catch(() => ({ ok: false }));
+  const opened = browserSupport.ok ? await openUrl(created.url).catch(() => false) : false;
+  if (!browserSupport.ok) {
     await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
       clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
     ).catch(() => false);

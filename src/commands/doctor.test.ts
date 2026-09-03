@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   claimSessionSqliteMigrationGithubIssue: vi.fn(),
   clearSessionSqliteMigrationGithubIssueClaim: vi.fn(),
+  detectBrowserOpenSupport: vi.fn(),
   openUrl: vi.fn(),
   promptYesNo: vi.fn(),
   reconcileGithubIssue: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("./doctor-session-sqlite-failure.js", () => ({
 }));
 
 vi.mock("../infra/browser-open.js", () => ({
+  detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
   openUrl: mocks.openUrl,
 }));
 
@@ -77,6 +79,7 @@ describe("doctorCommand", () => {
       }),
     );
     mocks.clearSessionSqliteMigrationGithubIssueClaim.mockReturnValue(true);
+    mocks.detectBrowserOpenSupport.mockResolvedValue({ command: "open", ok: true });
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
       async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
@@ -581,9 +584,87 @@ describe("doctorCommand", () => {
     });
   });
 
-  it("keeps a failed browser handoff URL out of JSON output", async () => {
+  it("retains the receipt after an indeterminate browser handoff", async () => {
     const fallbackUrl =
       "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
+    const supportIssue = {
+      body: "private-report-text",
+      title: "Session SQLite migration recovery report (run-1)",
+    };
+    const report = {
+      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    const persisted = {
+      marker: `openclaw-report:${"a".repeat(64)}`,
+      status: "attempted",
+      title: supportIssue.title,
+    } as const;
+    mocks.runDoctorSessionSqlite.mockResolvedValue(report);
+    mocks.claimSessionSqliteMigrationGithubIssue
+      .mockReturnValueOnce({ issue: persisted, status: "claimed" })
+      .mockReturnValueOnce({ issue: persisted, status: "existing" });
+    mocks.submitGithubIssue.mockResolvedValueOnce({
+      reason: "transport-unavailable",
+      status: "browser-fallback",
+      url: fallbackUrl,
+    });
+    mocks.openUrl.mockResolvedValueOnce(false);
+    mocks.reconcileGithubIssue.mockResolvedValueOnce({ status: "not-found" });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const options = {
+      json: true,
+      sessionSqlite: "recover" as const,
+      sessionSqliteGithubIssue: true,
+      yes: true,
+    };
+
+    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
+    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
+
+    expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
+    expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
+    expect(mocks.reconcileGithubIssue).toHaveBeenCalledOnce();
+    expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect((supportIssue as { github?: unknown }).github).toEqual({
+      message:
+        "A prior GitHub issue handoff may already have created this report; no duplicate was opened.",
+      status: "failed",
+    });
+    expect(runtime.writeJson).toHaveBeenCalledTimes(2);
+    expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+    const jsonOutput = JSON.stringify(runtime.writeJson.mock.calls);
+    expect(jsonOutput).toContain("private-report-text");
+    expect(jsonOutput).not.toContain("issues/new?");
+    expect(jsonOutput).not.toContain(fallbackUrl);
+  });
+
+  it("releases the receipt when browser preflight proves no opener is available", async () => {
     const supportIssue = {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
@@ -611,9 +692,9 @@ describe("doctorCommand", () => {
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "transport-unavailable",
       status: "browser-fallback",
-      url: fallbackUrl,
+      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text",
     });
-    mocks.openUrl.mockResolvedValueOnce(false);
+    mocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: false, reason: "no-display" });
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -626,29 +707,21 @@ describe("doctorCommand", () => {
 
     await expect(
       doctorCommand(runtime, {
-        json: true,
         sessionSqlite: "recover",
         sessionSqliteGithubIssue: true,
         yes: true,
       }),
     ).rejects.toThrow("exit:0");
 
-    expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
+    expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).toHaveBeenCalledWith(
       "/tmp/run-1.json",
       `openclaw-report:${"a".repeat(64)}`,
       expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect((supportIssue as { github?: unknown }).github).toEqual({
-      message: "GitHub issue creation is unavailable.",
-      status: "failed",
-    });
-    expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
-    const jsonOutput = JSON.stringify(runtime.writeJson.mock.calls);
-    expect(jsonOutput).toContain("private-report-text");
-    expect(jsonOutput).not.toContain("issues/new?");
-    expect(jsonOutput).not.toContain(fallbackUrl);
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+      "browser handoff unavailable; the sanitized report remains available in the recovery result",
+    );
   });
 
   it("keeps an oversized fallback in the recovery result without opening a browser", async () => {
