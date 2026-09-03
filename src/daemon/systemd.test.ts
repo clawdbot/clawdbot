@@ -99,7 +99,6 @@ import {
   findInstalledSystemdGatewayScope,
   findSystemdGatewayInstallation,
   formatDuelingScopesWarning,
-  hasSudoToRootSystemdUserManagerMismatch,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
@@ -516,7 +515,7 @@ describe("systemd availability", () => {
 
     const env = { SUDO_USER: "debian", USER: "root", LOGNAME: "root" };
     expect(resolveSystemdUserServiceAccount(env)).toBe("debian");
-    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(true);
+    expect(systemdExec.hasSudoToRootSystemdUserManagerMismatch(env)).toBe(true);
   });
 
   it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
@@ -555,7 +554,7 @@ describe("systemd availability", () => {
       DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
     };
     expect(resolveSystemdUserServiceAccount(env)).toBe("root");
-    expect(hasSudoToRootSystemdUserManagerMismatch(env)).toBe(false);
+    expect(systemdExec.hasSudoToRootSystemdUserManagerMismatch(env)).toBe(false);
   });
 
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
