@@ -64,7 +64,10 @@ function linkFixtureParent(packageRoot: string) {
   );
 }
 
-function createBundledChannelSmokeFixture(entrySource: string, prepared = false) {
+function createBundledChannelSmokeFixture(
+  entrySource: string,
+  options: { prepared?: boolean; missingTransitive?: boolean } = {},
+) {
   const rootDir = tempDirs.make("openclaw-prepack-standalone-smoke-");
   for (const relativePath of standaloneBundledChannelSmokeFiles) {
     const destination = path.join(rootDir, relativePath);
@@ -72,7 +75,7 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
     copyFileSync(path.join(process.cwd(), relativePath), destination);
   }
 
-  const packageRoot = prepared ? rootDir : path.join(rootDir, "package");
+  const packageRoot = options.prepared ? rootDir : path.join(rootDir, "package");
   const extensionRoot = path.join(packageRoot, "dist", "extensions", "fixture-channel");
   mkdirSync(extensionRoot, { recursive: true });
   writeFileSync(path.join(packageRoot, "package.json"), '{"files":[]}\n');
@@ -94,6 +97,9 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
   );
   const parentRoot = path.join(parentStoreRoot, "fixture-parent");
   const siblingRoot = path.join(parentStoreRoot, "fixture-sibling");
+  const siblingSpecifier = options.missingTransitive
+    ? "fixture-missing-transitive"
+    : "fixture-sibling";
   mkdirSync(parentRoot, { recursive: true });
   mkdirSync(siblingRoot);
   writeFileSync(
@@ -102,7 +108,7 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
   );
   writeFileSync(
     path.join(parentRoot, "index.js"),
-    'import { value } from "fixture-sibling"; export const fixtureValue = value;\n',
+    `import { value } from "${siblingSpecifier}"; export const fixtureValue = value;\n`,
   );
   writeFileSync(
     path.join(siblingRoot, "package.json"),
@@ -122,7 +128,7 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
 }
 
 function createPreparedPrepackFixture(entrySource: string) {
-  const { rootDir } = createBundledChannelSmokeFixture(entrySource, true);
+  const { rootDir } = createBundledChannelSmokeFixture(entrySource, { prepared: true });
   mkdirSync(path.join(rootDir, "node_modules"), { recursive: true });
   symlinkSync(
     path.dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
@@ -234,8 +240,12 @@ process.exit(result.status ?? 1);
 
 type BundledChannelSmokeLayout = "source" | "installed-env" | "installed-path";
 
-function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledChannelSmokeLayout) {
-  const fixture = createBundledChannelSmokeFixture(entrySource);
+function runStandaloneBundledChannelSmoke(
+  entrySource: string,
+  layout: BundledChannelSmokeLayout,
+  missingTransitive = false,
+) {
+  const fixture = createBundledChannelSmokeFixture(entrySource, { missingTransitive });
   const { dependencyFiles, rootDir } = fixture;
   let { packageRoot } = fixture;
   if (layout === "installed-path") {
@@ -315,27 +325,40 @@ function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledCh
 describe("standalone bundled channel smoke", () => {
   const layouts = ["source", "installed-env", "installed-path"] as const;
   it.each(
-    layouts.flatMap((layout) => [
-      { layout, invalid: false },
-      { layout, invalid: true },
-    ]),
+    layouts.flatMap((layout) =>
+      ["valid", "invalid-entry", "missing-transitive"].map((outcome) => ({ layout, outcome })),
+    ),
   )(
-    "preserves the result and releases its layout for $layout with invalid=$invalid",
-    ({ layout, invalid }) => {
-      const entrySource = invalid
-        ? 'import "fixture-parent"; export default [];\n'
-        : `import { fixtureValue } from "fixture-parent";
-          export default {
-            kind: "bundled-channel-entry",
-            loadChannelPlugin() { return { id: fixtureValue }; },
-          };\n`;
-      const observed = runStandaloneBundledChannelSmoke(entrySource, layout);
+    "preserves the result and releases its layout for $layout with outcome=$outcome",
+    ({ layout, outcome }) => {
+      const entrySource = `
+        import assert from "node:assert/strict";
+        import { realpathSync } from "node:fs";
+        import { fileURLToPath } from "node:url";
+        import { fixtureValue } from "fixture-parent";
+        if (${layout !== "installed-env"}) {
+          const modulePath = realpathSync(fileURLToPath(import.meta.url)).replaceAll("\\\\", "/");
+          assert.ok(modulePath.includes("/node_modules/openclaw/dist/"));
+        }
+        export default ${
+          outcome === "invalid-entry"
+            ? "[]"
+            : '{ kind: "bundled-channel-entry", loadChannelPlugin() { return { id: fixtureValue }; } }'
+        };
+      `;
+      const missingTransitive = outcome === "missing-transitive";
+      const observed = runStandaloneBundledChannelSmoke(entrySource, layout, missingTransitive);
       const { result } = observed;
       expect(result.error).toBeUndefined();
       expect(result.signal).toBeNull();
-      expect(result.status, result.stderr).toBe(invalid ? 1 : 0);
-      if (invalid) {
-        expect(result.stderr).toContain("AssertionError");
+      expect(result.status, result.stderr).toBe(outcome === "valid" ? 0 : 1);
+      if (outcome !== "valid") {
+        expect(result.stderr).toContain(
+          missingTransitive ? "ERR_MODULE_NOT_FOUND" : "AssertionError",
+        );
+        if (missingTransitive) {
+          expect(result.stderr).toContain("fixture-missing-transitive");
+        }
         expect(result.stdout).not.toContain("[build-smoke]");
       } else {
         expect(result.stdout).toContain("channel=1");

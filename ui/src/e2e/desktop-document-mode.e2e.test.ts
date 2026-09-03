@@ -197,8 +197,7 @@ suite.define(() => {
           await panel.getByText("Desktop sources", { exact: true }).waitFor();
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
           await gateway.setMethodResponse("environments.list", inventory);
-          await gateway.setMethodResponse(
-            "sessions.list",
+          await gateway.setSessionsListResponse(
             chatSessionListResponse([
               {
                 ...session,

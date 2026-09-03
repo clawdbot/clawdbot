@@ -122,14 +122,10 @@ export function floatingSidebarAttentionVisible(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
 }): boolean {
-  // Mobile keeps attention in its drawer except during onboarding. Settings
-  // replaces that drawer/sidebar entirely, so both need the floating copy.
   const attentionNeedsFloating =
-    params.settingsTakeover ||
-    (params.navigationSurfaceHidden && (!params.mobileNavLayout || params.onboarding));
+    params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
 }
 
@@ -137,7 +133,6 @@ export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];

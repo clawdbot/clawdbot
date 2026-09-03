@@ -1,7 +1,3 @@
-// Utilities for splitting outbound text into platform-sized chunks without
-// unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
-// the chunk so messages are only split when they truly exceed the limit.
-
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
@@ -417,9 +413,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
     let breakIdx = softBreak > start ? softBreak : windowEnd;
 
-    const initialFence = isSafeFenceBreak(spans, breakIdx)
-      ? undefined
-      : findFenceSpanAt(spans, breakIdx);
+    const initialFence = findFenceSpanAt(spans, breakIdx);
 
     let fenceToSplit = initialFence;
     if (initialFence) {
@@ -530,8 +524,11 @@ function pickSafeBreakIndex(
   end: number,
   spans: ReturnType<typeof parseFenceSpans>,
 ): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(text, start, end, (index) =>
-    isSafeFenceBreak(spans, index),
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
+    text,
+    start,
+    end,
+    (index) => findFenceSpanAt(spans, index)?.end,
   );
 
   if (lastNewline > start) {
@@ -547,14 +544,17 @@ function scanParenAwareBreakpoints(
   text: string,
   start: number,
   end: number,
-  isAllowed: (index: number) => boolean = () => true,
+  skipTo?: (index: number) => number | undefined,
 ): { lastNewline: number; lastWhitespace: number } {
   let lastNewline = -1;
   let lastWhitespace = -1;
   let depth = 0;
 
   for (let i = start; i < end; i++) {
-    if (!isAllowed(i)) {
+    const skippedEnd = skipTo?.(i);
+    if (skippedEnd !== undefined) {
+      // The fence end remains an eligible breakpoint; resume there after the loop increment.
+      i = skippedEnd - 1;
       continue;
     }
     const char = text.charAt(i);

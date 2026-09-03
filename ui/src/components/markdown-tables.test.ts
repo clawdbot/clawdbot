@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startNativeLinkRouting } from "../app/native-link-routing.ts";
+import { resetTranscriptSession } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import {
   enhanceMarkdownTables,
@@ -235,6 +236,25 @@ describe("Markdown table interactions", () => {
       routing.dispose();
       releaseMarkdownTables(owner);
     }
+  });
+
+  it("retires a connected pane's pending table without blocking another pane", async () => {
+    const pane = document.createElement("section");
+    const { owner } = interactiveOwner();
+    pane.append(owner);
+    document.body.append(pane);
+    owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
+
+    resetTranscriptSession("retired-pane", pane);
+    await vi.dynamicImportSettled();
+    expect(owner.isConnected).toBe(true);
+    expect(owner.querySelector(".markdown-table-modal")).toBeNull();
+
+    const { owner: current } = interactiveOwner();
+    current.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
+    const { modal } = await waitForRenderedModalDialog(current);
+    expect(modal.querySelector("table")?.textContent).toContain("Alpha");
+    releaseMarkdownTables(current);
   });
 
   it("disconnects observers and removes the dialog with its transcript owner", async () => {

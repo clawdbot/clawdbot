@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
@@ -19,6 +20,7 @@ export const vitestWorkerBuildEntries = {
       ...Object.values(sessionTitleRetentionEntrypoints),
       nodeHostConfigRuntimeEntrypoint,
       persistenceRuntimeEntrypoint,
+      qaGatewayCleanupRuntimeEntrypoint,
       stateLeaseProcessExitRuntimeEntrypoint,
     ].map((entry) => [
       entry.distWorkerPath.replace(/\.js$/u, ""),

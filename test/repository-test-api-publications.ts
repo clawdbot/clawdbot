@@ -114,14 +114,10 @@ const publications: Record<string, string | symbol> = {
   "src/cron/service/active-run-cancellation.ts": Symbol.for("openclaw.activeCronTaskRunTestApi"),
   "src/cron/service/timer.ts": Symbol.for("openclaw.cronTimerTestApi"),
   "src/cron/session-reaper.ts": Symbol.for("openclaw.cronSessionReaperTestApi"),
-  "src/entry.compile-cache.ts": Symbol.for("openclaw.entryCompileCacheTestApi"),
   "src/flows/doctor-health-contributions.ts": Symbol.for(
     "openclaw.doctorHealthContributionsTestApi",
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
-  "src/infra/session-delivery-queue-runtime.ts": Symbol.for(
-    "openclaw.sessionDeliveryQueueRuntimeTestApi",
-  ),
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),

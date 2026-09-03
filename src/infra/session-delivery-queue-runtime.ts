@@ -203,15 +203,3 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
     armSessionDelivery(entry, generation);
   }
 }
-
-const testing = {
-  reset(): void {
-    runtimeGeneration += 1;
-    runtime = undefined;
-    clearScheduledEntries();
-  },
-};
-
-(globalThis as Record<PropertyKey, unknown>)[
-  Symbol.for("openclaw.sessionDeliveryQueueRuntimeTestApi")
-] = testing;

@@ -257,7 +257,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           options.collectionReconcile &&
           !options.collectionReconcile.approvedSkillNames?.has(skill.skillKey)
         ) {
-          throw new ToolInputError(`skill is outside this collection review: ${skill.skillKey}`);
+          throw new ToolInputError(`skill is outside this collection review: ${skill.skillName}`);
         }
         const readMaxChars = projectionBudgets.artifactChars;
         const truncated = skill.content.length > readMaxChars;
@@ -281,7 +281,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const text = truncated
           ? truncateUtf16Safe(
               [
-                `Skill: ${skill.skillKey} (${sizeBytes} bytes)`,
+                `Skill: ${skill.skillName} (${sizeBytes} bytes)`,
                 "Content omitted: the complete skill exceeds the selected-model read budget.",
                 options.collectionReconcile
                   ? "Next: leave this skill unlisted in the reconcile call; only the operator can change it."
@@ -291,6 +291,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             )
           : skill.content;
         return textResult(text, {
+          skillName: skill.skillName,
           skillKey: skill.skillKey,
           sizeBytes,
           contentIncluded: !truncated,
@@ -512,15 +513,15 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           throw new ToolInputError(
             target.content.length > projectionBudgets.artifactChars
               ? action === "patch"
-                ? `skill "${target.skillKey}" exceeds the reviewer read budget: call action=prepare_patch with the non-empty exact old_string before patching`
-                : `skill "${target.skillKey}" exceeds the reviewer read budget and cannot be updated autonomously`
-              : `read the live skill first: call action=read with skill_name "${target.skillKey}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
+                ? `skill "${target.skillName}" exceeds the reviewer read budget: call action=prepare_patch with the non-empty exact old_string before patching`
+                : `skill "${target.skillName}" exceeds the reviewer read budget and cannot be updated autonomously`
+              : `read the live skill first: call action=read with skill_name "${target.skillName}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
           );
         }
         if (readHash && readHash !== contentHash) {
           readSkillHashes.delete(target.skillKey);
           throw new ToolInputError(
-            `skill "${target.skillKey}" changed since it was read: call action=read again and redraft the ${action} from the current content`,
+            `skill "${target.skillName}" changed since it was read: call action=read again and redraft the ${action} from the current content`,
           );
         }
         expectedCurrentContentHash = readHash ?? preparedHash ?? contentHash;
@@ -603,7 +604,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             evidence,
           });
           contentText = proposalMutationText("Created skill proposal", proposal.record);
-        } else if (action === "update") {
+        } else if (action === "update" || action === "patch") {
           proposal = await proposeUpdateSkill({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
@@ -615,42 +616,24 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               label: "skill_name",
             }),
             expectedCurrentContentHash,
-            description: readToolStringParam(params, "description"),
-            content: requireProposalContent(proposalContent),
-            supportFiles,
-            createdBy: "skill-workshop",
-            ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
-            ...(options.origin ? { origin: options.origin } : {}),
-            goal,
-            evidence,
-          });
-          contentText = proposalMutationText("Created skill update proposal", proposal.record);
-        } else if (action === "patch") {
-          // No description forwarding: a patch may only change the quoted span, and
-          // proposal rendering would regenerate frontmatter from a new description.
-          proposal = await proposeUpdateSkill({
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            eventActor: skillWorkshopAgentEventActor(options.agentId),
-            config: options.config,
-            env: options.env,
-            skillName: readToolStringParam(params, "skill_name", {
-              required: true,
-              label: "skill_name",
-            }),
-            expectedCurrentContentHash,
-            composePatch: readSkillPatchText(params),
+            // A patch may only change its exact span, never description or support files.
+            ...(action === "patch"
+              ? { composePatch: readSkillPatchText(params) }
+              : {
+                  description: readToolStringParam(params, "description"),
+                  content: requireProposalContent(proposalContent),
+                  supportFiles,
+                }),
             createdBy: "skill-workshop",
             ...(options.autonomousCapture || foregroundRepair ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,
           });
-          contentText = foregroundRepair
-            ? workshopConfig.autonomous.mode === "propose"
-              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillKey}; autonomous mode propose requires operator review.`
-              : proposalMutationText("Created skill patch proposal", proposal.record)
-            : proposalMutationText("Created skill patch proposal", proposal.record);
+          contentText =
+            foregroundRepair && workshopConfig.autonomous.mode === "propose"
+              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillName}; autonomous mode propose requires operator review.`
+              : proposalMutationText(`Created skill ${action} proposal`, proposal.record);
         } else if (action === "revise") {
           let proposalId = options.proposalRevision?.proposalId;
           let expectedRevisionHash = options.proposalRevision?.expectedRevisionHash;
@@ -718,12 +701,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             return proposalResult(
               { ...proposal, record: autonomous.record },
               {
-                contentText: `Skill ${autonomous.record.target.skillKey} is user-authored; proposal ${autonomous.record.id} awaits operator review.`,
+                contentText: `Skill ${autonomous.record.target.skillName} is user-authored; proposal ${autonomous.record.id} awaits operator review.`,
               },
             );
           }
           return actionResult(autonomous.record, {
-            contentText: `Repaired used skill ${autonomous.record.target.skillKey} through proposal ${autonomous.record.id}.`,
+            contentText: `Repaired used skill ${autonomous.record.target.skillName} through proposal ${autonomous.record.id}.`,
             targetSkillFile: autonomous.targetSkillFile,
           });
         }

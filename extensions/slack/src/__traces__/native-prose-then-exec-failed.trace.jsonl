@@ -1,9 +1,9 @@
 {"seq":1,"at":0,"dir":"in","kind":"reply-start"}
-{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":2,"at":0,"dir":"out","kind":"agents.sessions.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"processing","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
 {"seq":3,"at":0,"dir":"in","kind":"final","data":{"text":"The directory is missing."}}
 {"seq":4,"at":0,"dir":"out","kind":"users.info","data":{"payload":{"user":"U0TRACE"},"result":{"team_id":"T0TRACE"},"target":"U0TRACE"}}
 {"seq":5,"at":0,"dir":"out","kind":"chat.startStream","data":{"payload":{"channel":"C0TRACE","chunks":[{"text":"The directory is missing.","type":"markdown_text"}],"recipient_team_id":"T0TRACE","recipient_user_id":"U0TRACE","thread_ts":"ts#1"},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
 {"seq":6,"at":0,"dir":"in","kind":"final","data":{"text":"⚠️ 🛠️ Exec failed: "}}
 {"seq":7,"at":0,"dir":"in","kind":"idle"}
-{"seq":8,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":8,"at":0,"dir":"out","kind":"agents.sessions.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"active","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
 {"seq":9,"at":0,"dir":"out","kind":"chat.stopStream","data":{"payload":{"channel":"C0TRACE","chunks":[],"ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}

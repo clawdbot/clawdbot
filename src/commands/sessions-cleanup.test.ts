@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  resolveSessionStoreTargetsOrExit: vi.fn(),
+  resolveCommandSessionStoreTargets: vi.fn(),
   resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
   runLocalSessionsCleanup: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock("./sessions-cleanup.runtime.js", () => ({
 }));
 
 vi.mock("./session-store-targets.js", () => ({
-  resolveSessionStoreTargetsOrExit: mocks.resolveSessionStoreTargetsOrExit,
+  resolveCommandSessionStoreTargets: mocks.resolveCommandSessionStoreTargets,
 }));
 
 vi.mock("../config/sessions.js", async (importOriginal) => ({
@@ -96,7 +96,7 @@ describe("sessionsCleanupCommand", () => {
     process.exitCode = undefined;
     mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
-    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
+    mocks.resolveCommandSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
     mocks.callGateway.mockResolvedValue(null);
@@ -139,7 +139,7 @@ describe("sessionsCleanupCommand", () => {
     await sessionsCleanupCommand({ store: "", enforce: true }, runtime);
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.resolveSessionStoreTargetsOrExit).toHaveBeenCalledWith(
+    expect(mocks.resolveCommandSessionStoreTargets).toHaveBeenCalledWith(
       expect.objectContaining({ opts: expect.objectContaining({ store: "" }) }),
     );
   });
@@ -761,7 +761,7 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
-    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
+    mocks.resolveCommandSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
       { agentId: "work", storePath: "/resolved/work-sessions.json" },
     ]);
