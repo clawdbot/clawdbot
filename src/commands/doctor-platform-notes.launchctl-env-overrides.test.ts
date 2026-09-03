@@ -1,5 +1,6 @@
 // Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -17,39 +18,9 @@ import {
   noteMacStaleOpenClawUpdateLaunchdJobs,
 } from "./doctor-platform-notes.js";
 
-function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
-  const call = noteFn.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected note call ${index}`);
-  }
-  return call;
-}
-
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
   beforeEach(() => {
     processMocks.runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
-  });
-
-  it("collects clear unsetenv instructions for token override", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async (name: string) =>
-      name === "OPENCLAW_GATEWAY_TOKEN" ? "launchctl-token" : undefined,
-    );
-    const cfg = {
-      gateway: {
-        auth: {
-          token: "config-token",
-        },
-      },
-    } as OpenClawConfig;
-
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
-    const [warning] = requireNoteCall(noteFn);
-
-    expect(warning).toContain("Host-wide launchctl gateway auth overrides detected");
-    expect(warning).toContain("OPENCLAW_GATEWAY_TOKEN");
-    expect(warning).toContain("launchctl unsetenv OPENCLAW_GATEWAY_TOKEN");
-    expect(warning).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
   });
 
   it("prints clear unsetenv instructions for token override", async () => {
@@ -70,7 +41,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     expect(noteFn).toHaveBeenCalledTimes(1);
     expect(getenv).toHaveBeenCalledTimes(2);
 
-    const [message, title] = requireNoteCall(noteFn);
+    const [message, title] = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call 0");
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Host-wide launchctl gateway auth overrides detected");
     expect(message).toContain("Current managed Gateway installs do not need these values");
@@ -111,7 +82,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message] = requireNoteCall(noteFn);
+    const [message] = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call 0");
     expect(message).toContain("OPENCLAW_GATEWAY_PASSWORD");
   });
 
@@ -242,7 +213,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     });
 
     expect(findJobs).toHaveBeenCalledTimes(1);
-    const [message, title] = requireNoteCall(noteFn);
+    const [message, title] = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call 0");
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
     expect(message).toContain("ai.openclaw.update.2026.5.12");

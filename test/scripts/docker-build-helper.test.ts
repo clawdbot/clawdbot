@@ -2740,23 +2740,13 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
     expect(publishedRunner).toContain(
-      [
-        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
-        "    phase assert-prepublish-idle assert_prepublish_fixture_idle",
-        "  else",
-        "    phase assert-prepublish-requests assert_prepublish_plugin_install 1",
-        "  fi",
-      ].join("\n"),
+      "run_plugin_fixture_phase assert-prepublish-requests assert_prepublish_plugin_install 1",
     );
     expect(publishedRunner).toContain(
-      [
-        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
-        "      phase assert-prepublish-recovery-idle assert_prepublish_fixture_idle",
-        "    else",
-        "      phase assert-prepublish-recovery-requests assert_prepublish_plugin_install",
-        "    fi",
-      ].join("\n"),
+      "phase assert-prepublish-recovery-requests assert_prepublish_plugin_install",
     );
+    expect(publishedRunner).not.toContain("assert-prepublish-idle");
+    expect(publishedRunner).not.toContain("assert-prepublish-recovery-idle");
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
@@ -2810,7 +2800,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain(
       [
-        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
+        'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then',
         "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
         "else",
         '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
