@@ -34,6 +34,7 @@ import type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceBargeInOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   convertPcmToMulaw8k,
@@ -695,6 +696,26 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   setMediaTimestamp(_ts: number): void {}
+
+  // Gemini Live has no response.cancel equivalent; interruption is signaled by
+  // the realtime input API itself: activityStart + a non-silent audio chunk cut
+  // the current generation server-side (serverContent.interrupted), and
+  // audioStreamEnd after activityStart closes the interrupting activity cleanly.
+  handleBargeIn(_options?: RealtimeVoiceBargeInOptions): void {
+    if (!this.session || !this.connected || !this.sessionConfigured) {
+      return;
+    }
+    try {
+      this.session.sendRealtimeInput({ activityStart: {} });
+      if (this.audioStreamEnded) {
+        this.audioStreamEnded = false;
+      }
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Google Live barge-in activityStart failed"),
+      );
+    }
+  }
 
   sendUserMessage(text: string): void {
     const normalized = text.trim();
