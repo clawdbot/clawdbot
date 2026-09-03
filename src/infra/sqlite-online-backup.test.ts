@@ -4,10 +4,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { backupSqliteOnline } from "./sqlite-online-backup.js";
+import { backupSqliteOnline, isSqliteBackupContentionError } from "./sqlite-online-backup.js";
+
+// A regression that drops the bound must fail fast instead of spinning forever.
+const MOCK_BACKUP_STEP_CEILING = 100_000;
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     cleanup();
   });
@@ -24,16 +28,33 @@ function createDatabasePaths(): { destinationPath: string; sourcePath: string } 
   return { destinationPath, sourcePath };
 }
 
+// The bound is wall-clock, so the elapsed time each shape needs is simulated;
+// only Date is faked, because the unmocked cases still drive the real
+// node:sqlite backup and need live timers.
+function useSimulatedBackupClock(): (elapsedMs: number) => void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  return (elapsedMs: number) => {
+    vi.setSystemTime(new Date(Date.now() + elapsedMs));
+  };
+}
+
 function readPragmaValue(database: DatabaseSync, pragma: string): unknown {
   return Object.values(database.prepare(`PRAGMA ${pragma};`).get() ?? {})[0];
 }
 
 function expectContentionGuidance(error: unknown, sourcePath: string): void {
   expect(error).toBeInstanceOf(Error);
+  expect(isSqliteBackupContentionError(error)).toBe(true);
+  // The backup boundary recognises this failure through the wrapping every
+  // caller adds, never by matching message text.
+  expect(isSqliteBackupContentionError(new Error("wrapped", { cause: error }))).toBe(true);
   expect((error as Error).message).toContain(sourcePath);
   expect((error as Error).message).toMatch(
-    /no net page progress.*(stop the Gateway|otherwise quiesce writes).*back up only configuration.*only-config/iu,
+    /could not reach a consistent copy.*(stop the gateway|quiesce writes)/isu,
   );
+  // Read-only state-database opens and ownership checks reach this owner too,
+  // so it must never name a backup command.
+  expect((error as Error).message).not.toMatch(/only-config/iu);
 }
 
 describe("backupSqliteOnline", () => {
@@ -61,17 +82,19 @@ describe("backupSqliteOnline", () => {
   it("rejects a reported jump-up livelock", async () => {
     const sqlite = requireNodeSqlite();
     const paths = createDatabasePaths();
+    const advance = useSimulatedBackupClock();
     vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
-      }
-      options.progress({ remainingPages: 100, totalPages: 120 });
-      for (let cycle = 0; cycle < 100; cycle += 1) {
+      // The mock tolerates a missing progress option so pre-fix code, which
+      // passed none, reproduces the reported hang instead of failing on the
+      // mock's own shape.
+      options?.progress?.({ remainingPages: 100, totalPages: 120 });
+      for (let cycle = 0; cycle < MOCK_BACKUP_STEP_CEILING; cycle += 1) {
+        advance(60_000);
         for (let remainingPages = 101; remainingPages <= 120; remainingPages += 1) {
-          options.progress({ remainingPages, totalPages: 120 });
+          options?.progress?.({ remainingPages, totalPages: 120 });
         }
       }
-      throw new Error("backup progress was not bounded");
+      throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} cycles`);
     });
 
     const error = await backupSqliteOnline(paths).then(
@@ -85,13 +108,10 @@ describe("backupSqliteOnline", () => {
     const sqlite = requireNodeSqlite();
     const paths = createDatabasePaths();
     vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
+      for (let step = 0; step < MOCK_BACKUP_STEP_CEILING; step += 1) {
+        options?.progress?.({ remainingPages: 50, totalPages: 50 });
       }
-      for (let step = 0; step < 20_000; step += 1) {
-        options.progress({ remainingPages: 50, totalPages: 50 });
-      }
-      throw new Error("backup progress was not bounded");
+      throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} steps`);
     });
 
     const error = await backupSqliteOnline(paths).then(
@@ -135,17 +155,17 @@ describe("backupSqliteOnline", () => {
     expect(progressCalls).toBe(1);
   });
 
-  it("allows strictly decreasing backups much longer than both contention bounds", async () => {
+  it("never aborts a copy that keeps lowering its remaining page count, however slowly", async () => {
     const sqlite = requireNodeSqlite();
     const paths = createDatabasePaths();
+    const advance = useSimulatedBackupClock();
     const backup = sqlite.backup.bind(sqlite);
     vi.spyOn(sqlite, "backup").mockImplementation(async (source, destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
-      }
       const totalPages = 50_001;
       for (let remainingPages = totalPages; remainingPages > 0; remainingPages -= 1) {
-        options.progress({ remainingPages, totalPages });
+        // Ten minutes per copied page: slow is not stuck.
+        advance(10 * 60_000);
+        options?.progress?.({ remainingPages, totalPages });
       }
       return await backup(source, destination);
     });
@@ -154,19 +174,20 @@ describe("backupSqliteOnline", () => {
     expect(fs.existsSync(paths.destinationPath)).toBe(true);
   });
 
-  it("allows many restarts when every pass reaches a new all-time minimum", async () => {
+  it("allows far more restarts than any restart budget while each pass reaches a new minimum", async () => {
     const sqlite = requireNodeSqlite();
     const paths = createDatabasePaths();
+    const advance = useSimulatedBackupClock();
     const backup = sqlite.backup.bind(sqlite);
     vi.spyOn(sqlite, "backup").mockImplementation(async (source, destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
-      }
       const totalPages = 2_000;
-      options.progress({ remainingPages: totalPages - 1, totalPages });
+      options?.progress?.({ remainingPages: totalPages - 1, totalPages });
       for (let newMinimum = totalPages - 2; newMinimum >= 0; newMinimum -= 1) {
-        options.progress({ remainingPages: totalPages, totalPages });
-        options.progress({ remainingPages: newMinimum, totalPages });
+        options?.progress?.({ remainingPages: totalPages, totalPages });
+        // Each pass costs 29 simulated minutes and buys one page of headway,
+        // which is the shape the reviewer measured at 1,024 restarts.
+        advance(29 * 60_000);
+        options?.progress?.({ remainingPages: newMinimum, totalPages });
       }
       return await backup(source, destination);
     });
@@ -180,14 +201,11 @@ describe("backupSqliteOnline", () => {
     const paths = createDatabasePaths();
     const backup = sqlite.backup.bind(sqlite);
     vi.spyOn(sqlite, "backup").mockImplementation(async (source, destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
-      }
       const totalPages = 50_002;
-      options.progress({ remainingPages: 1, totalPages });
-      options.progress({ remainingPages: totalPages, totalPages });
+      options?.progress?.({ remainingPages: 1, totalPages });
+      options?.progress?.({ remainingPages: totalPages, totalPages });
       for (let remainingPages = totalPages - 1; remainingPages >= 0; remainingPages -= 1) {
-        options.progress({ remainingPages, totalPages });
+        options?.progress?.({ remainingPages, totalPages });
       }
       return await backup(source, destination);
     });
@@ -199,18 +217,42 @@ describe("backupSqliteOnline", () => {
   it("rejects partial-progress cycles that never beat the best remaining page count", async () => {
     const sqlite = requireNodeSqlite();
     const paths = createDatabasePaths();
-    const backup = sqlite.backup.bind(sqlite);
-    vi.spyOn(sqlite, "backup").mockImplementation(async (source, destination, options) => {
-      if (!options?.progress) {
-        throw new Error("missing progress callback");
-      }
-      options.progress({ remainingPages: 100, totalPages: 110 });
-      for (let cycle = 0; cycle < 20_000; cycle += 1) {
+    const advance = useSimulatedBackupClock();
+    vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
+      options?.progress?.({ remainingPages: 100, totalPages: 110 });
+      for (let cycle = 0; cycle < MOCK_BACKUP_STEP_CEILING; cycle += 1) {
+        advance(5 * 60_000);
         for (const remainingPages of [110, 109, 108]) {
-          options.progress({ remainingPages, totalPages: 110 });
+          options?.progress?.({ remainingPages, totalPages: 110 });
         }
       }
-      return await backup(source, destination);
+      throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} cycles`);
+    });
+
+    const error = await backupSqliteOnline(paths).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expectContentionGuidance(error, paths.sourcePath);
+  });
+
+  it("rejects a near-converging copy whose headway costs more than the no-progress budget", async () => {
+    const sqlite = requireNodeSqlite();
+    const paths = createDatabasePaths();
+    const advance = useSimulatedBackupClock();
+    vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
+      const totalPages = 6_000;
+      let best = totalPages - 1;
+      options?.progress?.({ remainingPages: best, totalPages });
+      for (let pass = 0; pass < MOCK_BACKUP_STEP_CEILING; pass += 1) {
+        options?.progress?.({ remainingPages: totalPages, totalPages });
+        // Real headway, but one page of it per 45 simulated minutes: at this
+        // rate the copy outlives any operator, so the budget stops it.
+        advance(45 * 60_000);
+        best -= 1;
+        options?.progress?.({ remainingPages: best, totalPages });
+      }
+      throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} passes`);
     });
 
     const error = await backupSqliteOnline(paths).then(

@@ -654,9 +654,7 @@ export async function prepareSqliteReadOnlyLocation(
     execFile(
       process.execPath,
       [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "async", sourcePath],
-      {
-        encoding: "utf8",
-      },
+      { encoding: "utf8" },
       (error, stdout, stderr) => {
         try {
           const failure = error ? `exited unsuccessfully: ${error.message}` : undefined;
@@ -677,9 +675,7 @@ export function prepareSqliteReadOnlyLocationSync(
   const result = spawnSync(
     process.execPath,
     [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "sync", sourcePath],
-    {
-      encoding: "utf8",
-    },
+    { encoding: "utf8" },
   );
   const failure = result.error
     ? `failed to start: ${result.error.message}`

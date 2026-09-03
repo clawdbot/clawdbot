@@ -18,6 +18,7 @@ import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
+import { isSqliteBackupContentionError } from "./sqlite-online-backup.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -365,8 +366,14 @@ export async function createBackupSqliteSnapshotPlan(params: {
       if (stateChange) {
         throw stateChange;
       }
+      // Only the backup command can offer a way past a source that will not
+      // hold still, so the shared online-backup owner stays caller-agnostic and
+      // its remedy is added here, where the operator is running a backup.
+      const contendedSourceRemedy = isSqliteBackupContentionError(error)
+        ? " To back up only configuration, run `openclaw backup create --only-config`."
+        : "";
       throw new Error(
-        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.${contendedSourceRemedy}`,
         { cause: error },
       );
     }

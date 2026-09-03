@@ -9,6 +9,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
+import { isSqliteBackupContentionError } from "./sqlite-online-backup.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -16,6 +17,9 @@ import {
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+
+// A regression that drops the bound must fail fast instead of spinning forever.
+const MOCK_BACKUP_STEP_CEILING = 100_000;
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -36,10 +40,14 @@ function createTempDatabasePath(): string {
 
 function expectContentionGuidance(error: unknown, sourcePath: string): void {
   expect(error).toBeInstanceOf(Error);
+  expect(isSqliteBackupContentionError(error)).toBe(true);
   expect((error as Error).message).toContain(sourcePath);
   expect((error as Error).message).toMatch(
-    /no net page progress.*(stop the Gateway|otherwise quiesce writes).*back up only configuration.*only-config/iu,
+    /could not reach a consistent copy.*(stop the gateway|quiesce writes)/isu,
   );
+  // This path is a read-only state-database open, not a backup, so the failure
+  // must not tell the operator to run a backup command.
+  expect((error as Error).message).not.toMatch(/only-config/iu);
 }
 
 async function expectPublicSnapshot(
@@ -539,12 +547,14 @@ describe("prepareSqliteReadOnlyLocation", () => {
       expect(fs.existsSync(`${databasePath}-shm`)).toBe(true);
 
       vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
-        if (!options?.progress) {
-          throw new Error("missing progress callback");
+        // Tolerating a missing progress option is what makes this a regression
+        // test: pre-fix production passed none, so the copy simply never
+        // stopped, which is the reported defect. The ceiling only keeps a
+        // future regression failing fast instead of spinning.
+        for (let step = 0; step < MOCK_BACKUP_STEP_CEILING; step += 1) {
+          options?.progress?.({ remainingPages: 50, totalPages: 50 });
         }
-        while (true) {
-          options.progress({ remainingPages: 50, totalPages: 50 });
-        }
+        throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} steps`);
       });
 
       const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).then(
