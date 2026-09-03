@@ -32,7 +32,7 @@ export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPay
 export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
 type ZaloWebhookIngress = {
-  accept: (rawEvent: string) => Promise<void>;
+  accept: (rawEvent: string, admitOptions?: { receivedAt?: number }) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -281,8 +281,8 @@ function createZaloWebhookIngress(options: {
   });
 
   return {
-    accept: async (rawEvent) => {
-      await monitor.admit(rawEvent);
+    accept: async (rawEvent, admitOptions) => {
+      await monitor.admit(rawEvent, admitOptions);
     },
     start: monitor.start,
     stop: monitor.stop,

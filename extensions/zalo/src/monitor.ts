@@ -119,7 +119,7 @@ type ZaloPollingLoopParams = {
   isStopped: () => boolean;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
-  acceptUpdate: (rawEvent: string) => Promise<void>;
+  acceptUpdate: (rawEvent: string, admitOptions?: { receivedAt?: number }) => Promise<void>;
   // No-op events (stickers, unsupported) skip the journal but still flow
   // through processUpdate so their verbose record is preserved.
   processNonJournaled: (update: ZaloUpdate) => Promise<void>;
@@ -245,6 +245,14 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     processNonJournaled,
   } = params;
   const pollTimeout = 30;
+  // The shared queue breaks equal received_at ties by event_id, which is not
+  // poll order. Keep polled admissions strictly monotonic so the serial drain
+  // replays them in receipt order even if two polls land in one millisecond.
+  let lastReceivedAt = 0;
+  const nextReceivedAt = () => {
+    lastReceivedAt = Math.max(Date.now(), lastReceivedAt + 1);
+    return lastReceivedAt;
+  };
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
@@ -270,7 +278,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         response.result.event_name !== "message.unsupported.received";
       if (isStopped() || abortSignal.aborted) {
         if (shouldJournal) {
-          await acceptUpdate(JSON.stringify(response.result)).catch((err: unknown) =>
+          await acceptUpdate(JSON.stringify(response.result), {
+            receivedAt: nextReceivedAt(),
+          }).catch((err: unknown) =>
             runtime.error?.(
               `[${account.accountId}] failed to journal consumed update before shutdown: ${formatZaloError(err)}`,
             ),
@@ -287,7 +297,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         // but produce no dispatch — keep them out of the durable queue while
         // retaining their prior verbose record through processUpdate.
         if (shouldJournal) {
-          await acceptUpdate(JSON.stringify(response.result));
+          await acceptUpdate(JSON.stringify(response.result), { receivedAt: nextReceivedAt() });
         } else {
           await processNonJournaled(response.result);
         }
