@@ -4,8 +4,10 @@ import { NewSessionTitleController } from "./draft-title.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
+const DEFAULT_PREPARED_TITLE = "Repair naming";
+
 export function createDraftTitleFixture(
-  request = async (_method: string): Promise<unknown> => ({ title: "Repair naming" }),
+  request = async (_method: string): Promise<unknown> => ({ title: DEFAULT_PREPARED_TITLE }),
   data?: NewSessionRouteData,
 ) {
   const fixture = createDraftFixture({

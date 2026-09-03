@@ -450,13 +450,6 @@
       "text": "exec host=gateway/node"
     },
     {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/new-session/draft-title.test-support.ts",
-      "text": "Repair naming"
-    },
-    {
       "count": 4,
       "kind": "html-text",
       "name": "text",
