@@ -109,6 +109,25 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(receipt?.counts.final.cancelled).toBe(0);
   });
 
+  it("does not retry an attached fallback after terminal hook cancellation", async () => {
+    const deliver = vi.fn(async () => {});
+    const primary = setReplyPayloadMetadata(
+      { text: "policy token", mediaUrl: "/tmp/voice.ogg" } satisfies ReplyPayload,
+      { replyHookSuppressesFallback: true },
+    );
+    attachReplyDispatchUndeliveredFallback(primary, { text: "policy token" });
+    const outcome = captureReplyDispatchDeliveryOutcome(primary);
+    const dispatcher = createReplyDispatcher({ beforeDeliver: async () => null, deliver });
+
+    expect(dispatcher.sendFinalReply(primary)).toBe(true);
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    await expect(outcome.promise).resolves.toBe("cancelled-suppress-fallback");
+    expect(receipt?.counts.final.cancelled).toBe(1);
+  });
+
   it("does not resurrect fallback text after a channel transform veto", async () => {
     const delivered: ReplyPayload[] = [];
     const skipped: string[] = [];

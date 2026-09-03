@@ -277,6 +277,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
+    suppressFallback?: true;
     sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
   }> => {
@@ -443,6 +444,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       return {
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+        ...(result.suppressFallback ? { suppressFallback: true } : {}),
       };
     }
     throwIfFinalDeliveryAborted();

@@ -122,7 +122,9 @@ describe("reply_payload_sending hook runner", () => {
   });
 
   it("stops at the first handler that cancels delivery", async () => {
-    const first = vi.fn().mockResolvedValue({ cancel: true, reason: "blocked" });
+    const first = vi
+      .fn()
+      .mockResolvedValue({ cancel: true, reason: "blocked", suppressFallback: true });
     const second = vi.fn();
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "reply_payload_sending", handler: first },
@@ -138,6 +140,7 @@ describe("reply_payload_sending hook runner", () => {
       payload: { text: "hello" },
       cancel: true,
       reason: "blocked",
+      suppressFallback: true,
     });
     expect(second).not.toHaveBeenCalled();
   });

@@ -1357,6 +1357,9 @@ export function createHookRunner(
           payload: currentPayload as PluginHookReplyPayload,
           cancel: stickyTrue(result?.cancel, handlerResult.cancel),
           reason: lastDefined(result?.reason, handlerResult.reason),
+          ...(stickyTrue(result?.suppressFallback, handlerResult.suppressFallback)
+            ? { suppressFallback: true }
+            : {}),
         };
 
         if (result.cancel === true) {

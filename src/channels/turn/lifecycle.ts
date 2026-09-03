@@ -1,6 +1,10 @@
 import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
@@ -466,7 +470,13 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           onDelivered: delivery.onDelivered,
                           payload,
                           info,
-                          result: createSuppressedChannelDeliveryResult({ reason }),
+                          result: createSuppressedChannelDeliveryResult({
+                            reason,
+                            ...(getReplyPayloadMetadata(payload)?.replyHookSuppressesFallback ===
+                            true
+                              ? { suppressFallback: true }
+                              : {}),
+                          }),
                         });
                       },
                     }

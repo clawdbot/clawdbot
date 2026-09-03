@@ -1170,6 +1170,39 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
+  it("preserves terminal reply-hook cancellation through prepared delivery", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValueOnce({
+      cancel: true,
+      suppressFallback: true,
+    });
+
+    await expect(
+      prepareOutboundPayloadBatch({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "policy token" }],
+        deps: { matrix: vi.fn() },
+        replyPayloadSendingHook: {
+          kind: "final",
+          context: { channelId: "matrix" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      entries: [
+        {
+          sourceIndex: 0,
+          status: "suppressed",
+          reason: "cancelled_by_reply_payload_sending_hook",
+          hookEffect: { suppressFallback: true },
+        },
+      ],
+    });
+  });
+
   it("revalidates conversation authority after queue admission and before the adapter", async () => {
     const order: string[] = [];
     queueMocks.enqueueDelivery.mockImplementationOnce(async () => {

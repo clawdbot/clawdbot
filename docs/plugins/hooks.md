@@ -1075,7 +1075,9 @@ Use message hooks for channel-level routing and delivery policy:
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
-  `{ cancel: true }`.
+  `{ cancel: true }`. A final-reply cancellation may also return
+  `{ suppressFallback: true }` when the plugin intentionally owns the terminal
+  outcome and OpenClaw must not synthesize a visible no-reply fallback.
 - `message_sent`: observe final success or failure.
 
 For audio-only TTS replies, `content` may contain the hidden spoken

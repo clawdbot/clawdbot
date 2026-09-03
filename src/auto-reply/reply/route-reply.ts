@@ -132,6 +132,8 @@ type RouteReplyResult = {
   ambiguous?: boolean;
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
+  /** True when hook suppression intentionally owns the terminal reply outcome. */
+  suppressFallback?: true;
   /** Delivery disposition reason when additional caller context is useful. */
   reason?:
     | "reasoning_payload_not_external"
@@ -413,6 +415,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         delivered: false,
         suppressed: true,
         reason: send.reason,
+        ...(send.payloadOutcomes?.some(
+          (outcome) =>
+            outcome.status === "suppressed" && outcome.hookEffect?.suppressFallback === true,
+        )
+          ? { suppressFallback: true }
+          : {}),
       };
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {

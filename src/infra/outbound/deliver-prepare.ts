@@ -174,6 +174,7 @@ export async function prepareOutboundPayloadBatch(
         sourceIndex,
         status: "suppressed",
         reason: "cancelled_by_reply_payload_sending_hook",
+        ...(replyHookResult.suppressFallback ? { hookEffect: { suppressFallback: true } } : {}),
       });
       continue;
     }

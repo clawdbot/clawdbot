@@ -1,4 +1,7 @@
-import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
@@ -239,6 +242,7 @@ export async function applyReplyPayloadSendingHook(params: {
   cancelled: boolean;
   payload: ReplyPayload;
   changed: boolean;
+  suppressFallback?: true;
 }> {
   if (!params.hook) {
     return { cancelled: false, payload: params.payload, changed: false };
@@ -252,7 +256,14 @@ export async function applyReplyPayloadSendingHook(params: {
     context: params.hook.context,
   });
   if (!nextPayload) {
-    return { cancelled: true, payload: params.payload, changed: false };
+    return {
+      cancelled: true,
+      payload: params.payload,
+      changed: false,
+      ...(getReplyPayloadMetadata(params.payload)?.replyHookSuppressesFallback === true
+        ? { suppressFallback: true }
+        : {}),
+    };
   }
   return {
     cancelled: false,
@@ -284,6 +295,7 @@ export function suppressedPayloadOutcome(params: {
   hookEffect?: {
     cancelReason?: string;
     metadata?: Record<string, unknown>;
+    suppressFallback?: true;
   };
 }): OutboundPayloadDeliveryOutcome {
   return {

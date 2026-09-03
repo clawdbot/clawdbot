@@ -685,6 +685,8 @@ export type PluginHookReplyPayloadSendingResult = {
   payload?: PluginHookReplyPayload;
   cancel?: boolean;
   reason?: string;
+  /** Treat this cancellation as the terminal reply outcome instead of synthesizing a fallback. */
+  suppressFallback?: boolean;
 };
 
 export type PluginHookToolKind = "code_mode_exec";

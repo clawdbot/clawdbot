@@ -8,6 +8,7 @@ export const REPLY_DISPATCH_OUTCOME_COUNTS = {
   "delivered-not-visible": "deliveredNotVisible",
   "channel-transform": "deliveredNotVisible",
   cancelled: "cancelled",
+  "cancelled-suppress-fallback": "cancelled",
   "failed-before-deliver": "failedBeforeSend",
   "failed-deliver": "failedAfterSend",
 } as const satisfies Record<string, keyof ReplyDispatchSettledCounts>;

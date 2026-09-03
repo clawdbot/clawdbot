@@ -394,7 +394,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             ]);
           }
           await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+          const outcome: ReplyDispatchDeliveryOutcome =
+            getReplyPayloadMetadata(payload)?.replyHookSuppressesFallback === true
+              ? "cancelled-suppress-fallback"
+              : "cancelled";
+          return { settlement: Promise.resolve(outcome) };
         }
         deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
       }
