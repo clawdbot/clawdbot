@@ -3335,7 +3335,7 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .agent-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .agent-select__trigger:focus-visible {
@@ -3419,9 +3419,17 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.agent-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .agent-select__separator {
