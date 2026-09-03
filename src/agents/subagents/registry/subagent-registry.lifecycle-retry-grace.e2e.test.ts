@@ -743,7 +743,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-transient-error", {
       phase: "error",
       error: "rate limit",
-      endedAt: 1_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -751,7 +751,7 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(14_999);
     expect(getAgentCalls()).toHaveLength(0);
 
-    emitLifecycleEvent("run-transient-error", { phase: "start", startedAt: 1_050 });
+    emitLifecycleEvent("run-transient-error", { phase: "start", startedAt: Date.now() });
     await flushAsync();
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -759,7 +759,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-transient-error", {
       phase: "end",
-      endedAt: 1_250,
+      endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "Final answer transient" },
     });
     await flushAsync();
@@ -775,7 +775,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-terminal-error", {
       phase: "error",
       error: "fatal failure",
-      endedAt: 2_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -1005,7 +1005,7 @@ describe("subagent registry lifecycle error grace", () => {
       status: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
-      endedAt: 3_000,
+      endedAt: Date.now(),
       error: "provider timed out",
     });
     await flushAsync();
@@ -1033,7 +1033,7 @@ describe("subagent registry lifecycle error grace", () => {
       status: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
-      endedAt: 4_000,
+      endedAt: Date.now(),
     });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
@@ -1041,7 +1041,7 @@ describe("subagent registry lifecycle error grace", () => {
     // Before the grace window, the run successfully ends (non-aborted)
     emitLifecycleEvent("run-timeout-cancel", {
       phase: "end",
-      endedAt: 4_500,
+      endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "Final answer after recovery" },
     });
     await flushAsync();
