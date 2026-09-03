@@ -44,10 +44,10 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import { GitHubPublicationController } from "./chat-github-publication.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
-import {
-  type ChatPaneConnectionScope,
-  type ChatPageContext,
-  type PaneSessionChangeOptions,
+import type {
+  ChatPaneConnectionScope,
+  ChatPageContext,
+  PaneSessionChangeOptions,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import {
