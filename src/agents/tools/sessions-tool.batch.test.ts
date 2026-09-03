@@ -85,10 +85,10 @@ async function seedSessions() {
 
 describe("sessions tool batch patch", () => {
   it("retains agent-selected model recovery for batch patches", async () => {
-    const callGateway: AgentToolGatewayRequestCaller = vi.fn(async <T>() => {
+    const callGateway: AgentToolGatewayRequestCaller = async <T>() => {
       expect(isAgentSessionModelPatchOrigin()).toBe(true);
       return { outcomes: [{ ok: true, key: targetKeys[0] }] } as T;
-    });
+    };
     const tool = createSessionsTool({ agentSessionKey: currentKey, config: {}, callGateway });
     const result = await tool.execute("batch-model", {
       action: "patch",
