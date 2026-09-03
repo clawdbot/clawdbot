@@ -83,24 +83,6 @@ import { assertValidParams } from "./validation.js";
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
-// Explicit callers share only active checkout work for the exact config snapshot.
-// Reloaded config must never join work started under an older snapshot.
-const updateStatusCheckoutRefreshes = new WeakMap<OpenClawConfig, Promise<void>>();
-
-function refreshUpdateStatusCheckout(config: OpenClawConfig): Promise<void> {
-  const current = updateStatusCheckoutRefreshes.get(config);
-  if (current) {
-    return current;
-  }
-  const refresh = refreshGatewayUpdateStatus(config).finally(() => {
-    if (updateStatusCheckoutRefreshes.get(config) === refresh) {
-      updateStatusCheckoutRefreshes.delete(config);
-    }
-  });
-  updateStatusCheckoutRefreshes.set(config, refresh);
-  return refresh;
-}
-
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
   PreUpdateConfigRestoreInput | undefined
 > {
@@ -134,7 +116,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const configChannel = normalizeUpdateChannel(config?.update?.channel);
     if (params.refreshCheckout === true && config) {
       try {
-        await refreshUpdateStatusCheckout(config);
+        await refreshGatewayUpdateStatus(config);
       } catch (err) {
         context?.logGateway?.warn(
           `update.status checkout refresh failed: ${formatErrorMessage(err)}`,

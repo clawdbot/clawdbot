@@ -152,7 +152,7 @@ vi.mock("./model-catalog.js", async () => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: (...args: unknown[]) =>
+  prepareAmbientAgentCredentialsForDiscovery: async (...args: unknown[]) =>
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
