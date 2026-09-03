@@ -26,6 +26,10 @@ suite.define(() => {
                   text: [
                     "## Alignment check",
                     "",
+                    "これは**（注記）**です",
+                    "",
+                    'safe<br>break and unsafe<br class="wide">markup',
+                    "",
                     "- Bullet item",
                     "",
                     "1. Numbered item",
@@ -56,6 +60,9 @@ suite.define(() => {
           hasText: "Alignment check",
         });
         await markdown.waitFor();
+        expect(await markdown.locator("strong", { hasText: "（注記）" }).count()).toBe(1);
+        expect(await markdown.locator("br").count()).toBe(1);
+        expect(await markdown.textContent()).toContain('unsafe<br class="wide">markup');
 
         const geometry = await markdown.evaluate((root) => {
           const textRect = (selector: string) => {

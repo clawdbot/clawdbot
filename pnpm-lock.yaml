@@ -2672,6 +2672,9 @@ importers:
       markdown-it:
         specifier: 15.0.0
         version: 15.0.0
+      markdown-it-cjk-friendly:
+        specifier: 2.0.3
+        version: 2.0.3(@types/markdown-it@14.2.0)(markdown-it@15.0.0)
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1

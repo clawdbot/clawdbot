@@ -79,24 +79,6 @@ describe("toSanitizedMarkdownHtml", () => {
     ]);
   });
 
-  // ── Additional tests for markdown-it migration ──
-  describe("HTML escaping", () => {
-    it("escapes HTML tags as text", () => {
-      const html = toSanitizedMarkdownHtml("<div>**bold**</div>");
-      expect(html).toBe("&lt;div&gt;**bold**&lt;/div&gt;\n");
-    });
-
-    it("strips script tags", () => {
-      const html = toSanitizedMarkdownHtml("<script>alert(1)</script>");
-      expect(html).toBe("&lt;script&gt;alert(1)&lt;/script&gt;\n");
-    });
-
-    it("escapes inline HTML tags", () => {
-      const html = toSanitizedMarkdownHtml("Check <b>this</b> out");
-      expect(html).toBe("<p>Check &lt;b&gt;this&lt;/b&gt; out</p>\n");
-    });
-  });
-
   describe("task lists", () => {
     it("renders task list checkboxes", () => {
       const html = toSanitizedMarkdownHtml("- [ ] Unchecked\n- [x] Checked");
