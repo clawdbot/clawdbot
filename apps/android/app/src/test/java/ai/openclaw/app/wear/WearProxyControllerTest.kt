@@ -148,9 +148,10 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun phoneGatewayReconnectRestoresWearStatusAndRequests() =
+  fun gatewayCommandsStayOnPhoneRelayWithoutInventingReadiness() =
     runTest {
       var gatewayRequests = 0
+      var gatewayConnects = 0
       val requestedMethods = mutableListOf<String>()
       var connected = true
       var selectedAgent = "main"
@@ -179,7 +180,7 @@ class WearProxyControllerTest {
             selectedAgent = agentId
             true
           },
-          connectGateway = { connected = true },
+          connectGateway = { gatewayConnects += 1 },
           disconnectGateway = { connected = false },
         )
 
@@ -197,7 +198,6 @@ class WearProxyControllerTest {
       assertEquals(0, gatewayRequests)
       val offlineSessions = controller.handle(request(WearRpcMethod.SessionsList))
       val reconnected = controller.handle(request(WearRpcMethod.GatewayConnect))
-      val recoveredSessions = controller.handle(request(WearRpcMethod.SessionsList))
 
       val statusResult = checkNotNull(status.result).jsonObject
       val agentsResult = checkNotNull(agents.result).jsonObject
@@ -220,7 +220,7 @@ class WearProxyControllerTest {
           .jsonPrimitive.content
           .toBoolean(),
       )
-      assertTrue(
+      assertFalse(
         reconnectedResult
           .getValue("connected")
           .jsonPrimitive.content
@@ -228,16 +228,9 @@ class WearProxyControllerTest {
       )
       assertFalse(offlineSessions.ok)
       assertEquals("unavailable", offlineSessions.error?.code)
-      assertTrue(recoveredSessions.ok)
-      assertEquals(
-        0,
-        checkNotNull(recoveredSessions.result)
-          .jsonObject
-          .getValue("sessions")
-          .jsonArray.size,
-      )
-      assertEquals(2, gatewayRequests)
-      assertEquals(listOf("sessions.list", "sessions.list"), requestedMethods)
+      assertEquals(1, gatewayConnects)
+      assertEquals(1, gatewayRequests)
+      assertEquals(listOf("sessions.list"), requestedMethods)
     }
 
   @Test
