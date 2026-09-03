@@ -58,7 +58,46 @@ function requireCallId(value: unknown): string {
   return callId;
 }
 
-function createProjectedCallIdResolver(): (id: string) => string {
+/** Every id the transcript replays verbatim, so a rewrite can never land on one. */
+function collectPassthroughCallIds(messages: readonly AgentMessage[]): Set<string> {
+  const reserved = new Set<string>();
+  const reserve = (value: unknown) => {
+    const id = normalizeOptionalString(value);
+    if (id && id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
+      reserved.add(id);
+    }
+  };
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    if (message.role === "toolResult") {
+      reserve(message.toolCallId);
+      continue;
+    }
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const value of message.content) {
+      if (isRecord(value) && value.type === "toolCall") {
+        reserve(value.id ?? value.toolCallId);
+      }
+    }
+  }
+  return reserved;
+}
+
+function buildProjectedCallId(id: string, salt: number): string {
+  const salted = salt === 0 ? id : `${id}\u0000${salt}`;
+  const hashSuffix = `_${createHash("sha256").update(salted).digest("hex").slice(0, 10)}`;
+  const maxTailLength = OPENAI_RESPONSES_CALL_ID_MAX_LENGTH - "call_".length;
+  const rawTail = id.startsWith("call_") ? id.slice("call_".length) : id;
+  const safeTail = rawTail.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/^_+|_+$/gu, "");
+  const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
+  return `call_${`${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength)}`;
+}
+
+function createProjectedCallIdResolver(reservedIds: ReadonlySet<string>): (id: string) => string {
   // Core's createOpenAIResponsesToolCallIdResolver is not exported through the
   // plugin SDK, so this projection mirrors its rewrite locally. The trigger is
   // deliberately narrower than core's: core rewrites any id failing
@@ -69,6 +108,13 @@ function createProjectedCallIdResolver(): (id: string) => string {
   // (e.g. "call-1"), changing model-visible ids and invalidating prompt caches.
   // Weigh that before swapping in core's resolver if it is ever exported.
   const rewrittenByOriginalId = new Map<string, string>();
+  // A rewrite must not land on an id the transcript already replays verbatim,
+  // or on one an earlier rewrite produced: the projection keys its duplicate,
+  // ambiguity and completeness bookkeeping by the resolved id, so a clash would
+  // reject a complete transcript as duplicated -- the same fail-closed turn this
+  // rewrite exists to prevent. Salting is deterministic, so the mapping is still
+  // a pure function of the transcript.
+  const taken = new Set<string>(reservedIds);
 
   return (id) => {
     const rewritten = rewrittenByOriginalId.get(id);
@@ -78,12 +124,13 @@ function createProjectedCallIdResolver(): (id: string) => string {
     if (id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
       return id;
     }
-    const hashSuffix = `_${createHash("sha256").update(id).digest("hex").slice(0, 10)}`;
-    const maxTailLength = OPENAI_RESPONSES_CALL_ID_MAX_LENGTH - "call_".length;
-    const rawTail = id.startsWith("call_") ? id.slice("call_".length) : id;
-    const safeTail = rawTail.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/^_+|_+$/gu, "");
-    const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
-    const normalized = `call_${`${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength)}`;
+    let salt = 0;
+    let normalized = buildProjectedCallId(id, salt);
+    while (taken.has(normalized)) {
+      salt += 1;
+      normalized = buildProjectedCallId(id, salt);
+    }
+    taken.add(normalized);
     rewrittenByOriginalId.set(id, normalized);
     return normalized;
   };
@@ -292,9 +339,10 @@ export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): J
   const items: JsonValue[] = [];
   const calls = new Map<string, string>();
   const results = new Set<string>();
-  const resolveCallId = createProjectedCallIdResolver();
+  const orderedMessages = [...messages];
+  const resolveCallId = createProjectedCallIdResolver(collectPassthroughCallIds(orderedMessages));
   let bytes = 0;
-  for (const message of messages) {
+  for (const message of orderedMessages) {
     for (const { item, call, result } of projectMessage(message, resolveCallId)) {
       if (call) {
         if (calls.has(call.id)) {

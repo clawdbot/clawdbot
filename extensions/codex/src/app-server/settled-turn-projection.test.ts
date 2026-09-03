@@ -159,6 +159,34 @@ describe("projectSettledCodexMessages", () => {
     expect(ids[0]).not.toBe(ids[2]);
   });
 
+  it("keeps a complete transcript when a raw id equals an overlength id's rewrite", () => {
+    // The rewrite lands in the same call_ space that raw ids occupy, so a
+    // transcript can legitimately carry both. Reserving passthrough ids keeps
+    // that from being rejected as a duplicate -- the fail-closed turn this
+    // whole rewrite exists to prevent.
+    const [collidingId] = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+    expect(collidingId).toBeDefined();
+
+    const ids = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+      toolCall(collidingId as string),
+      toolResult(collidingId as string),
+    ]);
+
+    expect(ids).toHaveLength(4);
+    // The raw id is replayed verbatim; the overlength one moves out of its way.
+    expect(ids[2]).toBe(collidingId);
+    expect(ids[3]).toBe(collidingId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).not.toBe(collidingId);
+    expect(ids[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(ids[0]?.length).toBeLessThanOrEqual(64);
+  });
+
   it("passes a 64-character call id through untouched and rewrites at 65", () => {
     const atLimit = "b".repeat(64);
     const overLimit = "c".repeat(65);
