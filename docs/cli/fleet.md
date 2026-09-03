@@ -262,14 +262,16 @@ Purge is retryable when an exact expected tenant directory is already absent. Th
 
 ## Storage and container layout
 
-Cell state and auth-profile encryption keys use separate per-tenant host paths under the active OpenClaw state directory:
+Cell state and the legacy auth-profile encryption key use separate per-tenant host paths under the active OpenClaw state directory:
 
 ```text
 <state-dir>/fleet/cells/<tenant>/
 <state-dir>/fleet/auth-profile-secrets/<tenant>/
 ```
 
-The first directory is mounted at `/home/node/.openclaw`. The second is mounted at `/home/node/.config/openclaw`, matching the official Docker setup's encryption-key mount. The encryption key is therefore not exposed beneath the ordinary state mount or included when only the cell-state directory is backed up or shared. Both directories survive normal removal and upgrade; `fleet rm --purge-data --force` deletes both after separate containment checks.
+The first directory is mounted at `/home/node/.openclaw`. The second is mounted at `/home/node/.config/openclaw`, matching the official Docker setup's legacy OAuth migration-key mount. Both directories survive normal removal and upgrade; `fleet rm --purge-data --force` deletes both after separate containment checks.
+
+Current OAuth token material is stored as plaintext in SQLite beneath the ordinary state mount, including access, refresh, and ID-token values. The separate key can recover legacy encrypted sidecar credentials; it does not encrypt current SQLite rows or protect them from a state-only backup or copy. Treat cell-state backups and shared copies as credentials because they can contain usable OAuth material.
 
 Before first start, Fleet initializes the cell config with `gateway.mode=local`, token auth, the LAN container bind, and Control UI origins for the allocated host port. The token value is not written to that config; it remains in the container environment.
 

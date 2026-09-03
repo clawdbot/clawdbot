@@ -1,8 +1,8 @@
-// Control UI E2E tests cover attributed chat identity placement.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+// Control UI E2E tests cover attributed chat identity placement.
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,16 +11,19 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function resolveArtifactDir(): string | undefined {
-  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
-}
+let proofArtifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  proofArtifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-attributed-identity", parent)
+    : undefined;
+});
 
 async function captureProof(page: Page, name: string) {
-  const artifactDir = resolveArtifactDir();
+  const artifactDir = proofArtifactDir;
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(artifactDir, name),
@@ -66,10 +69,7 @@ function expectStableNamePosition(
 
 suite.define(() => {
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -290,7 +290,7 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps attributed user avatars beside their bubbles through send reconciliation", async () => {
+  it("keeps refreshed self attribution through profile qualification and send reconciliation", async () => {
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 860 },
     });
@@ -298,6 +298,17 @@ suite.define(() => {
     const localSenderId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
     const peerSenderId = "315ee057-302f-45b4-829d-2c5db1bfed75";
     const localAvatarUrl = `/api/users/${localSenderId}/avatar?v=7`;
+    const localUser = {
+      id: localSenderId,
+      identity: { type: "profile" as const, id: localSenderId },
+      name: "Collin Johnson",
+      avatarUrl: localAvatarUrl,
+    };
+    const peerUser = {
+      id: peerSenderId,
+      identity: { type: "profile" as const, id: peerSenderId },
+      name: "Riley Chen",
+    };
     const priorPrompt = "A prior attributed prompt.";
     const peerPrompt = "A peer attributed prompt.";
     const prompt = "A newly sent attributed prompt.";
@@ -343,11 +354,10 @@ suite.define(() => {
         {
           self: true,
           id: localSenderId,
-          identity: { type: "profile", id: localSenderId },
-          name: "Collin Johnson",
+          name: "Raw login",
           avatarUrl: localAvatarUrl,
         },
-        { id: peerSenderId, identity: { type: "profile", id: peerSenderId }, name: "Riley Chen" },
+        peerUser,
       ],
     });
 
@@ -378,6 +388,17 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await page.getByText(priorPrompt, { exact: true }).waitFor();
+      await captureProof(page, "self-before-qualification.png");
+      const connect = await gateway.waitForRequest("connect");
+      const { client } = connect.params as { client: { instanceId: string } };
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          { instanceId: client.instanceId, user: localUser, ts: Date.now() },
+          { instanceId: "peer-tab", user: peerUser, ts: Date.now() },
+        ],
+      });
+      await expect(page.locator(".sidebar-identity-card")).toContainText(localUser.name);
       const before = await readUserAvatarLayout(priorPrompt);
       const peerBefore = await readUserAvatarLayout(peerPrompt);
 
@@ -387,6 +408,7 @@ suite.define(() => {
       const afterSend = await readUserAvatarLayout(prompt);
       const priorAfterSend = await readUserAvatarLayout(priorPrompt);
       const peerAfterSend = await readUserAvatarLayout(peerPrompt);
+      await captureProof(page, "self-after-qualification-send.png");
 
       const params = sendRequest.params;
       if (!params || typeof params !== "object" || !("idempotencyKey" in params)) {
@@ -424,10 +446,10 @@ suite.define(() => {
   });
 
   it("keeps an attributed failed send in the transcript with one-line retry metadata", async () => {
-    const artifactDir = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("bubble-delivery", artifactRoot)
+      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
@@ -532,10 +554,7 @@ suite.define(() => {
   });
 
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir

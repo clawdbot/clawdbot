@@ -7,7 +7,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import {
+  cancelResponseReaderSoon,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../lib/bounded-response.mjs";
 import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -597,6 +600,10 @@ export function collectAllResolvedPackagesFromLockfile(lockfileText) {
   return versionsByPackage;
 }
 
+/**
+ * @param {Map<string, Set<string>>} versionsByPackage
+ * @returns {Record<string, string[]>}
+ */
 export function createBulkAdvisoryPayload(versionsByPackage) {
   return Object.fromEntries(
     [...versionsByPackage.entries()]
@@ -692,7 +699,7 @@ function chunkEntries(entries, size) {
   return chunks;
 }
 
-function resolveRegistryBaseUrl() {
+export function resolveRegistryBaseUrl() {
   const configured =
     process.env.npm_config_registry ??
     process.env.NPM_CONFIG_REGISTRY ??
@@ -734,10 +741,16 @@ function clampBulkAdvisoryTimeoutMs(valueMs) {
   return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
-async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
+/**
+ * @template T
+ * @param {{ label: string, timeoutMs: number, run: (options: { signal: AbortSignal, timeoutPromise: Promise<never> }) => Promise<T> }} options
+ * @returns {Promise<T>}
+ */
+export async function withAdvisoryRequestTimeout({ label, timeoutMs, run }) {
   const resolvedTimeoutMs = clampBulkAdvisoryTimeoutMs(timeoutMs);
   const controller = new AbortController();
   let timeout;
+  /** @type {Promise<never>} */
   const timeoutPromise = new Promise((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
@@ -786,9 +799,7 @@ export async function readBoundedBulkAdvisoryErrorText(
             read,
             options.timeoutPromise.catch((error) => {
               canceled = true;
-              void Promise.resolve()
-                .then(() => reader.cancel())
-                .catch(() => undefined);
+              cancelResponseReaderSoon(reader);
               throw error;
             }),
           ])
@@ -838,7 +849,7 @@ export async function fetchBulkAdvisories({
   timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  return await withBulkAdvisoryTimeout({
+  return await withAdvisoryRequestTimeout({
     label: "Bulk advisory request",
     timeoutMs,
     run: async ({ signal, timeoutPromise }) => {
@@ -906,13 +917,15 @@ export async function runPnpmAuditProd({
   );
   if (findings.length === 0) {
     stdout.write(
-      `No ${normalizedMinSeverity} or higher advisories found for production dependencies.\n`,
+      `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies. ` +
+        "Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n",
     );
     return 0;
   }
 
   stderr.write(
-    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories in production dependencies:\n`,
+    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories from npm bulk in production dependencies ` +
+      "(upstream repository advisories not checked):\n",
   );
   for (const finding of findings.slice(0, 25)) {
     const details = [
@@ -978,4 +991,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
+  if (process.exitCode) {
+    process.stderr.write(`[pnpm-audit-prod] FAILED (exit ${process.exitCode})\n`);
+  }
 }

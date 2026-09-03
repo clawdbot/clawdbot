@@ -3,10 +3,51 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mts");
 const tempDirs: string[] = [];
+
+type WorkflowStep = {
+  name: string;
+  id?: string;
+  if?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string | number | boolean>;
+  with?: Record<string, string | number | boolean>;
+  "timeout-minutes"?: number;
+  "continue-on-error"?: boolean | string;
+};
+
+type WorkflowJob = {
+  if?: string;
+  needs?: string | string[];
+  "runs-on": string;
+  "continue-on-error"?: boolean | string;
+  steps: WorkflowStep[];
+};
+
+function readWindowsProbe() {
+  const workflow = parse(readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8")) as {
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { default: unknown; type: string; description: string }>;
+      };
+    };
+    jobs: Record<string, WorkflowJob>;
+  };
+  const native = Object.values(workflow.jobs).find((job) =>
+    job.steps.some((step) => step.id === "native_schtasks"),
+  );
+  const probe = workflow.jobs.probe;
+  if (!probe || !native) {
+    throw new Error("Windows probe must declare both headless CI and native proof jobs");
+  }
+  return { workflow, probe, native };
+}
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -239,34 +280,149 @@ describe("check-workflows", () => {
     expect(workflow).not.toContain("Microsoft-Hyper-V-All");
   });
 
-  it("keeps the Windows probe CI shard opt-in and dependency-backed", () => {
-    const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
-
-    expect(workflow).toContain("run_windows_ci:");
-    expect(workflow).toContain(
-      'description: "Run the focused Windows CI shard and native Scheduled Task proof"',
+  it("requests independent headless CI and native qualification without allowing either to fail", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.run_windows_ci).toMatchObject({
+      description: "Run the focused Windows CI shard and native Scheduled Task proof",
+      default: false,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.runner_label?.default).toBe(
+      "blacksmith-16vcpu-windows-2025",
     );
-    expect(workflow).toContain("default: false");
-    expect(workflow).toContain("if: ${{ inputs.run_windows_ci }}");
-    expect(workflow).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
-    expect(workflow).toContain("uses: ./.github/actions/setup-pnpm-store-cache");
-    expect(workflow).toContain("pnpm install --frozen-lockfile --prefer-offline");
-    expect(workflow).toContain("pnpm test:windows:ci");
-    expect(workflow).toContain("pnpm test:windows:schtasks:integration");
-    expect(workflow).toContain('CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"');
-    expect(workflow).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
-    expect(workflow).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
-    expect(workflow).toContain('$process.CommandLine -like "*$probePath*"');
-    expect(workflow).toContain('$process.CommandLine -like "*$eventsPath*"');
-    expect(workflow).toContain("schtasks.exe /Delete /F /TN $taskName");
-    expect(workflow).toContain('$service = New-Object -ComObject "Schedule.Service"');
-    expect(workflow).toContain("failure-diagnostics.json");
-    expect(workflow).toContain("cleanup-summary.txt");
-    expect(workflow).not.toContain("task-before-cleanup.xml");
-    expect(workflow).not.toContain("Copy-Item -LiteralPath $stateDir");
-    expect(workflow).toContain("          exit 0");
-    expect(workflow).toContain(".artifacts/windows-schtasks/");
-    expect(workflow).toContain("if: ${{ always() && !cancelled() }}");
-    expect(workflow).toContain("if: ${{ always() && !cancelled() && inputs.require_wsl2 }}");
+    expect(native).not.toBe(probe);
+    expect(native.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(native["runs-on"]).toBe("windows-2025");
+    expect(probe.if).toBeUndefined();
+    expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
+    for (const job of [probe, native]) {
+      expect(job.needs).toBeUndefined();
+      for (const entry of [job, ...job.steps]) {
+        expect(entry["continue-on-error"]).toBeUndefined();
+      }
+    }
+    const ci = probe.steps.find((step) => step.name === "Run Windows CI tests")!;
+    expect(ci.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(ci.run).toContain("pnpm test:windows:ci");
+    expect(ci.env).toMatchObject({ OPENCLAW_VITEST_MAX_WORKERS: 1 });
+    expect(native.steps).not.toContainEqual(ci);
+    expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
+    expect(
+      probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
+    ).toBe("${{ always() && !cancelled() }}");
+    expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
+      "${{ always() && !cancelled() && inputs.require_wsl2 }}",
+    );
+
+    const preflight = native.steps[0]!;
+    expect(preflight.name).toBe("Preflight native Scheduled Task session");
+    expect(preflight.if).toBe(native.if);
+    expect(preflight.run).toContain(
+      'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
+    );
+    for (const diagnostic of [
+      "identity=",
+      "session_id=",
+      "user_interactive=",
+      "administrator=",
+      "query user",
+    ]) {
+      expect(preflight.run).toContain(diagnostic);
+    }
+    for (const name of [
+      "Checkout",
+      "Setup Node.js",
+      "Setup pnpm",
+      "Runtime versions",
+      "Capture node path",
+      "Install dependencies",
+    ]) {
+      const setup = probe.steps.find((step) => step.name === name)!;
+      expect(setup).toBeDefined();
+      expect(native.steps.find((step) => step.name === name)).toEqual(setup);
+    }
+    expect(native.steps.find((step) => step.name === "Checkout")?.with).toMatchObject({
+      ref: "${{ inputs.target_ref || github.ref }}",
+      "persist-credentials": false,
+    });
+    expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
+      REQUESTED_NODE_VERSION: "22.x",
+    });
+    expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
+      "./.github/actions/setup-pnpm-store-cache",
+    );
+    expect(native.steps.find((step) => step.name === "Install dependencies")?.run).toContain(
+      "pnpm install --frozen-lockfile --prefer-offline",
+    );
+  });
+
+  it("retains exact-source native proof and cleanup evidence even on failure", () => {
+    const { native } = readWindowsProbe();
+    const proof = native.steps.find((step) => step.id === "native_schtasks")!;
+    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!;
+    const upload = native.steps.find((step) => step.id === "native_proof_upload")!;
+    const remove = native.steps.find(
+      (step) => step.name === "Remove retained native Scheduled Task evidence",
+    )!;
+    expect(proof["timeout-minutes"]).toBe(5);
+    expect(proof.if).toBe(native.if);
+    expect(proof.env).toMatchObject({
+      EXPECTED_HEAD: "${{ inputs.target_ref }}",
+      CI_WINDOWS_SCHTASKS_ROOT:
+        "${{ runner.temp }}\\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}",
+      CI_WINDOWS_SCHTASKS_TEST_ID: "${{ github.run_id }}-${{ github.run_attempt }}",
+      CI_WINDOWS_SCHTASKS_PROOF_PATH:
+        "${{ github.workspace }}\\.artifacts\\windows-schtasks\\proof.json",
+    });
+    expect(proof.run).toContain('if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then');
+    expect(proof.run).toContain('CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"');
+    expect(proof.run).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
+    expect(proof.run).toContain("export CI_WINDOWS_SCHTASKS_HEAD");
+    expect(proof.run).toContain("pnpm test:windows:schtasks:integration");
+    expect(cleanup.if).toBe("${{ always() && inputs.run_windows_ci }}");
+    expect(upload.if).toBe(cleanup.if);
+    expect(cleanup.env).toEqual({
+      TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
+      TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+    });
+    expect(remove.env).toEqual(cleanup.env);
+    expect(cleanup.run).toContain('"proof_outcome=${{ steps.native_schtasks.outcome }}"');
+    expect(cleanup.run).toContain("schtasks.exe /Delete /F /TN $taskName");
+    expect(cleanup.run).toContain('$service = New-Object -ComObject "Schedule.Service"');
+    expect(cleanup.run).toContain('throw ($cleanupErrors -join " ")');
+    expect(upload.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/u);
+    expect(upload.with?.path).toContain(".artifacts/windows-schtasks/proof.json");
+    expect(upload.with?.path).toContain("failure-diagnostics.json");
+    expect(upload.with?.path).toContain("cleanup-summary.txt");
+    expect(upload.with?.path).not.toContain("task-before-cleanup.xml");
+    expect(cleanup.run).not.toContain("Copy-Item -LiteralPath $stateDir");
+    expect(remove.if).toBe(
+      "${{ always() && inputs.run_windows_ci && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}",
+    );
+    expect(native.steps.slice(native.steps.indexOf(proof))).toEqual([
+      proof,
+      cleanup,
+      upload,
+      remove,
+    ]);
+  });
+
+  it("identifies the producer's exact native probe before emergency process-tree cleanup", () => {
+    const { native } = readWindowsProbe();
+    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!.run;
+    const probe = createGatewayTaskSupervisorProbe("probe-root");
+    expect(cleanup).toContain(
+      `$probePath = Join-Path $env:TEST_ROOT "${path.basename(probe.probePath)}"`,
+    );
+    expect(cleanup).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
+    expect(cleanup).toContain('$eventsPath = Join-Path $env:TEST_ROOT "runs.txt"');
+    expect(cleanup).toContain(
+      '$process.CommandLine -like "*$probePath*" -and\n        $process.CommandLine -like "*$eventsPath*"',
+    );
+    expect(cleanup).toContain(
+      'throw "Refusing to kill reused or unverifiable process id $probePid."',
+    );
+    expect(cleanup).toContain("taskkill.exe /F /T /PID $probePid");
+    expect(cleanup).toContain("[DateTime]::UtcNow.AddSeconds(30)");
   });
 });

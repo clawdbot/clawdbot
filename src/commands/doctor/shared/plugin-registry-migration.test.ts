@@ -18,7 +18,7 @@ import {
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
+import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -103,7 +103,7 @@ function expectSha256(value: unknown) {
 }
 
 function requireMigratedIndex(
-  result: Awaited<ReturnType<typeof migratePluginRegistryForInstall>>,
+  result: Awaited<ReturnType<typeof migratePluginRegistryForDoctor>>,
 ): InstalledPluginIndex {
   if (result.status !== "migrated") {
     throw new Error(`Expected migration result to be migrated, got ${result.status}`);
@@ -148,7 +148,7 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
   );
 }
 
-describe("plugin registry install migration", () => {
+describe("doctor plugin registry migration", () => {
   it("stops migration with the original error when the shared registry read fails", async () => {
     const stateDir = makeTempDir();
     const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
@@ -164,7 +164,7 @@ describe("plugin registry install migration", () => {
     const readConfig = vi.fn(() => ({}));
     await expect
       .soft(
-        migratePluginRegistryForInstall({
+        migratePluginRegistryForDoctor({
           stateDir,
           readConfig,
           candidates: [],
@@ -185,7 +185,7 @@ describe("plugin registry install migration", () => {
       { env: { OPENCLAW_STATE_DIR: stateDir } },
     );
     expect(row).toMatchObject({ updated_at_ms: 123 });
-    const restored = await migratePluginRegistryForInstall({
+    const restored = await migratePluginRegistryForDoctor({
       stateDir,
       readConfig,
       candidates: [],
@@ -200,7 +200,7 @@ describe("plugin registry install migration", () => {
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       readConfig,
       env: hermeticEnv(),
@@ -222,7 +222,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     insertStalePersistedIndexRow(stateDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir)],
       readConfig: async () => ({}),
@@ -246,7 +246,7 @@ describe("plugin registry install migration", () => {
     insertStalePersistedIndexRow(stateDir, installRecordsJson);
 
     await expect(
-      migratePluginRegistryForInstall({
+      migratePluginRegistryForDoctor({
         stateDir,
         readConfig: async () => ({}),
         env: hermeticEnv(),
@@ -283,7 +283,7 @@ describe("plugin registry install migration", () => {
     ) as OpenClawConfig;
 
     await expect(
-      migratePluginRegistryForInstall({
+      migratePluginRegistryForDoctor({
         stateDir,
         readConfig: async () => invalidConfig,
         env: hermeticEnv(),
@@ -303,7 +303,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(disabledDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(enabledDir, "enabled-demo"),
@@ -344,7 +344,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(openaiDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
@@ -370,7 +370,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(migrationDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(migrationDir, "migrate-demo", "bundled", {
@@ -399,7 +399,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(openaiDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(openaiDir, "openai", "bundled"),
@@ -431,7 +431,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(memoryDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(memoryDir, "memory-core", "bundled", {
@@ -467,7 +467,7 @@ describe("plugin registry install migration", () => {
     const stateDir = makeTempDir();
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       dryRun: true,
       readConfig,
@@ -488,7 +488,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createCandidate(pluginDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [candidate],
       config: {},
@@ -514,7 +514,7 @@ describe("plugin registry install migration", () => {
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
       readConfig: async () => ({
@@ -561,7 +561,7 @@ describe("plugin registry install migration", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [],
       readConfig: async () => ({

@@ -1,7 +1,8 @@
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
-import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
+import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderPanelLoadingSkeleton,
@@ -32,9 +33,12 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserRefreshOnPresentation: boolean;
+  preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
+  desktopSource: string | null;
   hasBoard: boolean;
   chat: TemplateResult;
   workspace: TemplateResult | typeof nothing;
@@ -53,6 +57,8 @@ type SidebarPanelDefinitionParams = {
   connected: boolean;
   pendingQuestion: string | null;
   onClearCompanion: () => void;
+  onRefreshTasks: () => void;
+  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -92,7 +98,9 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
-  const desktopFocusHref = state ? desktopFocusPath(state.basePath) : null;
+  const desktopFocusHref = state
+    ? buildControlUiFocusPath({ kind: "desktop", session: state.sessionKey }, state.basePath)
+    : null;
   const definePanel = (
     slot: SidebarSlotId,
     textKey: SidebarPanelTextKey,
@@ -130,6 +138,9 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
+          .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
+          .sessionKey=${state.sessionKey}
+          .preferredTab=${params?.preferredBrowserTab}
           .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
@@ -160,6 +171,8 @@ export function sidebarPanelDefinitions(
           .available=${desktopAvailable}
           .presented=${params?.desktopPresented ?? false}
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
+          .requestedSource=${params?.desktopSource ?? null}
+          .sessionKey=${state.sessionKey}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
@@ -209,36 +222,37 @@ export function sidebarPanelDefinitions(
       companion,
       params
         ? {
-            headerAction: html`<wa-dropdown
-              class="chat-session-rail__menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                if (event.detail.item.value === "clear") {
-                  params.onClearCompanion();
-                }
-              }}
-            >
+            headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
-                slot="trigger"
-                class="rail-header__action"
+                class="rail-header__action chat-session-rail__clear"
                 type="button"
-                aria-label=${t("chat.rail.moreActions")}
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                ${icons.moreHorizontal}
-              </button>
-              <wa-dropdown-item
-                value="clear"
+                aria-label=${t("chat.rail.clear")}
                 ?disabled=${!params.connected || params.pendingQuestion !== null}
+                @click=${params.onClearCompanion}
               >
-                ${t("chat.rail.clear")}
-              </wa-dropdown-item>
-            </wa-dropdown>`,
+                ${icons.trash}
+              </button>
+            </openclaw-tooltip>`,
           }
         : undefined,
     ),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
+      headerAction: params
+        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+            <button
+              class="rail-header__action chat-tasks-rail__refresh"
+              type="button"
+              aria-label=${t("chat.backgroundTasks.refresh")}
+              ?disabled=${!params.connected || params.tasksLoading}
+              @click=${params.onRefreshTasks}
+            >
+              ${params.tasksLoading
+                ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+                : icons.refresh}
+            </button>
+          </openclaw-tooltip>`
+        : undefined,
+    }),
     definePanel("desktop", "desktop", icons.monitor, desktop, {
       available: desktopAvailable,
       ...(desktopFocusHref

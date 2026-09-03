@@ -1,15 +1,16 @@
 export interface FrvChildStatus extends Record<string, unknown> {
-  effectiveRunAttempt: number;
+  effectiveRunAttempt: number | null;
   key: string;
-  plannedRunAttempt: number;
+  plannedRunAttempt: number | null;
   runId: string;
-  status: string;
+  status: "active" | "failed" | "missing" | "passed";
 }
 
 export interface FrvContinuationStatus {
   active: FrvChildStatus[];
   children: FrvChildStatus[];
   failed: FrvChildStatus[];
+  missing: FrvChildStatus[];
   passed: FrvChildStatus[];
 }
 
@@ -26,11 +27,18 @@ export interface FrvClient {
     runId: string,
     plan: Record<string, unknown>,
     operationDeadline?: number,
+    expectedRunAttempts?: Record<string, number>,
   ) => Promise<unknown>;
+  verifySeal?: (
+    runId: string,
+    plan: Record<string, unknown>,
+    operationDeadline: number,
+    expectedRunAttempts: Record<string, number>,
+  ) => Promise<boolean>;
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify">>;
+  Required<Pick<FrvClient, "rerunFailed" | "rerunParent" | "verify" | "verifySeal">>;
 
 export function inspectContinuation(
   plan: Record<string, unknown>,

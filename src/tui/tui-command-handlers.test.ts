@@ -2083,6 +2083,7 @@ describe("tui command handlers", () => {
         });
         const editor = {
           getText: vi.fn(() => ""),
+          getExpandedText: vi.fn(() => ""),
           setText: vi.fn(),
           addToHistory: vi.fn(),
         };

@@ -12,6 +12,7 @@ type DesktopConnectOptions = {
   background?: string;
   credentials?: { username?: string; password?: string };
   gatewayUrl?: string;
+  isCurrent: () => boolean;
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
   onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
@@ -23,6 +24,7 @@ type DesktopConnectOptions = {
 
 export type DesktopConnectionHandle = {
   disconnect(): void;
+  disableInput(): void;
   sendBackspace?(): void;
   sendKeyboardEvent?(event: KeyboardEvent): void;
   sendText?(text: string): void;
@@ -82,6 +84,10 @@ export class DesktopClient {
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
     const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    // The socket claims control before RFB authentication; canceled lazy loads must not open it.
+    if (!options.isCurrent()) {
+      throw new DOMException("Desktop connection is no longer current", "AbortError");
+    }
     const socket = this.createWebSocket(wsUrl);
     let closeDetail: DesktopDisconnectDetail = {};
     socket.addEventListener("close", (event) => {
@@ -123,6 +129,9 @@ export class DesktopClient {
       });
     return {
       disconnect: () => rfb.disconnect(),
+      disableInput: () => {
+        rfb.viewOnly = true;
+      },
       setScaleViewport: (enabled) => {
         rfb.scaleViewport = enabled;
       },
@@ -130,11 +139,12 @@ export class DesktopClient {
       sendText: (text) => {
         // Mobile IMEs can omit keydown/keyup. "Unidentified" asks noVNC's
         // keyboard owner to translate each inserted character and emit a
-        // balanced press/release, matching its built-in mobile UI fallback.
-        for (let index = 0; index < text.length; index += 1) {
+        // balanced press/release. Line breaks need Enter rather than Unicode LF.
+        const normalizedText = text.replace(/\r\n?/g, "\n");
+        for (let index = 0; index < normalizedText.length; index += 1) {
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: text.charAt(index),
+              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
               code: "Unidentified",
               bubbles: true,
               cancelable: true,

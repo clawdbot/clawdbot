@@ -76,6 +76,9 @@ export function estimateTranscriptPromptTokens(
   let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
   for (const event of selectParentForkTokenEstimateEvents(events)) {
+    if (isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true) {
+      continue;
+    }
     const serializedBytes = Buffer.byteLength(JSON.stringify(event)) + 1;
     byteEstimate += serializedBytes;
     if (!isRecord(event)) {

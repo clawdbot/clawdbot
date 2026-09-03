@@ -10,6 +10,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createFixedWindowRateLimiter,
+  resolveRequestClientIp,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -93,7 +94,13 @@ async function handleAuth(
     sendText(res, 415, "Unsupported media type");
     return;
   }
-  const ip = req.socket.remoteAddress ?? "unknown";
+  const cfg = currentConfig(api);
+  const ip =
+    resolveRequestClientIp(
+      req,
+      cfg.gateway?.trustedProxies,
+      cfg.gateway?.allowRealIpFallback === true,
+    ) ?? "unknown";
   if (!consumeRateLimit(ip)) {
     sendText(res, 429, "Too many requests");
     return;
@@ -117,7 +124,6 @@ async function handleAuth(
     return;
   }
   const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
-  const cfg = currentConfig(api);
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
     initData: authBody.initData,

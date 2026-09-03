@@ -6,6 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
 function row(
@@ -92,6 +93,87 @@ describe("session activity semantics", () => {
 
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
+
+  it.each(["missing", "stale"])(
+    "opens the displayed Activity rows when the sidebar is %s",
+    (sidebar) => {
+      const rows = (["chat", "dashboard"] as const).map((face, index) =>
+        row(
+          `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
+          { id: "owner" },
+          Date.now(),
+          { boardFace: face, displayName: `Research ${face}` },
+        ),
+      );
+      const input = props({ rows });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agentSelection: { state: { selectedId: "other" } },
+        sessions: {
+          state: {
+            agentId: "other",
+            result: {
+              sessions:
+                sidebar === "missing"
+                  ? []
+                  : rows.map((session) => ({ ...session, displayName: "Old title" })),
+            },
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+      expect(links).toHaveLength(rows.length);
+      for (const [index, session] of rows.entries()) {
+        const link = links[index]!;
+        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-12345678`;
+        expect(link.getAttribute("href")).toBe(pathname);
+        link.click();
+        expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
+          pathname,
+          search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`,
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["workspace", "/control/chat/research", undefined],
+    ["global", "/control/chat/research", undefined],
+    [
+      "catalog:native:gateway%3Alocal:Thread-1",
+      "/control/chat/research",
+      "?catalog=native&host=gateway%3Alocal&thread=Thread-1",
+    ],
+  ] as const)(
+    "preserves configured main and selected-agent routing for %s",
+    (key, pathname, search) => {
+      const input = props({ rows: [row(key, { id: "owner" }, Date.now())] });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agents: { state: { agentsList: { defaultId: "main", mainKey: "workspace" } } },
+        agentSelection: { state: { selectedId: "research" } },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const link = container.querySelector<HTMLAnchorElement>("[data-activity-session]")!;
+      expect(link.getAttribute("href")).toBe(`${pathname}${search ?? ""}`);
+      link.click();
+      expect(input.context.navigate).toHaveBeenCalledWith(
+        "chat",
+        search ? { pathname, search } : { pathname },
+      );
+    },
+  );
 
   it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
@@ -209,6 +291,7 @@ describe("session activity people filter", () => {
           presenceViewers: [
             {
               id: "online",
+              identity: { type: "profile", id: "online" },
               name: "Online person",
               watchedSessions: [],
               entries: [{ instanceId: "online-device", user: { id: "online" }, ts: now }],
@@ -252,6 +335,7 @@ describe("session activity people filter", () => {
         presenceViewers: [
           {
             id: "online",
+            identity: { type: "profile", id: "online" },
             email: "online@example.test",
             watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
             entries: [
@@ -321,6 +405,47 @@ describe("session activity people filter", () => {
         expect(container.querySelector("[data-activity-identity]")).toBeNull();
         expect(container.querySelector("[data-activity-session]")).toBeNull();
       }
+    },
+  );
+
+  it.each([true, false])(
+    "never joins raw presence into a profile Activity page (profile online: %s)",
+    (online) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId: "online", query: "", time: "7d" },
+        rows: [row("raw-watch", { id: "online" }, 10)],
+        presenceViewers: [
+          ...(online
+            ? [
+                {
+                  id: "online",
+                  identity: { type: "profile" as const, id: "online" },
+                  name: "Profile person",
+                  watchedSessions: [],
+                  entries: [{ host: "Profile device", ts: 1 }],
+                },
+              ]
+            : []),
+          {
+            id: "online",
+            name: "Raw collider",
+            watchedSessions: ["raw-watch"],
+            entries: [{ host: "Raw device", ts: 1 }],
+          },
+        ],
+      });
+      render(renderSessionActivityView(input), container);
+      const identity = container.querySelector("[data-activity-identity]")!;
+      expect(identity.querySelector("h2")?.textContent).toBe(
+        online ? "Profile person" : "Online person",
+      );
+      expect(identity.textContent).not.toContain("Raw device");
+      expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
+      expect(
+        container.querySelectorAll(".activity-feed__people-row .activity-feed__presence-dot"),
+      ).toHaveLength(online ? 1 : 0);
     },
   );
 
@@ -405,7 +530,14 @@ describe("session activity automation grouping", () => {
       { filters: { personId: null, query: "Automation", time: "7d" as const } },
       {
         filters: { personId: "owner", query: "", time: "7d" as const },
-        presenceViewers: [{ id: "owner", name: "Owner", watchedSessions: [] }],
+        presenceViewers: [
+          {
+            id: "owner",
+            identity: { type: "profile" as const, id: "owner" },
+            name: "Owner",
+            watchedSessions: [],
+          },
+        ],
       },
     ]) {
       render(

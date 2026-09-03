@@ -28,7 +28,7 @@ type TestSessionStore = {
 
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
-const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.6.0";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.6.2";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
@@ -251,9 +251,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const managedDelegate = (
       managedRuntime.runtime as unknown as {
-        resolveManagedToolsDelegateForSession(sessionKey: string): typeof managedRuntime.delegate;
+        resolveManagedToolsDelegateForSession(target: {
+          sessionKey: string;
+        }): typeof managedRuntime.delegate;
       }
-    ).resolveManagedToolsDelegateForSession("agent:codex:acp:managed");
+    ).resolveManagedToolsDelegateForSession({ sessionKey: "agent:codex:acp:managed" });
     const managedTurn = vi.spyOn(managedDelegate, "runTurn").mockImplementation(async function* () {
       yield { type: "done" };
     });
@@ -297,9 +299,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+          resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
         }
-      ).resolveManagedToolsDelegateForSession(sessionKey) as {
+      ).resolveManagedToolsDelegateForSession({ sessionKey }) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -338,18 +340,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
     };
 
-    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main");
+    const target = { sessionKey: "agent:worker:main" };
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(target);
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
-      firstDelegate,
-    );
+    expect(exposedRuntime.resolveManagedToolsDelegateForSession(target)).toBe(firstDelegate);
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
@@ -1322,7 +1323,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         reasoningEffort: "medium",
       }),
     ).toBe(
-      `npx @agentclientprotocol/codex-acp@1.6.0 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
+      `npx @agentclientprotocol/codex-acp@1.6.2 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
     );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
     expect(testing.normalizeAgentCommand(["node", "/tmp/codex acp/index.js", "--label", ""])).toBe(
@@ -2078,11 +2079,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): {
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): {
         close: AcpRuntime["close"];
       };
     };
-    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:main",
+    });
     const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
 
     await runtime.close({

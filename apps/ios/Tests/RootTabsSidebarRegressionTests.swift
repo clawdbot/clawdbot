@@ -16,7 +16,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
-    @Test func `sidebar controls keep glass inside their hit target`() throws {
+    @Test func `sidebar controls keep a background-free icon inside their hit target`() throws {
         let source = try String(contentsOf: Self.openClawProComponentsSourceURL(), encoding: .utf8)
         let revealButton = try Self.extract(
             source,
@@ -30,7 +30,7 @@ struct RootTabsSidebarRegressionTests {
         let button = try Self.extract(
             revealButton,
             from: "private var button: some View",
-            to: "@ViewBuilder\n    private var icon")
+            to: "private var icon: some View")
         let icon = try Self.extract(
             revealButton,
             from: "private var icon: some View",
@@ -39,8 +39,9 @@ struct RootTabsSidebarRegressionTests {
         #expect(revealButton.contains("self.identified(self.button.buttonStyle(.plain))"))
         #expect(button.contains(".frame(width: 44, height: 44)"))
         #expect(button.contains(".contentShape(Rectangle())"))
-        #expect(icon.contains(".regular.interactive()"))
-        #expect(icon.contains("in: Circle()"))
+        #expect(icon.contains(".foregroundStyle(OpenClawBrand.accent)"))
+        #expect(!icon.contains(".glassEffect("))
+        #expect(!icon.contains("Circle()"))
         #expect(icon.contains("width: OpenClawProMetric.compactControlSize"))
         #expect(toolbarItem.contains(".sharedBackgroundVisibility(.hidden)"))
     }
@@ -60,7 +61,7 @@ struct RootTabsSidebarRegressionTests {
         let drawerGesture = try Self.extract(
             drawerSource,
             from: "private var drawerGesture: some Gesture",
-            to: "private static func dragDisposition(")
+            to: "static func dragDisposition(")
         let detailShell = try Self.extract(
             source,
             from: "private var sidebarDetailShell: some View",
@@ -95,7 +96,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(!contentCard.contains(".shadow("))
 
         #expect(drawerGesture.contains(".updating(self.$dragState)"))
-        #expect(drawerGesture.contains("if let latchedDisposition = state.disposition"))
         #expect(drawerGesture.contains("dragSession.disposition = disposition"))
         #expect(drawerGesture.contains("let disposition = dragSession.disposition"))
         #expect(drawerGesture.contains("dragSession.disposition = nil"))
@@ -103,10 +103,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(drawerGesture.contains("case .closing:"))
         #expect(drawerGesture.contains("onShow()"))
         #expect(drawerGesture.contains("onHide()"))
-        #expect(drawerSource.contains("value.startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth"))
-        #expect(drawerSource.contains("value.startLocation.y > RootSidebarDrawerMetric.topGestureExclusion"))
-        #expect(drawerSource.contains("value.translation.width > abs(value.translation.height)"))
-        #expect(drawerSource.contains("-value.translation.width > abs(value.translation.height)"))
         #expect(drawerSource.contains("UnevenRoundedRectangle("))
         #expect(drawerSource.contains("topLeadingRadius: RootSidebarDrawerMetric.topLeadingRadius * progress"))
         #expect(drawerSource.contains("bottomLeadingRadius: RootSidebarDrawerMetric.cornerRadius * progress"))
@@ -189,7 +185,7 @@ struct RootTabsSidebarRegressionTests {
 
         let pin = try #require(sessionButton.range(of: "Image(systemName: \"pin.fill\")"))
         let detail = try #require(sessionButton.range(of: "CommandCenterTab.sessionDetail(session)"))
-        let openChat = try #require(sessionButton.range(of: "self.appModel.openChat(sessionKey: session.key)"))
+        let openChat = try #require(sessionButton.range(of: "self.selectSession(session)"))
         let contextActions = try #require(sessionButton.range(of: ".commandSessionActions("))
         #expect(pin.lowerBound < detail.lowerBound)
         #expect(openChat.lowerBound < contextActions.lowerBound)

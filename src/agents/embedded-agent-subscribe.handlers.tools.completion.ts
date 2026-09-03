@@ -716,5 +716,6 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
-  return { executionStarted: terminal.executionStarted, effectReceipt: terminal.effectReceipt };
+  terminal.executedArguments ??= startArgs;
+  return Object.assign(terminal, { isError: observerIsError });
 }

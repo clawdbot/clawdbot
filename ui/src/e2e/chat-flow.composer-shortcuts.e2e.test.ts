@@ -74,14 +74,12 @@ suite.define(() => {
         await composer.press("Control+Enter");
 
         if (followUpMode === "steer") {
-          const queuedRow = page
-            .locator(".chat-group.user", { hasText: followUpText })
-            .locator(".chat-queue__item");
+          const queuedRow = page.locator(".chat-queue__item", { hasText: followUpText });
           await queuedRow.waitFor();
           await expectRequestCountStable(gateway, "chat.send", 1);
           await gateway.setMethodResponse("chat.history", {
             messages: [{ role: "user", content: [{ type: "text", text: initialText }] }],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             sessionInfo: {
               key: "main",
               hasActiveRun: false,
@@ -94,7 +92,10 @@ suite.define(() => {
           await gateway.emitChatFinal({ runId, text: "The original run is done." });
           const sends = await waitForRequests(gateway, "chat.send", 2);
           const queuedParams = requireRecord(sends[1]?.params);
-          expect(queuedParams).toMatchObject({ message: followUpText, sessionKey: "main" });
+          expect(queuedParams).toMatchObject({
+            message: followUpText,
+            sessionKey: "agent:main:main",
+          });
           expect(queuedParams).not.toHaveProperty("queueMode");
           await queuedRow.waitFor({ state: "detached" });
           await expectRequestCountStable(gateway, "chat.send", 2);
@@ -105,7 +106,7 @@ suite.define(() => {
             deliver: false,
             message: followUpText,
             queueMode: "steer",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           });
           expect(steerParams).not.toHaveProperty("expectedRunId");
           expect(steerParams).not.toHaveProperty("expectedLeafEntryId");

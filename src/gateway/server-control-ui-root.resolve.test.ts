@@ -27,6 +27,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(fs, "realpathSync").mockImplementation((rootPath) => String(rootPath));
+    vi.spyOn(fs, "readFileSync").mockReturnValue("<html></html>");
     controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockResolvedValue({
       ok: true,
       built: false,
@@ -86,6 +87,28 @@ describe("createGatewayControlUiRootLifecycle", () => {
       isCancelled: isStopped,
       signal: controller.signal,
     });
+  });
+
+  test("snapshots public asset identity only for a bundled root", () => {
+    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
+    controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '<html data-openclaw-control-ui-build-id="build-content-digest"></html>',
+    );
+    const { lifecycle } = createLifecycle();
+    expect(lifecycle.state).toMatchObject({
+      kind: "bundled",
+      publicAssetBuildId: "build-content-digest",
+    });
+    expect(fs.readFileSync).toHaveBeenCalledExactlyOnceWith(
+      "/repo/dist/control-ui/index.html",
+      "utf8",
+    );
+    vi.mocked(fs.readFileSync).mockClear();
+    controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue("/repo/dist/control-ui");
+    const custom = createLifecycle({ override: "/repo/dist/control-ui" });
+    expect(custom.lifecycle.state).not.toHaveProperty("publicAssetBuildId");
+    expect(fs.readFileSync).not.toHaveBeenCalled();
   });
 
   test("cancels retained-generation preparation without warning during shutdown", async () => {

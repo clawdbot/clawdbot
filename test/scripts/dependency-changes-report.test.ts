@@ -78,6 +78,43 @@ describe("dependency-changes-report", () => {
     expect(dependencyDiffPathspecs()).toContain(".github/release/vercel-cli/package-lock.json");
   });
 
+  it.each([
+    {
+      name: "git ref",
+      baseArgs: ["--base-ref", "origin/main"],
+      expectedBaseRef: "origin/main",
+      expectedBaseLockfile: null,
+    },
+    {
+      name: "lockfile",
+      baseArgs: ["--base-lockfile", "base-lock.yaml"],
+      expectedBaseRef: null,
+      expectedBaseLockfile: "base-lock.yaml",
+    },
+  ])("parses all report options with a $name base", (testCase) => {
+    expect(
+      parseArgs([
+        "--root",
+        "/repo",
+        ...testCase.baseArgs,
+        "--head-lockfile",
+        "head-lock.yaml",
+        "--json",
+        "artifacts/report.json",
+        "--",
+        "--markdown",
+        "artifacts/report.md",
+      ]),
+    ).toEqual({
+      rootDir: "/repo",
+      baseRef: testCase.expectedBaseRef,
+      baseLockfile: testCase.expectedBaseLockfile,
+      headLockfile: "head-lock.yaml",
+      jsonPath: "artifacts/report.json",
+      markdownPath: "artifacts/report.md",
+    });
+  });
+
   it("rejects missing report artifact path option values", () => {
     for (const flag of [
       "--root",

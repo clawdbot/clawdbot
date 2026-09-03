@@ -1,12 +1,16 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { preserveQueuedUserTurn } from "./chat-send-support.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -18,6 +22,7 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(handler: (params?: unknown) => unknown) {
   return makeChatHost({
@@ -74,9 +79,12 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 }
 
 describe("chat history cursor revalidation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it.each(["live", "history-delta"] as const)(
     "retains an attributed pending steer across a leaf advance before %s persistence",
     async (delivery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
       const sessionKey = "agent:main:participant-steer";
       const sendRunId = "bob-send";
       const aliceFinal = {
@@ -150,6 +158,13 @@ describe("chat history cursor revalidation", () => {
         sessionKey,
         sender: { id: "bob-profile", name: "Bob Proof" },
       };
+      expect(
+        admitStoredChatComposerQueueItem(
+          state,
+          captureChatOutboxAdmission(state, sessionKey, queued.agentId),
+          queued,
+        ),
+      ).toBe(true);
       state.chatQueue = [queued];
       const renderedBobMessages = () =>
         buildChatItems({
@@ -173,8 +188,8 @@ describe("chat history cursor revalidation", () => {
       expect(renderedBobMessages()).toHaveLength(1);
 
       // Delivery retirement materializes the acknowledged turn before its durable row arrives.
-      preserveQueuedUserTurn(state, queued);
-      state.chatQueue = [];
+      expect(await retireDeliveredQueuedUserTurn(state, sendRunId, { sessionKey })).toBe("retired");
+      expect(state.chatQueue).toEqual([]);
       expect(renderedBobMessages()).toHaveLength(1);
       await loadChatHistory(state);
       expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));
@@ -262,11 +277,7 @@ describe("chat history cursor revalidation", () => {
 
     await loadChatHistory(state);
 
-    const current = getChatSessionProjection(
-      state,
-      state.chatMessages,
-      readChatSessionProjectionScope(state),
-    );
+    const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
   });
@@ -325,24 +336,26 @@ describe("chat history cursor revalidation", () => {
     });
   });
 
-  it("recovers a missed terminal failure even when cursor catch-up has no new messages", async () => {
+  it("retires a missed terminal failure after a newer successful cursor catch-up", async () => {
     const cached = message("user", "cached", "cached-user", 1);
-    const handler = vi.fn(async (_params?: unknown) => ({
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      sessionInfo: {
-        key: "main",
-        kind: "direct",
-        sessionId: "session-cursor",
-        updatedAt: 2,
-        status: "failed",
-        hasActiveRun: false,
-        lastRunId: "run-first",
-        lastRunError:
-          "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-      },
-    }));
+    const handler = vi.fn(
+      async (_params?: unknown): Promise<unknown> => ({
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          sessionId: "session-cursor",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "run-first",
+          lastRunError:
+            "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+        },
+      }),
+    );
     const state = createState(handler);
     const cache = seedCachedHistory(state, [cached], "cursor-1");
 
@@ -355,6 +368,27 @@ describe("chat history cursor revalidation", () => {
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-2");
+
+    const reply = message("assistant", "Recovery completed.", "retry-answer", 2);
+    handler.mockResolvedValueOnce({
+      kind: "delta",
+      messages: [{ message: reply, messageId: "retry-answer", messageSeq: 2, runId: "run-retry" }],
+      deltaCursor: "cursor-3",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 3,
+        status: "done",
+        hasActiveRun: false,
+        lastRunId: "run-retry",
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-2" }));
+    expect(state.chatMessages.map(extractText)).toEqual(["cached", "Recovery completed."]);
+    expect(state.chatRunError).toBeNull();
   });
 
   it.each([
@@ -445,6 +479,101 @@ describe("chat history cursor revalidation", () => {
       expect(state.chatToolMessages).toContainEqual(
         expect.objectContaining({ runId: "run-live", toolCallId: "call-restored" }),
       );
+    },
+  );
+
+  it.each([
+    { terminal: "final", historyFirst: false },
+    { terminal: "aborted", historyFirst: false },
+    { terminal: "error", historyFirst: false },
+    { terminal: "final", historyFirst: true },
+  ] as const)(
+    "adopts commentary once across $terminal and cursor catch-up (history first: $historyFirst)",
+    async ({ terminal, historyFirst }) => {
+      const runId = "commentary-run";
+      const text = "Checking the workspace.";
+      const prompt = {
+        ...message("user", "Inspect the workspace", "user", 1),
+        timestamp: 1,
+        __openclaw: { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
+      };
+      const commentary = {
+        ...message("assistant", text, "commentary", 2),
+        timestamp: 2,
+        __openclaw: { id: "commentary", seq: 2, runId, mirrorOrigin: "codex-app-server" },
+        openclawStreamFallback: { itemId: "item-1", replacementText: text, source: "segment" },
+      };
+      // Intermediate Codex rows carry producer ownership in metadata, without a terminal run envelope.
+      const payload = {
+        sessionKey: "main",
+        message: commentary,
+        messageId: "commentary",
+        messageSeq: 2,
+      };
+      const handler = vi.fn(async () => ({
+        kind: "delta",
+        messages: [payload],
+        deltaCursor: "cursor-2",
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          sessionId: "session-cursor",
+          updatedAt: 3,
+          hasActiveRun: historyFirst,
+          activeRunIds: historyFirst ? [runId] : [],
+        },
+      }));
+      const state = createState(handler);
+      seedCachedHistory(state, [prompt], "cursor-1");
+      state.chatRunId = runId;
+      handleAgentEvent(state, {
+        runId,
+        seq: 1,
+        ts: 2,
+        sessionKey: "main",
+        stream: "item",
+        data: { kind: "preamble", itemId: "item-1", progressText: text },
+      });
+      applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: runId });
+      expect(state.chatMessages).toEqual([prompt]);
+      if (historyFirst) {
+        await loadChatHistory(state);
+      }
+      handleChatGatewayEvent(state, {
+        runId,
+        sessionKey: "main",
+        state: terminal,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Workspace inspected." }],
+          timestamp: 3,
+        },
+      });
+      if (!historyFirst) {
+        await loadChatHistory(state);
+      }
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-1" }));
+      expect(state.chatMessages.map(extractText)).toEqual([
+        "Inspect the workspace",
+        text,
+        "Workspace inspected.",
+      ]);
+      expect(state.chatMessages[1]).toEqual(commentary);
+      expect(state.chatStreamSegments).toEqual([]);
+      // Reconnect replay retains the same row and cannot revive its live segment.
+      await loadChatHistory(state);
+      handleAgentEvent(state, {
+        runId,
+        seq: 2,
+        ts: 2,
+        sessionKey: "main",
+        stream: "item",
+        data: { kind: "preamble", itemId: "item-1", progressText: text },
+      });
+      expect(state.chatMessages.filter((candidate) => extractText(candidate) === text)).toEqual([
+        commentary,
+      ]);
+      expect(state.chatStreamSegments).toEqual([]);
     },
   );
 

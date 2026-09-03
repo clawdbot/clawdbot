@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
+import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
@@ -149,14 +149,20 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const contextFiles = bootstrapRouting.includeBootstrapInSystemContext
     ? remappedContextFiles
     : remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
-  const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
-    ? hookAdjustedBootstrapFiles
-    : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+  const bootstrapInjectionStats = buildBootstrapInjectionStats({
+    bootstrapFiles: hookAdjustedBootstrapFiles,
+    injectedFiles: contextFiles,
+  });
+  // Stats retain input order. Reports include suppressed BOOTSTRAP rows; budgets do not.
+  const bootstrapBudgetFiles = bootstrapRouting.includeBootstrapInSystemContext
+    ? bootstrapInjectionStats
+    : bootstrapInjectionStats.filter(
+        (_, index) => hookAdjustedBootstrapFiles[index]!.name !== DEFAULT_BOOTSTRAP_FILENAME,
+      );
   const bootstrapBudget = buildBootstrapBudgetState({
     config: attempt.config,
     agentId: params.sessionAgentId,
-    bootstrapFiles: bootstrapFilesForInjectionStats,
-    injectedFiles: contextFiles,
+    files: bootstrapBudgetFiles,
     seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
     previousSignature: attempt.bootstrapPromptWarningSignature,
   });
@@ -178,7 +184,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     ...bootstrapBudget,
     bootstrapMode,
     contextFiles,
-    hookAdjustedBootstrapFiles,
+    bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,
     workspaceNotes,
   };

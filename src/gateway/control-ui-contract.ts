@@ -14,9 +14,22 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
+/**
+ * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
+ * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
+ * yields both the login and the avatar without a per-person API lookup.
+ */
+type ControlUiGitHubPreviewCoAuthor = {
+  login: string;
+  avatarDataUrl?: string;
+};
+
 export type ControlUiGitHubPreview = {
   additions?: number;
   avatarDataUrl?: string;
+  /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
+  coAuthors?: ControlUiGitHubPreviewCoAuthor[];
+  coAuthorCount?: number;
   changedFiles?: number;
   closedAt?: string;
   comments?: number;

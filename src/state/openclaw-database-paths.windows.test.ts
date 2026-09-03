@@ -1,4 +1,5 @@
 // Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -139,7 +140,7 @@ describe("OpenClaw database paths on Windows", () => {
       const privateDirectory = path.dirname(String(openedStatePath?.file));
       expect(readOnlyState?.walMaintenance.close()).toBe(true);
       expect(fs.existsSync(privateDirectory)).toBe(false);
-      expect(fs.readFileSync(statePath)).toEqual(stateBytesBeforeReadOnly);
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBytesBeforeReadOnly);
       expect(
         fs
           .readdirSync(path.dirname(statePath), { withFileTypes: true })

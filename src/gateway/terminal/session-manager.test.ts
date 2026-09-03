@@ -588,7 +588,11 @@ describe("TerminalSessionManager agent ownership", () => {
       fake.emitData("before");
       await vi.advanceTimersByTimeAsync(4);
       const attached = manager.attach("viewer-1", outcome.sessionId);
-      expect(attached).toMatchObject({ buffer: "before", seq: 6 });
+      expect(attached).toMatchObject({
+        buffer: "before",
+        seq: 6,
+        owner: `agent:${agentOwner.agentSessionKey}`,
+      });
 
       fake.emitData("after");
       await vi.advanceTimersByTimeAsync(4);
@@ -827,6 +831,7 @@ describe("TerminalSessionManager detach/reattach", () => {
   async function openDetachable(options?: {
     detachGraceMs?: number;
     maxDetachedSessions?: number;
+    title?: string;
   }) {
     const emit = vi.fn();
     const fake = makeFakePty();
@@ -836,7 +841,7 @@ describe("TerminalSessionManager detach/reattach", () => {
       detachGraceMs: options?.detachGraceMs ?? 60_000,
       maxDetachedSessions: options?.maxDetachedSessions,
     });
-    const outcome = await manager.open(baseRequest());
+    const outcome = await manager.open(baseRequest({ title: options?.title }));
     if (!outcome.ok) {
       throw new Error("expected open");
     }
@@ -868,7 +873,7 @@ describe("TerminalSessionManager detach/reattach", () => {
   it("attach rebinds a detached session, replays the buffer, and resumes streaming", async () => {
     vi.useFakeTimers();
     try {
-      const { manager, fake, emit, sessionId } = await openDetachable();
+      const { manager, fake, emit, sessionId } = await openDetachable({ title: "codex" });
       fake.emitData("before ");
       manager.handleDisconnect("conn-1");
       fake.emitData("away ");
@@ -877,7 +882,10 @@ describe("TerminalSessionManager detach/reattach", () => {
       const attached = manager.attach("conn-2", sessionId);
       expect(attached?.buffer).toBe(`${OPERATOR_INTRO}before away `);
       expect(attached?.seq).toBe(OPERATOR_INTRO.length + 12);
-      expect(attached?.agentId).toBe("main");
+      expect(attached).toMatchObject({ agentId: "main", title: "codex", owner: "conn" });
+      expect(manager.list()).toEqual([
+        expect.objectContaining({ sessionId, title: "codex", owner: "conn" }),
+      ]);
       // The reaper is cancelled: the session survives past the grace deadline.
       vi.advanceTimersByTime(120_000);
       expect(fake.killed).toBe(false);

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   recordSessionParticipant,
@@ -44,6 +44,48 @@ function result(status: "available" | "offline"): SessionsListResult {
     ],
   };
 }
+
+it("invalidates completed sessions.list identity after a worker environment inventory mutation", async () => {
+  let inventoryVersion = 0;
+  let environment = { providerId: "machine0", profileId: "original" };
+  const workerEnvironmentService = {
+    get: () => environment,
+    inventoryVersion: () => inventoryVersion,
+  };
+  const context = { workerEnvironmentService } as unknown as GatewayRequestContext;
+  const config: OpenClawConfig = {};
+  const run = vi.fn(async () => {
+    const value = result("available");
+    Object.assign(value.sessions[0]!.placement!, workerEnvironmentService.get());
+    return value;
+  });
+  const requestList = async () => {
+    const respond = vi.fn();
+    await respondWithCachedSessionList({
+      client: null,
+      config,
+      context,
+      request: {},
+      respond,
+      run,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    return respond.mock.calls[0]![1] as SessionsListResult;
+  };
+
+  const original = await requestList();
+  expect(original.sessions[0]?.placement).toMatchObject({ profileId: "original" });
+  expect(await requestList()).toBe(original);
+  expect(run).toHaveBeenCalledTimes(1);
+
+  environment = { providerId: "machine1", profileId: "replacement" };
+  inventoryVersion += 1;
+  const refreshed = await requestList();
+  expect(refreshed.sessions[0]?.placement).toMatchObject(environment);
+  expect(refreshed).not.toBe(original);
+  expect(await requestList()).toBe(refreshed);
+  expect(run).toHaveBeenCalledTimes(2);
+});
 
 it("does not publish old in-flight runner availability across a version transition", async () => {
   const config: OpenClawConfig = {};

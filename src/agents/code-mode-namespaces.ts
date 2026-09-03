@@ -6,7 +6,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
@@ -465,7 +465,7 @@ interface AgentsApi {
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
 
-/** Spawn collector agents concurrently. */
+/** Spawn collector agents concurrently; requests queue when bridge slots are full. */
 declare const agents: Readonly<AgentsApi>;
 /** Publish a phase heading for this swarm. */
 declare function phase(title: string): void;

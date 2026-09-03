@@ -13,11 +13,14 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -26,6 +29,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   afterMaterialize: undefined as (() => void) | undefined,
@@ -149,6 +153,52 @@ describe("SQLite session handle lifecycle", () => {
     );
   });
 
+  it("does not run automatic maintenance on a replacement database handle", async () => {
+    const staleDashboardScope = {
+      ...scope,
+      sessionId: "stale-dashboard",
+      sessionKey: "agent:main:dashboard:stale",
+    };
+    replaceSessionEntrySync(staleDashboardScope, {
+      sessionId: staleDashboardScope.sessionId,
+      updatedAt: 1,
+    });
+    let markWriterStarted!: () => void;
+    const writerStarted = new Promise<void>((resolve) => {
+      markWriterStarted = resolve;
+    });
+    let releaseWriter!: () => void;
+    const writerRelease = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const blockedWrite = patchSessionEntryCore(
+      scope,
+      async () => {
+        markWriterStarted();
+        await writerRelease;
+        return { label: "replacement handle write" };
+      },
+      { skipMaintenance: true },
+    );
+    await writerStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const drains = [...SQLITE_SESSION_WRITER_QUEUES.values()].flatMap((queue) =>
+      queue.drainPromise ? [queue.drainPromise] : [],
+    );
+    expect(drains).not.toHaveLength(0);
+
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    releaseWriter();
+    await Promise.all([blockedWrite, ...drains]);
+
+    expect(replacement.db.isOpen).toBe(true);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+    expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+  });
+
   it("commits a lifecycle projection after its async builder loses the cached handle", async () => {
     await expect(
       applySessionEntryLifecycleMutation({
@@ -166,6 +216,28 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ).resolves.toMatchObject({ afterCount: 1 });
     expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
+  });
+
+  it("revalidates label ownership after the planning handle closes", async () => {
+    await applySessionEntryCanonicalReplacements({
+      storePath: scope.storePath,
+      sessionKeys: [scope.sessionKey],
+      includeLabelOwners: "Renamed",
+      update: async ([snapshot]) => {
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        return {
+          result: undefined,
+          replacements: [
+            {
+              entry: { ...snapshot!.entry, label: "Renamed" },
+              sessionKey: scope.sessionKey,
+              previousSessionKeys: [],
+            },
+          ],
+        };
+      },
+    });
+    expect(loadSessionEntry(scope)?.label).toBe("Renamed");
   });
 
   it("waits for projection repair after its polling handle closes", async () => {

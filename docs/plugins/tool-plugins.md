@@ -171,6 +171,12 @@ That is the opposite argument order from the declarative
 Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
+Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
+transient activity out of channel progress drafts. Lifecycle events and the
+final tool result still flow normally. OpenClaw preserves this flag when
+reusing a cached tool or normalizing its schema; omitted or `false` leaves
+normal progress behavior in place. See [Progress drafts](/concepts/progress-drafts).
+
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
 with hooks, services, providers, or commands.

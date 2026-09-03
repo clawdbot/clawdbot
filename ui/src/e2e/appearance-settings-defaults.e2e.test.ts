@@ -1,9 +1,9 @@
 // Control UI tests cover Appearance override provenance and restoring product defaults.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -24,12 +24,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "appearance-settings-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("appearance-settings-defaults");
+  }
+});
 function settingsStorageKey(): string {
   return controlUiBundledSettingsStorageKey(suite.server.baseUrl);
 }
@@ -169,7 +169,6 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(uiProofArtifactDir, filename),
@@ -177,6 +176,55 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("shows task progress auto-collapse off by default and persists the opt-in", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse({}, "appearance-task-progress-1"),
+          },
+        });
+
+        const response = await page.goto(
+          `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
+        );
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        const row = settingsRow(page, "Collapse task progress by default");
+        const toggle = row.locator("wa-switch");
+        await row.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() =>
+            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
+          )
+          .toBe(false);
+        await expect.poll(() => row.textContent()).toContain("Using default: Disabled");
+        await captureViewport(page, "11-task-progress-collapse-off.png");
+
+        await row.click();
+        await expect
+          .poll(() =>
+            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
+          )
+          .toBe(true);
+        await expect
+          .poll(() => readPersistedSettings(page))
+          .toMatchObject({
+            chatCollapseTaskProgress: true,
+          });
+        await captureViewport(page, "12-task-progress-collapse-on.png");
+      },
+    );
+  });
+
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

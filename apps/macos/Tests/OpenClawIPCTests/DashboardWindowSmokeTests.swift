@@ -538,7 +538,9 @@ struct DashboardWindowSmokeTests {
             isMainFrame: false,
             dashboardURL: dashboard))
     }
+}
 
+extension DashboardWindowSmokeTests {
     @Test func `dashboard link browser tabs preserve isolation and lifecycle`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -693,6 +695,17 @@ struct DashboardWindowSmokeTests {
                 dividerThickness: controller._testLinkBrowserDividerThickness,
                 persistedWidth: resizedWidth)
             #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
+
+            for (size, width) in [
+                (DashboardWindowLayout.windowSize, CGFloat(800)),
+                (DashboardWindowLayout.windowMinSize, CGFloat(500)),
+            ] {
+                defaults.set(Double(width), forKey: key)
+                controller._testCloseLinkBrowser()
+                controller.window?.setContentSize(size)
+                controller._testOpenLinkBrowser(link)
+                #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+            }
         }
     }
 
@@ -1142,7 +1155,10 @@ struct DashboardWindowSmokeTests {
         let authGate = DashboardRouteAuthGate(token: "route-a-device-token")
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await authGate.authToken() },
-            routeProbe: { await authGate.probe() })
+            routeProbe: { purpose in
+                #expect(purpose == .authentication)
+                await authGate.probe()
+            })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
         let socketURL = server.websocketURL("")
@@ -1193,7 +1209,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in nil },
-            routeProbe: {})
+            routeProbe: { purpose in #expect(purpose == .authentication) })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
 

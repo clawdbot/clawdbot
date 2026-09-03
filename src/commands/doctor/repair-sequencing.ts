@@ -5,9 +5,9 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -111,13 +111,6 @@ export async function runDoctorRepairSequence(params: {
     }
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
   };
-
-  const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
-  if (removedExecApprovals > 0) {
-    changeNotes.push(
-      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
-    );
-  }
 
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];
@@ -226,15 +219,25 @@ export async function runDoctorRepairSequence(params: {
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();
-    pluginMetadataSnapshotState.current = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
+    pluginMetadataSnapshotState.current = runWithCurrentPluginMetadata(() =>
+      resolveConfigWideDoctorPluginMetadataSnapshot({
+        snapshot: loadPluginMetadataSnapshot({
+          config: currentScope.config,
+          env,
+          workspaceDir: currentScope.workspaceDir,
+          // Later Doctor contributions reuse this cache owner. Carry the committed
+          // records into it so registry refresh cannot restore the pre-repair base.
+          index: loadInstalledPluginIndex({
+            config: currentScope.config,
+            env,
+            workspaceDir: currentScope.workspaceDir,
+            installRecords: missingConfiguredPluginInstallRepair.records,
+          }),
+        }),
         config: currentScope.config,
         env,
-        workspaceDir: currentScope.workspaceDir,
       }),
-      config: currentScope.config,
-      env,
-    });
+    );
   }
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);

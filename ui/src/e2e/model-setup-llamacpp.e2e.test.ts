@@ -1,7 +1,7 @@
 // Control UI tests cover llama.cpp setup against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-llamacpp", artifactRoot)
+    : undefined;
+});
 const prepareOptions = [
   {
     id: "ollama",
@@ -61,7 +67,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
@@ -72,11 +78,10 @@ suite.define(() => {
               done: false,
               status: "running",
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef,
-              latencyMs: 731,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
             },
             "wizard.next": {
               sequence: [
@@ -122,6 +127,7 @@ suite.define(() => {
                   },
                 },
                 { done: true, status: "done" },
+                { done: true, status: "done", modelActivation: { modelRef } },
               ],
             },
           },
@@ -139,7 +145,6 @@ suite.define(() => {
         await expect.poll(() => llamaCppRow.textContent()).not.toContain("RAM");
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -182,13 +187,14 @@ suite.define(() => {
           .toContain(modelRef);
         await expect
           .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 731 ms");
+          .not.toContain("Verified in");
         await expect
           .poll(() => page.locator('.model-setup-success [data-provider-icon="llamacpp"]').count())
           .toBe(1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "provider-auto:llama-cpp",
           agentId: "main",
           modelRef,

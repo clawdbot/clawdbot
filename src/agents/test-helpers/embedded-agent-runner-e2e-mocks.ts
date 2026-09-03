@@ -8,13 +8,14 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
 type EmbeddedRunnerFastRunMockOptions = {
-  runEmbeddedAttempt: (params: unknown) => unknown;
+  runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => unknown;
   prepareProviderRuntimeAuth?: (params: {
     provider: string;
     context: { apiKey: string };
@@ -61,6 +62,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -77,6 +79,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot {
   return {
+    catalogOwner: undefined,
     ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
     ...(input.inheritedAuthDir !== undefined ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
@@ -170,7 +173,11 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
     attachModelProviderRuntimePluginHandle: (model: unknown) => model,
     prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
+    resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderRuntimePluginHandle: vi.fn((params: object) => params),
     wrapProviderStreamFn: vi.fn(() => undefined),
@@ -205,7 +212,8 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
-    runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
+      options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
@@ -356,7 +364,10 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     ),
   }));
   vi.doMock("../embedded-agent-runner/run/attempt.js", () => ({
-    runEmbeddedAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => options.runEmbeddedAttempt(params),
+  }));
+  vi.doMock("../../plugins/provider-external-auth.js", () => ({
+    resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
@@ -370,7 +381,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
-    resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),

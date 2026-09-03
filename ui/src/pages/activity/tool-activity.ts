@@ -119,7 +119,9 @@ function buildOutputPreview(value: unknown): { text?: string; truncated: boolean
   }
   const redacted = redactToolPayloadText(raw);
   const truncated = truncateText(redacted, ACTIVITY_OUTPUT_PREVIEW_LIMIT);
-  return { text: truncated.text, truncated: truncated.truncated };
+  // A sliced preview can retain the whole output after the raw event is evicted.
+  // Copy its characters here so the bounded Activity entry owns only its preview.
+  return { text: Array.from(truncated.text).join(""), truncated: truncated.truncated };
 }
 
 function countArgumentFields(value: unknown): number {

@@ -344,6 +344,10 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
     throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
   }
+  if (config.plugins?.entries?.codex?.enabled !== false) {
+    throw new Error("expected the corrupt plugin fixture's explicit Codex opt-out to survive");
+  }
+  console.log(JSON.stringify({ allow, codexEnabled: false }));
 }
 
 const [command, arg, arg2] = process.argv.slice(2);

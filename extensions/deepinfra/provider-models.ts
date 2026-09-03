@@ -3,16 +3,21 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
+  fetchLiveProviderModelRows,
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  getCachedLiveCatalogValue,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
 
 const log = createSubsystemLogger("deepinfra-models");
 
@@ -23,6 +28,7 @@ const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 export const DEEPINFRA_BASE_URL = DEEPINFRA_MANIFEST_PROVIDER.baseUrl;
 const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
+const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
 const DEEPINFRA_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash";
 export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
@@ -34,6 +40,12 @@ export const DEEPINFRA_MODEL_CATALOG: ModelDefinitionConfig[] = DEEPINFRA_MANIFE
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type DeepInfraDiscoveryOptions = {
+  hasApiKey?: boolean;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+};
 
 type DeepInfraAuthConfig = {
   secrets?: { defaults?: { env?: string; file?: string; exec?: string } };
@@ -358,11 +370,13 @@ export function buildDeepInfraModelDefinition(model: ModelDefinitionConfig): Mod
   };
 }
 
-function chatSurfaceModelToModelDefinition(model: DeepInfraSurfaceModel): ModelDefinitionConfig {
+function chatSurfaceModelToModelDefinition(
+  model: DeepInfraSurfaceModel,
+): Omit<ModelDefinitionConfig, "cost"> {
   const manifestModel = DEEPINFRA_MODEL_CATALOG.find((entry) => entry.id === model.id);
   const input: Array<"text" | "image"> = model.tags.includes("vlm") ? ["text", "image"] : ["text"];
   const reasoning = model.tags.includes("reasoning") || model.tags.includes("reasoning_effort");
-  return buildDeepInfraModelDefinition({
+  return {
     id: model.id,
     name: model.name,
     reasoning: manifestModel?.reasoning ?? reasoning,
@@ -370,13 +384,7 @@ function chatSurfaceModelToModelDefinition(model: DeepInfraSurfaceModel): ModelD
     ...(manifestModel?.compat ? { compat: manifestModel.compat } : {}),
     contextWindow: model.contextWindow ?? DEEPINFRA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.maxTokens ?? DEEPINFRA_DEFAULT_MAX_TOKENS,
-    cost: {
-      input: model.pricing.input_tokens ?? 0,
-      output: model.pricing.output_tokens ?? 0,
-      cacheRead: model.pricing.cache_read_tokens ?? 0,
-      cacheWrite: 0,
-    },
-  });
+  };
 }
 
 // Gate dynamic discovery on key presence: pre-auth keeps the picker tight and
@@ -406,23 +414,22 @@ export function hasDeepInfraApiKey(options?: {
   return isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir });
 }
 
-// Discover the per-surface catalog. Falls back to the static manifest when
-// no key, fetch fails, or running under Vitest. 5-minute cache on success.
-export async function discoverDeepInfraSurfaces(options?: {
-  hasApiKey?: boolean;
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-}): Promise<DeepInfraDiscoveredCatalog> {
+function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
   const env = options?.env ?? process.env;
   if (env.NODE_ENV === "test" || env.VITEST) {
-    return manifestFallbackCatalog();
+    return false;
   }
+  return options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
+}
 
-  const hasKey = options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
-  if (!hasKey) {
-    return manifestFallbackCatalog();
-  }
+// Keep pre-auth and tests offline; successful discovery shares the five-minute live catalog cache.
+export async function discoverDeepInfraSurfaces(
+  options?: DeepInfraDiscoveryOptions,
+): Promise<DeepInfraDiscoveredCatalog> {
+  return canDiscoverDeepInfra(options) ? loadDeepInfraSurfaces() : manifestFallbackCatalog();
+}
 
+async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
   try {
     const data = await getCachedLiveProviderModelRows({
       providerId: "deepinfra",
@@ -462,30 +469,79 @@ export async function discoverDeepInfraSurfaces(options?: {
   }
 }
 
-// Chat-only shim for callers that haven't migrated to the per-surface catalog
-// (provider-catalog.ts, augmentModelCatalog).
-export async function discoverDeepInfraModels(options?: {
-  hasApiKey?: boolean;
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-}): Promise<ModelDefinitionConfig[]> {
-  const catalog = await discoverDeepInfraSurfaces(options);
-  if (!catalog.live) {
-    // Keep manifest-owned chat compatibility metadata intact. The generic
-    // surface projection intentionally carries only cross-surface fields.
+async function discoverDeepInfraPricing() {
+  try {
+    return await getCachedLiveCatalogValue({
+      keyParts: ["deepinfra", "native-pricing", DEEPINFRA_PRICING_URL],
+      ttlMs: DISCOVERY_CACHE_TTL_MS,
+      load: async () => {
+        const rows = await fetchLiveProviderModelRows({
+          providerId: "deepinfra",
+          endpoint: DEEPINFRA_PRICING_URL,
+          timeoutMs: DISCOVERY_TIMEOUT_MS,
+          buildRequestHeaders: () => ({ Accept: "application/json" }),
+          auditContext: "deepinfra-pricing-discovery",
+          fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+          readRows: (body) => {
+            if (!Array.isArray(body)) {
+              throw new Error("Native DeepInfra pricing response must be an array");
+            }
+            return body;
+          },
+        });
+        const prices = parseDeepInfraPricingCatalog(rows);
+        if (!prices) {
+          throw new Error("Native DeepInfra pricing is malformed or has no usable schedules");
+        }
+        return prices;
+      },
+    });
+  } catch (error) {
+    log.warn(
+      `Native pricing unavailable: ${String(error)}. Keeping model metadata with unknown estimates; retry discovery or configure explicit model costs.`,
+    );
+    return undefined;
+  }
+}
+
+export async function discoverDeepInfraModels(
+  options?: DeepInfraDiscoveryOptions,
+): Promise<ModelDefinitionConfig[]> {
+  if (!canDiscoverDeepInfra(options)) {
+    return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+  }
+  // Resolve auth once and load independent public facts concurrently within the discovery deadline.
+  // Media-only discovery continues to use just the agent projection.
+  const [catalog, prices] = await Promise.all([
+    loadDeepInfraSurfaces(),
+    discoverDeepInfraPricing(),
+  ]);
+  if (!catalog.live && !prices) {
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
   const chatModels = catalog.chat.length > 0 ? catalog.chat : [...catalog.chat, ...catalog.vlm];
-  if (chatModels.length === 0) {
-    // True empty (no manifest entries either) — keep behavior stable.
-    return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
-  }
-  const liveModels = chatModels.map(chatSurfaceModelToModelDefinition);
+  // Static surface rows omit chat compatibility metadata; keep the complete
+  // manifest seeds when metadata fails, then attach any available native prices.
+  const liveModels = catalog.live ? chatModels.map(chatSurfaceModelToModelDefinition) : [];
   const seen = new Set(liveModels.map((model) => model.id));
   const manifestModels = DEEPINFRA_MODEL_CATALOG.filter((model) => {
     const unseen = !seen.has(model.id);
     seen.add(model.id);
     return unseen;
-  }).map(buildDeepInfraModelDefinition);
-  return [...liveModels, ...manifestModels];
+  });
+  const models = [...liveModels, ...manifestModels];
+  const unknownPrices = models.filter((model) => !prices?.has(model.id)).length;
+  if (prices && unknownPrices > 0) {
+    log.warn(
+      `Native pricing unavailable or qualified for ${unknownPrices} models; keeping metadata with unknown estimates. Configure explicit model costs if needed.`,
+    );
+  }
+  // Price appended seeds too: a missing projection row must not revive stale bundled costs.
+  // Runtime requires zeros for unknown prices; this is not evidence of free billing.
+  return models.map((model) =>
+    buildDeepInfraModelDefinition({
+      ...model,
+      cost: prices?.get(model.id) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }),
+  );
 }

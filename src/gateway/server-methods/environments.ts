@@ -20,9 +20,16 @@ import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
+import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  isNodeCommandAllowed,
+  resolveNodeCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
+} from "../node-command-policy.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -59,6 +66,8 @@ function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): st
 function summarizeNodeEnvironment(
   node: NodeListNode,
   config: Parameters<typeof resolveNodeCommandAllowlist>[0],
+  requiredCommands: readonly string[],
+  liveNode: NodeSession | undefined,
 ): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
@@ -83,6 +92,16 @@ function summarizeNodeEnvironment(
         .slice(0, 128)
     : [];
   const desktop = invocableCommands.includes(NODE_DESKTOP_STREAM_COMMAND);
+  const requiredNodeCommand =
+    allowlist && liveNode
+      ? resolveRequiredNodeCommandAuthority({
+          requiredCommands,
+          declaredCommands: liveNode.declaredCommands,
+          effectiveCommands: liveNode.commands,
+          withheldCommands: readNodeSessionWithheldCommands(liveNode),
+          allowlist,
+        })
+      : undefined;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
@@ -102,6 +121,7 @@ function summarizeNodeEnvironment(
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
+    ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
@@ -139,6 +159,7 @@ export function summarizeWorkerEnvironment(
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
   workers = listWorkerEnvironments(context),
+  runtimeId?: string,
 ): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
   // Orphaned or failed rows that retain a node binding still own its pairing role.
@@ -159,6 +180,10 @@ export async function listGatewayEnvironments(
     projectPairedDeviceNodeBindings(visibleDevices),
   );
   const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
+  const connectedNodesById = new Map(connectedNodes.map((node) => [node.nodeId, node]));
+  const requiredCommands = runtimeId
+    ? (resolveWorkerPlacementCapabilities(runtimeId).devicePlacement?.requiredNodeCommands ?? [])
+    : [];
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
@@ -172,7 +197,9 @@ export async function listGatewayEnvironments(
       : GATEWAY_ENVIRONMENT;
   return [
     gateway,
-    ...listKnownNodes(catalog).map((node) => summarizeNodeEnvironment(node, config)),
+    ...listKnownNodes(catalog).map((node) =>
+      summarizeNodeEnvironment(node, config, requiredCommands, connectedNodesById.get(node.nodeId)),
+    ),
   ];
 }
 function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
@@ -200,7 +227,7 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
     summaries.map(async (summary) => {
       const executionModes = (["worker-turn", "remote-exec"] as const).filter(
         (mode) =>
-          context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
+          context.workerEnvironmentService?.supportsExecutionMode(summary.id, mode) === true,
       );
       const executionMode = executionModes[0];
       const resolvedSummary = Object.assign(
@@ -427,13 +454,25 @@ async function respondDesktopLaunch(params: {
 }
 
 export const environmentsHandlers: GatewayRequestHandlers = {
-  "environments.list": async ({ params, respond, context }) => {
+  "environments.list": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
+    if (params.runtimeId) {
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
+      if (!access.allowed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`),
+        );
+        return;
+      }
+    }
     await respondUnavailableOnThrow(respond, async () => {
       const workers = listWorkerEnvironments(context);
-      const environments = await listGatewayEnvironments(context, workers);
+      const environments = await listGatewayEnvironments(context, workers, params.runtimeId);
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),

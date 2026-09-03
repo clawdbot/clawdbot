@@ -137,6 +137,54 @@ describe("realtime voice session harness", () => {
       1,
     );
   });
+
+  it("settles rejected manual speech before a response is created and fences its terminal twin", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge({
+          sendUserMessage: () =>
+            request.onEvent?.({ direction: "client", type: "response.create" }),
+        });
+      },
+    };
+    const harness = createHarness();
+    const onResponseDone = vi.fn(() => session.sendUserMessage("Next answer"));
+    const session = harness.createBridge({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      onResponseDone,
+    });
+
+    session.sendUserMessage("First answer");
+    expect(harness.talk.activeTurnId).toBeDefined();
+    const failure = { status: "failed", message: "Speech request rejected" } as const;
+    callbacks?.onResponseDone?.(failure);
+    expect(onResponseDone).toHaveBeenCalledExactlyOnceWith(failure);
+
+    const nextTurnId = harness.talk.activeTurnId;
+    expect(nextTurnId).toBeDefined();
+    callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+    expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    expect(onResponseDone).toHaveBeenCalledOnce();
+
+    onResponseDone.mockImplementation(() => {});
+    callbacks?.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "resp-next",
+    });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-next" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-next" });
+    expect(onResponseDone).toHaveBeenCalledTimes(2);
+    expect(harness.talk.activeTurnId).toBeUndefined();
+  });
+
   it("keeps shared Talk events ordered across input, output, and turn completion", () => {
     const harness = createHarness();
 

@@ -1,7 +1,10 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
+import type {
+  BrowserRequestClient,
+  BrowserInspectedNode,
+  BrowserPanelTab,
+} from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
@@ -54,7 +57,7 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     value: BrowserPanelInputState[Key],
   ): void;
   runAction(
-    action: (client: GatewayBrowserClient) => Promise<void>,
+    action: (client: BrowserRequestClient) => Promise<void>,
     refreshView?: boolean,
   ): Promise<boolean>;
   reportError(error: unknown): void;

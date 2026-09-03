@@ -18,6 +18,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -533,6 +534,7 @@ export async function handleDirectiveOnly(
       });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
+      emitSessionLifecycleEvent({ sessionKey, agentId: activeAgentId, reason: "patch" });
       triggerSessionPatchHook({
         cfg: params.cfg,
         sessionEntry: appliedSessionEntry,
@@ -629,21 +631,27 @@ export async function handleDirectiveOnly(
       parts.push(formatElevatedRuntimeHint());
     }
   }
-  if (directives.hasExecDirective && directives.hasExecOptions && allowPrivilegedPersistence) {
-    const execParts = Object.entries({
-      host: directives.execHost,
-      security: directives.execSecurity,
-      ask: directives.execAsk,
-      node: directives.execNode,
-    })
-      .filter(([, value]) => Boolean(value))
-      .map(([key, value]) => `${key}=${value}`);
-    if (execParts.length > 0) {
-      parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
+  if (directives.hasExecDirective && directives.hasExecOptions) {
+    for (const [label, options] of [
+      [
+        allowPrivilegedPersistence && "Exec defaults set",
+        { host: directives.execHost, node: directives.execNode },
+      ],
+      [
+        "Exec policy for this run only",
+        { security: directives.execSecurity, ask: directives.execAsk },
+      ],
+    ] as const) {
+      const execParts = Object.entries(options)
+        .filter(([, value]) => Boolean(value))
+        .map(([key, value]) => `${key}=${value}`);
+      if (execParts.length > 0) {
+        const message = label
+          ? `${label} (${execParts.join(", ")}).`
+          : formatInternalExecPersistenceDeniedText();
+        parts.push(formatDirectiveAck(message));
+      }
     }
-  }
-  if (directives.hasExecDirective && directives.hasExecOptions && !allowPrivilegedPersistence) {
-    parts.push(formatDirectiveAck(formatInternalExecPersistenceDeniedText()));
   }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;

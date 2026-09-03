@@ -264,6 +264,7 @@ export function createAgentRunEventHandler(params: {
       return;
     }
     if (evt.data.completed !== true) {
+      await params.turn.opts?.onCompactionEnd?.({ completed: false });
       await sendCompactionUserNotices("incomplete");
       return;
     }
@@ -288,7 +289,7 @@ export function createAgentRunEventHandler(params: {
         consoleMessage,
       });
     }
-    await params.turn.opts?.onCompactionEnd?.();
+    await params.turn.opts?.onCompactionEnd?.({ completed: true });
     await sendCompactionUserNotices("end");
   };
 }

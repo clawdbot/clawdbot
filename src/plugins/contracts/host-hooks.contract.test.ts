@@ -12,10 +12,11 @@ import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
 import {
   clearPluginOwnedSessionState,
   listSessionEntriesCore,
+  loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
@@ -42,6 +43,7 @@ import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtur
 import {
   drainPluginNextTurnInjectionContext,
   enqueuePluginNextTurnInjection,
+  getPluginSessionExtensionStateSync,
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
@@ -1869,6 +1871,112 @@ describe("host-hook fixture plugin contract", () => {
       }),
     ).resolves.toEqual({ enqueued: false, id: "", sessionKey: "agent:main:main" });
   });
+
+  it.each(["enqueue", "drain", "extension"] as const)(
+    "keeps global plugin %s state in its selected agent store",
+    async (operation) => {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(createPluginRecord({ id: "owner-fixture", status: "loaded" }));
+      registry.sessionExtensions.push({
+        pluginId: "owner-fixture",
+        source: "test",
+        extension: { namespace: "workflow", description: "Agent-owned workflow state" },
+      });
+      registry.trustedToolPolicies.push({
+        pluginId: "owner-fixture",
+        source: "test",
+        policy: {
+          id: "owner-state",
+          description: "Read the selected agent's workflow state",
+          evaluate: (_event, ctx) => ({
+            params: { workflow: ctx.getSessionExtension?.("workflow") },
+          }),
+        },
+      });
+      setActivePluginRegistry(registry);
+      await withHostHookState(
+        "openclaw-host-hooks-owner-",
+        async ({ tempConfig }) => {
+          const scope = (agentId: string) => ({
+            agentId,
+            sessionKey: "global",
+            storePath: resolveSessionStorePathCore(tempConfig.session.store, { agentId }),
+          });
+          for (const agentId of ["qa", "beta"]) {
+            await replaceSessionEntry(scope(agentId), {
+              sessionId: `session-${agentId}`,
+              updatedAt: 1,
+              pluginExtensions: { "owner-fixture": { workflow: { owner: agentId } } },
+              pluginNextTurnInjections: {
+                "owner-fixture": [
+                  {
+                    id: agentId,
+                    pluginId: "owner-fixture",
+                    text: agentId,
+                    placement: "prepend_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            });
+          }
+          const betaBefore = loadSessionEntryReadOnly(scope("beta"));
+          if (operation === "enqueue") {
+            const result = await enqueuePluginNextTurnInjection({
+              cfg: tempConfig,
+              pluginId: "owner-fixture",
+              injection: { agentId: "qa", sessionKey: "global", text: "only qa" },
+            });
+            expect(result.enqueued).toBe(true);
+            const queued = loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections?.[
+              "owner-fixture"
+            ];
+            expect(queued?.map((entry) => entry.text)).toEqual(["qa", "only qa"]);
+            expect(queued?.[1]).not.toHaveProperty("agentId");
+          } else if (operation === "drain") {
+            const result = await drainPluginNextTurnInjectionContext({
+              cfg: tempConfig,
+              agentId: "qa",
+              sessionKey: "global",
+            });
+            expect(result.prependContext).toBe("qa");
+            expect(loadSessionEntryReadOnly(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
+          } else {
+            await expect(
+              patchPluginSessionExtension({
+                cfg: tempConfig,
+                agentId: "qa",
+                sessionKey: "global",
+                pluginId: "owner-fixture",
+                namespace: "workflow",
+                value: { owner: "qa", approved: true },
+              }),
+            ).resolves.toMatchObject({ ok: true });
+            expect(
+              getPluginSessionExtensionStateSync({
+                cfg: tempConfig,
+                agentId: "qa",
+                sessionKey: "global",
+                pluginId: "owner-fixture",
+              }),
+            ).toEqual({ workflow: { owner: "qa", approved: true } });
+            await expect(
+              runTrustedToolPolicies(
+                { toolName: "read", params: {} },
+                { toolName: "read", sessionKey: "global", agentId: "qa" },
+                { config: tempConfig, registry },
+              ),
+            ).resolves.toEqual({ params: { workflow: { owner: "qa", approved: true } } });
+          }
+          expect(loadSessionEntryReadOnly(scope("beta"))).toEqual(betaBefore);
+        },
+        (storePath) => ({
+          agents: { ownership: "explicit", entries: { qa: {}, beta: {} } },
+          session: { store: path.join(path.dirname(storePath), "{agentId}", "sessions.json") },
+        }),
+      );
+    },
+  );
 
   it("reports duplicate next-turn injections as not newly enqueued", async () => {
     await withHostHookState("openclaw-host-hooks-injection-", async ({ storePath, tempConfig }) => {

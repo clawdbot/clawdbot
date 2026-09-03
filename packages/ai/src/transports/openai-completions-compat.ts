@@ -48,7 +48,7 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
@@ -107,6 +107,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "deepseek-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "xai-native" ||
     isXiaomi ||
     isZai ||
@@ -159,11 +160,13 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
-      provider === "openrouter" && modelId?.startsWith("anthropic/") === true
+      (isModelStudioLike && endpointClass !== "custom") ||
+      (provider === "openrouter" && modelId?.startsWith("anthropic/") === true)
         ? "anthropic"
         : undefined,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
     supportsLongCacheRetention:
+      !isModelStudioLike &&
       provider !== "cloudflare-workers-ai" &&
       provider !== "cloudflare-ai-gateway" &&
       knownProviderFamily !== "together" &&
@@ -242,7 +245,7 @@ function resolveSessionAffinity(
 
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
-  model: Model<"openai-completions">,
+  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);

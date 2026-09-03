@@ -24,7 +24,6 @@ import {
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
-  shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
@@ -351,6 +350,30 @@ describe("control-ui-i18n process runner", () => {
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
   });
 
+  it("runs an optional result validator before accepting a batch reply", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "native.apple.progress",
+        text: "Processed %lld of %@",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "native.apple.progress": "Bearbetade %@" }),
+        items,
+        "sv",
+        (source, translated, key, locale) => {
+          if (source.includes("%lld") && !translated.includes("%lld")) {
+            throw new Error(`invalid structural tokens for ${locale}:${key}`);
+          }
+        },
+      ),
+    ).toThrow("invalid structural tokens for sv:native.apple.progress");
+  });
+
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
     const reusable = filterPlaceholderCompatibleTranslations(
       new Map([
@@ -410,23 +433,6 @@ describe("control-ui-i18n process runner", () => {
         { fallbackCount: 0, locale: "fr" },
       ]),
     ).not.toThrow();
-  });
-
-  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: true,
-        isFallback: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReuseExistingTranslation({
-        allowTranslate: false,
-        force: false,
-        isFallback: true,
-      }),
-    ).toBe(true);
   });
 
   it("keeps a bounded process output tail", () => {

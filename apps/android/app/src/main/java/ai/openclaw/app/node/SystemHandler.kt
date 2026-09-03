@@ -58,16 +58,21 @@ private class AndroidSystemNotificationPoster(
     // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
-        "passive" ->
+        "passive" -> {
           Triple("passive", NotificationManager.IMPORTANCE_LOW, nativeString("OpenClaw Passive"))
-        "timesensitive" ->
+        }
+
+        "timesensitive" -> {
           Triple(
             "timesensitive",
             NotificationManager.IMPORTANCE_HIGH,
             nativeString("OpenClaw Time Sensitive"),
           )
-        else ->
+        }
+
+        else -> {
           Triple("active", NotificationManager.IMPORTANCE_DEFAULT, nativeString("OpenClaw Active"))
+        }
       }
     val channelId = "$NOTIFICATION_CHANNEL_BASE_ID.$suffix"
     val manager = appContext.getSystemService(NotificationManager::class.java)
@@ -113,7 +118,7 @@ internal fun buildSystemNotification(
     .build()
 
 /** Handles system-level node.invoke commands implemented by Android services. */
-class SystemHandler private constructor(
+class SystemHandler internal constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
@@ -168,10 +173,5 @@ class SystemHandler private constructor(
       sound = sound?.trim()?.ifEmpty { null },
       priority = priority?.trim()?.ifEmpty { null },
     )
-  }
-
-  companion object {
-    /** Creates a handler with a fake poster for parser and authorization tests. */
-    internal fun forTesting(poster: SystemNotificationPoster): SystemHandler = SystemHandler(poster)
   }
 }

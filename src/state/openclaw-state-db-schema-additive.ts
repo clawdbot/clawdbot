@@ -16,6 +16,7 @@ import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
+  repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -313,6 +314,19 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
   `);
 }
 
+/** First personal publication write only; status and old readers leave this surface dormant. */
+export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_personal_publication_requests (",
+  );
+  const marker = "ON github_personal_publication_requests(status, updated_at_ms, request_id);";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Personal GitHub publication schema marker is missing.");
+  }
+  db.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical lazy additive DDL only.
+}
+
 /**
  * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
  *
@@ -459,8 +473,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "managed_outgoing_image_records",
     "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
   );
-  ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(
     db,
     "current_conversation_bindings",
@@ -493,6 +505,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "detail_json TEXT");
   repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentTaskBindings(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");

@@ -287,6 +287,7 @@ export async function runTrustedToolPolicies(
                   cfg: config,
                   pluginId,
                   sessionKey: ctx.sessionKey,
+                  agentId: ctx.agentId,
                 })
               : undefined,
           );

@@ -72,16 +72,13 @@ function readBindingCandidate(row: BindingRow, prefix: (typeof KEY_PREFIXES)[num
   return { row, agentId, sessionId, stable };
 }
 
-async function scanBindings(
-  { context }: MigrationParams,
-  remove?: NonNullable<PluginDoctorStateMigrationContext["deletePluginStateEntriesIfUnchanged"]>,
-) {
+async function* iterateOrphanBindingPages({
+  context,
+}: MigrationParams): AsyncGenerator<BindingRow[]> {
   const readPage = context.readPluginStateEntriesInKeyRange;
   const readEvidence = context.readSessionIdentityEvidenceBatch;
-  let deleted = 0;
-  let changed = 0;
   if (!readPage || !readEvidence) {
-    return { found: false, deleted, changed };
+    return;
   }
   for (const prefix of KEY_PREFIXES) {
     let after: string | undefined;
@@ -129,12 +126,7 @@ async function scanBindings(
           })
           .map(({ row }) => row);
         if (stale.length > 0) {
-          if (!remove) {
-            return { found: true, deleted, changed };
-          }
-          const result = remove(CODEX_APP_SERVER_BINDING_NAMESPACE, stale);
-          deleted += result.deleted;
-          changed += result.changed;
+          yield stale;
         }
       }
       if (rows.length < PAGE_SIZE) {
@@ -144,7 +136,6 @@ async function scanBindings(
       await setImmediate();
     }
   }
-  return { found: false, deleted, changed };
 }
 
 export const codexOrphanedSessionBindingMigration: PluginDoctorStateMigration = {
@@ -153,9 +144,10 @@ export const codexOrphanedSessionBindingMigration: PluginDoctorStateMigration = 
   doctorOnly: true,
   phase: "after-session-repair",
   async detectLegacyState(params) {
-    return (await scanBindings(params)).found
-      ? { preview: ["- Codex app-server bindings: remove orphaned session ownership"] }
-      : null;
+    for await (const _ of iterateOrphanBindingPages(params)) {
+      return { preview: ["- Codex app-server bindings: remove orphaned session ownership"] };
+    }
+    return null;
   },
   async migrateLegacyState(params) {
     const remove = params.context.deletePluginStateEntriesIfUnchanged;
@@ -165,7 +157,13 @@ export const codexOrphanedSessionBindingMigration: PluginDoctorStateMigration = 
         warnings: ["Codex session binding repair requires locked SQLite maintenance ownership"],
       };
     }
-    const { deleted, changed } = await scanBindings(params, remove);
+    let deleted = 0;
+    let changed = 0;
+    for await (const rows of iterateOrphanBindingPages(params)) {
+      const result = remove(CODEX_APP_SERVER_BINDING_NAMESPACE, rows);
+      deleted += result.deleted;
+      changed += result.changed;
+    }
     return {
       changes:
         deleted > 0 ? [`Removed ${deleted} orphaned Codex app-server session binding(s)`] : [],

@@ -1,4 +1,4 @@
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/run-state.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
@@ -59,6 +59,7 @@ export async function prepareGatewayLifecycle(params: {
     sessionMessageSubscribers,
     isConnectionActive,
     clients,
+    mentionInbox,
     broadcast,
     cfgAtStart,
     pluginRuntime,
@@ -390,6 +391,7 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the

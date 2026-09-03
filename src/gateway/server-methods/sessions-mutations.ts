@@ -358,10 +358,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     if ("incognitoDeleted" in result) {
       respond(true, { ok: true, key: result.key, deleted: true }, undefined);
-      // The session is gone, not reset: clients drop rows and navigate away
-      // only on "delete" (a non-delete reason merges a rowless no-op event).
       emitSessionsChanged(context, {
         sessionKey: result.key,
+        agentId: result.agentId,
+        sessionId: result.deletedSessionId,
         reason: "delete",
       });
       return;

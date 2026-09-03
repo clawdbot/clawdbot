@@ -22,6 +22,24 @@ import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
+export function assertSessionStoreMigrationComplete(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  targets?: readonly { storePath: string }[];
+}): void {
+  const env = params.env ?? process.env;
+  const targets = params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const legacyStore = [
+    path.join(resolveStateDir(env), "sessions", "sessions.json"),
+    ...targets.map((target) => target.storePath),
+  ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
+  if (legacyStore) {
+    throw new Error(
+      `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
+    );
+  }
+}
+
 /** Maintains existing SQLite stores and returns their physical owners for startup reconciliation. */
 export async function runSessionStartupMigration(params: {
   cfg: OpenClawConfig;
@@ -39,15 +57,7 @@ export async function runSessionStartupMigration(params: {
   let targets = resolveTargets(params.cfg, { env });
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
-  const legacyStore = [
-    path.join(resolveStateDir(env), "sessions", "sessions.json"),
-    ...targets.map((target) => target.storePath),
-  ].find((storePath) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath));
-  if (legacyStore) {
-    throw new Error(
-      `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
-    );
-  }
+  assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
   const migrateLegacyMain =
     params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
   const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "automatic" });

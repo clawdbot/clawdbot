@@ -53,6 +53,7 @@ async function fetchPlaybackHead(params: {
   timeoutMs: number;
   fetchImpl: typeof fetch;
 }): Promise<Response> {
+  const { fetchImpl } = params;
   const controller = new AbortController();
   let rejectDeadline: ((error: Error) => void) | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -74,7 +75,7 @@ async function fetchPlaybackHead(params: {
   }, params.timeoutMs);
   try {
     return await Promise.race([
-      params.fetchImpl(params.source, {
+      fetchImpl(params.source, {
         method: "HEAD",
         headers: params.headers,
         credentials: "same-origin",

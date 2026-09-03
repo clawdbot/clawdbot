@@ -38,7 +38,7 @@ export function stripAssistantMediaDirectivesForDisplay(
   text: string,
   managedMediaUrls: readonly string[],
 ): string {
-  if (!/(?:^|\n)\s*MEDIA:/iu.test(text) || managedMediaUrls.length === 0) {
+  if (managedMediaUrls.length === 0 || !/(?:^|\n)\s*MEDIA:/iu.test(text)) {
     return text;
   }
   const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));
@@ -165,6 +165,9 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return true;
   }
+  if (!hasAssistantDisplayableNonTextContent(message)) {
+    return false;
+  }
   const content = message.text ?? message.content;
   const texts =
     typeof content === "string"
@@ -180,11 +183,7 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
               : [];
           })
         : [];
-  return (
-    texts.length > 0 &&
-    texts.every((text) => isSuppressedControlReplyText(text)) &&
-    hasAssistantDisplayableNonTextContent(message)
-  );
+  return texts.length > 0 && texts.every((text) => isSuppressedControlReplyText(text));
 }
 
 export function asRoleContentMessage(message: Record<string, unknown>): RoleContentMessage | null {

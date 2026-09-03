@@ -18,7 +18,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   context: GatewayRequestContext;
   runId: string;
   controller: AbortController;
-  sessionId: string;
+  sessionBinding: { readonly sessionId: string };
   sessionKey: string;
   agentId?: string;
   ownerConnId?: string;
@@ -53,6 +53,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   const lifecycle: TurnAdoptionLifecycle = {
     // Gateway cancel identity only — share collect key via ownerKey.
     admission: "cancel-only",
+    abortSignal: params.controller.signal,
     ...(params.originatingLeafEntryId !== undefined
       ? { originatingLeafEntryId: params.originatingLeafEntryId }
       : {}),
@@ -66,7 +67,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         chatQueuedTurns: params.chatQueuedTurns,
         runId: params.runId,
         controller: params.controller,
-        sessionId: params.sessionId,
+        sessionId: params.sessionBinding.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         ownerConnId: normalizeOptionalChatText(params.ownerConnId),

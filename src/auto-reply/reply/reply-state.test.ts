@@ -25,12 +25,11 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushThreshold,
+  resolveCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
-import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const tempDirs: string[] = [];
@@ -271,9 +270,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 0, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 16_000,
-        reserveTokensFloor: 20_000,
-        softThresholdTokens: 4_000,
+        threshold: 0,
       }),
     ).toBe(false);
   });
@@ -282,67 +279,48 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: undefined,
-        contextWindowTokens: 16_000,
-        reserveTokensFloor: 1_000,
-        softThresholdTokens: 4_000,
+        threshold: 11_000,
       }),
     ).toBe(false);
   });
 
-  it("preserves thresholds supplied by external memory providers", () => {
-    expect(
-      resolveMemoryFlushThreshold({
-        contextWindowTokens: 100,
-        reserveTokensFloor: 10,
-        softThresholdTokens: 80,
-      }),
-    ).toBe(10);
-
-    const disabled = {
-      entry: { totalTokens: 8_000, totalTokensFresh: true, totalTokensVersion: 1 as const },
-      contextWindowTokens: 32_000,
-      reserveTokensFloor: 50_000,
-      softThresholdTokens: 4_000,
-    };
-    expect(shouldRunMemoryFlush(disabled)).toBe(false);
-    expect(shouldRunPreflightCompaction(disabled)).toBe(false);
-  });
+  it.each([
+    [8_000, 4_000, 4_000],
+    [16_000, 8_000, 8_000],
+    [24_000, 16_000, 8_000],
+    [32_768, 20_000, 12_768],
+    [128_000, 20_000, 108_000],
+    [200_000, 20_000, 180_000],
+    [32_000, 50_000, 0],
+  ])(
+    "honors the selected reserve in a %i-token window",
+    (contextWindowTokens, reserveTokensFloor, expected) => {
+      const threshold = resolveCompactionThreshold({ contextWindowTokens, reserveTokensFloor });
+      expect(threshold).toBe(expected);
+      for (const tokenCount of [expected - 1, expected, expected + 1]) {
+        expect(
+          shouldRunPreflightCompaction({
+            entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+            threshold,
+          }),
+        ).toBe(expected > 0 && tokenCount >= expected);
+      }
+    },
+  );
 
   it.each([
-    [8_000, 4_000, 2_000, 2_000],
-    [16_000, 8_000, 4_000, 4_000],
-    [24_000, 16_000, 4_000, 4_000],
-    [32_000, 20_000, 4_000, 8_000],
-    [128_000, 20_000, 4_000, 104_000],
-    [200_000, 20_000, 4_000, 176_000],
+    [12_000, 12_768],
+    [16_000, 16_000],
   ])(
-    "preserves a usable %i-token model window with provider-owned maintenance budgets",
-    (contextWindowTokens, reserveTokensFloor, softThresholdTokens, threshold) => {
-      const params = {
-        contextWindowTokens,
-        reserveTokensFloor,
-        softThresholdTokens,
-      };
-
-      expect(resolveMemoryFlushThreshold(params)).toBe(threshold);
+    "honors a server floor of %i without lowering the local threshold",
+    (minimumThresholdTokens, expected) => {
       expect(
-        shouldRunMemoryFlush({
-          ...params,
-          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
+        resolveCompactionThreshold({
+          contextWindowTokens: 32_768,
+          reserveTokensFloor: 20_000,
+          minimumThresholdTokens,
         }),
-      ).toBe(true);
-      expect(
-        shouldRunPreflightCompaction({
-          ...params,
-          entry: { totalTokens: threshold - 1, totalTokensFresh: true, totalTokensVersion: 1 },
-        }),
-      ).toBe(false);
-      expect(
-        shouldRunPreflightCompaction({
-          ...params,
-          entry: { totalTokens: threshold, totalTokensFresh: true, totalTokensVersion: 1 },
-        }),
-      ).toBe(true);
+      ).toBe(expected);
     },
   );
 
@@ -350,9 +328,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 10_000, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 20_000,
-        softThresholdTokens: 10_000,
+        threshold: 70_000,
       }),
     ).toBe(false);
   });
@@ -361,9 +337,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 85, totalTokensFresh: true, totalTokensVersion: 1 },
-        contextWindowTokens: 100,
-        reserveTokensFloor: 10,
-        softThresholdTokens: 5,
+        threshold: 85,
       }),
     ).toBe(true);
   });
@@ -372,15 +346,13 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: {
-          totalTokens: 90_000,
+          totalTokens: 96_000,
           totalTokensFresh: true,
           totalTokensVersion: 1,
           compactionCount: 2,
           memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -394,18 +366,14 @@ describe("shouldRunMemoryFlush", () => {
           totalTokensVersion: 1,
           compactionCount: 1,
         },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(true);
   });
 
   it("runs on consecutive compaction cycles when flush records the pre-increment count", () => {
     const params = {
-      contextWindowTokens: 100_000,
-      reserveTokensFloor: 5_000,
-      softThresholdTokens: 2_000,
+      threshold: 93_000,
     };
 
     for (const entry of [
@@ -438,9 +406,7 @@ describe("shouldRunMemoryFlush", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -451,9 +417,7 @@ describe("shouldRunPreflightCompaction", () => {
     expect(
       shouldRunPreflightCompaction({
         entry: { totalTokens: 96_000, totalTokensFresh: false },
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(false);
   });
@@ -463,9 +427,7 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 10, totalTokensFresh: false },
         tokenCount: 93_000,
-        contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
-        softThresholdTokens: 2_000,
+        threshold: 93_000,
       }),
     ).toBe(true);
   });
@@ -546,9 +508,11 @@ describe("incrementCompactionCount", () => {
       storePath,
     });
     expect(count).toBe(3);
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(3);
+    expect(sessionStore[sessionKey]).toMatchObject({ sessionId: "s1", compactionCount: 3 });
+    expect(await loadStoredEntry(storePath, sessionKey)).toMatchObject({
+      sessionId: "s1",
+      compactionCount: 3,
+    });
   });
 
   it.each([
@@ -692,88 +656,56 @@ describe("incrementCompactionCount", () => {
     expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
-  it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
-    const entry = {
+  it.each([12_000, 0])(
+    "persists a chronology-qualified %i-token current-context snapshot",
+    async (currentContextTokens) => {
+      const entry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        compactionCount: 0,
+        totalTokens: 180_000,
+      };
+      const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+      await incrementCompactionCount({
+        sessionEntry: entry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        tokensAfter: currentContextTokens,
+      });
+
+      expect(await loadStoredEntry(storePath, sessionKey)).toMatchObject({
+        compactionCount: 1,
+        totalTokens: currentContextTokens,
+        totalTokensFresh: true,
+      });
+    },
+  );
+
+  it("marks current context unknown when no ordered snapshot is available", async () => {
+    const entry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
-    } as SessionEntry;
+      totalTokensFresh: true,
+    };
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
-    await incrementRunCompactionCount({
+    await incrementCompactionCount({
       sessionEntry: entry,
       sessionStore,
       sessionKey,
       storePath,
-      compactionTokensAfter: 12_000,
-      lastCallUsage: {
-        input: 90_000,
-        output: 1_000,
-        total: 91_000,
-      },
-      contextTokensUsed: 200_000,
+      tokensAfter: undefined,
     });
 
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(12_000);
-    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
-  });
-
-  it("preserves zero compactionTokensAfter for run accounting", async () => {
-    const entry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      compactionCount: 0,
+    expect(await loadStoredEntry(storePath, sessionKey)).toMatchObject({
+      compactionCount: 1,
       totalTokens: 180_000,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementRunCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      compactionTokensAfter: 0,
-      lastCallUsage: {
-        input: 90_000,
-        output: 1_000,
-        total: 91_000,
-      },
-      contextTokensUsed: 200_000,
+      totalTokensFresh: false,
     });
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(0);
-    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
-  });
-
-  it("falls back to last-call usage when run compactionTokensAfter is non-finite", async () => {
-    const entry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-      totalTokens: 180_000,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementRunCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      compactionTokensAfter: Number.POSITIVE_INFINITY,
-      lastCallUsage: {
-        input: 90_000,
-        output: 1_000,
-        total: 91_000,
-      },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(90_000);
-    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("ignores non-finite tokensAfter values", async () => {
@@ -815,48 +747,6 @@ describe("incrementCompactionCount", () => {
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(4);
-  });
-
-  it("updates sessionId when newSessionId is provided", async () => {
-    const entry = {
-      sessionId: "old-session-id",
-      updatedAt: Date.now(),
-      compactionCount: 1,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      newSessionId: "new-session-id",
-    });
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("new-session-id");
-    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(2);
-  });
-
-  it("keeps sessionId when newSessionId matches current sessionId", async () => {
-    const entry = {
-      sessionId: "same-id",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      newSessionId: "same-id",
-    });
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("same-id");
-    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
   });
 
   it("marks totalTokens stale when tokensAfter is not provided", async () => {

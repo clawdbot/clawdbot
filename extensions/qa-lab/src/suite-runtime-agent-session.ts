@@ -59,6 +59,7 @@ type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
   compactionSummaries: string[];
   completedToolCallCounts: Record<string, number>;
+  currentSourceToolDeliveries?: Array<{ toolName: string; threadId?: string }>;
   eventCursor: number;
   hasPendingCodeModeWait?: boolean;
   userMessageCount: number;
@@ -140,6 +141,7 @@ function summarizeSessionTranscriptEvents(
   const assistantToolCallCounts: Record<string, number> = {};
   const completedToolCallCounts: Record<string, number> = {};
   const compactionSummaries: string[] = [];
+  const currentSourceToolDeliveries: Array<{ toolName: string; threadId?: string }> = [];
   const successfulToolCallCounts: Record<string, number> = {};
   const successfulToolCallEvents: NonNullable<
     QaSessionTranscriptSummary["successfulToolCallEvents"]
@@ -181,6 +183,15 @@ function summarizeSessionTranscriptEvents(
     if (message.role === "toolResult") {
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
+      const details = isRecord(message.details) ? message.details : undefined;
+      if (toolName && details?.sourceReplyRoute === "current-source") {
+        const receipt = isRecord(details.receipt) ? details.receipt : undefined;
+        const threadId = readNonEmptyString(receipt?.threadId);
+        currentSourceToolDeliveries.push({
+          toolName,
+          ...(threadId ? { threadId } : {}),
+        });
+      }
       if (
         toolCallId &&
         toolName &&
@@ -278,6 +289,7 @@ function summarizeSessionTranscriptEvents(
     assistantToolCallCounts,
     compactionSummaries,
     completedToolCallCounts,
+    ...(currentSourceToolDeliveries.length > 0 ? { currentSourceToolDeliveries } : {}),
     eventCursor,
     ...(pendingCodeModeExecNeedle
       ? {

@@ -3,11 +3,12 @@
  * A cap captured from a host-pinned creator surface must rebuild exec pinned to
  * that target; absence of the pin keeps baseline exec behavior.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
@@ -45,6 +46,8 @@ vi.mock("./bash-tools.js", () => ({
 }));
 
 describe("createOpenClawCodingTools scheduled exec target", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("pins exec to the scheduled cap's restrict-only target", async () => {
     const tools = createOpenClawCodingTools({
       scheduledToolPolicy: {
@@ -116,8 +119,8 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     );
   });
 
-  it("keeps the scheduled approval floor in a reused full-permission session", () => {
-    createOpenClawCodingTools({
+  it("keeps the scheduled approval floor in a reused full-permission session", async () => {
+    const tools = createOpenClawCodingTools({
       sessionPermissionPolicy: { root: process.cwd(), mode: "full" },
       scheduledToolPolicy: {
         version: 1,
@@ -126,11 +129,28 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       },
     });
 
+    const exec = tools.find((tool) => tool.name === "exec");
+    if (!exec) {
+      throw new Error("expected an exec tool on the scheduled surface");
+    }
+    await exec.execute("call-full-session", { command: "echo hi" });
     expect(shellSpies.defaults).toHaveBeenCalledWith(
       expect.objectContaining({
         host: "gateway",
+        mode: undefined,
+        security: "full",
         ask: "always",
         bypassHostApprovalFloors: false,
+      }),
+    );
+    expect(createOpenClawTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execOverrides: expect.objectContaining({
+          host: "gateway",
+          mode: undefined,
+          security: "full",
+          ask: "always",
+        }),
       }),
     );
   });

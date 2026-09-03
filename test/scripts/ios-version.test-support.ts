@@ -15,14 +15,21 @@ export function installIosFixtureCleanup(): void {
 export function writeIosFixture(params: {
   version?: string;
   changelog: string;
+  mobileVersion?: string;
   packageVersion?: string;
   prefix?: string;
 }): string {
   const rootDir = makeTempDir(tempDirs, params.prefix ?? "openclaw-ios-version-");
   fs.mkdirSync(path.join(rootDir, "apps", "ios"), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, "apps", "mobile"), { recursive: true });
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
     `${JSON.stringify({ version: params.packageVersion ?? params.version ?? "2026.4.6" }, null, 2)}\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "apps", "mobile", "version.json"),
+    `${JSON.stringify({ version: params.mobileVersion ?? params.version ?? "2026.4.6" }, null, 2)}\n`,
     "utf8",
   );
   fs.writeFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), params.changelog, "utf8");

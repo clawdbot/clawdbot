@@ -1,5 +1,4 @@
 // Implements task-list commands that route through the current session agent.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
@@ -13,9 +12,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
-import type { ReplyPayload } from "../types.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const MAX_VISIBLE_TASKS = 5;
 
@@ -82,7 +80,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
 
 function buildTasksText(params: { sessionKey: string; agentId: string }): string {
   const sessionSnapshot = buildTaskStatusSnapshot(
-    listTasksForSessionKeyForStatus(params.sessionKey),
+    listTasksForSessionKeyForStatus(params.sessionKey, params.agentId),
   );
   const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot)];
 
@@ -109,27 +107,14 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   return lines.join("\n");
 }
 
-async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const agentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  return {
-    text: buildTasksText({
-      sessionKey: params.sessionKey,
-      agentId,
-    }),
-  };
-}
-
 export const handleTasksCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/tasks",
     match: (body) => matchCommandPrefix(body, "/tasks"),
     silentUnauthorized: true,
   },
-  async (params) =>
+  (params) =>
     params.command.commandBodyNormalized === "/tasks"
-      ? { shouldContinue: false, reply: await buildTasksReply(params) }
+      ? commandReply(buildTasksText(params))
       : commandReply("Usage: /tasks"),
 );

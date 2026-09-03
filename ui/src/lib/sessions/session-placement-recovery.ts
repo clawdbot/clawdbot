@@ -1,10 +1,13 @@
 import {
+  SessionsCreateParamsSchema,
   SessionPermissionModeSchema,
   SessionToolOverridesSchema,
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
+import type { HumanMention } from "../chat/chat-types.ts";
+import { readHumanMentions } from "../chat/human-mentions.ts";
 import { formatUiError } from "../format-error.ts";
 import type { SessionCreateParams } from "./create.ts";
 import {
@@ -31,6 +34,7 @@ type SessionPlacementSubmission = {
   sessionKey: string;
   messageId: string;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments?: unknown[];
   target: SessionPlacementTarget;
   agentId: string;
@@ -74,6 +78,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "incognito",
   "visibility",
   "permissionMode",
+  "fastMode",
   "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
@@ -95,6 +100,8 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.fastMode !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.fastMode, record.fastMode)) ||
     (record.permissionMode !== undefined &&
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&
@@ -192,8 +199,16 @@ function validateSessionPlacementRecovery(
   ) {
     return null;
   }
+  const { mentions: storedMentions, ...recovery } = value;
+  const mentions = readHumanMentions(value.message, storedMentions);
+  if (
+    storedMentions !== undefined &&
+    (!Array.isArray(storedMentions) || (mentions?.length ?? 0) !== storedMentions.length)
+  ) {
+    return null;
+  }
   // SAFETY: every required recovery field and nested closed target was validated above.
-  return value as SessionPlacementRecovery;
+  return { ...recovery, ...(mentions ? { mentions } : {}) } as SessionPlacementRecovery;
 }
 
 function removeSessionPlacementRecoveryRow(storage: Storage, key: string): boolean {
@@ -348,11 +363,13 @@ export function readSessionPlacementRecovery(
 
 export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery): boolean {
   const { gatewayUrl, recoveryScope, sessionKey } = recovery;
-  if (
-    !gatewayUrl ||
-    !recoveryScope ||
-    !validateSessionPlacementRecovery(recovery, gatewayUrl, recoveryScope, sessionKey)
-  ) {
+  const normalized = validateSessionPlacementRecovery(
+    recovery,
+    gatewayUrl,
+    recoveryScope,
+    sessionKey,
+  );
+  if (!gatewayUrl || !recoveryScope || !normalized) {
     return false;
   }
   try {
@@ -361,7 +378,7 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
       return false;
     }
     const key = sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
-    storage.setItem(key, JSON.stringify(recovery));
+    storage.setItem(key, JSON.stringify(normalized));
     return Boolean(
       readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
     );

@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 
+const assertActive = () => {};
+
 const CONTINUE_FROM_TRANSCRIPT_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const CONTINUE_AFTER_TOOL_FAILURE_PROMPT = `${CONTINUE_FROM_TRANSCRIPT_PROMPT} If a tool failed, say so; never claim completion or success.`;
 
 const BASE_RUN_PARAMS = {
   admittedRunContext: createTestAdmittedRunContext("run-1"),
@@ -79,6 +83,18 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("adds failed-tool guidance to current-transcript continuation", () => {
+    const state = createState();
+
+    state.continueFromCurrentTranscript({ includeToolFailureInstruction: true });
+
+    expect(state.activePrompt).toEqual({
+      override: CONTINUE_AFTER_TOOL_FAILURE_PROMPT,
+      persisted: true,
+      internal: true,
+    });
+  });
+
   it("settles projection maintenance only for an owned transcript retry", async () => {
     const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
     const waitForProjection = vi
@@ -91,7 +107,7 @@ describe("embedded run session prompt state", () => {
       await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
       expect(waitForProjection).not.toHaveBeenCalled();
 
-      await state.prepareCompactedTranscriptRetry();
+      await state.prepareCompactedTranscriptRetry(assertActive);
       await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget, abortSignal);
       expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget, abortSignal);
 
@@ -142,7 +158,7 @@ describe("embedded run session prompt state", () => {
     });
 
     state.onUserMessagePersisted(runtimeMessage);
-    await state.prepareCompactedTranscriptRetry();
+    await state.prepareCompactedTranscriptRetry(assertActive);
 
     expect(persistApproved).toHaveBeenCalledOnce();
     expect(onUserMessagePersisted).toHaveBeenCalledWith(runtimeMessage);
@@ -201,7 +217,7 @@ describe("embedded run session prompt state", () => {
     });
 
     state.onUserMessagePersisted(makeUserMessage());
-    await state.prepareCompactedTranscriptRetry();
+    await state.prepareCompactedTranscriptRetry(assertActive);
 
     expect(persistApproved).toHaveBeenCalledOnce();
     expect(onUserMessagePersisted).not.toHaveBeenCalled();
@@ -209,65 +225,66 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(false);
   });
 
-  it("waits for pending canonical persistence before preparing a compacted retry", async () => {
-    const persistedMessage = makeUserMessage();
-    let resolvePersistence:
-      | ((result: {
-          admission: typeof TEST_ADMISSION;
-          sessionFile: string;
-          sessionEntry: undefined;
-          messageId: string;
-          message: typeof persistedMessage;
-        }) => void)
-      | undefined;
-    const persistApproved = vi.fn(
-      () =>
-        new Promise<{
-          admission: typeof TEST_ADMISSION;
-          sessionFile: string;
-          sessionEntry: undefined;
-          messageId: string;
-          message: typeof persistedMessage;
-        }>((resolve) => {
-          resolvePersistence = resolve;
-        }),
-    );
-    const recorder = createRecorder({ persistApproved });
-    const onUserMessagePersisted = vi.fn();
-    const state = createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
+  it.each(["active", "closed"] as const)(
+    "revalidates the %s owner after pending canonical persistence before retry",
+    async (owner) => {
+      const persistedMessage = makeUserMessage();
+      const callerError = new Error("caller stopped while user persistence was pending");
+      let closed = false;
+      const assertPersistenceOwnerActive = () => {
+        if (closed) {
+          throw callerError;
+        }
+      };
+      const persistence =
+        createDeferred<Awaited<ReturnType<UserTurnTranscriptRecorder["persistApproved"]>>>();
+      const persistApproved = vi.fn(() => persistence.promise);
+      const recorder = createRecorder({ persistApproved });
+      const onUserMessagePersisted = vi.fn();
+      const state = createState({
+        userTurnTranscriptRecorder: recorder,
+        onUserMessagePersisted,
+      });
 
-    state.onUserMessagePersisted(persistedMessage);
-    let retryPrepared = false;
-    const retryPromise = state.prepareCompactedTranscriptRetry().then(() => {
-      retryPrepared = true;
-    });
-    await Promise.resolve();
+      state.onUserMessagePersisted(persistedMessage);
+      let retryPrepared = false;
+      const retryPromise = state
+        .prepareCompactedTranscriptRetry(assertPersistenceOwnerActive)
+        .then(() => {
+          retryPrepared = true;
+        });
+      await Promise.resolve();
 
-    expect(recorder.waitForRuntimePersistence).toHaveBeenCalledOnce();
-    expect(retryPrepared).toBe(false);
-    expect(state.suppressNextUserMessagePersistence).toBe(false);
+      expect(recorder.waitForRuntimePersistence).toHaveBeenCalledOnce();
+      expect(retryPrepared).toBe(false);
+      expect(state.suppressNextUserMessagePersistence).toBe(false);
 
-    resolvePersistence?.({
-      admission: TEST_ADMISSION,
-      sessionFile: BASE_RUN_PARAMS.sessionFile,
-      sessionEntry: undefined,
-      messageId: "msg-user-delayed",
-      message: persistedMessage,
-    });
-    await retryPromise;
-
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
-    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
-  });
+      closed = owner === "closed";
+      persistence.resolve({
+        admission: TEST_ADMISSION,
+        sessionFile: BASE_RUN_PARAMS.sessionFile,
+        sessionEntry: undefined,
+        messageId: "msg-user-delayed",
+        message: persistedMessage,
+      });
+      if (closed) {
+        await expect(retryPromise).rejects.toBe(callerError);
+        expect(retryPrepared).toBe(false);
+        expect(state.activePrompt.override).toBeUndefined();
+        expect(state.suppressNextUserMessagePersistence).toBe(false);
+      } else {
+        await retryPromise;
+        expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+        expect(state.suppressNextUserMessagePersistence).toBe(true);
+      }
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
+    },
+  );
 
   it("does not suppress an original prompt that precheck compaction never persisted", async () => {
     const state = createState();
 
-    await state.prepareCompactedTranscriptRetry();
+    await state.prepareCompactedTranscriptRetry(assertActive);
 
     expect(state.activePrompt).toEqual({ persisted: false, internal: false });
     expect(state.suppressNextUserMessagePersistence).toBe(false);
@@ -279,7 +296,7 @@ describe("embedded run session prompt state", () => {
     const state = createState();
     state.activateInternalPrompt(reasoningContinuation);
 
-    await state.prepareCompactedTranscriptRetry();
+    await state.prepareCompactedTranscriptRetry(assertActive);
 
     expect(state.activePrompt).toEqual({
       override: reasoningContinuation,

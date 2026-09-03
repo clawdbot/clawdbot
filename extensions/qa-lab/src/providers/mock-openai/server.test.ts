@@ -1,5 +1,7 @@
 import { once } from "node:events";
+import { runInNewContext } from "node:vm";
 // Qa Lab tests cover server plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -39,7 +41,9 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
 const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
-  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
+  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT =
+  "Empty response after write exhaustion QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `WRITE-EXHAUSTED-OK`.";
 const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
   "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
@@ -810,28 +814,31 @@ describe("qa mock openai server", () => {
     expect(outputItems(body).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it("keeps final-only marker preview deltas separate from the final answer", async () => {
-    const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
-    const response = await expectStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
-        ),
-      ],
-    });
+  it.each(["", "@openclaw ", "@sut_bot "])(
+    "keeps final-only marker preview deltas separate from the final answer with prefix %j",
+    async (prefix) => {
+      const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
+      const response = await expectStreamingResponses(server, {
+        input: [
+          makeUserInput(
+            `${prefix}Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK`,
+          ),
+        ],
+      });
 
-    const responseBody = await response.text();
-    const deltaText = responseBody
-      .split("\n")
-      .filter((line) => line.startsWith("data: {"))
-      .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
-      .filter((event) => event.type === "response.output_text.delta")
-      .map((event) => event.delta ?? "")
-      .join("");
-    expect(deltaText).toBe("QA streaming preview in progress");
-    expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
-    expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
-  });
+      const responseBody = await response.text();
+      const deltaText = responseBody
+        .split("\n")
+        .filter((line) => line.startsWith("data: {"))
+        .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
+        .filter((event) => event.type === "response.output_text.delta")
+        .map((event) => event.delta ?? "")
+        .join("");
+      expect(deltaText).toBe("QA streaming preview in progress");
+      expect(deltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
+      expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
+    },
+  );
 
   it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
     const server = await startMockServer();
@@ -894,6 +901,79 @@ describe("qa mock openai server", () => {
       action: "send",
       message: "QA-A2A-MIRROR-OK",
     });
+  });
+
+  it.each([
+    { label: "structured", output: JSON.stringify({ ok: true }) },
+    { label: "empty", output: "" },
+  ])("plans the native thread reply and completes after $label output", async ({ output }) => {
+    const server = await startMockServer();
+    const prompt =
+      "qa thread reply receipt check. Use the native reply path. channel id: `qa-room`; thread id: `thread-1`; exact marker: `QA-THREAD-RECEIPT-OK`";
+
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [{ type: "function", name: "message" }],
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(outputItem(payload).type).toBe("function_call");
+    expect(outputItem(payload).name).toBe("message");
+    expect(outputToolArgs(payload)).toEqual({
+      action: "thread-reply",
+      channelId: "qa-room",
+      threadId: "thread-1",
+      message: "QA-THREAD-RECEIPT-OK",
+    });
+
+    const toolCall = outputToolCall(payload, "message");
+    const finalPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_thread_reply_receipt"),
+          output,
+        },
+      ],
+    });
+    expect(outputText(finalPayload)).toBe("QA-THREAD-RECEIPT-OK");
+    expect(finalPayload).not.toMatchObject({ output: [{ type: "function_call" }] });
+  });
+
+  it("returns a divergent automatic final after the native thread reply", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "qa thread reply receipt check. channel id: `qa-room`; thread id: `thread-1`; " +
+      "exact marker: `QA-THREAD-TOOL-OK`; divergent final: `QA-THREAD-FINAL-OK`";
+
+    const initialPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialPayload, "message");
+    const finalPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_thread_reply_divergent"),
+          output: JSON.stringify({ ok: true }),
+        },
+        makeUserInput("Continue from the tool result."),
+      ],
+    });
+
+    expect(outputText(finalPayload)).toBe("QA-THREAD-FINAL-OK");
   });
 
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
@@ -996,10 +1076,11 @@ describe("qa mock openai server", () => {
     expect(visibleEvents.map((event) => event.type)).toEqual([
       "response.created",
       "response.output_item.added",
+      "response.content_part.added",
       "response.output_text.delta",
       "response.failed",
     ]);
-    expect(visibleEvents[2]).toMatchObject({
+    expect(visibleEvents[3]).toMatchObject({
       type: "response.output_text.delta",
       delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
     });
@@ -3441,6 +3522,29 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
   });
 
+  it("returns explicit empty output for the intentional non-delivery worker", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent terminal reply QA worker: empty. Return no assistant output after the write.";
+    await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [makeUserInput(prompt)],
+    });
+    const writeRequest = requireRecord(
+      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+      "intentional empty terminal write request",
+    );
+
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "write" }],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(String(writeRequest.plannedToolCallId), "Wrote 40 bytes"),
+      ],
+    });
+    expect(outputText(payload)).toBe("");
+  });
+
   it("represents an empty terminal reply intentionally in the resumed parent turn", async () => {
     const server = await startMockServer();
     const payload = await expectNonStreamingResponsesJson(server, {
@@ -3595,6 +3699,25 @@ Update and merge these partial structured summaries.`,
       expect(outputText(payload)).toBe("NO_REPLY");
     },
   );
+
+  it("acknowledges the empty worker before its intentional non-delivery", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput(
+          "Subagent terminal reply QA check: empty. Reply to the requester after spawning.",
+        ),
+        makeToolOutputWithCallId(
+          "call_mock_sessions_spawn_1",
+          JSON.stringify({ status: "accepted", runId: "run-empty" }),
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(payload)).toBe("QA-SUBAGENT-EMPTY-PARENT-ACK");
+  });
 
   it.each([
     ["visible", "NO_REPLY"],
@@ -5791,10 +5914,11 @@ Update and merge these partial structured summaries.`,
       "response.created",
       "response.output_item.added",
       "response.custom_tool_call_input.delta",
+      "response.custom_tool_call_input.done",
       "response.output_item.done",
       "response.completed",
     ]);
-    const [created, added, delta, done, completed] = events;
+    const [created, added, delta, inputDone, done, completed] = events;
     expect(created?.response?.id).toBe(completed?.response?.id);
     expect(added?.item).toMatchObject({
       type: "custom_tool_call",
@@ -5811,6 +5935,7 @@ Update and merge these partial structured summaries.`,
     expect(delta?.item_id).toBe(done?.item?.id);
     expect(delta?.call_id).toBe(done?.item?.call_id);
     expect(delta?.delta).toBe(done?.item?.input);
+    expect(inputDone).toMatchObject({ item_id: done?.item?.id, input: done?.item?.input });
     expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
     expect(completed?.response?.output).toEqual([done?.item]);
     for (const item of [added?.item, done?.item, completed?.response?.output?.[0]]) {
@@ -6472,24 +6597,29 @@ Update and merge these partial structured summaries.`,
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.added",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {
         type: "response.completed",
         response: {
           id: "response_mock",
+          object: "response",
           status: "completed",
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
@@ -6882,47 +7012,127 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
   });
 
+  const restartCheckpointTools = [
+    {
+      type: "function",
+      name: "exec",
+      parameters: {
+        type: "object",
+        properties: {
+          language: { type: "string" },
+          code: { type: "string" },
+          restartSafe: { type: "boolean" },
+        },
+        required: ["code"],
+      },
+    },
+    {
+      type: "function",
+      name: "wait",
+      parameters: {
+        type: "object",
+        properties: { runId: { type: "string" } },
+        required: ["runId"],
+      },
+    },
+  ];
+  const restartRecoveryPrompt =
+    "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+
+  async function expectRestartCheckpointExecution(
+    execArgs: Record<string, unknown>,
+    checkpoint: number,
+  ) {
+    expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+    expect(execArgs.code).toContain("qa_restart_wait");
+    expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
+    expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+    const started = createDeferred<void>();
+    const released = createDeferred<void>();
+    const calls: unknown[] = [];
+    const target = Object.assign(
+      (args: unknown) => {
+        calls.push(args);
+        started.resolve();
+        return released.promise;
+      },
+      { toolName: "qa_restart_wait" },
+    );
+    let yielded = false;
+    const execution: unknown = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+      catalog: {
+        search: async (name: string) => {
+          expect(name).toBe("qa_restart_wait");
+          return [target];
+        },
+      },
+      yield_control: () => {
+        yielded = true;
+      },
+    });
+    try {
+      await started.promise;
+      expect(yielded).toBe(true);
+    } finally {
+      released.resolve();
+      await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+    }
+    expect(calls).toEqual([{}]);
+  }
+
+  it("settles hard-kill recovery after one real checkpoint and resets from request history", async () => {
+    const server = await startMockServer();
+    const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
+    const tools = [
+      ...restartCheckpointTools,
+      { type: "function", name: "qa_restart_unsafe_probe", parameters: { type: "object" } },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+    const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(execPayload)).toHaveLength(1);
+    const execCall = outputToolCall(execPayload, "exec");
+    const execArgs = outputToolArgsFromItem(execCall);
+    await expectRestartCheckpointExecution(execArgs, 1);
+
+    const runId = "kill-restart-checkpoint-1";
+    input.push(
+      execCall,
+      makeToolOutputWithCallId(
+        outputToolCallId(execCall, "kill-restart-exec"),
+        JSON.stringify({ status: "waiting", runId }),
+      ),
+    );
+    const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(waitPayload)).toHaveLength(1);
+    const waitCall = outputToolCall(waitPayload, "wait");
+    expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+    input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+
+    const recovered = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
+    expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputItems(freshPayload)).toHaveLength(1);
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
+  });
+
   it("derives three restart checkpoints from request history without server counters", async () => {
     const server = await startMockServer();
     const prompt =
       "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-    const recoveryPrompt =
-      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
-    const tools = [
-      {
-        type: "function",
-        name: "exec",
-        parameters: {
-          type: "object",
-          properties: {
-            language: { type: "string" },
-            code: { type: "string" },
-            restartSafe: { type: "boolean" },
-          },
-          required: ["code"],
-        },
-      },
-      {
-        type: "function",
-        name: "wait",
-        parameters: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = restartCheckpointTools;
     const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
 
     for (const checkpoint of [1, 2, 3]) {
       const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const execCall = outputToolCall(execPayload, "exec");
       const execArgs = outputToolArgsFromItem(execCall);
-      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
-      expect(execArgs.code).toContain("qa_restart_wait");
-      expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
-      expect(execArgs.code).toContain("await target({})");
-      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+      await expectRestartCheckpointExecution(execArgs, checkpoint);
 
       const runId = `restart-checkpoint-${checkpoint}`;
       input.push(
@@ -6935,7 +7145,7 @@ Update and merge these partial structured summaries.`,
       const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
       const waitCall = outputToolCall(waitPayload, "wait");
       expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-      input.push(waitCall, makeUserInput(recoveryPrompt));
+      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
     }
 
     const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
@@ -8096,11 +8306,85 @@ Update and merge these partial structured summaries.`,
     expect(secondEmpty.output?.[0]?.content?.[0]?.text).toBe("");
   });
 
-  it("scripts settled continuation after an empty response from a side-effecting write", async () => {
-    const server = await startMockServer();
+  it.each([
+    { history: "fresh", precedingInput: [] },
+    {
+      history: "earlier reply directive",
+      precedingInput: [makeUserInput("Earlier check: exact marker: `PREVIOUS-SCENARIO-OK`.")],
+    },
+  ])(
+    "scripts settled continuation after a side-effecting write with $history",
+    async ({ precedingInput }) => {
+      const server = await startMockServer();
 
+      const toolPlan = await expectOpenAiStreamingResponsesText(server, {
+        input: [...precedingInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+      });
+      expect(toolPlan).toContain('"name":"write"');
+
+      const toolOutput = {
+        type: "function_call_output" as const,
+        output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+      };
+      const emptyPayload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          ...precedingInput,
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+          toolOutput,
+        ],
+      });
+      expect(emptyPayload.output?.[0]?.content?.[0]?.text).toBe("");
+
+      const recoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          ...precedingInput,
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+          makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+          toolOutput,
+        ],
+      });
+      expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
+      const cronRecoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          makeUserInput(
+            [
+              "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+              "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+            ].join("\n\n"),
+          ),
+          makeUserInput(
+            `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+          ),
+          toolOutput,
+        ],
+      });
+      expect(outputText(cronRecoveredPayload)).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+
+      const laterHeartbeatPayload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+          makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+          toolOutput,
+          makeUserInput("Read HEARTBEAT.md if it exists."),
+        ],
+      });
+      expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
+    },
+  );
+
+  it("keeps settled write finalization empty for host fallback coverage", async () => {
+    const server = await startMockServer();
     const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
     });
     expect(toolPlan).toContain('"name":"write"');
 
@@ -8108,56 +8392,23 @@ Update and merge these partial structured summaries.`,
       type: "function_call_output" as const,
       output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
     };
-    const emptyPayload = await expectOpenAiNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT), toolOutput],
-    });
-    expect(emptyPayload.output?.[0]?.content?.[0]?.text).toBe("");
-
-    const recoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        toolOutput,
-      ],
-    });
-    expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-
-    const cronRecoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [
-        makeUserInput(
-          [
-            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
-            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
-          ].join("\n\n"),
-        ),
-        makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
-        ),
-        toolOutput,
-      ],
-    });
-    expect(outputText(cronRecoveredPayload)).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
-
-    const laterHeartbeatPayload = await expectOpenAiNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      input: [
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        toolOutput,
-        makeUserInput("Read HEARTBEAT.md if it exists."),
-      ],
-    });
-    expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
+    for (const includeFinalizationPrompt of [false, true, true]) {
+      const payload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
+          ...(includeFinalizationPrompt
+            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
+            : []),
+          toolOutput,
+        ],
+      });
+      expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
+    }
   });
 
-  it("scripts one failure-honest Code Mode terminal-tool continuation (#118274)", async () => {
+  it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();
     const prompt =
       "Failed tool terminal recovery QA check: read the missing file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`.";
@@ -8201,49 +8452,28 @@ Update and merge these partial structured summaries.`,
       String(plannedRequest.plannedToolCallId),
       JSON.stringify({ status: "failed", error: "ENOENT: qa-failed-terminal-missing-file.txt" }),
     );
-    const dishonestFinalization = await expectNonStreamingResponsesJson<{
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-    }>(server, {
-      model: "gpt-5.6-luna",
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        failedToolOutput,
-      ],
-    });
-    expect(outputText(dishonestFinalization)).toBe("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
-
     const recovered = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
       model: "gpt-5.6-luna",
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
-        ),
-        failedToolOutput,
-      ],
+      tools: codeModeTools,
+      input: [makeUserInput(prompt), failedToolOutput],
     });
     expect(outputText(recovered)).toBe(
       "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
     );
 
-    const reconciled = await expectNonStreamingResponsesJson<{
+    const succeeded = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
       model: "gpt-5.6-luna",
+      tools: codeModeTools,
       input: [
         makeUserInput(prompt),
-        makeUserInput(
-          "The previous Code Mode mutation may have partially applied. Do not repeat or finish any mutation. Use only the available read-only inspection tools to determine the authoritative current state, then report exactly what applied, what did not, what remains unknown, and what work is still required.",
-        ),
-        failedToolOutput,
+        makeToolOutputWithCallId(String(plannedRequest.plannedToolCallId), "file contents"),
       ],
     });
-    expect(outputText(reconciled)).toBe(
-      "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
-    );
+    expect(outputText(succeeded)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 });
 

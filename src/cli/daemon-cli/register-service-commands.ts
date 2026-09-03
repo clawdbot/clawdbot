@@ -1,5 +1,7 @@
 // Gateway service command registration shared by `gateway` and legacy `daemon` CLIs.
 import type { Command } from "commander";
+import { isGatewayServiceEnv } from "../../daemon/constants.js";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveGatewayRpcOptionsWithLocalPort } from "../gateway-rpc.js";
@@ -32,10 +34,19 @@ function resolveInstallOptions(
 
 function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  const force = Boolean(cmdOpts.force || parentForce);
+  const safeFromGateway =
+    process.platform === "win32" &&
+    isGatewayServiceEnv(process.env) &&
+    !isGatewayExternallySupervised() &&
+    !force &&
+    cmdOpts.wait === undefined &&
+    !cmdOpts.preserveDefinition &&
+    !cmdOpts.skipDeferral;
   return {
     ...cmdOpts,
-    force: Boolean(cmdOpts.force || parentForce),
-    safe: Boolean(cmdOpts.safe),
+    force,
+    safe: cmdOpts.safe || safeFromGateway,
     json: resolveJsonOption(cmdOpts, command),
   };
 }

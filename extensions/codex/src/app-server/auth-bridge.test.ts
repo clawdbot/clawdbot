@@ -2664,13 +2664,18 @@ describe("bridgeCodexAppServerStartOptions", () => {
         },
       });
 
-      await expect(
-        applyCodexAppServerAuthProfile({
-          client: { request } as never,
-          agentDir,
-          authProfileId: "anthropic:work",
-        }),
-      ).rejects.toThrow(
+      const rejection = await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "anthropic:work",
+      }).catch((error: unknown) => error);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).toMatchObject({
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      });
+      expect((rejection as Error).message).toBe(
         'Codex app-server auth profile "anthropic:work" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
       );
       expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
@@ -2706,7 +2711,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
 
     expect(rejection).toBeInstanceOf(Error);
-    expect((rejection as { status?: unknown }).status).toBe(401);
+    expect(rejection).toMatchObject({
+      status: 401,
+      code: "selected_auth_profile_unavailable",
+    });
     expect(request).not.toHaveBeenCalled();
   });
 

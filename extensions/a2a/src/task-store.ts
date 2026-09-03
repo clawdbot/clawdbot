@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
@@ -19,7 +20,7 @@ function createStatusMessage(contextId: string, text: string): A2aMessageRecord 
     messageId: randomUUID(),
     contextId,
     role: "ROLE_AGENT",
-    parts: [{ text: text.slice(0, A2A_ERROR_MAX_LENGTH) }],
+    parts: [{ text: truncateUtf16Safe(text, A2A_ERROR_MAX_LENGTH) }],
   };
 }
 

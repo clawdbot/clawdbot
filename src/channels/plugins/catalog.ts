@@ -31,7 +31,7 @@ import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
-export type ChannelUiMetaEntry = {
+type ChannelUiMetaEntry = {
   id: string;
   label: string;
   detailLabel: string;
@@ -47,7 +47,7 @@ export type ChannelUiCatalog = {
   byId: Record<string, ChannelUiMetaEntry>;
 };
 
-export type ChannelPluginCatalogInstall = PluginPackageInstall &
+type ChannelPluginCatalogInstall = PluginPackageInstall &
   ({ clawhubSpec: string } | { npmSpec: string });
 
 export type ChannelPluginCatalogEntry = {
@@ -189,7 +189,8 @@ function resolveInstallInfo(params: {
 }): ChannelPluginCatalogEntry["install"] | null {
   const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
   let npmSpec =
-    normalizeOptionalString(params.install?.npmSpec) ?? normalizeOptionalString(params.packageName);
+    normalizeOptionalString(params.install?.npmSpec) ??
+    (clawhubSpec ? undefined : normalizeOptionalString(params.packageName));
   const packageVersion = normalizeOptionalString(params.packageVersion);
   const parsedNpmSpec = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
   const expectedPackageName = normalizeOptionalString(params.packageName);
@@ -210,18 +211,8 @@ function resolveInstallInfo(params: {
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
-  const requestedDefaultChoice = params.install?.defaultChoice;
-  const availableChoices = { clawhub: clawhubSpec, npm: npmSpec, local: localPath };
   const defaultChoice: NonNullable<PluginPackageInstall["defaultChoice"]> =
-    requestedDefaultChoice &&
-    Object.hasOwn(availableChoices, requestedDefaultChoice) &&
-    availableChoices[requestedDefaultChoice]
-      ? requestedDefaultChoice
-      : clawhubSpec
-        ? "clawhub"
-        : localPath
-          ? "local"
-          : "npm";
+    params.install?.defaultChoice === "local" && localPath ? "local" : npmSpec ? "npm" : "clawhub";
   const install = {
     ...(localPath ? { localPath } : {}),
     defaultChoice,

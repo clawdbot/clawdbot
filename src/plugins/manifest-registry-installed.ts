@@ -11,8 +11,10 @@ import {
   type ChannelSetupFieldMetadata,
 } from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import type { PluginCandidate } from "./discovery.js";
+import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
@@ -38,6 +40,7 @@ import {
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
+  pluginCacheRealpathSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -85,17 +88,13 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
+    // Only bundledDist changes runtime selection; legacy absence and build stamps hash alike.
     plugins: index.plugins.map(
       ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
         ...plugin,
-        ...(packageBuild
-          ? {
-              packageBuild:
-                packageBuild.bundledDist === undefined
-                  ? {}
-                  : { bundledDist: packageBuild.bundledDist },
-            }
-          : {}),
+        ...(packageBuild?.bundledDist === undefined
+          ? {}
+          : { packageBuild: { bundledDist: packageBuild.bundledDist } }),
       }),
     ),
   });
@@ -536,10 +535,38 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           diagnostics: [...diagnostics],
         };
       }
+      // These selections belong to this process, not the persisted installation inventory.
+      const sourceRoots = new Set(
+        listBundledSourceOverlayDirs({ bundledRoot: resolveBundledPluginsDir(env), env }).map(
+          (root) => pluginCacheRealpathSync(root) ?? root,
+        ),
+      );
+      const loadPaths = params.config?.plugins?.load?.paths ?? [];
+      const configuredSources = new Set(
+        loadPaths.length > 0
+          ? discoverConfiguredPluginLoadPaths({
+              loadPaths,
+              env,
+              workspaceDir: params.workspaceDir,
+            }).candidates.map(
+              (candidate) => pluginCacheRealpathSync(candidate.source) ?? candidate.source,
+            )
+          : [],
+      );
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-        .map((plugin) => toPluginCandidate(plugin, env));
+        .map((plugin) => {
+          const candidate = toPluginCandidate(plugin, env);
+          if (
+            candidate.origin === "bundled" &&
+            (sourceRoots.has(pluginCacheRealpathSync(candidate.rootDir) ?? candidate.rootDir) ||
+              configuredSources.has(pluginCacheRealpathSync(candidate.source) ?? candidate.source))
+          ) {
+            candidate.sourcePreferred = true;
+          }
+          return candidate;
+        });
       return loadPluginManifestRegistryCore({
         config: params.config,
         workspaceDir: params.workspaceDir,

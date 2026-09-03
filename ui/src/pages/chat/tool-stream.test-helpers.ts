@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./tool-stream.ts";
+import type { FallbackStatus, ToolStreamEntry } from "./tool-stream-contract.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;

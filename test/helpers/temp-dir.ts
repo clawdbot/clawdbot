@@ -24,7 +24,7 @@ function resolveCanonicalSystemTempRoot(): string {
 interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
   make(prefix: string, root?: string): string;
-  cleanup(): void;
+  cleanup(this: void): void;
 }
 
 interface AutoCleanupTempDirTracker {
@@ -44,14 +44,28 @@ export function makeTempDir(tempDirs: TempDirCollection, prefix: string, root?: 
   return dir;
 }
 
-/** Remove all tracked temporary directories and clear the tracker. */
+/** Remove tracked directories, retaining failed removals for cleanup retry. */
 export function cleanupTempDirs(tempDirs: TempDirCollection): void {
-  const dirs = Array.isArray(tempDirs) ? tempDirs.splice(0) : [...tempDirs];
+  // Successful releases mutate the tracker; walk the original ownership snapshot.
+  const dirs = [...tempDirs];
+  const errors: unknown[] = [];
   for (const dir of dirs) {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+      if (Array.isArray(tempDirs)) {
+        tempDirs.splice(tempDirs.indexOf(dir), 1);
+      } else {
+        tempDirs.delete(dir);
+      }
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  if (!Array.isArray(tempDirs)) {
-    tempDirs.clear();
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Test temporary directory cleanup failed");
   }
 }
 
@@ -62,7 +76,7 @@ export function createTempDirTracker(): TestTempDirTracker {
     make(prefix: string, root?: string): string {
       return makeTempDir(dirs, prefix, root);
     },
-    cleanup(): void {
+    cleanup(this: void): void {
       cleanupTempDirs(dirs);
     },
   };

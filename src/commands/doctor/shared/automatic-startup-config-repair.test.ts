@@ -8,7 +8,7 @@ import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { VERSION } from "../../../version.js";
 import {
   isStartupConfigRepairResult,
-  planStartupConfigRepair,
+  planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
 } from "./automatic-startup-config-repair.js";
 
@@ -41,11 +41,11 @@ describe("automatic startup config repair", () => {
       issuePaths: ["session.idleMinutes"],
     });
 
-    const plan = planStartupConfigRepair(snapshot);
+    const plan = planAutomaticConfigRepair(snapshot);
 
     expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
     expect(validateConfigObjectWithPlugins(plan?.config).ok).toBe(true);
-    expect(planStartupConfigRepair(snapshot)?.config).toEqual(plan?.config);
+    expect(planAutomaticConfigRepair(snapshot)?.config).toEqual(plan?.config);
     expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
   });
 
@@ -65,7 +65,7 @@ describe("automatic startup config repair", () => {
       issuePaths: ["meta", "agents.defaults.heartbeat"],
     });
 
-    const plan = planStartupConfigRepair(snapshot);
+    const plan = planAutomaticConfigRepair(snapshot);
 
     expect(plan?.config).toEqual({
       meta: { lastTouchedVersion: "2026.7.1-2" },
@@ -200,6 +200,6 @@ describe("automatic startup config repair", () => {
       includedPaths,
     });
 
-    expect(planStartupConfigRepair(snapshot)).toBeNull();
+    expect(planAutomaticConfigRepair(snapshot)).toBeNull();
   });
 });

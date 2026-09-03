@@ -12,12 +12,13 @@ import {
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 
 type JsonSchema = {
+  "~openclawClosedObjectIdentity"?: symbol;
   type?: string | string[];
   const?: boolean | number | string | null;
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
-  enum?: string[];
+  enum?: Array<string | null>;
   patternProperties?: Record<string, JsonSchema>;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
@@ -133,8 +134,8 @@ function swiftCompatibilityPropertyLines(structName: string, key: string): strin
 
 // filled later once schemas are loaded
 const schemaNameByObject = new Map<object, string>();
-const schemaNameBySignature = new Map<string, string>();
-const duplicateSchemaSignatures = new Set<string>();
+const schemaNameBySignature = new Map<string, string | undefined>();
+const schemaNamesByIdentity = new Map<symbol, Map<string, string | undefined>>();
 
 function stableJson(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -158,29 +159,64 @@ function schemaSignature(schema: JsonSchema): string {
 function registerNamedSchema(name: string, schema: JsonSchema): void {
   schemaNameByObject.set(schema as object, name);
   const signature = schemaSignature(schema);
-  if (duplicateSchemaSignatures.has(signature)) {
-    return;
+  registerUniqueName(schemaNameBySignature, signature, name);
+  const identity = schema["~openclawClosedObjectIdentity"];
+  if (identity) {
+    const names = schemaNamesByIdentity.get(identity) ?? new Map<string, string | undefined>();
+    registerUniqueName(names, signature, name);
+    schemaNamesByIdentity.set(identity, names);
   }
-  if (schemaNameBySignature.has(signature)) {
-    schemaNameBySignature.delete(signature);
-    duplicateSchemaSignatures.add(signature);
-    return;
-  }
-  schemaNameBySignature.set(signature, name);
 }
 
-function namedSchema(schema: JsonSchema, allowStructuralFallback = false): string | undefined {
+function registerUniqueName(
+  names: Map<string, string | undefined>,
+  signature: string,
+  name: string,
+) {
+  names.set(signature, names.has(signature) ? undefined : name);
+}
+
+function namedSchema(
+  schema: JsonSchema,
+  allowStructuralFallback = false,
+  identity?: symbol,
+): string | undefined {
   return (
     schemaNameByObject.get(schema as object) ??
-    (allowStructuralFallback ? schemaNameBySignature.get(schemaSignature(schema)) : undefined)
+    (identity
+      ? schemaNamesByIdentity.get(identity)?.get(schemaSignature(schema))
+      : allowStructuralFallback
+        ? schemaNameBySignature.get(schemaSignature(schema))
+        : undefined)
   );
 }
 
 function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed = false): string {
-  const t = schema.type;
+  const schemaTypes = schema.type;
+  const normalizedSchema =
+    !required &&
+    Array.isArray(schemaTypes) &&
+    schemaTypes.length === 2 &&
+    schemaTypes.includes("null")
+      ? {
+          ...schema,
+          type: schemaTypes.find((type) => type !== "null"),
+          enum: schema.enum?.filter((value): value is string => value !== null),
+          anyOf: schema.anyOf?.filter((branch) => branch.type !== "null"),
+          oneOf: schema.oneOf?.filter((branch) => branch.type !== "null"),
+        }
+      : schema;
+  const nullableTypeArray = normalizedSchema !== schema;
+  const t = normalizedSchema.type;
   const isOptional = !required;
   let base: string;
-  const named = namedSchema(schema, allowStructuralNamed);
+  // Normalization spreads the schema, so retain its hidden identity before copying.
+  const identity = schema["~openclawClosedObjectIdentity"];
+  let named = namedSchema(normalizedSchema, allowStructuralNamed, identity);
+  if (!named && nullableTypeArray && (normalizedSchema.anyOf || normalizedSchema.oneOf)) {
+    const { type: _normalizedType, ...normalizedStructuralSchema } = normalizedSchema;
+    named = namedSchema(normalizedStructuralSchema, allowStructuralNamed, identity);
+  }
   if (named) {
     base = named;
   } else if (t === "string") {
@@ -192,8 +228,8 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   } else if (t === "boolean") {
     base = "Bool";
   } else if (t === "array") {
-    base = `[${swiftType(schema.items ?? { type: "Any" }, true, true)}]`;
-  } else if (schema.enum) {
+    base = `[${swiftType(normalizedSchema.items ?? { type: "Any" }, true, true)}]`;
+  } else if (normalizedSchema.enum) {
     base = "String";
   } else if (schema.patternProperties) {
     base = "[String: AnyCodable]";
@@ -207,7 +243,8 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
 
 function stringEnumCases(schema: JsonSchema): string[] | undefined {
   if (schema.type === "string" && schema.enum) {
-    return schema.enum.every((value) => typeof value === "string") ? schema.enum : undefined;
+    const cases = schema.enum.filter((value): value is string => typeof value === "string");
+    return cases.length === schema.enum.length ? cases : undefined;
   }
 
   const variants = schema.oneOf ?? schema.anyOf;
@@ -227,8 +264,8 @@ function swiftInitializerParam(params: {
   required: boolean;
   allowStructuralNamed?: boolean;
 }): string {
-  const type = swiftType(params.schema, true, params.allowStructuralNamed ?? true);
-  return params.required ? `${params.name}: ${type}` : `${params.name}: ${type}? = nil`;
+  const type = swiftType(params.schema, params.required, params.allowStructuralNamed ?? true);
+  return params.required ? `${params.name}: ${type}` : `${params.name}: ${type} = nil`;
 }
 
 function emitEnum(name: string, schema: JsonSchema): string {
@@ -676,6 +713,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
         return undefined;
       }
       const caseName = swiftUnionCaseName(literal, `case${index + 1}`);
+      // Union cases retain their established structural names; properties use nominal identity.
       const registeredName = namedSchema(branch, true);
       const branchName =
         registeredName ?? `${name}${caseName.charAt(0).toUpperCase()}${caseName.slice(1)}`;

@@ -53,7 +53,7 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-instance",
-          user: { id: "alice", name: "Alice" },
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
           lastInputSeconds: 600,
           ts: 1,
         },
@@ -107,9 +107,9 @@ describe("AppSidebar viewer presence", () => {
       .querySelector<HTMLAnchorElement>(".person-activity-card footer a")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(onNavigate).toHaveBeenCalledWith("activity", {
-      href: "/activity?person=alice",
-      pathname: "/activity",
-      search: "?person=alice",
+      href: "/activity/alice",
+      pathname: "/activity/alice",
+      search: "",
     });
   });
 
@@ -133,7 +133,9 @@ describe("AppSidebar viewer presence", () => {
         row.createdActor = { type: "agent", id: "alice" };
       }
       if (index >= 4) {
-        row.owner = { actor: { type: "human", id: "alice" } };
+        row.owner = {
+          actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
+        };
       }
     });
     sessions.publishList({ result });
@@ -150,7 +152,7 @@ describe("AppSidebar viewer presence", () => {
         platform: tab === 3 ? "iOS" : "macOS",
         mode: "webchat",
         timeZone: "Europe/Paris",
-        user: { id: "alice", name: "Alice" },
+        user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
         watchedSessions: [
           "AGENT:research:watched",
           "agent:research:watched",
@@ -207,7 +209,11 @@ describe("AppSidebar viewer presence", () => {
         ...result,
         sessions: result.sessions.map((row) => ({
           ...row,
-          createdActor: { type: "human" as const, id: "alice" },
+          createdActor: {
+            type: "human" as const,
+            id: "alice",
+            identity: { type: "profile" as const, id: "alice" },
+          },
         })),
       },
     });
@@ -216,7 +222,7 @@ describe("AppSidebar viewer presence", () => {
     const now = Date.now();
     const alice = {
       ts: now,
-      user: { id: "alice", name: "Alice" },
+      user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
       watchedSessions: ["agent:main:work"],
       onlineSince: now - 60_000,
       lastActivityAt: now - 10_000,
@@ -281,7 +287,7 @@ describe("AppSidebar viewer presence", () => {
       sidebar.connected = true;
       const person = {
         ts: Date.now(),
-        user: { id: "alice", name: "Alice" },
+        user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
         onlineSince: Date.now() - 90_000,
       };
       gateway.publishEvent("presence", {
@@ -361,7 +367,10 @@ describe("AppSidebar viewer presence", () => {
     gatewayHarness.publishEvent("presence", {
       presence: [
         { instanceId: "self-instance", user: { id: "self", name: "Self" } },
-        { instanceId: "alice-instance", user: { id: "alice", name: "Alice" } },
+        {
+          instanceId: "alice-instance",
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
+        },
         { instanceId: "bob-instance", user: { id: "bob", name: "Bob" } },
         { instanceId: "carol-instance", user: { id: "carol", name: "Carol" } },
         { instanceId: "dave-instance", user: { id: "dave", name: "Dave" } },
@@ -435,12 +444,17 @@ describe("AppSidebar viewer presence", () => {
         },
         {
           instanceId: "alice-1",
-          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
+          user: {
+            id: "alice",
+            identity: { type: "profile", id: "alice" },
+            name: "Alice",
+            avatarUrl: "/api/users/alice/avatar",
+          },
           watchedSessions: ["agent:main:work"],
         },
         {
           instanceId: "alice-2",
-          user: { id: "alice", name: "Alice" },
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
           watchedSessions: ["agent:main:main"],
         },
         {
@@ -525,7 +539,10 @@ describe("AppSidebar viewer presence", () => {
     );
   });
 
-  it("renders an Account fallback for an unidentified connection", async () => {
+  it.each([
+    undefined,
+    { id: "owner-profile", identity: { type: "profile" as const, id: "owner-profile" } },
+  ])("renders an Owner fallback without a name or email (%j)", async (user) => {
     const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -535,16 +552,21 @@ describe("AppSidebar viewer presence", () => {
 
     gatewayHarness.publishEvent("presence", {
       presence: [
-        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
-        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
+        { instanceId: "anonymous-self", user, watchedSessions: ["agent:main:main"] },
+        {
+          instanceId: "alice",
+          user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
+        },
       ],
     });
     await sidebar.updateComplete;
 
     const identityCard = sidebar.querySelector(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
+      "Owner",
     );
-    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
+    expect(
+      identityCard?.querySelector(`[data-viewer-id="${user?.id ?? "owner"}"]`)?.textContent,
+    ).toContain("O");
   });
 });

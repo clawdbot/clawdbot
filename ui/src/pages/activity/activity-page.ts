@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
@@ -10,7 +11,7 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { activityPersonFromPath, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -42,7 +43,6 @@ import {
 import { renderRunInspector } from "./run-inspector-view.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
-import { sessionActivitySearch, type SessionActivityFilters } from "./session-activity.ts";
 import {
   parseActivityEvent,
   updateToolActivity,
@@ -76,7 +76,11 @@ class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeSearch = "";
+  @property({ attribute: false }) routeLocation: RouteLocation = {
+    pathname: "/activity",
+    search: "",
+    hash: "",
+  };
   private routeData: ActivityRouteData = {
     mode: "sessions",
     filters: { personId: null, query: "", time: "7d" },
@@ -126,22 +130,33 @@ class ActivityPage extends OpenClawLightDomElement {
   );
 
   override willUpdate(changed: PropertyValues) {
-    if (changed.has("routeSearch")) {
-      this.routeData = resolveActivityRouteData(this.routeSearch);
+    if (changed.has("routeLocation")) {
+      this.routeData = resolveActivityRouteData(
+        this.routeLocation.search,
+        activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
+      );
     }
   }
 
   override updated(changed: PropertyValues) {
-    if (changed.has("routeSearch")) {
+    if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
       this.syncSessionActivity();
     }
+    const canonical = this.sessionActivity.canonicalLocation(
+      this.routeLocation,
+      this.context.basePath,
+      projectPresencePayload(this.presencePayload).users,
+    );
+    if (canonical) {
+      this.context.replace("activity", canonical);
+    }
+    const autoFollowEnabled = this.autoFollow && changed.has("autoFollow");
     if (
-      this.autoFollow &&
-      this.streamFollow.atBottom &&
-      (changed.has("entries") || changed.has("autoFollow"))
+      autoFollowEnabled ||
+      (this.autoFollow && this.streamFollow.atBottom && changed.has("entries"))
     ) {
-      this.streamFollow.schedule(changed.has("autoFollow"));
+      this.streamFollow.schedule(autoFollowEnabled);
     }
   }
 
@@ -459,13 +474,7 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   private selectMode(mode: "sessions" | "live") {
-    if (mode === "sessions") {
-      this.context.navigate("activity", { search: "" });
-      return;
-    }
-    if (mode === "live") {
-      this.context.navigate("activity", { search: "?view=live" });
-    }
+    this.context.navigate("activity", { search: mode === "live" ? "?view=live" : "" });
   }
 
   private rebuildEntries(
@@ -497,7 +506,7 @@ class ActivityPage extends OpenClawLightDomElement {
       return;
     }
     if (event.event === "sessions.changed") {
-      this.syncSessionActivity(true);
+      this.sessionActivity.invalidate();
     }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);
@@ -553,51 +562,99 @@ class ActivityPage extends OpenClawLightDomElement {
     this.streamFollow.atBottom = true;
   }
 
+  private renderMode() {
+    const route = this.routeData;
+    if (route.mode === "sessions") {
+      const presenceViewers = projectPresencePayload(this.presencePayload).users;
+      return renderSessionActivityView({
+        context: this.context,
+        expandedAutomationDays: this.expandedAutomationDays,
+        filters: {
+          ...route.filters,
+          personId: this.sessionActivity.result?.involvingProfileId ?? route.filters.personId,
+        },
+        presenceViewers,
+        result: this.sessionActivity.result,
+        loading: this.sessionActivity.loading,
+        error: this.sessionActivity.error,
+        onRetry: () => this.syncSessionActivity(true),
+        onAutomationDayToggle: (dayKey) => {
+          const next = new Set(this.expandedAutomationDays);
+          if (next.has(dayKey)) {
+            next.delete(dayKey);
+          } else {
+            next.add(dayKey);
+          }
+          this.expandedAutomationDays = next;
+        },
+        onFiltersChange: (next) =>
+          this.context.navigate(
+            "activity",
+            this.sessionActivity.locationForFilters(
+              next,
+              this.routeLocation,
+              this.context.basePath,
+              presenceViewers,
+            ),
+          ),
+      });
+    }
+    if (route.mode === "run") {
+      return html`<a
+          class="activity-run-inspector-back"
+          href=${pathForRoute("activity", this.context.basePath)}
+          >${icons.arrowLeft}${t("activityFeed.backToSessions")}</a
+        >
+        ${renderRunInspector({
+          basePath: this.context.basePath,
+          state: this.runInspector,
+          onLoadMoreExecutions: () => this.loadMoreExecutions(),
+          onLoadMoreDecisions: () => this.loadMoreDecisions(),
+          selectorId: route.selectorId,
+          selector: route.selector,
+          onRestart: () => this.restartRunInspector(),
+          onRetry: () =>
+            this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
+        })}`;
+    }
+    return html`<div id="activity-live-panel">
+      ${renderActivity({
+        basePath: this.context.basePath,
+        entries: this.entries,
+        filterText: this.filterText,
+        statusFilters: this.statusFilters,
+        toolFilter: this.toolFilter,
+        expandedIds: this.expandedIds,
+        autoFollow: this.autoFollow,
+        onFilterTextChange: (next) => (this.filterText = next),
+        onToolFilterChange: (next) => (this.toolFilter = next),
+        onStatusToggle: (status, enabled) => {
+          this.statusFilters = { ...this.statusFilters, [status]: enabled };
+        },
+        onToggleAutoFollow: (next) => (this.autoFollow = next),
+        onClear: () => this.clearEntries(),
+        onExpandAll: () => {
+          this.expandedIds = new Set(this.entries.map((entry) => entry.id));
+        },
+        onCollapseAll: () => {
+          this.expandedIds = new Set();
+        },
+        onEntryToggle: (id, open) => {
+          const next = new Set(this.expandedIds);
+          if (open) {
+            next.add(id);
+          } else {
+            next.delete(id);
+          }
+          this.expandedIds = next;
+        },
+        onScroll: (event) => this.streamFollow.handleScroll(event),
+      })}
+    </div>`;
+  }
+
   override render() {
-    const liveActivity = renderActivity({
-      basePath: this.context.basePath,
-      entries: this.entries,
-      filterText: this.filterText,
-      statusFilters: this.statusFilters,
-      toolFilter: this.toolFilter,
-      expandedIds: this.expandedIds,
-      autoFollow: this.autoFollow,
-      onFilterTextChange: (next) => (this.filterText = next),
-      onToolFilterChange: (next) => (this.toolFilter = next),
-      onStatusToggle: (status, enabled) => {
-        this.statusFilters = { ...this.statusFilters, [status]: enabled };
-      },
-      onToggleAutoFollow: (next) => {
-        this.autoFollow = next;
-        if (next) {
-          this.streamFollow.schedule(true);
-        }
-      },
-      onClear: () => this.clearEntries(),
-      onExpandAll: () => {
-        this.expandedIds = new Set(this.entries.map((entry) => entry.id));
-      },
-      onCollapseAll: () => {
-        this.expandedIds = new Set();
-      },
-      onEntryToggle: (id, open) => {
-        const next = new Set(this.expandedIds);
-        if (open) {
-          next.add(id);
-        } else {
-          next.delete(id);
-        }
-        this.expandedIds = next;
-      },
-      onScroll: (event) => this.streamFollow.handleScroll(event),
-    });
-    const mode = this.routeData?.mode ?? "live";
-    const filters =
-      this.routeData.mode === "sessions"
-        ? this.routeData.filters
-        : ({ personId: null, query: "", time: "7d" } satisfies SessionActivityFilters);
-    const presenceViewers = projectPresencePayload(this.presencePayload).users;
-    const selectedProfileId = this.sessionActivity.result?.involvingProfileId ?? filters.personId;
+    const mode = this.routeData.mode;
     const body = html`
       ${mode === "run"
         ? nothing
@@ -619,50 +676,7 @@ class ActivityPage extends OpenClawLightDomElement {
         role=${mode === "run" ? nothing : "tabpanel"}
         aria-labelledby=${mode === "run" ? nothing : `activity-mode-tab-${mode}`}
       >
-        ${mode === "sessions"
-          ? renderSessionActivityView({
-              context: this.context,
-              expandedAutomationDays: this.expandedAutomationDays,
-              filters: { ...filters, personId: selectedProfileId },
-              presenceViewers,
-              result: this.sessionActivity.result,
-              loading: this.sessionActivity.loading,
-              error: this.sessionActivity.error,
-              onRetry: () => this.syncSessionActivity(true),
-              onAutomationDayToggle: (dayKey) => {
-                const next = new Set(this.expandedAutomationDays);
-                if (next.has(dayKey)) {
-                  next.delete(dayKey);
-                } else {
-                  next.add(dayKey);
-                }
-                this.expandedAutomationDays = next;
-              },
-              onFiltersChange: (next) =>
-                this.context.navigate("activity", { search: sessionActivitySearch(next) }),
-            })
-          : mode === "run"
-            ? html`<a
-                  class="activity-run-inspector-back"
-                  href=${pathForRoute("activity", this.context.basePath)}
-                  >${icons.arrowLeft}${t("activityFeed.backToSessions")}</a
-                >
-                ${renderRunInspector({
-                  basePath: this.context.basePath,
-                  state: this.runInspector,
-                  onLoadMoreExecutions: () => this.loadMoreExecutions(),
-                  onLoadMoreDecisions: () => this.loadMoreDecisions(),
-                  selectorId: this.routeData.mode === "run" ? this.routeData.selectorId : null,
-                  selector: this.routeData.mode === "run" ? this.routeData.selector : null,
-                  onRestart: () => this.restartRunInspector(),
-                  onRetry: () =>
-                    this.syncRunInspector(
-                      this.context.gateway,
-                      this.context.gateway.snapshot,
-                      true,
-                    ),
-                })}`
-            : html`<div id="activity-live-panel">${liveActivity}</div>`}
+        ${this.renderMode()}
       </div>
     `;
     return html`
@@ -681,9 +695,8 @@ class ActivityPage extends OpenClawLightDomElement {
 
 export const activityPageComponent = {
   header: true,
-  render: (search: unknown) => html`<openclaw-activity-page
-    .routeSearch=${typeof search === "string" ? search : ""}
-  ></openclaw-activity-page>`,
+  render: (location: RouteLocation = { pathname: "/activity", search: "", hash: "" }) =>
+    html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
 };
 
 if (!customElements.get("openclaw-activity-page")) {

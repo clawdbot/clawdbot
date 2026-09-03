@@ -92,24 +92,30 @@ internal fun gatewayExecApprovalResolutionNotice(
         warning = false,
       )
     }
-    GatewayApprovalTerminalStatus.Denied ->
+
+    GatewayApprovalTerminalStatus.Denied -> {
       GatewayExecApprovalNotice(
         approvalId = resolution.approval.id,
         message = gatewayExecApprovalDeniedMessage(resolution.attribution),
         warning = true,
       )
-    GatewayApprovalTerminalStatus.Expired ->
+    }
+
+    GatewayApprovalTerminalStatus.Expired -> {
       GatewayExecApprovalNotice(
         approvalId = resolution.approval.id,
         message = gatewayExecApprovalTerminalMessage(resolution.approval.status),
         warning = true,
       )
-    GatewayApprovalTerminalStatus.Cancelled ->
+    }
+
+    GatewayApprovalTerminalStatus.Cancelled -> {
       GatewayExecApprovalNotice(
         approvalId = resolution.approval.id,
         message = gatewayExecApprovalTerminalMessage(resolution.approval.status),
         warning = true,
       )
+    }
   }
 
 private fun gatewayExecApprovalAllowedMessage(
@@ -254,36 +260,81 @@ internal fun parseGatewayExecApprovalListEntry(item: JsonElement): GatewayExecAp
 
 internal fun gatewayExecApprovalTextForDisplay(text: String): String =
   when (text) {
-    "Approval allowed and saved." -> nativeString("Approval allowed and saved.")
-    "Approval allowed once." -> nativeString("Approval allowed once.")
-    "A prior response already allowed this command and saved the choice." ->
+    "Approval allowed and saved." -> {
+      nativeString("Approval allowed and saved.")
+    }
+
+    "Approval allowed once." -> {
+      nativeString("Approval allowed once.")
+    }
+
+    "A prior response already allowed this command and saved the choice." -> {
       nativeString("A prior response already allowed this command and saved the choice.")
-    "A prior response already allowed this command once." ->
+    }
+
+    "A prior response already allowed this command once." -> {
       nativeString("A prior response already allowed this command once.")
-    "Gateway recorded approval and saved the choice." ->
+    }
+
+    "Gateway recorded approval and saved the choice." -> {
       nativeString("Gateway recorded approval and saved the choice.")
-    "Gateway recorded approval once." -> nativeString("Gateway recorded approval once.")
-    "Approval denied." -> nativeString("Approval denied.")
-    "A prior response already denied this approval." ->
+    }
+
+    "Gateway recorded approval once." -> {
+      nativeString("Gateway recorded approval once.")
+    }
+
+    "Approval denied." -> {
+      nativeString("Approval denied.")
+    }
+
+    "A prior response already denied this approval." -> {
       nativeString("A prior response already denied this approval.")
-    "Gateway recorded a denial." -> nativeString("Gateway recorded a denial.")
-    "This approval expired before it could be resolved." ->
+    }
+
+    "Gateway recorded a denial." -> {
+      nativeString("Gateway recorded a denial.")
+    }
+
+    "This approval expired before it could be resolved." -> {
       nativeString("This approval expired before it could be resolved.")
-    "This approval was cancelled before it could be resolved." ->
+    }
+
+    "This approval was cancelled before it could be resolved." -> {
       nativeString("This approval was cancelled before it could be resolved.")
-    "A prior response already resolved this approval." ->
+    }
+
+    "A prior response already resolved this approval." -> {
       nativeString("A prior response already resolved this approval.")
-    "Command request" -> nativeString("Command request")
-    "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified." ->
+    }
+
+    "Command request" -> {
+      nativeString("Command request")
+    }
+
+    "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified." -> {
       nativeString("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.")
-    "The Gateway still shows this approval as pending. Review it before trying again." ->
+    }
+
+    "The Gateway still shows this approval as pending. Review it before trying again." -> {
       nativeString("The Gateway still shows this approval as pending. Review it before trying again.")
-    "Could not load approval details. Refresh and try again." ->
+    }
+
+    "Could not load approval details. Refresh and try again." -> {
       nativeString("Could not load approval details. Refresh and try again.")
-    "Could not load approvals." -> nativeString("Could not load approvals.")
-    "Could not resolve approval. Refresh and try again." ->
+    }
+
+    "Could not load approvals." -> {
+      nativeString("Could not load approvals.")
+    }
+
+    "Could not resolve approval. Refresh and try again." -> {
       nativeString("Could not resolve approval. Refresh and try again.")
-    else -> text
+    }
+
+    else -> {
+      text
+    }
   }
 
 internal fun parseGatewayExecApprovalGetPayload(
@@ -395,8 +446,11 @@ private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprov
   val presentation = obj["presentation"].asObjectOrNull() ?: return null
   val summary = parseGatewayExecApprovalPresentation(id, createdAtMs, expiresAtMs, presentation) ?: return null
   return when (status) {
-    "pending" -> GatewayExecApprovalSnapshot.Pending(summary)
-    "allowed" ->
+    "pending" -> {
+      GatewayExecApprovalSnapshot.Pending(summary)
+    }
+
+    "allowed" -> {
       parseTerminalApproval(
         obj = obj,
         id = id,
@@ -405,28 +459,38 @@ private fun parseGatewayExecApprovalSnapshot(obj: JsonObject): GatewayExecApprov
       )?.takeIf { terminal ->
         terminal.decision?.let(summary.allowedDecisions::contains) == true
       }
-    "denied" ->
+    }
+
+    "denied" -> {
       parseTerminalApproval(
         obj = obj,
         id = id,
         status = GatewayApprovalTerminalStatus.Denied,
         expectedDecision = setOf("deny"),
       )
-    "expired" ->
+    }
+
+    "expired" -> {
       parseTerminalApproval(
         obj = obj,
         id = id,
         status = GatewayApprovalTerminalStatus.Expired,
         expectedDecision = null,
       )
-    "cancelled" ->
+    }
+
+    "cancelled" -> {
       parseTerminalApproval(
         obj = obj,
         id = id,
         status = GatewayApprovalTerminalStatus.Cancelled,
         expectedDecision = null,
       )
-    else -> null
+    }
+
+    else -> {
+      null
+    }
   }
 }
 
@@ -544,8 +608,14 @@ internal fun isWellFormedGatewayApprovalId(value: String): Boolean {
         if (index + 1 >= value.length || !Character.isLowSurrogate(value[index + 1])) return false
         index += 2
       }
-      Character.isLowSurrogate(current) -> return false
-      else -> index += 1
+
+      Character.isLowSurrogate(current) -> {
+        return false
+      }
+
+      else -> {
+        index += 1
+      }
     }
   }
   return true

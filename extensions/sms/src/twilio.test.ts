@@ -1,5 +1,10 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
@@ -99,6 +104,7 @@ function cancelTrackedTextResponse(
 describe("Twilio SMS helpers", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    clearRuntimeConfigSnapshot();
   });
 
   it("parses Twilio form bodies and inbound messages", async () => {
@@ -486,6 +492,44 @@ describe("Twilio SMS helpers", () => {
     ).rejects.toThrow("Twilio SMS/MMS send requires text or media.");
 
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["before the first request", false, true],
+    ["before a redirect hop", true, false],
+  ] as const)("classifies credential replacement %s", async (_name, redirect, notDispatched) => {
+    const account = createAccount();
+    setRuntimeConfigSnapshot({ channels: { sms: account } } as never);
+    const replacement = { ...account, authToken: "replacement" };
+    const fetchImpl = vi.fn<typeof fetch>();
+    if (redirect) {
+      fetchWithSsrFGuardMock.mockImplementationOnce(async (params) => {
+        expect(params.beforeRequest).toBeTypeOf("function");
+        params.beforeRequest?.();
+        setRuntimeConfigSnapshot({ channels: { sms: replacement } } as never);
+        params.beforeRequest?.();
+        throw new Error("expected credential rejection");
+      });
+    }
+
+    const rejection = await sendSmsViaTwilio({
+      account,
+      to: "+15551234567",
+      text: "hello",
+      onPlatformSendDispatch: async () => {
+        if (!redirect) {
+          setRuntimeConfigSnapshot({ channels: { sms: replacement } } as never);
+        }
+      },
+      ...(!redirect ? { fetchImpl } : {}),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection instanceof PlatformMessageNotDispatchedError).toBe(notDispatched);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {

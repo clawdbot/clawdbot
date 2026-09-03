@@ -30,7 +30,7 @@ export function renderDiffBlock(
   outcome: ToolCardOutcome = "succeeded",
   renderSkip?: (line: DiffLine) => unknown,
   file: DiffFilePaths = { path: "" },
-) {
+): ReturnType<typeof renderHighlightedDiff> {
   const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
   return renderHighlightedDiff(
     lines,

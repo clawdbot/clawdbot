@@ -1,7 +1,5 @@
 // Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { createConfigIO } from "../../config/io.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -14,9 +12,6 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveGatewayService } from "../../daemon/service.js";
-import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -224,34 +219,4 @@ export function filterContainerGenericHints(
       !hint.includes("If you're in a container, run the gateway in the foreground instead of") &&
       !hint.includes("systemd user services are unavailable; install/enable systemd"),
   );
-}
-
-export async function resolveGatewayLifecycleContext(
-  service = resolveGatewayService(),
-  requireEffective = false,
-) {
-  const command = requireEffective
-    ? await service.readCommand(process.env, { requireEffective: true })
-    : await service.readCommand(process.env).catch(() => null);
-  if (requireEffective && !command) {
-    throw new Error(
-      "Updated gateway service could not be inspected; run `openclaw gateway status --deep`.",
-    );
-  }
-  const env = mergeGatewayServiceEnv(process.env, command);
-  const config = await createConfigIO({
-    env,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch(() => undefined);
-  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, command };
-}
-
-export async function resolveGatewayConfigPorts() {
-  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
 }

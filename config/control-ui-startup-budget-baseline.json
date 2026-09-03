@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345371,
-  "reason": "Queued-send transcript bubbles (#131909), rebuilt on main a79e6517be8: measured 345371 B. Replace the conflicting 348449 B main baseline with this fresh measurement; retain the 512 B growth allowance, 64 B build variance, and 350 KiB ceiling.",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 349565,
+  "reason": "Integrated Control UI and dependency changes since the 348668 B baseline, including chat face/visibility, locale, first-render, Meetings, and Appearance work, now measure 349565 B (+897 B, 0.26%); an independent exact-head build measured 349533 B (32 B lower, within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained",
+  "updatedAt": "2026-09-03"
 }

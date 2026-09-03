@@ -4,16 +4,19 @@ import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
-import { isRecoverableTelegramNetworkError, isTelegramServerError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramMessageHasNoTextError,
+  isTelegramMessageNotModifiedError,
+  isTelegramServerError,
+} from "./network-errors.js";
 import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
-import { buildTelegramRichMarkdownPlan, getTelegramRichRawApi } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import {
-  isTelegramMessageHasNoTextError,
-  isTelegramMessageNotModifiedError,
   resolveTelegramApiContext,
   sendLogger,
   withTelegramApiContextLease,
@@ -210,7 +213,7 @@ async function editMessageTelegramWithContext(
           ),
         sendRich: (richMessage) =>
           edit(() =>
-            getTelegramRichRawApi(api).editMessageText({
+            api.raw.editMessageText({
               chat_id: chatId,
               message_id: messageId,
               rich_message: richMessage,

@@ -14,6 +14,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
+  transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
@@ -24,6 +25,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "pendingProjectGitUrl",
   "pendingWorktree",
   "sessionDiffBaselineCapture",
+  "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
 function projectPublicModelFallback(

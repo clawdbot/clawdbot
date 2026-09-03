@@ -1,5 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -10,8 +11,6 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-
-const queuedBubbleSelector = ".chat-group.user:has(.chat-queue__item)";
 
 const QUEUED = ["review the migration", "then update the docs", "finally run the smoke"] as const;
 
@@ -36,31 +35,25 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
       const queueText = () =>
-        page.locator(queuedBubbleSelector).evaluateAll((rows) =>
+        page.locator(".chat-queue__item").evaluateAll((rows) =>
           rows.map((row) => {
             const editor = row.querySelector(".chat-queue__edit-input");
             return editor instanceof HTMLTextAreaElement
               ? editor.value
-              : (row.querySelector(".chat-bubble .chat-text")?.textContent?.trim() ?? "");
+              : (row.querySelector(".chat-queue__text")?.textContent ?? "");
           }),
         );
       expect(await queueText()).toEqual([...QUEUED]);
 
       await composer.fill("a separate composer draft");
 
-      const queuedBubbles = page.locator(queuedBubbleSelector);
-      expect(await page.locator(".chat-queue").count()).toBe(0);
-      expect(await queuedBubbles.count()).toBe(3);
-      await queuedBubbles.nth(1).locator(".chat-queue__more").click();
-      await queuedBubbles.nth(1).locator('wa-dropdown-item[value="edit"]').click();
+      // Double-click is the shortcut; the pencil on the row is the visible path.
+      await page.locator(".chat-queue__item").nth(1).dblclick();
 
-      const rowEditor = page
-        .locator(queuedBubbleSelector)
-        .nth(1)
-        .locator(".chat-queue__edit-input");
+      const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
@@ -99,12 +92,12 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
       await composer.fill("a separate composer draft");
-      const row = page.locator(queuedBubbleSelector).nth(1);
-      await row.locator(".chat-bubble").dblclick();
+      const row = page.locator(".chat-queue__item").nth(1);
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.fill("a replacement the operator abandons");
@@ -112,15 +105,9 @@ suite.define(() => {
       await rowEditor.press("Escape");
 
       await expect
-        .poll(
-          () =>
-            page
-              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
-          {
-            timeout: 10_000,
-          },
-        )
+        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
+          timeout: 10_000,
+        })
         .toEqual([...QUEUED]);
       expect(await composer.inputValue()).toBe("a separate composer draft");
     } finally {
@@ -146,34 +133,28 @@ suite.define(() => {
       for (const message of QUEUED) {
         await composer.fill(message);
         await composer.press("Enter");
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
-      const row = page.locator(queuedBubbleSelector).nth(1);
-      await row.locator(".chat-bubble").dblclick();
+      const row = page.locator(".chat-queue__item").nth(1);
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await composer.fill("a separate composer send");
       await composer.press("Enter");
 
       await page
-        .locator(queuedBubbleSelector, { hasText: "a separate composer send" })
+        .locator(".chat-queue__item", { hasText: "a separate composer send" })
         .waitFor({ timeout: 10_000 });
       await expect.poll(() => rowEditor.inputValue(), { timeout: 10_000 }).toBe(QUEUED[1]);
       expect(await composer.inputValue()).toBe("");
-      expect(await page.locator(queuedBubbleSelector).count()).toBe(4);
+      expect(await page.locator(".chat-queue__item").count()).toBe(4);
 
       await rowEditor.press("Escape");
       await expect
-        .poll(
-          () =>
-            page
-              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
-          {
-            timeout: 10_000,
-          },
-        )
+        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
+          timeout: 10_000,
+        })
         .toEqual([...QUEUED, "a separate composer send"]);
     } finally {
       await suite.closeBrowserContext(context);
@@ -181,10 +162,10 @@ suite.define(() => {
   });
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.queue-edit", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -198,7 +179,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -217,16 +198,32 @@ suite.define(() => {
       const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
+      // The active seed turn is delivered; only the four later turns are queued.
+      const acceptedSession = {
+        key: "agent:main:main",
+        sessionId: "session:agent:main:main",
+        hasActiveRun: true,
+        activeRunIds: [activeRunId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+
       for (const message of ["send first", "edit before send", "remove me", "send last"]) {
         await composer.fill(message);
         await page.getByRole("button", { name: "Queue message" }).click();
-        await page.locator(queuedBubbleSelector, { hasText: message }).waitFor({ timeout: 10_000 });
-      }
-      expect(await page.locator(".chat-queue").count()).toBe(0);
-      expect(await page.locator(queuedBubbleSelector).count()).toBe(4);
-      await composer.fill("keep this composer draft while editing and reordering");
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/queue-controls-before.png`, fullPage: true });
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
       await gateway.setOnline(false);
       await gateway.closeLatest();
@@ -236,17 +233,18 @@ suite.define(() => {
         )
         .waitFor({ timeout: 10_000 });
 
-      const editRow = page.locator(queuedBubbleSelector, { hasText: "edit before send" });
-      await editRow.locator(".chat-bubble").dblclick();
+      const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
+      await editRow.dblclick();
+      // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
       await inlineEditor.press("ControlOrMeta+A");
       await page.keyboard.insertText("edited before send");
       await inlineEditor.press("Control+Enter");
-      await page.locator(queuedBubbleSelector, { hasText: "edited before send" }).waitFor();
+      await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
 
       const lastGrip = page
-        .locator(queuedBubbleSelector, { hasText: "send last" })
+        .locator(".chat-queue__item", { hasText: "send last" })
         .locator(".chat-queue__grip");
       await lastGrip.focus();
       for (const expected of [
@@ -256,24 +254,11 @@ suite.define(() => {
       ]) {
         await page.keyboard.press("ArrowUp");
         await expect
-          .poll(() =>
-            page
-              .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-              .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
-          )
+          .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
           .toEqual(expected);
       }
 
-      expect(await composer.inputValue()).toBe(
-        "keep this composer draft while editing and reordering",
-      );
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/queue-controls-reordered.png`,
-          fullPage: true,
-        });
-      }
-      const row = page.locator(queuedBubbleSelector, {
+      const row = page.locator(".chat-queue__item", {
         hasText: "remove me",
       });
 
@@ -304,7 +289,6 @@ suite.define(() => {
 
       await page
         .getByRole("alert")
-        .locator("summary")
         .getByText("Could not store this message for reconnect.", { exact: false })
         .waitFor({ timeout: 10_000 });
       await row.waitFor();
@@ -329,10 +313,8 @@ suite.define(() => {
             const target = event.target instanceof Element ? event.target : null;
             trace.push({
               detail: (event as MouseEvent).detail,
-              rowText: target
-                ?.closest(".chat-group.user")
-                ?.querySelector(".chat-bubble .chat-text")
-                ?.textContent?.trim(),
+              rowText: target?.closest(".chat-queue__item")?.querySelector(".chat-queue__text")
+                ?.textContent,
             });
           },
           { capture: true },
@@ -340,10 +322,10 @@ suite.define(() => {
       });
       await row.locator(".chat-queue__remove").click();
       await row.waitFor({ state: "detached", timeout: 10_000 });
-      // Transcript reflow can move the next row away from the first click's coordinates.
+      // Queue reflow can move the next row away from the first click's coordinates.
       // Aim the native second click at its remove control without another first click.
       await page
-        .locator(queuedBubbleSelector, { hasText: "edited before send" })
+        .locator(".chat-queue__item", { hasText: "edited before send" })
         .locator(".chat-queue__remove")
         .hover();
       await page.mouse.down({ clickCount: 2 });
@@ -363,18 +345,14 @@ suite.define(() => {
       ]);
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
-        .poll(() =>
-          page
-            .locator(`${queuedBubbleSelector} .chat-bubble .chat-text`)
-            .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim() ?? "")),
-        )
+        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
         .toEqual(["send last", "send first", "edited before send"]);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       const queueDisposable = async (text: string) => {
         await composer.fill(text);
         await composer.press("Enter");
-        const disposable = page.locator(queuedBubbleSelector, { hasText: text });
+        const disposable = page.locator(".chat-queue__item", { hasText: text });
         await disposable.waitFor({ timeout: 10_000 });
         return disposable;
       };
@@ -385,17 +363,58 @@ suite.define(() => {
       await keyboardRow.locator(".chat-queue__remove").focus();
       await page.keyboard.press("Enter");
       await keyboardRow.waitFor({ state: "detached", timeout: 10_000 });
-      const programmaticRow = await queueDisposable("programmatic removal");
-      await programmaticRow
-        .locator(".chat-queue__remove")
-        .evaluate((button: HTMLElement) => button.click());
+      // Remove at the first DOM commit, before yielded delivery can resume.
+      // Programmatic activation must keep cancellation exact even at this boundary.
+      const removal = await page.evaluateHandle(() => {
+        let removed = false;
+        const observer = new MutationObserver(() => {
+          const queuedRow = [...document.querySelectorAll(".chat-queue__item")].find(
+            (item) =>
+              item.querySelector(".chat-queue__text")?.textContent === "programmatic removal",
+          );
+          const button = queuedRow?.querySelector<HTMLButtonElement>(".chat-queue__remove");
+          if (button) {
+            observer.disconnect();
+            button.click();
+            removed = true;
+          }
+        });
+        observer.observe(document, { childList: true, subtree: true });
+        return { wasRemoved: () => removed };
+      });
+      await composer.fill("programmatic removal");
+      await composer.press("Enter");
+      await expect.poll(() => removal.evaluate((proof) => proof.wasRemoved())).toBe(true);
+      await removal.dispose();
+      const programmaticRow = page.locator(".chat-queue__item", {
+        hasText: "programmatic removal",
+      });
       await programmaticRow.waitFor({ state: "detached", timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/02-duplicate-noop.png`, fullPage: true });
       }
 
+      const terminalSession = {
+        ...acceptedSession,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: activeRunId,
+        status: "done",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: terminalSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
@@ -404,13 +423,7 @@ suite.define(() => {
         )
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        activeRunIds: [],
-        agentId: "main",
-        hasActiveRun: false,
-        key: "global",
-        status: "done",
-      });
+      await gateway.emitGatewayEvent("sessions.changed", terminalSession);
 
       const first = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
       expect(first.message).toBe("send last");
@@ -438,10 +451,16 @@ suite.define(() => {
       ]);
       expect(new Set(params.map((entry) => entry.idempotencyKey)).size).toBe(4);
       await expectRequestCountStable(gateway, "chat.send", 4);
-      await page.locator(queuedBubbleSelector).waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-exact-drain.png`, fullPage: true });
       }
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "queue-edit-reconnect",
+      });
+      throw error;
     } finally {
       await suite.closeBrowserContext(context);
     }

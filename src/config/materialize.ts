@@ -40,7 +40,7 @@ export function materializeRuntimeConfig(
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   next = applyCronDefaults(next);
-  next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
+  next = applyContextPruningDefaults(next, options);
   next = applyCompactionDefaults(next);
   next = applyModelDefaults(next, {
     manifestRegistry: options.manifestRegistry,

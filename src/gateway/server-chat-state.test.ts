@@ -52,6 +52,36 @@ describe("createChatRunState", () => {
     expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
   });
 
+  it.each(["full", "summary"] as const)(
+    "retains the latest usage through %s reconnect eviction",
+    (mode) => {
+      const state = createChatRunState();
+      const event = (seq: number, stream: string, data: Record<string, unknown>) =>
+        state.recordProgressEvent("run-1", { runId: "run-1", seq, stream, ts: seq, data }, mode);
+      event(1, "usage", { outputTokens: 100 });
+      event(2, "usage", { outputTokens: 170 });
+      event(1, "usage", { outputTokens: 100 });
+      event(3, "usage", { activeContextTokens: 900 });
+      for (let seq = 4; seq < 65; seq += 1) {
+        event(seq, "tool", { phase: "start", toolCallId: `tool-${seq}`, name: "read" });
+      }
+      const snapshot = state.runs.get("run-1")?.progressSnapshot;
+      expect(snapshot?.events.filter((candidate) => candidate.stream === "usage")).toEqual([
+        {
+          runId: "run-1",
+          seq: 3,
+          stream: "usage",
+          ts: 3,
+          data: { outputTokens: 170, activeContextTokens: 900 },
+        },
+      ]);
+      expect(snapshot?.events).toHaveLength(50);
+      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+      state.clearRun("run-1");
+      expect(state.runs.has("run-1")).toBe(false);
+    },
+  );
+
   it.each(["naming_worktree", "creating_worktree", "running_setup", "preparing_context"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {

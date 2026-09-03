@@ -4,8 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
+import { loadSkillLibrarySelection } from "../library/selection.js";
 import {
   loadMergedWorkspaceSkills,
+  loadWorkspaceSkills,
   normalizeWorkspaceSkillRoots,
 } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
@@ -22,6 +24,7 @@ const SKILL_SNAPSHOT_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
 type ReusableSkillSnapshotParams = {
+  librarySelections?: SkillSnapshot["librarySelections"];
   workspaceDir: string;
   executionSkillsDir?: string;
   config: OpenClawConfig;
@@ -87,7 +90,12 @@ export function resolveReusableWorkspaceSkillSnapshot(
     stableStringify(params.skillOverrides);
   const skillRootsChanged =
     stableStringify(params.existingSnapshot?.skillRoots) !== stableStringify(skillRoots);
+  const librarySelections = params.librarySelections ?? params.existingSnapshot?.librarySelections;
+  const libraryChanged =
+    stableStringify(librarySelections) !==
+    stableStringify(params.existingSnapshot?.librarySelections);
   const shouldRefresh =
+    libraryChanged ||
     promptFormatChanged ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
@@ -95,7 +103,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    const entries = skillRoots
+    let entries = skillRoots
       ? loadMergedWorkspaceSkills({
           ...skillRoots,
           config: params.config,
@@ -106,6 +114,18 @@ export function resolveReusableWorkspaceSkillSnapshot(
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
         })
       : undefined;
+    if (librarySelections?.length) {
+      entries = [
+        ...(entries ??
+          loadWorkspaceSkills(params.workspaceDir, {
+            config: params.config,
+            agentId: params.agentId,
+            eligibility: params.eligibility,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+          })),
+        ...loadSkillLibrarySelection(librarySelections),
+      ];
+    }
     const snapshot = buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
       ...(entries ? { entries, preserveEntryOrder: true } : {}),
@@ -116,12 +136,17 @@ export function resolveReusableWorkspaceSkillSnapshot(
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       snapshotVersion,
     });
-    return skillRoots ? { ...snapshot, skillRoots } : snapshot;
+    return {
+      ...snapshot,
+      ...(skillRoots ? { skillRoots } : {}),
+      ...(librarySelections ? { librarySelections } : {}),
+    };
   };
 
   const buildSnapshotCacheKey = () =>
     JSON.stringify([
       params.workspaceDir,
+      librarySelections,
       skillRoots,
       snapshotVersion,
       params.skillFilter,

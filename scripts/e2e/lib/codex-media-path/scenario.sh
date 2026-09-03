@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_SKIP_GMAIL_WATCHER=1
@@ -15,15 +16,20 @@ export OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG="/tmp/openclaw-codex-media-path-
 
 PORT="${PORT:?missing PORT}"
 TOKEN="${OPENCLAW_GATEWAY_TOKEN:?missing OPENCLAW_GATEWAY_TOKEN}"
-PLUGIN_SPEC="${OPENCLAW_CODEX_MEDIA_PATH_PLUGIN_SPEC:?missing OPENCLAW_CODEX_MEDIA_PATH_PLUGIN_SPEC}"
+PLUGIN_SPEC="${OPENCLAW_CODEX_MEDIA_PATH_PLUGIN_SPEC:-npm:@openclaw/codex}"
+if [[ -z "${OPENCLAW_CODEX_MEDIA_PATH_PLUGIN_SPEC:-}" && -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]]; then
+  PLUGIN_SPEC="npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+fi
 GATEWAY_LOG="/tmp/openclaw-codex-media-path-gateway.log"
 CLIENT_LOG="/tmp/openclaw-codex-media-path-client.log"
 PLUGIN_INSTALL_LOG="/tmp/openclaw-codex-media-path-plugin-install.log"
 PLUGIN_INSPECT_LOG="/tmp/openclaw-codex-media-path-plugin-inspect.json"
 gateway_pid=""
+plugin_registry_pid=""
 
 cleanup() {
   openclaw_e2e_stop_process "$gateway_pid"
+  openclaw_e2e_stop_process "$plugin_registry_pid"
 }
 trap cleanup EXIT
 
@@ -39,6 +45,8 @@ mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
 rm -f "$OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG"
 
 openclaw_e2e_enable_openclaw_cli_timeout
+openclaw_prepublish_plugin_registry_start_mounted \
+  /tmp/openclaw-codex-media-path-registry plugin_registry_pid '["@openclaw/codex"]'
 
 echo "Installing Codex plugin: $PLUGIN_SPEC"
 openclaw_e2e_fixture_plugin_command openclaw -- plugins install "$PLUGIN_SPEC" --force >"$PLUGIN_INSTALL_LOG" 2>&1

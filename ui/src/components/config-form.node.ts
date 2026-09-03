@@ -22,7 +22,7 @@ import {
   matchesNodeSearch,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, pathKey, schemaType } from "./config-form.shared.ts";
+import { configFieldId, hintForPath, pathKey, schemaType } from "./config-form.shared.ts";
 import { renderSettingsToggle, renderSettingsToggleRow } from "./settings-ui.ts";
 
 export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typeof nothing {
@@ -33,7 +33,20 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
+  if (
+    unsupported.has(key) ||
+    [...unsupported].some((pattern) => {
+      if (!pattern.includes("*")) {
+        return false;
+      }
+      const segments = pattern.split(".");
+      // Use the original segments: dynamic model/provider keys may contain dots.
+      return (
+        segments.length === path.length &&
+        segments.every((segment, index) => segment === "*" || segment === String(path[index]))
+      );
+    })
+  ) {
     return renderFieldRow({
       label,
       tags: [],
@@ -190,6 +203,11 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
 
   // Boolean - toggle row
   if (type === "boolean") {
+    // A placeholder names an optional boolean's inherited state; a toggle
+    // cannot distinguish an unset override from an explicit false.
+    if (!params.isRequired && hintForPath(path, hints)?.placeholder) {
+      return renderSelect({ ...params, options: [true, false] });
+    }
     const displayValue =
       typeof value === "boolean"
         ? value
