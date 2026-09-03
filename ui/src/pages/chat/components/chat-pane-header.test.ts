@@ -407,7 +407,7 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("groups visibility with the face switch inside the centered header region", () => {
+  it("places visibility in the owner slot while the face switch stays centered", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
@@ -422,20 +422,39 @@ describe("chat pane header", () => {
       "chat-pane__header-center",
     );
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
-      "chat-pane__header-center",
+      "chat-pane__header-leading",
     );
   });
 
-  it("keeps visibility with trailing actions when the session has no face switch", () => {
+  it("keeps visibility in the owner slot when the session has no face switch", () => {
     const { container } = mountHeader({
       faceControl: nothing,
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
-      "chat-pane__header-trailing",
+      "chat-pane__header-leading",
     );
     expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+  });
+
+  it("replaces the header owner avatar when visibility is available", () => {
+    const actor = {
+      type: "human" as const,
+      id: "profile-ada",
+      identity: { type: "profile" as const, id: "profile-ada" },
+      label: "Ada",
+    };
+    const { container } = mountHeader({
+      session: row({ owner: { actor } }),
+      showOwnerChip: true,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-leading",
+    );
   });
 
   it("uses the full header width when no face switch needs centering", () => {
@@ -671,6 +690,35 @@ describe("chat pane header", () => {
           ?.classList.contains("session-owner-chip--away"),
       ).toBe(identity === undefined);
     }
+  });
+
+  it("keeps the linked owner visible when session sharing cannot open", async () => {
+    const owners = [
+      { type: "human" as const, id: "profile-ada", label: "Ada" },
+      { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+    ];
+    const mounted = mountIntegratedPresenceHeader({ owners, presence: [] });
+    const snapshot = mounted.pane.context.gateway.snapshot;
+    snapshot.hello = {
+      ...snapshot.hello,
+      auth: { role: "operator", scopes: [] },
+      features: {
+        ...snapshot.hello?.features,
+        methods: ["session.visibility.set"],
+      },
+    } as typeof snapshot.hello;
+
+    mounted.renderHeader();
+    const ownerLink = mounted.container.querySelector<HTMLAnchorElement>(
+      "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
+    );
+    const ownerChip = ownerLink?.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+      "openclaw-session-owner-chip",
+    );
+    await ownerChip?.updateComplete;
+
+    expect(mounted.container.querySelector(".chat-pane__sharing-trigger")).toBeNull();
+    expect(ownerLink?.getAttribute("href")).toBe("/activity?person=profile-ada");
   });
 
   it("renders the durable session actor avatar with the header attribution semantics", async () => {

@@ -716,26 +716,6 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
-.chat-pane__header-center .chat-pane__sharing-menu,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-start: 100%;
-  display: inline-flex;
-  transform: translateY(-50%);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
-}
-
 .chat-pane__sharing-menu::part(menu) {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
@@ -765,6 +745,20 @@ openclaw-chat-pane {
 
 .chat-pane__sharing-members-title {
   margin-top: 8px;
+}
+
+.chat-pane__sharing-owner-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-owner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
 .chat-pane__sharing-member-skeleton {
@@ -827,22 +821,17 @@ openclaw-chat-pane {
 }
 
 .chat-pane__draft-indicator {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
 }
 
 .chat-pane__draft-indicator svg {
   width: 15px;
   height: 15px;
-}
-
-.chat-pane__header-center .chat-pane__draft-indicator {
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 /* A full split header measures 793px including insets, so secondary controls

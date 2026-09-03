@@ -5256,6 +5256,7 @@ export const en: TranslationMap & {
       suggest: "Suggest",
       draft: "Draft",
       publishDraft: "Publish draft",
+      owner: "Owner",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",

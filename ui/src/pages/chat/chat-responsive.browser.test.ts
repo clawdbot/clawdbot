@@ -1252,6 +1252,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <span class="chat-pane__session-title-text">A deliberately long session title that must yield to the centered face switch</span>
                 </span>
               </div>
+              <wa-dropdown class="chat-pane__sharing-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
+              </wa-dropdown>
             </div>
             <div class="chat-pane__header-center">
               <div class="chat-pane__face-switch">
@@ -1261,9 +1264,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <button class="settings-segmented__btn" type="button">Dashboard</button>
                 </div>
               </div>
-              <wa-dropdown class="chat-pane__sharing-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
-              </wa-dropdown>
             </div>
             <div class="chat-pane__header-trailing">
               <div class="chat-pane__actions">
@@ -1303,7 +1303,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps a non-manager draft indicator out of the face switch width", async () => {
+  it("keeps a non-manager draft indicator in the owner slot", async () => {
     const page = await openBrowserPage(800, 180);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -1312,7 +1312,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
           <div class="chat-pane__header chat-pane__header--centered" style="width: 720px;">
-            <div class="chat-pane__header-leading"></div>
+            <div class="chat-pane__header-leading">
+              <span class="chat-pane__draft-indicator" title="Draft">${iconSvg()}</span>
+            </div>
             <div class="chat-pane__header-center">
               <div class="chat-pane__face-switch">
                 <div class="settings-segmented">
@@ -1321,7 +1323,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <button class="settings-segmented__btn" type="button">Dashboard</button>
                 </div>
               </div>
-              <span class="chat-pane__draft-indicator" title="Draft">👻</span>
             </div>
             <div class="chat-pane__header-trailing"></div>
           </div>
@@ -1349,7 +1350,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      expect(geometry.draftPosition).toBe("absolute");
+      expect(geometry.draftPosition).toBe("static");
       expect(Math.abs(geometry.faceCenter - geometry.contentCenter)).toBeLessThanOrEqual(0.5);
     } finally {
       await closeBrowserPage(page);
