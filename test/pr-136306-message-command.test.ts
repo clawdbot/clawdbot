@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "../extensions/telegram/api.js";
 import type { CliDeps } from "../src/cli/deps.js";
 import { messageCommand } from "../src/commands/message.js";
-import { sanitizeForPlainText } from "../src/infra/outbound/sanitize-text.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { RuntimeEnv } from "../src/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 
 vi.mock("../src/config/config.js", () => ({
   getRuntimeConfig: () => ({ channels: { telegram: { enabled: true } } }),
@@ -36,8 +36,7 @@ afterEach(() => {
 
 describe("messageCommand outbound label projection", () => {
   it("delivers the visible label through the shipped message command", async () => {
-    const sendText = vi.fn(async ({ to, text }: { to: string; text: string }) => ({
-      channel: "telegram" as const,
+    const sendMessageTelegram = vi.fn(async (to: string, text: string) => ({
       messageId: "fixture-message",
       to,
       text,
@@ -47,24 +46,7 @@ describe("messageCommand outbound label projection", () => {
         {
           pluginId: "telegram",
           source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            messaging: {
-              targetResolver: {
-                looksLike: () => true,
-                resolveTarget: async ({ input }) => ({
-                  to: input,
-                  kind: "user" as const,
-                  source: "normalized" as const,
-                }),
-              },
-            },
-            outbound: {
-              deliveryMode: "direct",
-              sanitizeText: ({ text }) => sanitizeForPlainText(text),
-              sendText,
-            },
-          }),
+          plugin: { ...telegramPlugin, actions: undefined },
         },
       ]),
     );
@@ -77,12 +59,12 @@ describe("messageCommand outbound label projection", () => {
         message: "<https://example.com/a.pdf|Manual>",
         json: true,
       },
-      {} as CliDeps,
+      { sendMessageTelegram } satisfies CliDeps,
       runtime,
     );
 
-    expect(sendText.mock.calls.map(([call]) => ({ to: call.to, text: call.text }))).toEqual([
-      { to: "12345", text: "Manual" },
+    expect(sendMessageTelegram.mock.calls.map(([to, text]) => ({ to, text }))).toEqual([
+      { to: "telegram:12345", text: "Manual" },
     ]);
   });
 });
