@@ -18,6 +18,7 @@ import {
 import { renderSessionColorDot } from "./session-color.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
+import "./session-hovercard.css";
 import "./tooltip.ts";
 import "./viewer-facepile.ts";
 
@@ -235,7 +236,7 @@ function renderParticipantMenu(
       const label = participantLabel(participant);
       const activity =
         participant.identity.type === "profile"
-          ? personActivityLink(participant.identity.id, personActivity)
+          ? personActivityLink(participant.identity.id, personActivity, label)
           : null;
       return html`<div role="listitem">
         ${renderPersonName(
@@ -246,7 +247,7 @@ function renderParticipantMenu(
       </div>`;
     })}
     ${unresolvedCount > 0
-      ? html`<div class="session-hovercard__participant-unresolved" role="listitem">
+      ? html`<div class="session-hovercard__more" role="listitem">
           ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
         </div>`
       : nothing}
@@ -270,7 +271,7 @@ function renderSessionAttribution({
   const primaryParticipant = creator ? undefined : participants[0];
   const primaryActivity =
     primaryIdentity?.type === "profile"
-      ? personActivityLink(primaryIdentity.id, personActivity)
+      ? personActivityLink(primaryIdentity.id, personActivity, primaryLabel)
       : null;
   const creatorInitials = creator ? sessionOwnerInitials(creator) : "";
   const avatarFallback = creatorInitials

@@ -930,10 +930,6 @@ openclaw-chat-pane {
   background: var(--wa-color-surface-raised);
 }
 
-.chat-header-session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
 .chat-header-session-menu--compact::part(menu) {
   max-height: calc(100dvh - 16px);
   overflow-y: auto;

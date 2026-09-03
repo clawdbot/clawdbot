@@ -740,12 +740,10 @@ extension AppState {
             }
 
             if draft.dirtyFields.contains(.remoteUrl) {
-                let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmedUrl.isEmpty {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-                } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
-                }
+                // Reconciliation needs the incomplete draft too, or it mistakes the
+                // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
+                let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
+                changed = Self.updateGatewayString(&remote, key: "url", value: url) || changed
             }
 
         case .ssh:

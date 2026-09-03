@@ -179,6 +179,10 @@ beforeEach(async () => {
     delete process.env[key];
   }
   process.env.HOME = root;
+  // This fixture models an installed service even though its manager calls are simulated.
+  const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
   configPath = path.join(root, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath));
   await fs.mkdir(path.join(root, "dist"));

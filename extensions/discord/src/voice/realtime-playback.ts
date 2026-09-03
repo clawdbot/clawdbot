@@ -32,9 +32,7 @@ const DISCORD_REALTIME_MAX_PENDING_OUTPUT_BYTES = DISCORD_RAW_PCM_FRAME_BYTES * 
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
-type RealtimeExactSpeechState =
-  | { status: "idle" }
-  | { status: "active"; message: string; audioStarted: boolean };
+type RealtimeExactSpeechState = { status: "idle" } | { status: "active"; message: string };
 
 function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -66,9 +64,10 @@ export class DiscordRealtimePlayback<TState> {
     | { normalizedText: string; sentAt: number; assistantTranscriptCount: number }
     | undefined;
   private readonly playerIdleHandler = () => {
-    const hadOutputAudio = this.isOutputAudioActive();
+    // Encoder/player failure can emit Idle before the provider finishes this response.
+    const responseEnded = this.params.harness.outputActivity.snapshot().streamEnding;
     this.resetOutputStream("player-idle");
-    if (hadOutputAudio) {
+    if (responseEnded) {
       this.completeExactSpeechResponse("player-idle");
     }
   };
@@ -163,9 +162,6 @@ export class DiscordRealtimePlayback<TState> {
       return;
     }
     const stream = this.ensureOutputStream();
-    if (this.exactSpeechState.status === "active") {
-      this.exactSpeechState = { ...this.exactSpeechState, audioStarted: true };
-    }
     this.params.harness.recordOutputAudio(realtimePcm24kMono, {
       audioMs: realtimeVoiceAudioDurationMs(
         REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -178,8 +174,12 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   clearOutputAudio(reason = "clear"): void {
+    const responseEnded = this.params.harness.outputActivity.snapshot().streamEnding;
     this.resetOutputStream(reason);
     this.params.entry.player.stop(true);
+    if (responseEnded) {
+      this.completeExactSpeechResponse(reason);
+    }
   }
 
   finishOutputAudioStream(
@@ -198,9 +198,7 @@ export class DiscordRealtimePlayback<TState> {
       this.startOutputPlayback(stream);
       this.scheduleOutputPlaybackWatchdog(reason, stream);
     } else {
-      this.resetOutputStream(reason);
-      this.params.entry.player.stop(true);
-      this.completeExactSpeechResponse(reason);
+      this.clearOutputAudio(reason);
       return;
     }
     // Provider completion must not end the stream before its queued tail drains.
@@ -212,7 +210,9 @@ export class DiscordRealtimePlayback<TState> {
   handleResponseDone(outcome: {
     status: "completed" | "cancelled" | "failed" | "incomplete";
   }): void {
-    if (this.exactSpeechState.status === "active" && !this.exactSpeechState.audioStarted) {
+    // A provider clear may already have discarded this response's audio. Its
+    // terminal event must still release queued speech without waiting for Idle.
+    if (!this.isOutputAudioActive()) {
       this.completeExactSpeechResponse(outcome.status);
     }
     this.finishOutputAudioStream(outcome.status, {
@@ -491,7 +491,6 @@ export class DiscordRealtimePlayback<TState> {
         `discord voice: realtime output pipeline failed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}: ${formatErrorMessage(err)}`,
       );
       this.clearOutputAudio("output-pipeline-error");
-      this.completeExactSpeechResponse("output-pipeline-error");
     });
     const buffered = Buffer.concat(this.outputPacedBuffers, this.outputPacedBytes);
     this.outputPacedBuffers = [];
@@ -548,7 +547,6 @@ export class DiscordRealtimePlayback<TState> {
         `discord voice: realtime audio playback watchdog fired reason=${reason} guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} audioMs=${this.outputAudioMs()} elapsedMs=${this.params.harness.outputActivity.elapsedPlaybackMs()}`,
       );
       this.clearOutputAudio("playback-watchdog");
-      this.completeExactSpeechResponse("playback-watchdog");
     }, timeoutMs);
   }
 
@@ -564,7 +562,7 @@ export class DiscordRealtimePlayback<TState> {
     if (this.params.stopped() || !text.trim()) {
       return;
     }
-    this.exactSpeechState = { status: "active", message: text, audioStarted: false };
+    this.exactSpeechState = { status: "active", message: text };
     this.params.bridge()?.sendUserMessage(this.params.buildSpeakExactMessage(text));
   }
 

@@ -237,6 +237,7 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
+    sessionKey: key,
     entry,
     agentId: sessionAgentId,
     rowContext,

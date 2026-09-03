@@ -183,6 +183,7 @@ export async function prepareGatewayNodeConnect(
   const nodeConnectParams = connectParams as ConnectParams & {
     declaredCaps?: string[];
     declaredCommands?: string[];
+    withheldCommands?: string[];
     declaredComputerUse?: unknown;
     declaredPermissions?: Record<string, boolean>;
     sessionCapsCeiling?: string[];
@@ -190,6 +191,7 @@ export async function prepareGatewayNodeConnect(
   };
   nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
   nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+  nodeConnectParams.withheldCommands = reconciliation.withheldCommands;
   nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
   const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);

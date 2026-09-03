@@ -456,6 +456,16 @@
   text-decoration: none;
 }
 
+.sidebar-issues-panel__summary--navigation {
+  position: relative;
+}
+
+.sidebar-issues-panel__navigation-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
   outline: none;
@@ -484,6 +494,8 @@
 }
 
 .sidebar-issues-panel__dismiss {
+  position: relative;
+  z-index: 1;
   display: inline-grid;
   width: 24px;
   height: 24px;

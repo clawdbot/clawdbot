@@ -8,6 +8,7 @@ import {
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../state/user-profiles.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -111,7 +112,9 @@ export function sharingIdentity(
   actor: ReturnType<typeof resolveGatewayOperatorRoleActor>,
 ) {
   const operator = actor?.kind === "operator" ? { id: actor.profileId } : undefined;
-  return gatewayClientSessionCreator(client) ?? operator;
+  const identity = gatewayClientSessionCreator(client) ?? operator;
+  // Owner attribution never narrows sharing; solo deployments stay owner-equivalent.
+  return identity?.id === GATEWAY_OWNER_PROFILE_ID ? undefined : identity;
 }
 
 export function resolveSessionSharingRole(
@@ -124,7 +127,7 @@ export function resolveSessionSharingRole(
   }
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
-  // Shared-secret/no-auth solo deployments have no durable person identity.
+  // Solo ownership is independent of the shared-secret connection's attribution profile.
   if (!identity) {
     return params.client?.authenticatedGitHubIdentitySync ||
       (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
@@ -206,7 +209,7 @@ export function authorizeIncognitoSessionTarget(params: {
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
-  const identity = gatewayClientSessionCreator(params.client);
+  const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   if (!identity) {
     return null;
   }

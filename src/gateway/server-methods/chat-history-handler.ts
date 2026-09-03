@@ -143,6 +143,7 @@ async function handleChatMetadataRequest({
           config: session.cfg,
           agentId: requested.agentId,
         }),
+        sessionKey: session.canonicalKey,
         sessionEntry: session.entry,
       }),
     );
@@ -303,6 +304,7 @@ async function handleChatHistoryRequest({
         try {
           return await context.readChatStartupProjection?.({
             agentId: sessionAgentId,
+            sessionKey: canonicalKey,
             sessionEntry: entry,
             readPolicy: method === "chat.history" ? "ready" : "current",
           });

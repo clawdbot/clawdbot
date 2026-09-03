@@ -29,7 +29,6 @@ import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
-  strictTransportSecurityHeader?: string;
   controlUiBasePath: string;
   controlUiRoot?: string;
   resolvedAuth: ResolvedGatewayAuth;
@@ -90,17 +89,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
-  const strictTransportSecurityConfig =
-    params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
-  // HSTS is opt-in and must stay absent for blank strings; local HTTP and reverse-proxy
-  // setups rely on not emitting a malformed or accidentally inherited header.
-  const strictTransportSecurityHeader =
-    strictTransportSecurityConfig === false
-      ? undefined
-      : typeof strictTransportSecurityConfig === "string" &&
-          strictTransportSecurityConfig.trim().length > 0
-        ? strictTransportSecurityConfig.trim()
-        : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
   const controlUiRoot =
@@ -180,7 +168,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   return {
     bindHost,
     controlUiEnabled,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot,
     resolvedAuth,

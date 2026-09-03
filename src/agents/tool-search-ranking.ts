@@ -281,8 +281,7 @@ function stemVariants(word: string): string[] {
 export function tokenizeDocument(input: string): string[] {
   return splitWords(input)
     .filter((word) => !STOPWORDS.has(word))
-    .flatMap(stemVariants)
-    .filter(Boolean);
+    .flatMap(stemVariants);
 }
 
 /**
@@ -299,10 +298,10 @@ function normalizeTrigger(word: string): string {
 }
 
 const NORMALIZED_EXPANSIONS: ReadonlyArray<{
-  triggers: ReadonlySet<string>;
+  triggers: readonly string[];
   add: readonly string[];
 }> = QUERY_EXPANSIONS.map((group) => ({
-  triggers: new Set(group.terms.map(normalizeTrigger)),
+  triggers: group.terms.map(normalizeTrigger),
   add: group.add.map(stem),
 }));
 
@@ -319,12 +318,12 @@ type WeightedTerm = { term: string; weight: number };
 export function tokenizeQuery(input: string): WeightedTerm[] {
   const words = splitWords(input).filter((word) => !STOPWORDS.has(word));
   const weights = new Map<string, number>();
-  for (const term of words.flatMap(stemVariants).filter(Boolean)) {
+  for (const term of words.flatMap(stemVariants)) {
     weights.set(term, 1);
   }
   const triggers = new Set(words.map(normalizeTrigger));
   for (const group of NORMALIZED_EXPANSIONS) {
-    if (![...group.triggers].some((trigger) => triggers.has(trigger))) {
+    if (!group.triggers.some((trigger) => triggers.has(trigger))) {
       continue;
     }
     for (const addition of group.add) {
@@ -347,7 +346,9 @@ type LexicalIndex<T> = {
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
   const postings = new Map<string, Map<IndexedDocument<T>, number>>();
-  const prepared = documents.map((document, position) => {
+  const documentCount = documents.length;
+  let totalLength = 0;
+  documents.forEach((document, position) => {
     const indexed = { value: document.value, length: document.terms.length, position };
     for (const term of document.terms) {
       let matches = postings.get(term);
@@ -357,13 +358,12 @@ export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>
       }
       matches.set(indexed, (matches.get(indexed) ?? 0) + 1);
     }
-    return indexed;
+    totalLength += indexed.length;
   });
-  const totalLength = prepared.reduce((sum, document) => sum + document.length, 0);
   return {
     postings,
-    documentCount: prepared.length,
-    averageLength: prepared.length > 0 ? totalLength / prepared.length : 0,
+    documentCount,
+    averageLength: documentCount > 0 ? totalLength / documentCount : 0,
   };
 }
 

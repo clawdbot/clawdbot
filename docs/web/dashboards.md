@@ -44,6 +44,18 @@ state, so each browser can keep its own working layout.
 
 ## Build a dashboard by asking
 
+Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
+
+<iframe
+  className="w-full aspect-video rounded-lg"
+  src="https://www.youtube-nocookie.com/embed/gHyBueWideg"
+  title="Build an OpenClaw Dashboard with One Prompt"
+  frameBorder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  referrerPolicy="strict-origin-when-cross-origin"
+  allowFullScreen
+></iframe>
+
 Ask your agent for what you want to see:
 
 > Create a widget named revenue-graph: an interactive bar chart of monthly
@@ -69,6 +81,9 @@ never needs the agent.
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
+- **Automatic height.** HTML widgets adjust their height to fit their content.
+  Resizing by handle or choosing a size preset fixes the height. Choose
+  **Auto height** from the widget menu to fit the content again.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.

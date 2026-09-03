@@ -81,12 +81,14 @@ export function prepareEmbeddedRunTerminal(input: {
     latestUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
+  // A runtime can observe its model without emitting message_end. That scoped
+  // attribution is useful here, but is not completed text or usage evidence.
+  const attributionAssistant = terminalAssistant ?? attempt.currentAttemptAssistant;
   const reportedModelRef = resolveReportedModelRef({
-    provider: input.provider,
-    model: input.model,
-    assistant: terminalAssistant,
+    ...(attempt.runtimeModelSelection ?? { provider: input.provider, model: input.model }),
+    assistant: attributionAssistant,
   });
-  const responseModel = terminalAssistant?.responseModel?.trim() || reportedModelRef.model;
+  const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
@@ -118,6 +120,9 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
+    ...(attempt.runtimeModelSelection
+      ? { runtimeModelSelection: attempt.runtimeModelSelection }
+      : {}),
     credentialSource: attempt.modelAttempt?.credentialSource,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,

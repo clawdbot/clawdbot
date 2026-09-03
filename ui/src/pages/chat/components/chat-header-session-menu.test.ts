@@ -3,15 +3,19 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { RouteId } from "../../../app-route-paths.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
 import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
+import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -74,9 +78,8 @@ async function mountMenu(
     layoutActions?: HeaderMenuQuickAction[];
     statusActions?: HeaderMenuStatusAction[];
     sharing?: ChatSessionSharingProps | null;
-    ownerOptions?: SessionOwnerOption[];
-    selfOwner?: SessionOwnerOption | null;
-    currentOwnerId?: string | null;
+    context?: ApplicationContext<RouteId>;
+    currentOwner?: SessionOwnerOption | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     forkFromLastCompleted?: boolean;
@@ -88,7 +91,9 @@ async function mountMenu(
     onAction?: (action: HeaderMenuAction) => void;
   } = {},
 ): Promise<HeaderMenuElement> {
-  const container = document.createElement("div");
+  const container = options.context
+    ? createApplicationContextProvider(options.context)
+    : document.createElement("div");
   containers.push(container);
   document.body.append(container);
   render(
@@ -118,9 +123,7 @@ async function mountMenu(
       .statusActions=${options.statusActions ?? []}
       .sharing=${options.sharing ?? null}
       .groups=${["Projects"]}
-      .ownerOptions=${options.ownerOptions ?? []}
-      .selfOwner=${options.selfOwner ?? null}
-      .currentOwnerId=${options.currentOwnerId ?? null}
+      .currentOwner=${options.currentOwner ?? null}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
@@ -238,6 +241,7 @@ describe("chat header session menu", () => {
       "Archive session",
       "Icon & color",
       "Move to group",
+      "Assign to…",
       "Fork conversation",
       "Copy",
       "Open in",
@@ -458,12 +462,10 @@ describe("chat header session menu", () => {
 
   it("offers self and named owner assignment in one submenu", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
-    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const { context } = createSessionOwnerMenuHarness();
     const menu = await mountMenu({
-      ownerOptions: [ada, research],
-      selfOwner: ada,
-      currentOwnerId: research.id,
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
       onAction,
     });
 
@@ -496,8 +498,7 @@ describe("chat header session menu", () => {
     const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
-    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
-    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const { context } = createSessionOwnerMenuHarness();
     const menu = await mountMenu({
       compact: true,
       worktreePath: "/work/openclaw",
@@ -527,9 +528,8 @@ describe("chat header session menu", () => {
           onActivate: showAccess,
         },
       ],
-      ownerOptions: [ada, research],
-      selfOwner: ada,
-      currentOwnerId: research.id,
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
       onOpenCommandPalette,
       onSettingsChange,
       onAction,

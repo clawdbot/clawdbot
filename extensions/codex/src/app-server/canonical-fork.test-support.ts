@@ -221,7 +221,7 @@ export async function createCanonicalForkFixture(params: {
           abortSignal: host.abortController.signal,
         } as unknown as EmbeddedRunAttemptParamsV2;
         const runAbortController = host.abortController;
-        const startupBinding = await bindingStore.read(session);
+        const startupBinding = bindingStore.read(session);
         const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
           workspaceDir,
           agentId: attempt.agentId,

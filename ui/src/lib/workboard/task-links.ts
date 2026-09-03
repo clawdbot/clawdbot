@@ -20,17 +20,36 @@ const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 export const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
+function isInvalidGatewayRequest(error: unknown): error is GatewayRequestError {
+  return error instanceof GatewayRequestError && error.gatewayCode === "INVALID_REQUEST";
+}
+
 export async function listWorkboardTasks(
   client: GatewayBrowserClient,
 ): Promise<WorkboardTaskSummary[]> {
   const tasks: WorkboardTaskSummary[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
+  let restarted = false;
   while (true) {
-    const payload = await client.request("tasks.list", {
-      limit: WORKBOARD_TASKS_LIST_LIMIT,
-      ...(cursor ? { cursor } : {}),
-    });
+    let payload: unknown;
+    try {
+      payload = await client.request("tasks.list", {
+        limit: WORKBOARD_TASKS_LIST_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      });
+    } catch (error) {
+      // A rejected opaque continuation invalidates the whole snapshot. Restart
+      // once with fresh task and cursor state so callers never publish mixed pages.
+      if (restarted || !cursor || !isInvalidGatewayRequest(error)) {
+        throw error;
+      }
+      tasks.length = 0;
+      seenCursors.clear();
+      cursor = null;
+      restarted = true;
+      continue;
+    }
     const page = normalizeTasksPage(payload);
     tasks.push(...page.tasks);
     if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
@@ -218,11 +237,7 @@ export function selectWorkboardTaskDiscoveryQueries(
 
 export function isMissingTaskLookupError(error: unknown, taskId: string): boolean {
   // tasks.get currently has no structured not-found detail code.
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message === `task not found: ${taskId}`
-  );
+  return isInvalidGatewayRequest(error) && error.message === `task not found: ${taskId}`;
 }
 
 export async function getWorkboardTaskPollBatch(
@@ -282,8 +297,7 @@ export async function getWorkboardTaskPollBatch(
       if (
         discoveryQuery?.cursor &&
         !discoveryQuery.sessionKey &&
-        result.reason instanceof GatewayRequestError &&
-        result.reason.gatewayCode === "INVALID_REQUEST"
+        isInvalidGatewayRequest(result.reason)
       ) {
         rejectedUnfilteredCursor = discoveryQuery.cursor;
       }

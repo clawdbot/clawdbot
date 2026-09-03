@@ -223,12 +223,12 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   );
 }
 
-function finalizeCompletion(params: {
+export function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
-  logger: RuntimeLogger;
+  logger?: RuntimeLogger;
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
   const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
@@ -252,7 +252,8 @@ function finalizeCompletion(params: {
     ...(normalized?.total !== undefined ? { totalTokens: normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  params.logger.info("plugin llm completion", {
+  const logger = params.logger ?? toRuntimeLogger(defaultLogger);
+  logger.info("plugin llm completion", {
     caller: params.result.audit.caller,
     purpose: params.result.audit.purpose,
     sessionKey: params.result.audit.sessionKey,
@@ -641,7 +642,7 @@ export function createRuntimeLlm(
           authProfileId:
             executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
         });
-        return finalizeCompletion({
+        return finalizePluginLlmCompletion({
           cfg,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
@@ -698,7 +699,7 @@ export function createRuntimeLlm(
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
         .map((c) => c.text)
         .join("");
-      return finalizeCompletion({
+      return finalizePluginLlmCompletion({
         cfg,
         hostPluginId: pluginPolicyId,
         // Provider failures resolve as messages; only visible successful output owns usage.

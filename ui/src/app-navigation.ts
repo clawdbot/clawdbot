@@ -7,9 +7,7 @@ import { i18n, t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
-type NavigationItem = {
-  [TRouteId in NavigationRouteId]: IconName;
-};
+type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
 
 // The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
@@ -262,55 +260,55 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_SUBPAGE_ROUTES,
 ]);
 
-const NAVIGATION_ICONS: NavigationItem = {
-  agents: "bot",
-  activity: "activity",
-  meetings: "book",
-  apps: "layoutGrid",
-  portals: "monitor",
-  approvals: "badgeCheck",
-  workboard: "kanban",
-  worktrees: "folder",
-  channels: "link",
-  connection: "radio",
-  sessions: "fileText",
-  usage: "coins",
-  cron: "calendarClock",
-  tasks: "listChecks",
-  skills: "zap",
-  plugins: "puzzle",
-  "skill-workshop": "wrench",
-  devices: "monitorSmartphone",
-  "cloud-workers": "server",
-  chat: "messageSquare",
-  dashboard: "layoutDashboard",
-  dashboards: "layoutDashboard",
-  custodian: "lobster",
-  config: "settings",
-  profile: "circleUser",
-  communications: "send",
-  appearance: "palette",
-  lobsterdex: "bug",
-  automation: "terminal",
-  mcp: "wrench",
-  memory: "book",
-  talk: "mic",
-  infrastructure: "globe",
-  labs: "flaskConical",
-  updates: "download",
-  about: "fileText",
-  "ai-agents": "brain",
-  "model-setup": "spark",
-  "model-providers": "box",
-  "memory-import": "download",
-  notifications: "bell",
-  security: "shieldCheck",
-  secrets: "key",
-  advanced: "fileCode",
-  debug: "bug",
-  logs: "scrollText",
-  plugin: "puzzle",
-  "new-session": "plus",
+const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
+  agents: ["bot", "tabs.agents", "subtitles.agents"],
+  activity: ["activity", "tabs.activity", "subtitles.activity"],
+  meetings: ["book", "tabs.meetings", "subtitles.meetings"],
+  apps: ["layoutGrid", "tabs.apps", "subtitles.apps"],
+  portals: ["monitor", "tabs.portals", "subtitles.portals"],
+  approvals: ["badgeCheck", "tabs.approvals", "subtitles.approvals"],
+  workboard: ["kanban", "tabs.workboard", "subtitles.workboard"],
+  worktrees: ["folder", "tabs.worktrees", "subtitles.worktrees"],
+  channels: ["link", "tabs.channels", "subtitles.channels"],
+  connection: ["radio", "tabs.connection", "subtitles.connection"],
+  sessions: ["fileText", "tabs.sessions", "subtitles.sessions"],
+  usage: ["coins", "tabs.usage", "subtitles.usage"],
+  cron: ["calendarClock", "tabs.cron", "subtitles.cron"],
+  tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
+  skills: ["zap", "tabs.skills", "subtitles.skills"],
+  plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
+  "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
+  devices: ["monitorSmartphone", "tabs.devices", "subtitles.devices"],
+  "cloud-workers": ["server", "tabs.cloudWorkers", "subtitles.cloudWorkers"],
+  chat: ["messageSquare", "tabs.chat", "subtitles.chat"],
+  dashboard: ["layoutDashboard", "tabs.chat", "subtitles.chat"],
+  dashboards: ["layoutDashboard", "tabs.dashboards", "subtitles.dashboards"],
+  custodian: ["lobster", "tabs.custodian", "subtitles.custodian"],
+  config: ["settings", "nav.settings", "subtitles.config"],
+  profile: ["circleUser", "tabs.profile", "subtitles.profile"],
+  communications: ["send", "tabs.communications", "subtitles.communications"],
+  appearance: ["palette", "tabs.appearance", "subtitles.appearance"],
+  lobsterdex: ["bug", "tabs.lobsterdex", "subtitles.lobsterdex"],
+  automation: ["terminal", "tabs.automation", "subtitles.automation"],
+  mcp: ["wrench", "tabs.mcp", "subtitles.mcp"],
+  memory: ["book", "tabs.memory", "subtitles.memory"],
+  talk: ["mic", "tabs.talk", "subtitles.talk"],
+  infrastructure: ["globe", "tabs.infrastructure", "subtitles.infrastructure"],
+  labs: ["flaskConical", "tabs.labs", "subtitles.labs"],
+  updates: ["download", "tabs.updates", "subtitles.updates"],
+  about: ["fileText", "tabs.about", "subtitles.about"],
+  "ai-agents": ["brain", "tabs.aiAgents", "subtitles.aiAgents"],
+  "model-setup": ["spark", "tabs.modelSetup", "subtitles.modelSetup"],
+  "model-providers": ["box", "routeTitles.modelProviders", "subtitles.modelProviders"],
+  "memory-import": ["download", "tabs.memoryImport", "subtitles.memoryImport"],
+  notifications: ["bell", "routeTitles.notifications", "subtitles.notifications"],
+  security: ["shieldCheck", "tabs.security", "subtitles.security"],
+  secrets: ["key", "tabs.secrets", "secretsStore.hint"],
+  advanced: ["fileCode", "routeTitles.advanced", "subtitles.advanced"],
+  debug: ["bug", "tabs.debug", "subtitles.debug"],
+  logs: ["scrollText", "tabs.logs", "subtitles.logs"],
+  plugin: ["puzzle", "tabs.plugin", "subtitles.plugin"],
+  "new-session": ["plus", "newSession.title", "newSession.hint"],
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -322,7 +320,7 @@ export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): Naviga
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
-  return NAVIGATION_ICONS[routeId] ?? "folder";
+  return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
 }
 
 export function scheduleRoutePreload<TRouteId extends string>(
@@ -373,74 +371,9 @@ export function cancelRoutePreload(
   }
 }
 
-const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
-  agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
-  activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
-  meetings: { titleKey: "tabs.meetings", subtitleKey: "subtitles.meetings" },
-  apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
-  portals: { titleKey: "tabs.portals", subtitleKey: "subtitles.portals" },
-  approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
-  workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
-  worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
-  channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
-  connection: { titleKey: "tabs.connection", subtitleKey: "subtitles.connection" },
-  sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
-  usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
-  cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
-  tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
-  skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
-  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
-  "skill-workshop": {
-    titleKey: "tabs.skillWorkshop",
-    subtitleKey: "subtitles.skillWorkshop",
-  },
-  devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
-  "cloud-workers": {
-    titleKey: "tabs.cloudWorkers",
-    subtitleKey: "subtitles.cloudWorkers",
-  },
-  chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
-  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
-  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
-  custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
-  config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
-  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
-  communications: {
-    titleKey: "tabs.communications",
-    subtitleKey: "subtitles.communications",
-  },
-  appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
-  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
-  automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
-  mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
-  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
-  talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
-  infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
-  labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
-  updates: { titleKey: "tabs.updates", subtitleKey: "subtitles.updates" },
-  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
-  "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
-  "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
-  "model-providers": {
-    titleKey: "routeTitles.modelProviders",
-    subtitleKey: "subtitles.modelProviders",
-  },
-  "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
-  notifications: {
-    titleKey: "routeTitles.notifications",
-    subtitleKey: "subtitles.notifications",
-  },
-  security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
-  secrets: { titleKey: "tabs.secrets", subtitleKey: "secretsStore.hint" },
-  advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
-  debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
-  logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
-  plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
-  "new-session": { titleKey: "newSession.title", subtitleKey: "newSession.hint" },
-};
-
 export function titleForRoute(routeId: NavigationRouteId): string {
-  return t(NAVIGATION_COPY[routeId].titleKey);
+  const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
+  return t(titleKey);
 }
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
@@ -477,5 +410,6 @@ export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): str
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {
-  return t(NAVIGATION_COPY[routeId].subtitleKey);
+  const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
+  return t(subtitleKey);
 }

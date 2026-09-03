@@ -245,7 +245,18 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
       await page.keyboard.press("Escape");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      const checkoutTrigger = page.locator("#new-session-checkout-trigger");
+      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+      await checkoutTrigger.click();
+      const currentCheckout = checkout.locator('[data-value="checkout"]');
+      expect(await currentCheckout.isDisabled()).toBe(true);
+      expect(await currentCheckout.getAttribute("aria-pressed")).toBe("false");
+      expect(await tooltipTitleText(currentCheckout)).toBe("Devices and cloud run in a worktree");
+      expect(await checkout.locator('[data-value="worktree"]').getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      await page.keyboard.press("Escape");
 
       const effortSelect = page.locator(
         '.new-session-page__composer [data-chat-thinking-select="true"]',
@@ -288,20 +299,18 @@ suite.define(() => {
       await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await projectTrigger.click();
-      await project.getByText("Advanced", { exact: true }).click();
-      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("main");
-      await project.getByLabel("Base branch").fill("release");
-      await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
-      await project.getByLabel("Base branch").fill("main");
-      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
+      await checkoutTrigger.click();
+      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("main");
+      await checkout.getByLabel("From").fill("release");
+      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("release");
+      await checkout.getByLabel("From").fill("main");
+      await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the selected runner",
       );
       await page.keyboard.press("Escape");
       await expect
         .poll(() =>
-          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
 
@@ -314,19 +323,14 @@ suite.define(() => {
       await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
       await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await projectTrigger.click();
+      await checkoutTrigger.click();
       await expect
         .poll(() =>
-          project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(true);
-      const checkoutName = project.getByLabel("Checkout name");
-      if (!(await checkoutName.isVisible())) {
-        await project.getByText("Advanced", { exact: true }).click();
-      }
-      await checkoutName.fill("cloud-e2e");
-      await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
+      await checkout.getByLabel("Name", { exact: true }).fill("cloud-e2e");
+      await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs OpenClaw to the selected runner",
       );
       await captureUiProof(suite, page, "01-cloud-worker-target.png");

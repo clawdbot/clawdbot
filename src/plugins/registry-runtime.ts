@@ -508,9 +508,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
             const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
-            const { resolveRunSessionExecutionOwner } = await loadSessionOwnership();
+            const { prepareRunSessionExecution } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {
-              const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
+              const { ownerPluginId, agentHarnessRuntimeOverride } =
+                prepareRunSessionExecution(runParams);
+              if (agentHarnessRuntimeOverride !== undefined) {
+                runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
+              }
               if (ownerPluginId) {
                 return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
               }
@@ -581,6 +585,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
+          complete: (params) =>
+            withPluginRuntimePluginIdScope(pluginId, () => subagent.complete(params)),
           run: async (params) => {
             const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
             return await withPluginRuntimePluginIdScope(pluginId, async () => {

@@ -409,6 +409,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         environment["PATH"] = privateRuntimePath + CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
+        // ManagedProcess owns this worker by process group. The CLI startup respawn
+        // would setsid() the real worker out of that group, so it must stay in-process.
+        environment["OPENCLAW_NO_RESPAWN"] = "1"
         self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.processGeneration = processGeneration

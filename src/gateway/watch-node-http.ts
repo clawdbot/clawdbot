@@ -901,11 +901,13 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       const registeredConnect = connect as ConnectParams & {
         declaredCaps?: string[];
         declaredCommands?: string[];
+        withheldCommands?: string[];
         declaredComputerUse?: unknown;
         declaredPermissions?: Record<string, boolean>;
       };
       registeredConnect.declaredCaps = reconciliation.declaredCaps;
       registeredConnect.declaredCommands = reconciliation.declaredCommands;
+      registeredConnect.withheldCommands = reconciliation.withheldCommands;
       registeredConnect.declaredComputerUse = reconciliation.declaredComputerUse;
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;

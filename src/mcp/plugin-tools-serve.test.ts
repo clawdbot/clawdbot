@@ -232,41 +232,47 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
-  it("uses unique ids and releases execution tracking after repeated direct MCP calls", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
-    const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
-    const handlers = createPluginToolsMcpHandlers([
-      {
-        name: "memory_recall",
-        description: "Recall stored memory",
-        parameters: { type: "object", properties: {} },
-        execute: executeSuccess,
-      } as unknown as AnyAgentTool,
-      {
-        name: "memory_forget",
-        description: "Forget stored memory",
-        parameters: { type: "object", properties: {} },
-        execute: executeFailure,
-      } as unknown as AnyAgentTool,
-    ]);
+  it.each([
+    ["memory_recall", "memory_recall"],
+    ["automations", "cron"],
+  ])(
+    "uses unique ids and releases execution tracking for %s called as %s",
+    async (name, callName) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
+      const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
+      const handlers = createPluginToolsMcpHandlers([
+        {
+          name,
+          description: "Recall stored memory",
+          parameters: { type: "object", properties: {} },
+          execute: executeSuccess,
+        } as unknown as AnyAgentTool,
+        {
+          name: "memory_forget",
+          description: "Forget stored memory",
+          parameters: { type: "object", properties: {} },
+          execute: executeFailure,
+        } as unknown as AnyAgentTool,
+      ]);
 
-    for (let index = 0; index < 32; index += 1) {
-      await handlers.callTool({ name: "memory_recall", arguments: { index } });
-      await handlers.callTool({ name: "memory_forget", arguments: { index } });
-    }
+      for (let index = 0; index < 32; index += 1) {
+        await handlers.callTool({ name: callName, arguments: { index } });
+        await handlers.callTool({ name: "memory_forget", arguments: { index } });
+      }
 
-    expect(executeSuccess).toHaveBeenCalledTimes(32);
-    expect(executeFailure).toHaveBeenCalledTimes(32);
-    const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
-      ([toolCallId]) => String(toolCallId),
-    );
-    expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
-    for (const toolCallId of toolCallIds) {
-      expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
-      expect(consumeAdjustedParamsForToolCall(toolCallId)).toBeUndefined();
-    }
-  });
+      expect(executeSuccess).toHaveBeenCalledTimes(32);
+      expect(executeFailure).toHaveBeenCalledTimes(32);
+      const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
+        ([toolCallId]) => String(toolCallId),
+      );
+      expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
+      for (const toolCallId of toolCallIds) {
+        expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
+        expect(consumeAdjustedParamsForToolCall(toolCallId)).toBeUndefined();
+      }
+    },
+  );
 
   it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {
     const execute = vi.fn().mockResolvedValue({

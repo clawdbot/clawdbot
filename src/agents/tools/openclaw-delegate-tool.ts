@@ -5,7 +5,7 @@ import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
-import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
 const OpenClawDelegateSchema = Type.Object({
@@ -17,8 +17,6 @@ const OpenClawDelegateOutputSchema = Type.Object(
   {
     reply: Type.String(),
     action: Type.Optional(Type.String()),
-    needsApproval: Type.Optional(Type.Literal(true)),
-    proposalId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -27,8 +25,6 @@ type OpenClawDelegateResult = {
   sessionId: string;
   reply: string;
   action?: string;
-  needsApproval?: boolean;
-  proposalId?: string;
 };
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
@@ -82,42 +78,48 @@ export function createOpenClawDelegateToolsForRun(
   const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",
+    // Keep human approval in one model tool call; a yielded cell can outlive its turn.
+    catalogMode: "direct-only",
     description:
       "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
-        : "Changes need human approval."),
+        : "Changes wait for human approval and return the final outcome."),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const message = readToolStringParam(params, "message", { required: true });
       const sessionId = readToolStringParam(params, "sessionId") ?? defaultSessionId;
-      const result = await callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-        sessionId,
-        message,
-        delegation: {
-          agentId: options.sessionAgentId,
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-          ...(turnSourceTo ? { turnSourceTo } : {}),
-          ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-          ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-        },
-      });
+      // Bind permissions and this call's cancellation privately: a stopped tool
+      // must retire its proposal even while the requesting run remains live.
+      const caller = sessionKey
+        ? {
+            agentId: options.sessionAgentId,
+            sessionKey,
+            fullPermission,
+            approvalSignals: signal ? [signal] : [],
+          }
+        : undefined;
+      const result = await withGatewayToolCallerIdentity(caller, () =>
+        callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
+          sessionId,
+          message,
+          delegation: {
+            agentId: options.sessionAgentId,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+            ...(turnSourceTo ? { turnSourceTo } : {}),
+            ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+            ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+          },
+        }),
+      );
       return jsonResult({
         reply: result.reply,
         ...(result.action && result.action !== "none" ? { action: result.action } : {}),
-        ...(result.needsApproval ? { needsApproval: true } : {}),
-        ...(result.proposalId ? { proposalId: result.proposalId } : {}),
       });
     },
   };
-  // Keep permission authority out of model-authored RPC data and scoped to this tool call.
-  return [
-    wrapToolWithGatewayCallerIdentity(
-      tool,
-      sessionKey ? { agentId: options.sessionAgentId, sessionKey, fullPermission } : undefined,
-    ),
-  ];
+  return [tool];
 }

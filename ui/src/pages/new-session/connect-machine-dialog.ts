@@ -5,9 +5,12 @@ import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+
+registerNewSessionSetupEnglish();
 
 /**
  * The join setup behind the connect-machine dialog.

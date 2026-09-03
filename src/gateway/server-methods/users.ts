@@ -132,7 +132,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
-    if (!client?.authenticatedUserId) {
+    if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
       respond(
         false,
         undefined,

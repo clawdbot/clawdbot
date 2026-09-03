@@ -86,6 +86,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
+  "node.hostStats": [READ_SCOPE],
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
