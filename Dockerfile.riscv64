@@ -36,6 +36,7 @@ FROM --platform=$BUILDPLATFORM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
+COPY scripts/lib/root-package-bundled-plugin-excludes.mjs /tmp/root-package-bundled-plugin-excludes.mjs
 COPY packages /tmp/packages
 COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
@@ -69,11 +70,14 @@ RUN corepack enable
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY node-version.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 
 COPY --from=workspace-deps /out/packages/ ./packages/
 COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
@@ -119,6 +123,39 @@ RUN set -eu; \
     pnpm_config_verify_deps_before_run=false pnpm build:docker; \
     pnpm_config_verify_deps_before_run=false pnpm ui:build
 
+# ── Stage 2b: production deps resolved FOR riscv64, ON the build host ──
+# pnpm 12 is a Rust rewrite that publishes binaries only for x86_64/arm64
+# (see get-pnpm platformPackageName), so pnpm cannot run on riscv64 at all.
+# Resolve the production tree here instead, using pnpm's supportedArchitectures
+# to select riscv64 artifacts, and copy the result into the runtime stage.
+FROM --platform=$BUILDPLATFORM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS production-deps
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY node-version.mjs ./
+COPY openclaw.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
+
+# @matrix-org/matrix-sdk-crypto-nodejs has no riscv64 prebuild and is only
+# needed by the (unselected) matrix extension. Skip its native build script.
+RUN sed -i 's#\("@matrix-org/matrix-sdk-crypto-nodejs":\)[[:space:]]*true#\1 false#' pnpm-workspace.yaml
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu=riscv64 \
+      --config.supportedArchitectures.libc=glibc
+
 # ── Stage 3: riscv64 runtime (native) ───────────────────────────────
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 ARG NODE_VERSION
@@ -159,34 +196,64 @@ RUN printf '%s\n' '#!/bin/sh' 'echo "bun is not available on riscv64" >&2' 'exit
 WORKDIR /app
 RUN chown node:node /app
 
-# Install runtime dependencies natively so native addons (sharp, esbuild, ...)
-# resolve their riscv64 prebuilts / compile from source with the correct ABI.
-ENV COREPACK_HOME=/usr/local/share/corepack
-# Install against ONLY the selected-plugin manifests (like the main build
-# stage). Unselected extensions — notably matrix, whose matrix-sdk-crypto-nodejs
-# native addon has no riscv64 prebuild — are excluded from the dependency graph.
+# Production dependencies come from the production-deps stage: pnpm 12 has no
+# riscv64 binary, so nothing installs here. The tree is already resolved for
+# linux/riscv64/glibc; only its native addons are architecture-bearing, and the
+# check below refuses the image if any of them is not riscv64.
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=node:node node-version.mjs ./
 COPY --chown=node:node openclaw.mjs ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 COPY --from=workspace-deps --chown=node:node /out/packages/ ./packages/
 COPY --from=workspace-deps --chown=node:node /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
-COPY --from=workspace-deps --chown=node:node /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
-RUN install -d -m 0755 "$COREPACK_HOME" && corepack enable && \
-    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
-    chmod -R a+rX "$COREPACK_HOME" && \
-    # @matrix-org/matrix-sdk-crypto-nodejs has no riscv64 prebuild and is only
-    # needed by the (unselected) matrix extension. Skip its native build script,
-    # matching how the repo already disables node-llama-cpp / koffi builds.
-    sed -i 's#\("@matrix-org/matrix-sdk-crypto-nodejs":\)[[:space:]]*true#\1 false#' pnpm-workspace.yaml
+COPY --from=production-deps --chown=node:node /app/node_modules ./node_modules
+
+# Cross-resolved trees are the one place a wrong-architecture addon reaches the
+# image silently: a .node built for the build host loads fine there and fails
+# only at runtime here. Walk the LINKED graph (following symlinks, skipping the
+# flat .pnpm store, which also holds unlinked per-platform packages that are
+# never loaded) and reject any native addon that is not RISC-V.
+#
+# tree-sitter-bash is the one allowed exception: it ships x64/arm64 prebuilds and
+# no riscv64 one, but the runtime loads its WebAssembly build, not the native
+# binding -- see src/infra/command-explainer/tree-sitter-runtime.ts resolving
+# "tree-sitter-bash/tree-sitter-bash.wasm". A new package arriving with a real
+# native addon fails this check on purpose, so the gap gets looked at.
+RUN node -e '                                                              \
+  const fs = require("fs"), p = require("path");                           \
+  const ALLOW = new Set(["tree-sitter-bash"]);                             \
+  const seen = new Set(), bad = []; let checked = 0;                        \
+  const walk = (dir) => {                                                  \
+    let rp; try { rp = fs.realpathSync(dir); } catch { return; }           \
+    if (seen.has(rp)) return; seen.add(rp);                                \
+    let es; try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } \
+    for (const e of es) {                                                  \
+      if (e.name === ".pnpm") continue;                                    \
+      const f = p.join(dir, e.name);                                       \
+      let st; try { st = fs.statSync(f); } catch { continue; }             \
+      if (st.isDirectory()) { walk(f); continue; }                         \
+      if (!e.name.endsWith(".node") || st.size < 20) continue;             \
+      const b = Buffer.alloc(20); const fd = fs.openSync(f, "r");          \
+      fs.readSync(fd, b, 0, 20, 0); fs.closeSync(fd);                      \
+      if (b.readUInt32BE(0) !== 0x7f454c46) continue;                      \
+      const real = fs.realpathSync(f);                                     \
+      const pkg = (real.split("/node_modules/").pop() || "").split("/")[0]; \
+      checked++;                                                           \
+      if (b.readUInt16LE(18) !== 243 && !ALLOW.has(pkg))                    \
+        bad.push(real + " e_machine=" + b.readUInt16LE(18));               \
+    }                                                                      \
+  };                                                                       \
+  walk("/app/node_modules");                                               \
+  console.log("linked native addons checked: " + checked);                 \
+  if (bad.length) {                                                        \
+    console.error("non-riscv64 linked addons:\n" + bad.join("\n"));       \
+    process.exit(1);                                                       \
+  }                                                                        \
+'
 
 USER node
-RUN --mount=type=cache,id=openclaw-pnpm-store-riscv64,target=/home/node/.local/share/pnpm/store,sharing=locked,uid=1000,gid=1000 \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod \
-      --config.supportedArchitectures.os=linux \
-      --config.supportedArchitectures.cpu=riscv64 \
-      --config.supportedArchitectures.libc=glibc
 
 # Bring in the rest of the source tree (runtime reads templates/skills/docs).
 COPY --chown=node:node . .
