@@ -6422,6 +6422,7 @@ public struct SessionRow: Codable, Sendable {
     public let createdactor: SessionCreatedActor?
     public let owner: SessionOwner?
     public let participants: [SessionParticipant]?
+    public let expandedparticipants: [SessionParticipant]?
     public let participantcount: Int?
     public let visibility: SessionVisibility?
     public let sharingrole: SessionSharingRole?
@@ -6497,6 +6498,7 @@ public struct SessionRow: Codable, Sendable {
         createdactor: SessionCreatedActor? = nil,
         owner: SessionOwner? = nil,
         participants: [SessionParticipant]? = nil,
+        expandedparticipants: [SessionParticipant]? = nil,
         participantcount: Int? = nil,
         visibility: SessionVisibility? = nil,
         sharingrole: SessionSharingRole? = nil,
@@ -6571,6 +6573,7 @@ public struct SessionRow: Codable, Sendable {
         self.createdactor = createdactor
         self.owner = owner
         self.participants = participants
+        self.expandedparticipants = expandedparticipants
         self.participantcount = participantcount
         self.visibility = visibility
         self.sharingrole = sharingrole
@@ -6647,6 +6650,7 @@ public struct SessionRow: Codable, Sendable {
         case createdactor = "createdActor"
         case owner
         case participants
+        case expandedparticipants = "expandedParticipants"
         case participantcount = "participantCount"
         case visibility
         case sharingrole = "sharingRole"
