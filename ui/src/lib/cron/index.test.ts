@@ -8,7 +8,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
-import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
+import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -1296,6 +1296,110 @@ describe("cron controller", () => {
 
     expect(requestPatch(await submit())).not.toHaveProperty("schedule");
   });
+
+  it("preserves configured duration precision when editing a staggered cron expression", async () => {
+    const job = createCronJob({
+      id: "job-exact-stagger",
+      name: "Exact stagger",
+      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 1_001 },
+    });
+    const { state, submit } = createCronEditHarness(job);
+    const displayedAmount = state.cronForm.staggerAmount;
+    state.cronForm.cronExpr = "*/5 * * * *";
+
+    const call = await submit();
+
+    expect({ displayedAmount, schedule: requestPatch(call).schedule }).toEqual({
+      displayedAmount: "1.001",
+      schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: 1_001 },
+    });
+    expect(validateCronUpdateParams(requestPayload(call))).toBe(true);
+  });
+
+  it.each([
+    { staggerAmount: "1.001", staggerUnit: "seconds", staggerMs: 1_001 },
+    { staggerAmount: "4.1", staggerUnit: "minutes", staggerMs: 246_000 },
+    { staggerAmount: "1e3", staggerUnit: "seconds", staggerMs: 1_000_000 },
+    { staggerAmount: "0x10", staggerUnit: "seconds", staggerMs: 16_000 },
+    { staggerAmount: "0b10", staggerUnit: "seconds", staggerMs: 2_000 },
+    { staggerAmount: "0o10", staggerUnit: "seconds", staggerMs: 8_000 },
+    { staggerAmount: "+1", staggerUnit: "seconds", staggerMs: 1_000 },
+  ] as const)(
+    "preserves configured duration precision for $staggerAmount $staggerUnit stagger",
+    async ({ staggerAmount, staggerUnit, staggerMs }) => {
+      const { submit } = createCronSubmitHarness("job-decimal-stagger", {
+        form: {
+          name: "Decimal stagger",
+          scheduleKind: "cron",
+          cronExpr: "0 * * * *",
+          staggerAmount,
+          staggerUnit,
+          payloadText: "run",
+        },
+      });
+
+      const { call, result } = await submit();
+
+      expect(result.saved).toBe(true);
+      expect(requestPayload(call).schedule).toEqual({ kind: "cron", expr: "0 * * * *", staggerMs });
+      expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    },
+  );
+
+  it("rejects stagger fractions below configured duration precision before the RPC", async () => {
+    const { state, request } = createCronSubmitHarness("job-submillisecond-stagger", {
+      form: {
+        name: "Submillisecond stagger",
+        scheduleKind: "cron",
+        staggerAmount: "0.0001",
+        staggerUnit: "seconds",
+        payloadText: "run",
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.staggerAmount).toBe("cron.errors.staggerAmountInvalid");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scheduleKind: "every", amount: "8640000000000", valid: true },
+    { scheduleKind: "every", amount: "8640000000000.001", valid: false },
+    { scheduleKind: "cron", amount: "8640000000000", valid: true },
+    { scheduleKind: "cron", amount: "8640000000000.001", valid: false },
+  ] as const)(
+    "bounds configured duration precision for $scheduleKind at $amount seconds",
+    async ({ scheduleKind, amount, valid }) => {
+      const { state, request } = createCronSubmitHarness("job-duration-boundary", {
+        form: {
+          name: "Duration boundary",
+          scheduleKind,
+          everyAmount: amount,
+          everyUnit: "seconds",
+          cronExpr: "0 * * * *",
+          staggerAmount: amount,
+          staggerUnit: "seconds",
+          payloadText: "run",
+        },
+      });
+
+      expect((await addCronJob(state)).saved).toBe(valid);
+      if (valid) {
+        const payload = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+        expect(payload.schedule).toEqual(
+          scheduleKind === "every"
+            ? { kind: "every", everyMs: 8_640_000_000_000_000 }
+            : { kind: "cron", expr: "0 * * * *", staggerMs: 8_640_000_000_000_000 },
+        );
+        expect(validateCronAddParams(payload)).toBe(true);
+      } else {
+        expect(state.cronFieldErrors).toHaveProperty(
+          scheduleKind === "every" ? "everyAmount" : "staggerAmount",
+        );
+        expect(request).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
     const job = createCronJob({
@@ -2922,7 +3026,7 @@ describe("cron every-interval lossless round-trip", () => {
 
   // Each everyMs the editable form must reproduce exactly: reading a job into the
   // form and rebuilding the schedule may never change the cadence. Legal everyMs
-  // spans 1ms..MAX_SAFE_INTEGER (gateway schema minimum 1, no sub-minute floor).
+  // spans 1ms through the Gateway's Date timestamp limit, with no sub-minute floor.
   const cases: ReadonlyArray<{ everyMs: number; amount: string; unit: string }> = [
     { everyMs: 1, amount: "0.001", unit: "seconds" },
     { everyMs: 450, amount: "0.45", unit: "seconds" },
@@ -2933,7 +3037,7 @@ describe("cron every-interval lossless round-trip", () => {
     { everyMs: 60_000, amount: "1", unit: "minutes" },
     { everyMs: 7_200_000, amount: "2", unit: "hours" },
     { everyMs: 86_400_000, amount: "1", unit: "days" },
-    { everyMs: Number.MAX_SAFE_INTEGER, amount: "9007199254740.991", unit: "seconds" },
+    { everyMs: 8_639_999_999_999_999, amount: "8639999999999.999", unit: "seconds" },
   ];
 
   it("reads every job back into the most natural exact unit", () => {
@@ -2943,12 +3047,14 @@ describe("cron every-interval lossless round-trip", () => {
       expect(state.cronForm.everyUnit).toBe(unit);
       expect(state.cronForm.everyAmount).toBe(amount);
       // The rebuilt millisecond value must equal the original, not a rounded one.
-      expect(parseCronEveryMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(everyMs);
+      expect(parseCronDurationMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(
+        everyMs,
+      );
     }
   });
 
   it("keeps everyMs unchanged on a metadata-only edit", async () => {
-    for (const everyMs of [30_000, 90_000, 450, Number.MAX_SAFE_INTEGER]) {
+    for (const everyMs of [30_000, 90_000, 450, 8_639_999_999_999_999]) {
       const { request, state } = captureUpdateState(everyJob(everyMs));
       startCronEdit(state, state.cronJobs[0] as CronJob);
       state.cronForm.name = "Renamed only";

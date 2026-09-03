@@ -20,6 +20,7 @@ const uiE2eIncludePatterns = [
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
@@ -28,8 +29,8 @@ export const uiE2eRealGatewayTestFiles = [
   openClawDelegationRealGatewayTest,
 ];
 
-// These files start a private source-module Vite server instead of leasing the
-// global production bundle. Keep their shared optimizer cache under one worker.
+// These files own their server instead of leasing the global production bundle.
+// Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
@@ -41,6 +42,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-loading.e2e.test.ts",
   "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",

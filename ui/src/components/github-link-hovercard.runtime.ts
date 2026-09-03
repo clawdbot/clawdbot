@@ -30,7 +30,7 @@ type PreviewState = {
 
 type CacheEntry = {
   expiresAt: number;
-  promise: Promise<GitHubPreview>;
+  promise: Promise<ControlUiGitHubPreview>;
   signal: AbortSignal;
 };
 
@@ -69,7 +69,7 @@ function parseCoAuthors(value: unknown): { login: string; avatarDataUrl?: string
   return parsed.length > 0 ? parsed : undefined;
 }
 
-function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubPreview {
+function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): ControlUiGitHubPreview {
   if (!isRecord(value)) {
     throw new Error("GitHub response was not an object");
   }
@@ -84,7 +84,6 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     throw new Error("GitHub response did not match the requested link");
   }
   return {
-    ...target,
     additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
     closedAt: readNonBlankString(value.closedAt),
@@ -340,7 +339,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private readonly previewTask = new Task(this, {
     autoRun: false,
     args: () => [this.activeTarget] as const,
-    task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
+    // Share metadata, not navigation: each activation owns its full validated URL.
+    task: async ([target], { signal }) =>
+      target ? { ...(await this.loadPreview(target, signal)), ...target } : initialState,
     onComplete: (preview) => {
       const card = this.hovercard.card;
       if (!card) {
@@ -595,7 +596,10 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     void this.previewTask.run([target]);
   }
 
-  private loadPreview(target: GitHubLinkTarget, signal: AbortSignal): Promise<GitHubPreview> {
+  private loadPreview(
+    target: GitHubLinkTarget,
+    signal: AbortSignal,
+  ): Promise<ControlUiGitHubPreview> {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
@@ -606,7 +610,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return cached.promise;
     }
 
-    const load = async (): Promise<GitHubPreview> => {
+    const load = async (): Promise<ControlUiGitHubPreview> => {
       if (!this.client) {
         throw new Error("GitHub preview requires a connected Gateway");
       }

@@ -1,10 +1,13 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  createFakeCodexAppServerClient,
+  threadStartResult as createThreadStartResult,
+  turnStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function codexModel(model = "gpt-5.4", id = model) {
   return {
@@ -29,30 +32,13 @@ function codexModel(model = "gpt-5.4", id = model) {
 }
 
 function threadStartResult(model: string, modelProvider = "openai") {
+  const result = createThreadStartResult("thread-finalizer", "/tmp/finalizer");
   return {
-    thread: {
-      id: "thread-finalizer",
-      sessionId: "session-finalizer",
-      preview: "",
-      ephemeral: true,
-      modelProvider,
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      cwd: "/tmp/finalizer",
-      projectId: null,
-      cliVersion: CODEX_APP_SERVER_VERSION,
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      name: null,
-      turns: [],
-    },
+    ...result,
+    thread: { ...result.thread, sessionId: "session-finalizer", ephemeral: true, modelProvider },
     model,
     modelProvider,
-    cwd: "/tmp/finalizer",
     approvalPolicy: "on-request",
-    approvalsReviewer: "user",
     sandbox: { type: "readOnly", networkAccess: false },
   };
 }
@@ -60,26 +46,8 @@ function threadStartResult(model: string, modelProvider = "openai") {
 function completedTurnResult() {
   return {
     turn: {
-      id: "turn-finalizer",
-      status: "completed",
-      items: [
-        {
-          id: "answer",
-          type: "agentMessage",
-          text: "The message was sent successfully.",
-          title: null,
-          status: "completed",
-          name: null,
-          tool: null,
-          server: null,
-          command: null,
-          cwd: null,
-          query: null,
-          aggregatedOutput: null,
-          changes: [],
-        },
-      ],
-      error: null,
+      ...turnStartResult("turn-finalizer", "completed").turn,
+      items: [{ id: "answer", type: "agentMessage", text: "The message was sent successfully." }],
       startedAt: 1,
       completedAt: 2,
       durationMs: 1,
@@ -88,17 +56,7 @@ function completedTurnResult() {
 }
 
 function inProgressTurnResult() {
-  return {
-    turn: {
-      id: "turn-finalizer",
-      status: "inProgress",
-      items: [],
-      error: null,
-      startedAt: 1,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return { turn: { ...turnStartResult("turn-finalizer").turn, startedAt: 1 } };
 }
 
 function createClientFactory(

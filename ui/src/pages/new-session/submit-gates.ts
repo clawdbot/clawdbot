@@ -2,6 +2,7 @@
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   readSessionMethodAccess,
@@ -20,6 +21,8 @@ import type {
   SubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
 import { readNewSessionTerminalStartAccess } from "./terminal-start.ts";
+
+registerNewSessionSetupEnglish();
 
 // Silent gates are the only submit blocks allowed to omit a visible reason:
 // the busy Start button and an empty draft already explain themselves. Every

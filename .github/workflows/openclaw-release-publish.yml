@@ -1331,6 +1331,7 @@ jobs:
               "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts" \
               "${plan_args[@]}" > "${plan_path}"
           cat "${plan_path}"
+          jq -r '.warnings[]? | "- Warning: \(.)"' "${plan_path}" >> "$GITHUB_STEP_SUMMARY"
 
           bootstrap_should_dispatch="$(
             jq -er '.bootstrap.shouldDispatch | select(type == "boolean") | tostring' "${plan_path}"

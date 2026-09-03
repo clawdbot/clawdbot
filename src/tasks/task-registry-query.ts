@@ -141,13 +141,19 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 export async function listTaskRecordPage(params: {
   offset: number;
   limit: number;
+  expectedRevision?: number;
   statuses?: readonly TaskStatus[];
   agentId?: string;
   sessionKey?: string;
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
   filter?: (task: Readonly<TaskRecord>) => boolean;
-}): Promise<Result<{ tasks: TaskRecord[]; hasMore: boolean }, "registry_changed">> {
+}): Promise<
+  Result<
+    { tasks: TaskRecord[]; hasMore: boolean; revision: number },
+    "cursor_stale" | "registry_changed"
+  >
+> {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
@@ -157,6 +163,9 @@ export async function listTaskRecordPage(params: {
   const windowSize = params.offset + params.limit;
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     const revision = readTaskRegistryRevision();
+    if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
+      return err("cursor_stale");
+    }
     const scanLimit = tasks.size;
     const window: TaskRecord[] = [];
     let matchingCount = 0;
@@ -199,15 +208,19 @@ export async function listTaskRecordPage(params: {
       }
     }
     if (revision !== readTaskRegistryRevision()) {
+      if (params.expectedRevision !== undefined) {
+        return err("cursor_stale");
+      }
       continue;
     }
     if (params.offset >= matchingCount) {
-      return ok({ tasks: [], hasMore: false });
+      return ok({ tasks: [], hasMore: false, revision });
     }
     const selected = window.toSorted(compareTaskPageOrder).slice(params.offset);
     return ok({
       tasks: selected.map((task) => cloneTaskRecord(task)),
       hasMore: params.offset + selected.length < matchingCount,
+      revision,
     });
   }
   return err("registry_changed");
