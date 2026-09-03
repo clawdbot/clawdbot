@@ -127,18 +127,11 @@ suite.define(() => {
                 return;
               }
               if (typeof frame.event === "string" && frame.event.startsWith("openclaw.approval.")) {
-                eventSequence.push(frame.event);
-              }
-              if (
-                frame.event === "agent" &&
-                isRecord(frame.payload) &&
-                frame.payload.sessionKey === sessionKey &&
-                frame.payload.stream === "tool" &&
-                isRecord(frame.payload.data) &&
-                frame.payload.data.phase === "result" &&
-                frame.payload.data.name === "openclaw"
-              ) {
-                eventSequence.push("openclaw.tool.result");
+                const applicationStatus =
+                  isRecord(frame.payload) && typeof frame.payload.applicationStatus === "string"
+                    ? `:${frame.payload.applicationStatus}`
+                    : "";
+                eventSequence.push(`${frame.event}${applicationStatus}`);
               }
               if (
                 frame.event === "chat" &&
@@ -152,7 +145,7 @@ suite.define(() => {
             });
           });
           await page.addInitScript(
-            ({ gatewayUrl, token, sessionKey: expectedSessionKey }) => {
+            ({ gatewayUrl, token }) => {
               const proofWindow = window as Window & {
                 __OPENCLAW_APPROVAL_UI_SEQUENCE__?: string[];
                 __OPENCLAW_APPROVAL_FALLBACK_OBSERVED__?: boolean;
@@ -169,14 +162,22 @@ suite.define(() => {
               ];
               const containsFallback = (text: string | null) =>
                 fallbackMarkers.some((marker) => text?.includes(marker));
+              let settledResultObserved = false;
               new MutationObserver((mutations) => {
                 for (const record of mutations) {
-                  if (
-                    (record.type === "characterData" &&
-                      containsFallback(record.target.textContent)) ||
-                    [...record.addedNodes].some((node) => containsFallback(node.textContent))
-                  ) {
+                  const changedText =
+                    record.type === "characterData"
+                      ? [record.target.textContent]
+                      : [...record.addedNodes].map((node) => node.textContent);
+                  if (changedText.some(containsFallback)) {
                     proofWindow["__OPENCLAW_APPROVAL_FALLBACK_OBSERVED__"] = true;
+                  }
+                  if (
+                    !settledResultObserved &&
+                    changedText.some((text) => text?.includes("Updated logging.level"))
+                  ) {
+                    settledResultObserved = true;
+                    proofWindow["__OPENCLAW_APPROVAL_UI_SEQUENCE__"]?.push("openclaw.tool.result");
                   }
                 }
               }).observe(document, { childList: true, characterData: true, subtree: true });
@@ -189,9 +190,8 @@ suite.define(() => {
                       const frame = JSON.parse(String(event.data)) as {
                         event?: unknown;
                         payload?: {
-                          data?: { name?: unknown; phase?: unknown };
+                          applicationStatus?: unknown;
                           sessionKey?: unknown;
-                          stream?: unknown;
                         };
                         type?: unknown;
                       };
@@ -199,19 +199,12 @@ suite.define(() => {
                         return;
                       }
                       if (frame.event === "openclaw.approval.resolved") {
+                        const applicationStatus =
+                          typeof frame.payload?.applicationStatus === "string"
+                            ? `:${frame.payload.applicationStatus}`
+                            : "";
                         proofWindow["__OPENCLAW_APPROVAL_UI_SEQUENCE__"]?.push(
-                          "openclaw.approval.resolved",
-                        );
-                      }
-                      if (
-                        frame.event === "agent" &&
-                        frame.payload?.sessionKey === expectedSessionKey &&
-                        frame.payload.stream === "tool" &&
-                        frame.payload.data?.phase === "result" &&
-                        frame.payload.data.name === "openclaw"
-                      ) {
-                        proofWindow["__OPENCLAW_APPROVAL_UI_SEQUENCE__"]?.push(
-                          "openclaw.tool.result",
+                          `openclaw.approval.resolved${applicationStatus}`,
                         );
                       }
                     } catch {
@@ -221,7 +214,7 @@ suite.define(() => {
                 }
               };
             },
-            { gatewayUrl: gateway.wsUrl, token: gateway.token, sessionKey },
+            { gatewayUrl: gateway.wsUrl, token: gateway.token },
           );
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -297,19 +290,21 @@ suite.define(() => {
           expect(eventSequence).toEqual([
             "openclaw.approval.requested",
             "openclaw.approval.resolved",
-            "openclaw.tool.result",
+            "openclaw.approval.resolved:applied",
             "chat.final",
           ]);
-          expect(
-            await page.evaluate(
+          const readUiSequence = () =>
+            page.evaluate(
               () =>
                 (window as unknown as { __OPENCLAW_APPROVAL_UI_SEQUENCE__: string[] })[
                   "__OPENCLAW_APPROVAL_UI_SEQUENCE__"
                 ],
-            ),
-          ).toEqual([
+            );
+          await expect.poll(readUiSequence, { timeout: 60_000 }).toContain("openclaw.tool.result");
+          expect(await readUiSequence()).toEqual([
             "openclaw.approval.resolved",
             "approval.card.removed",
+            "openclaw.approval.resolved:applied",
             "openclaw.tool.result",
           ]);
 
