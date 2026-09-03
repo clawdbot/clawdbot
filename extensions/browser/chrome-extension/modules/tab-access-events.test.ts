@@ -26,10 +26,10 @@ function createHarness(
       ) => void)
     | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
-  let groupUpdatedListener: (() => void) | undefined;
+  let groupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
   let revision = 0;
   let accessible = true;
-  const attachments = new Map([[7, { epoch: { revision: 0, tabRevision: 0 } }]]);
+  const attachments = new Map([[7, { epoch: { revision: 0, groupRevision: 0, tabRevision: 0 } }]]);
   const send = vi.fn();
   const policy = {
     mode,
@@ -43,7 +43,7 @@ function createHarness(
     }),
     beginRevocation: vi.fn(() => Symbol("revocation")),
     endRevocation: vi.fn(),
-    capture: vi.fn(() => ({ revision, tabRevision: 0 })),
+    capture: vi.fn(() => ({ revision, groupRevision: 0, tabRevision: 0 })),
     epochIsCurrent: vi.fn(
       (_tabId: number, epoch: { revision: number }) => epoch.revision === revision,
     ),
@@ -55,9 +55,9 @@ function createHarness(
       return undefined;
     }),
     forwardDocumentEvent: vi.fn((event, emit) => emit(event)),
-    invalidateDocumentGroup: vi.fn(),
-    invalidateAll: vi.fn(() => {
+    invalidateGroup: vi.fn(() => {
       revision += 1;
+      return true;
     }),
     inspectTab: vi.fn(async (_tabId: number, epoch: { revision: number }) => ({
       accessible: accessible && epoch.revision === revision,
@@ -99,7 +99,7 @@ function createHarness(
     },
     tabGroups: {
       onUpdated: {
-        addListener: (listener: () => void) => {
+        addListener: (listener: (group?: { id: number; title?: string }) => void) => {
           groupUpdatedListener = listener;
         },
       },
@@ -205,7 +205,11 @@ describe("tab access event epochs", () => {
       await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
       harness.tabsUpdatedListener(7, secondChange);
       await vi.waitFor(() => {
-        expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
+        expect(harness.attachments.get(7)?.epoch).toEqual({
+          revision: 2,
+          groupRevision: 0,
+          tabRevision: 0,
+        });
       });
 
       firstInspection.resolve({ accessible: false });

@@ -19,6 +19,12 @@ describe("update failure triage diagnostics", () => {
       root: path.join(home, "npm", "openclaw"),
       reason: "Package install failed",
       before: { version: "2026.8.1" },
+      recovery: {
+        serviceRestartSafe: true,
+        version: "2026.8.1",
+        buildId: "verified-recovery-build",
+        service: "healthy",
+      },
       durationMs: 10,
       steps: Array.from({ length: 5 }, (_, index) => ({
         name: `step-${index}`,
@@ -46,7 +52,11 @@ describe("update failure triage diagnostics", () => {
     expect(raw).not.toContain("unredacted-command");
     expect(raw).not.toContain("\uFFFD");
     expect(failure).toMatchObject({
-      result: { reason: "Package install failed", before: { version: "2026.8.1" } },
+      result: {
+        reason: "Package install failed",
+        before: { version: "2026.8.1" },
+        recovery: result.recovery,
+      },
     });
     expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
       "step-1",
@@ -81,6 +91,41 @@ describe("update failure triage diagnostics", () => {
     expect(recorded).toMatchObject({ result: failure.result });
     expect(recorded.error).toContain("Gateway activation failed");
     expect(recorded.error).toContain("terminal recovery cause");
+  });
+
+  it("retains package rollback proof without promoting restart safety", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const outputPath = await writeTriageUpdateFailure(
+      {
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "openclaw doctor",
+          before: { version: "2026.8.1" },
+          after: { version: "2026.8.1" },
+          steps: [],
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            packageRollbackVerified: true,
+          },
+        },
+      },
+      { env },
+    );
+
+    const recorded = await readTriageUpdateFailure(outputPath, { env, stateDir });
+
+    expect(recorded).toMatchObject({
+      result: {
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: true,
+        },
+      },
+    });
   });
 
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {

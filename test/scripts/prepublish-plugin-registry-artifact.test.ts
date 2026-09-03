@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
-import { resolveCrossOsCompanionPackages } from "../../scripts/lib/cross-os-release-checks/companions.ts";
+import { resolveCrossOsPackageSet } from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   findLaneByName,
   requiredPrepublishPluginPackagesForLanes,
@@ -184,7 +184,134 @@ console.log("package manifest stdout");
   return { repoRoot, sourceSha };
 }
 
+function preparedBundleFixture(repoRoot: string, sourceSha: string) {
+  const preparedBundleDir = path.join(repoRoot, "prepared-bundle");
+  mkdirSync(preparedBundleDir);
+  const entries = ["openclaw", "@openclaw/ai", "@openclaw/gateway-protocol"].map((name) => {
+    const tarballName = `${name.replace(/^@/u, "").replace("/", "-")}.tgz`;
+    const tarballPath = path.join(preparedBundleDir, tarballName);
+    writeFixtureTarball(path.join(repoRoot, "prepared-staging"), tarballPath, name);
+    return {
+      packageName: name,
+      packageVersion: VERSION,
+      tarballName,
+      tarballSha256: sha256(tarballPath),
+    };
+  });
+  const bundle = {
+    schema: "openclaw.npm-package-bundle/v1",
+    releaseSha: sourceSha,
+    ...entries[0],
+    corePackageTarballs: entries.slice(1),
+    dependencyTarballs: [entries[1]],
+  };
+  const writeBundle = () =>
+    writeFileSync(path.join(preparedBundleDir, "package-bundle.json"), JSON.stringify(bundle));
+  writeBundle();
+  return { preparedBundleDir, bundle, entries, writeBundle };
+}
+
 describe("prepublish plugin registry artifact", () => {
+  it("reuses prepared root and core bytes while packing only selected plugins", () => {
+    const { repoRoot, sourceSha } = cliFixture([PACKAGE_NAME, "@openclaw/slack"]);
+    const { preparedBundleDir, entries } = preparedBundleFixture(repoRoot, sourceSha);
+    const artifactDir = path.join(repoRoot, "artifact");
+    const result = spawnSync(
+      process.execPath,
+      [
+        SCRIPT,
+        "create",
+        "--repo-root",
+        repoRoot,
+        "--artifact-dir",
+        artifactDir,
+        "--source-sha",
+        sourceSha,
+        "--candidate-version",
+        VERSION,
+        "--required-packages-json",
+        JSON.stringify([PACKAGE_NAME]),
+        "--prepared-bundle-dir",
+        preparedBundleDir,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.packages).toEqual([
+      "@openclaw/ai",
+      PACKAGE_NAME,
+      "@openclaw/gateway-protocol",
+      "openclaw",
+    ]);
+    for (const entry of entries) {
+      expect(readFileSync(path.join(artifactDir, entry.tarballName))).toEqual(
+        readFileSync(path.join(preparedBundleDir, entry.tarballName)),
+      );
+    }
+    expect(
+      validatePrepublishPluginRegistryArtifact({
+        artifactDir,
+        expectedSourceSha: sourceSha,
+        expectedCandidateVersion: VERSION,
+        expectedManifestSha256: output.manifestSha256,
+        requiredPackages: ["openclaw", "@openclaw/ai", PACKAGE_NAME],
+      }).manifest.packages,
+    ).toHaveLength(4);
+    const crossOs = resolveCrossOsPackageSet({
+      artifactDir,
+      sourceSha,
+      candidateVersion: VERSION,
+      manifestSha256: output.manifestSha256,
+      requiredPackages: [PACKAGE_NAME],
+    });
+    expect(crossOs.packages.map((entry) => entry.name)).toEqual([
+      "@openclaw/ai",
+      PACKAGE_NAME,
+      "@openclaw/gateway-protocol",
+    ]);
+    expect(crossOs.companions.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
+  });
+
+  it.each(["source", "conflicting dependency", "tarball bytes"])(
+    "rejects prepared bundle %s drift before accepting its registry",
+    (drift) => {
+      const { repoRoot, sourceSha } = cliFixture([]);
+      const { preparedBundleDir, bundle, entries, writeBundle } = preparedBundleFixture(
+        repoRoot,
+        sourceSha,
+      );
+      if (drift === "source") {
+        bundle.releaseSha = "b".repeat(40);
+      }
+      if (drift === "conflicting dependency") {
+        bundle.dependencyTarballs = [{ ...entries[1]!, tarballSha256: "c".repeat(64) }];
+      }
+      if (drift === "tarball bytes") {
+        writeFileSync(path.join(preparedBundleDir, entries[1]!.tarballName), "tampered");
+      }
+      writeBundle();
+
+      expect(() =>
+        createPrepublishPluginRegistryArtifact({
+          repoRoot,
+          outputDir: path.join(repoRoot, "artifact"),
+          sourceSha,
+          candidateVersion: VERSION,
+          requiredPackages: [],
+          preparedBundleDir,
+        }),
+      ).toThrow(
+        drift === "source"
+          ? "bundle identity differs"
+          : drift === "conflicting dependency"
+            ? "conflicting package"
+            : "tarball SHA-256 mismatch",
+      );
+    },
+  );
+
   it.each(["discord", "slack"])(
     "stages the planned %s candidate and Codex in one verified artifact",
     (channel) => {
@@ -313,13 +440,13 @@ describe("prepublish plugin registry artifact", () => {
     addCompanionPackage(paths);
 
     expect(
-      resolveCrossOsCompanionPackages({
+      resolveCrossOsPackageSet({
         artifactDir: paths.artifactDir,
         candidateVersion: VERSION,
         manifestSha256: sha256(paths.manifestPath),
         requiredPackages: ["@openclaw/feishu"],
         sourceSha: SOURCE_SHA,
-      }),
+      }).companions,
     ).toEqual([
       {
         name: "@openclaw/feishu",
@@ -338,18 +465,18 @@ describe("prepublish plugin registry artifact", () => {
       sourceSha: SOURCE_SHA,
     };
 
-    expect(() => resolveCrossOsCompanionPackages({ ...common, sourceSha: "b".repeat(40) })).toThrow(
+    expect(() => resolveCrossOsPackageSet({ ...common, sourceSha: "b".repeat(40) })).toThrow(
       "source SHA differs",
     );
     expect(() =>
-      resolveCrossOsCompanionPackages({ ...common, candidateVersion: "2026.8.1-beta.2" }),
+      resolveCrossOsPackageSet({ ...common, candidateVersion: "2026.8.1-beta.2" }),
     ).toThrow("version differs");
-    expect(() =>
-      resolveCrossOsCompanionPackages({ ...common, manifestSha256: "c".repeat(64) }),
-    ).toThrow("manifest SHA-256 differs");
+    expect(() => resolveCrossOsPackageSet({ ...common, manifestSha256: "c".repeat(64) })).toThrow(
+      "manifest SHA-256 differs",
+    );
 
     writeFileSync(paths.tarballPath, "tampered");
-    expect(() => resolveCrossOsCompanionPackages(common)).toThrow("tarball SHA-256 mismatch");
+    expect(() => resolveCrossOsPackageSet(common)).toThrow("tarball SHA-256 mismatch");
   });
 
   it("refuses to create an artifact from tracked changes under the same HEAD", () => {

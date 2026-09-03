@@ -29,7 +29,7 @@ export const slackChannelConfigUiHints = {
         'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
       "block.coalesce": "Merge streamed Slack block replies before final delivery.",
       nativeTransport:
-        "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
+        "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack session status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
       "preview.toolProgress":
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":

@@ -1,5 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import { parseConfigSetValue } from "./config-cli-path.js";
+import { mergeAtPath, parseConfigSetValue } from "./config-cli-path.js";
+
+function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<string, unknown> {
+  let value = leaf;
+  for (let index = 0; index < depth; index += 1) {
+    value = { nested: value };
+  }
+  return value;
+}
 
 describe("parseConfigSetValue", () => {
   it.each([
@@ -46,5 +55,21 @@ describe("parseConfigSetValue", () => {
     expect(() => parseConfigSetValue("not-json", true)).toThrow(
       /(Unexpected token|Expected).*not-json/,
     );
+  });
+
+  it("merges deeply nested object values without an engine failure", () => {
+    const depth = 20_000;
+    const root = { value: nestedRecord(depth, { retained: true }) };
+
+    mergeAtPath(root, ["value"], nestedRecord(depth, { added: true }));
+
+    let cursor: unknown = root.value;
+    for (let index = 0; index < depth; index += 1) {
+      if (!isRecord(cursor)) {
+        throw new Error(`missing nested record at depth ${index}`);
+      }
+      cursor = cursor.nested;
+    }
+    expect(cursor).toEqual({ retained: true, added: true });
   });
 });

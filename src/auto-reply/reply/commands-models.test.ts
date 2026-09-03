@@ -331,7 +331,7 @@ describe("handleModelsCommand", () => {
     await handleModelsCommand(buildParams("/models"), true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
-    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.refreshFullCatalog).toBe(true);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.refreshFullCatalog).toBe("stale");
     const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
     expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
@@ -363,6 +363,7 @@ describe("handleModelsCommand", () => {
     await handleModelsCommand(params, true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.refreshFullCatalog).toBe("stale");
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.workspaceDir).toBe(
       "/tmp/spawned-workspace",
     );

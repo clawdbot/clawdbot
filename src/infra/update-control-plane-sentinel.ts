@@ -19,14 +19,14 @@ export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UP
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 
-// Only a completed, verified recovery can ask the parent to restart. Signals and
-// unexpected exits never authorize activation; notification consumption is irrelevant.
-export const MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE = 80;
+// The detached helper must retain an explicit unsafe verdict without relying on
+// a notification that another process may consume. Ordinary CLI failures stay 1.
+export const MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE = 79;
 
 export function resolveManagedServiceUpdateFailureExitCode(result: UpdateRunResult): number {
   return process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
-    result.recovery?.serviceRestartSafe === true
-    ? MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE
+    result.recovery?.serviceRestartSafe === false
+    ? MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE
     : 1;
 }
 

@@ -756,7 +756,10 @@ type TranslationBatchContext = LocaleRunContext & {
   locale: string;
   splitDepth?: number;
   segmentLabel?: string;
+  validateTranslation?: TranslationValidator;
 };
+
+type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
 
 type ClientAccess = {
   getClient: () => Promise<TranslationClient>;
@@ -927,6 +930,7 @@ export function parseTranslationBatchReply(
   raw: string,
   items: readonly TranslationBatchItem[],
   locale: string,
+  validateTranslation?: TranslationValidator,
 ): Map<string, string> {
   const parsed = parseTranslationReply(raw);
   const translated = new Map<string, string>();
@@ -935,6 +939,7 @@ export function parseTranslationBatchReply(
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`missing translation for ${item.key}`);
     }
+    validateTranslation?.(item.text, value, item.key, locale);
     translated.set(item.key, value);
   }
   assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
@@ -961,7 +966,12 @@ async function translateBatch(
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
       promptCompleted = true;
-      const translated = parseTranslationBatchReply(raw, items, context.locale);
+      const translated = parseTranslationBatchReply(
+        raw,
+        items,
+        context.locale,
+        context.validateTranslation,
+      );
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
@@ -1013,6 +1023,7 @@ export async function translateNativeEntries(
   entries: readonly NativeTranslationEntry[],
   targetLocale: string,
   glossary: readonly GlossaryEntry[] = [],
+  validateTranslation?: TranslationValidator,
 ): Promise<Map<string, string>> {
   if (!hasTranslationProvider()) {
     throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
@@ -1034,6 +1045,7 @@ export async function translateNativeEntries(
         localeIndex: 1,
         batchCount: batches.length,
         batchIndex: batchIndex + 1,
+        validateTranslation,
       });
       for (const [id, value] of result) {
         translated.set(id, value);

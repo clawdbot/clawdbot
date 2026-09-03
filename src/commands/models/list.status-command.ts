@@ -378,7 +378,7 @@ export async function modelsStatusCommand(
     }
     const pending = (async () => {
       const { runPluginPayloadSmokeCheckForManifestRecords } =
-        await import("../../cli/update-cli/plugin-payload-validation.js");
+        await import("../../plugins/payload-verification.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,

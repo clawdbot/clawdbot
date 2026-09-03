@@ -44,7 +44,8 @@ type DirectoryOptions = { cwd?: string; readDir?: ReadDirectoryEntries };
 type DirectoryLookup = Required<DirectoryOptions>;
 type ShardOptions = DirectoryOptions & { env?: NodeJS.ProcessEnv };
 type PlatformOptions = { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform };
-type PlatformShardOptions = ShardOptions & ResourceOptions & { splitCore?: boolean };
+type PlatformShardOptions = ShardOptions &
+  ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean };
 type ResourceOptions = PlatformOptions & { hostResources?: HostResources };
 type RunnerOptions = {
   env: NodeJS.ProcessEnv;
@@ -85,11 +86,13 @@ export function createOxlintShards({
   hostResources = resolveHostResources(),
   readDir = fs.readdirSync,
   splitCore = false,
+  splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const coreShards = splitCore ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
   // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
-  // Only chunk serial runs so explicit parallel modes cannot multiply processes.
+  // Chunk serial runs; explicit stripes use independently bounded Programs that stay serial.
   const chunkExtensions =
+    splitExtensions ||
     platform === "win32" ||
     (hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
       shouldRunOxlintShardsSerial({ env, platform, hostResources }));
@@ -265,12 +268,14 @@ export async function main(
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
+  const splitExtensions = shardArgs.extensionStripe !== undefined;
   const shards = createOxlintShards({
     cwd: process.cwd(),
     env,
     platform: process.platform,
     hostResources,
     splitCore: shardArgs.splitCore,
+    splitExtensions,
   });
   const selectedShards = selectExtensionOxlintStripe(
     selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe),
@@ -302,6 +307,7 @@ export async function main(
       platform: process.platform,
       hostResources,
       splitCore: shardArgs.splitCore,
+      splitExtensions,
     });
     // stderr: stdout may carry machine-readable oxlint output for callers.
     console.error(
@@ -466,8 +472,11 @@ export function selectExtensionOxlintStripe(
   if (!stripe) {
     return shards;
   }
-  if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("extensions:"))) {
-    throw new Error("--extension-stripe requires a non-empty extension-only shard selection");
+  if (shards.length === 0) {
+    return [];
+  }
+  if (shards.some((shard) => !shard.name.startsWith("extensions:"))) {
+    throw new Error("--extension-stripe requires an extension-only shard selection");
   }
   return shards.filter((_, index) => index % stripe.total === stripe.index - 1);
 }
@@ -500,8 +509,9 @@ export function resolveOxlintShardConcurrency({
   platform = process.platform,
   hostResources,
   splitCore = false,
-}: ResourceOptions & { splitCore?: boolean } = {}) {
-  if (shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
+  splitExtensions = false,
+}: ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean } = {}) {
+  if (splitExtensions || shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
     return 1;
   }
 

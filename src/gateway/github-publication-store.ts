@@ -55,6 +55,39 @@ export function hasGitHubPublicationStore(): boolean {
   return tableExists(openOpenClawStateDatabase().db, "github_publication_requests");
 }
 
+export function readGitHubPublicationRequest(
+  db: Parameters<typeof getNodeSqliteKysely>[0],
+  request: { requestId: string } | { sessionId: string; idempotencyKey: string },
+): GitHubPublicationRow | undefined {
+  const query = githubPublicationDatabase(db).selectFrom("github_publication_requests").selectAll();
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    "requestId" in request
+      ? query.where("request_id", "=", request.requestId)
+      : query
+          .where("session_id", "=", request.sessionId)
+          .where("idempotency_key", "=", request.idempotencyKey),
+  );
+}
+
+export function listGitHubPublicationsForClaim(
+  claim: WorkerSessionTurnClaim,
+  options: { pendingOnly?: boolean } = {},
+): GitHubPublicationRow[] {
+  const db = openOpenClawStateDatabase().db;
+  let query = githubPublicationDatabase(db)
+    .selectFrom("github_publication_requests")
+    .selectAll()
+    .where("session_id", "=", claim.sessionId)
+    .where("claim_id", "=", claim.claimId)
+    .where("run_id", "=", claim.runId)
+    .orderBy("created_at_ms");
+  if (options.pendingOnly) {
+    query = query.where("status", "in", ["requested", "publishing"]);
+  }
+  return executeSqliteQuerySync(db, query).rows;
+}
+
 export function claimGitHubPublicationExecution(
   requestId: string,
   gatewayInstanceId: string,
@@ -62,13 +95,7 @@ export function claimGitHubPublicationExecution(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const query = githubPublicationDatabase(db);
-      const current = executeSqliteQuerySync(
-        db,
-        query
-          .selectFrom("github_publication_requests")
-          .selectAll()
-          .where("request_id", "=", requestId),
-      ).rows[0];
+      const current = readGitHubPublicationRequest(db, { requestId });
       if (!current) {
         throw new Error("GitHub publication request disappeared.");
       }
@@ -175,14 +202,10 @@ export function insertGitHubPublicationRequest(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing()),
   );
-  const stored = executeSqliteQueryTakeFirstSync(
-    db,
-    query
-      .selectFrom("github_publication_requests")
-      .selectAll()
-      .where("session_id", "=", input.sessionId)
-      .where("idempotency_key", "=", request.idempotencyKey),
-  );
+  const stored = readGitHubPublicationRequest(db, {
+    sessionId: input.sessionId,
+    idempotencyKey: request.idempotencyKey,
+  });
   if (
     !stored ||
     stored.request_digest !== input.requestDigest ||
@@ -383,23 +406,23 @@ export function projectGitHubPublicationResult(
           },
         }
       : {};
-  const publisher = {
-    source:
-      row.identity_source === "personal"
-        ? ("personal" as const)
-        : row.identity_source === "agent-override"
-          ? ("agent-override" as const)
-          : row.identity_source === "system-configured"
-            ? ("system-configured" as const)
-            : ("system-detected" as const),
-    accountId: row.identity_account_id,
-    login: row.identity_login,
-  };
+  const common = {
+    requestId: row.request_id,
+    publisher: {
+      source:
+        row.identity_source === "personal" ||
+        row.identity_source === "agent-override" ||
+        row.identity_source === "system-configured"
+          ? row.identity_source
+          : "system-detected",
+      accountId: row.identity_account_id,
+      login: row.identity_login,
+    },
+    ...effect,
+  } satisfies Pick<SessionGitHubPublicationResult, "requestId" | "publisher" | "effect">;
   if (row.status === "published" && row.pull_request_url && row.repository && row.branch) {
     return {
-      requestId: row.request_id,
-      publisher,
-      ...effect,
+      ...common,
       status: "published",
       url: row.pull_request_url,
       repository: row.repository,
@@ -409,9 +432,7 @@ export function projectGitHubPublicationResult(
   }
   if (row.status === "failed" && row.error_code && row.next_action) {
     return {
-      requestId: row.request_id,
-      publisher,
-      ...effect,
+      ...common,
       status: "failed",
       code: publicationFailureCode(row.error_code),
       message: "GitHub publication failed.",
@@ -420,18 +441,14 @@ export function projectGitHubPublicationResult(
   }
   if (row.status === "needs_confirmation") {
     return {
-      requestId: row.request_id,
-      publisher,
-      ...effect,
+      ...common,
       status: "needs_confirmation",
       message:
         "Confirm the original My GitHub account, target, and workspace to continue this interrupted publication. Already-dispatched GitHub effects may have completed; confirmation checks them before retrying.",
     };
   }
   return {
-    requestId: row.request_id,
-    publisher,
-    ...effect,
+    ...common,
     status: row.status === "publishing" ? "publishing" : "requested",
     message:
       row.status === "publishing"

@@ -98,6 +98,7 @@ export function registerBrowserAgentActHookRoutes(
             element,
             paths: resolvedPaths,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            signal,
           });
         } else if (ref) {
           await pw.uploadViaPlaywright({

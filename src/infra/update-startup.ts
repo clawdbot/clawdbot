@@ -67,7 +67,6 @@ import {
 } from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { runGatewayUpdatePreflight, type UpdateRunResult } from "./update-runner.js";
-import { runUpdateFailureTriage } from "./update-triage.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -706,6 +705,8 @@ async function runCampaignUpdate(params: {
   if (!isCurrent()) {
     return "failed";
   }
+  // Capture recovery code before the updater can replace the running installation.
+  const { runUpdateFailureTriage } = await import("./update-triage.js");
   const { sentinel, revision } = await readRestartSentinelSnapshot();
   if (!isCurrent()) {
     return "failed";

@@ -62,7 +62,10 @@ describe("createControlUiLocaleSyncPlan", () => {
       settings: {},
       common: { ok: "OK" },
     };
-    const fragment = { settings: { title: "Settings" }, updates: { page: { title: "Updates" } } };
+    const fragment = {
+      settings: { title: "Settings" },
+      updates: { page: { title: "Updates" } },
+    };
     const merged = mergeControlUiTranslationMaps(startup, fragment);
 
     expect([...flattenTranslations(merged)]).toEqual([

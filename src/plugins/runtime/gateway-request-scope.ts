@@ -29,6 +29,18 @@ type PluginRuntimeGatewayRequestScope = {
     },
     invoke: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
   ) => Promise<T | undefined>;
+  /** Closure-bound admitted owner used to validate placement grant bindings. */
+  nodePlacementGrantAuthority?: {
+    agentId: string;
+    sessionKey: string;
+    runId: string;
+    assertCurrent: (request: {
+      pluginId: string;
+      command: string;
+      nodeId: string;
+      workspace: OpenClawPluginNodeWorkspace;
+    }) => void;
+  };
   context?: GatewayRequestContext;
   resolveGatewayContext?: GatewayContextResolver;
   client?: GatewayRequestOptions["client"];
@@ -77,6 +89,15 @@ export function bindGatewayContextResolver(
 export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
 
 export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
+
+/** Carry only closure-bound node authorities into a nested request scope. */
+export function getPluginRuntimeGatewayNodeAuthorities() {
+  const scope = pluginRuntimeGatewayRequestScope.getStore();
+  return {
+    invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
+  };
+}
 
 export function getSharedGatewayContextResolver(
   owners: readonly object[],

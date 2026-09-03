@@ -43,7 +43,14 @@ const updateFailureSchema = z
           }),
         ),
         recovery: z
-          .object({ serviceRestartSafe: z.boolean(), reason: z.string().optional() })
+          .object({
+            serviceRestartSafe: z.boolean(),
+            reason: z.string().optional(),
+            packageRollbackVerified: z.boolean().optional(),
+            version: z.string().optional(),
+            buildId: z.string().optional(),
+            service: z.enum(["healthy", "failed"]).optional(),
+          })
           .optional(),
         postUpdate: z
           .object({
@@ -262,7 +269,18 @@ export function sanitizeTriageUpdateFailure(
       before: identity(result.before),
       after: identity(result.after),
       recovery: result.recovery
-        ? { ...result.recovery, reason: text(result.recovery.reason, 96) }
+        ? {
+            serviceRestartSafe: result.recovery.serviceRestartSafe,
+            reason: text(result.recovery.reason, 96),
+            packageRollbackVerified: result.recovery.packageRollbackVerified,
+            ...(result.recovery.serviceRestartSafe
+              ? {
+                  version: text(result.recovery.version, 48),
+                  buildId: text(result.recovery.buildId, 96),
+                  service: result.recovery.service,
+                }
+              : {}),
+          }
         : undefined,
       // Successful steps are not the failure. Keep the latest failures in execution order.
       steps: failedSteps.slice(-3).map((step) => ({

@@ -11,15 +11,18 @@ export function renderChannelIcon(
   channelId: string,
   label: string,
   variant: "tile" | "cover" | "picker",
+  options: { pluginIconUrl?: string; preferPluginIcon?: boolean } = {},
 ) {
   const artVariant = variant === "picker" ? "tile" : variant;
-  const art = pluginArtPath(channelId);
+  const art = options.pluginIconUrl ?? (options.preferPluginIcon ? null : pluginArtPath(channelId));
   const [from, to] = art ? ["", ""] : pluginFallbackGradient(channelId);
   const style = `${variant === "picker" ? "--channels-art-size:24px;" : ""}${
     art ? "" : `--channels-art-a:${from};--channels-art-b:${to}`
   }`;
+  const packageCoverClass =
+    variant === "cover" && options.pluginIconUrl ? " channels-cover--icon" : "";
   return html`<span
-    class=${`channels-${artVariant}${art ? "" : ` channels-${artVariant}--fallback`}`}
+    class=${`channels-${artVariant}${packageCoverClass}${art ? "" : ` channels-${artVariant}--fallback`}`}
     style=${style}
     aria-hidden="true"
   >

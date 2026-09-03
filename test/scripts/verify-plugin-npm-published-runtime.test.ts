@@ -382,15 +382,18 @@ describe("findPackedPackageReadmePath", () => {
 });
 
 describe("parseNpmReadmeMetadata", () => {
-  it("accepts non-empty npm readme metadata", () => {
-    expect(parseNpmReadmeMetadata(JSON.stringify("# Plugin\n\nInstall it."))).toBe(
-      "# Plugin\n\nInstall it.",
-    );
+  it.each([
+    { npm: "<=11", payload: "# Plugin\n\nInstall it." },
+    { npm: "12", payload: ["# Plugin\n\nInstall it."] },
+  ])("accepts non-empty npm $npm readme metadata", ({ payload }) => {
+    expect(parseNpmReadmeMetadata(JSON.stringify(payload))).toBe("# Plugin\n\nInstall it.");
   });
 
   it("rejects empty or unsupported npm readme metadata", () => {
     expect(parseNpmReadmeMetadata(JSON.stringify(""))).toBe("");
     expect(parseNpmReadmeMetadata(JSON.stringify(null))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify([]))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify(["# One", "# Two"]))).toBe("");
     expect(parseNpmReadmeMetadata("{")).toBe("");
   });
 });

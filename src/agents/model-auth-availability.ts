@@ -50,6 +50,7 @@ import {
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
+import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -142,6 +143,8 @@ export function applyCliRuntimeModelAuthAvailability(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   provider: string;
   modelId?: string;
+  preferredProfileId?: string;
+  lockedProfileId?: string;
 }): ModelAuthAvailabilityEvaluation {
   if (
     params.evaluation.routeResolution !== null ||
@@ -182,6 +185,17 @@ export function applyCliRuntimeModelAuthAvailability(params: {
         unavailableUntil: undefined,
       };
     }
+  }
+  const selectedProfileId = params.lockedProfileId?.trim() || params.preferredProfileId?.trim();
+  const authPolicy = resolveBundledCliBackendAuthPolicy(runtimeProvider);
+  if (
+    selectedProfileId &&
+    authPolicy?.strictSelectedProfile &&
+    !authPolicy.nativeAuthProfileIds?.includes(selectedProfileId)
+  ) {
+    // Strict managed selections are forwarded to this CLI. Native login is
+    // neither required for them nor allowed to rescue an unusable selection.
+    return params.evaluation;
   }
   const runtimeAuthMode = params.authResolver.resolvePreparedRuntimeAuthMode(runtimeProvider);
   // The prepared native-runtime result is authoritative for this route. Provider

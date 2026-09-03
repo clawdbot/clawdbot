@@ -253,6 +253,7 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
         ],
         detailsExpr:
           "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
+        resultExpr: "result",
       },
     ],
   };

@@ -36,3 +36,5 @@ export const channelSessionContractPatterns = [
   "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
 ];
+
+export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];

@@ -446,8 +446,7 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return {
-    messageId: result.id || "unknown",
-    channelId: result.channel_id ?? channelId,
+    ...toDiscordSendResult(result, channelId),
     receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
   };
 }

@@ -4,6 +4,7 @@ import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
@@ -38,12 +39,11 @@ function formatTurnRecapDuration(ms: number): string {
   return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
-// Keep counts exact so small response updates remain visible above 1,000 tokens.
 // 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
     ? t("chat.turnRecap.tokensOne")
-    : t("chat.turnRecap.tokens", { count: outputTokens.toLocaleString(i18n.getLocale()) });
+    : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
 }
 
 export function renderChatWorkingIndicator(

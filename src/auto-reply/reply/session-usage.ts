@@ -1,11 +1,8 @@
-/** Persists usage, cost, model, and CLI session metadata after reply runs. */
+/** Persists usage, cost, and model metadata after reply runs. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  clearCliSession,
-  setCliSessionBinding,
-  setCliSessionId,
-} from "../../agents/cli-session.js";
+import { clearCliSession } from "../../agents/cli-session.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import {
   deriveSessionTotalTokens,
   hasBillableUsage,
@@ -25,11 +22,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
-function applyCliSessionIdToSessionPatch(
+function applyCliSessionClearToSessionPatch(
   params: {
     providerUsed?: string;
-    cliSessionId?: string;
-    cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
     clearCliSessionBinding?: boolean;
   },
   entry: SessionEntry,
@@ -42,26 +37,6 @@ function applyCliSessionIdToSessionPatch(
   if (params.clearCliSessionBinding === true) {
     const nextEntry = { ...entry, ...patch };
     clearCliSession(nextEntry, cliProvider);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  if (params.cliSessionBinding) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  if (params.cliSessionId) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
     return {
       ...patch,
       cliSessionIds: nextEntry.cliSessionIds,
@@ -117,6 +92,8 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  /** Session selection can differ from the response model used for billing. */
+  runtimeModelSelection?: ModelRef;
   agentHarnessId?: string;
   contextTokensUsed?: number;
   contextTokensSource?: SessionEntry["contextTokensSource"];
@@ -124,8 +101,7 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
-  cliSessionId?: string;
-  cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  /** Compaction invalidates native continuity with its accounting commit. */
   clearCliSessionBinding?: boolean;
   /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
   currentContextSnapshot?: { tokens: number | undefined };
@@ -143,6 +119,10 @@ export async function persistSessionUsageUpdate(params: {
   const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? getRuntimeConfig();
   const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
+  const modelSelection = params.runtimeModelSelection ?? {
+    provider: params.providerUsed,
+    model: params.modelUsed,
+  };
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasBilling = hasBillableUsage(params.usage);
   const hasPromptTokens =
@@ -160,7 +140,7 @@ export async function persistSessionUsageUpdate(params: {
     hasUsage ||
     hasFreshContextSnapshot ||
     hasCurrentContextSnapshot ||
-    Boolean(params.modelUsed || params.contextTokensUsed);
+    Boolean(modelSelection.model || params.contextTokensUsed);
   if (hasBilling || hasContextUpdate) {
     try {
       await patchSessionEntryCore(
@@ -210,8 +190,8 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: preserveSessionModelState
               ? entry.modelProvider
-              : (params.providerUsed ?? entry.modelProvider),
-            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+              : (modelSelection.provider ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (modelSelection.model ?? entry.model),
             ...(!preserveSessionModelState
               ? {
                   agentHarnessId,
@@ -260,7 +240,7 @@ export async function persistSessionUsageUpdate(params: {
           }
           return preserveUserFacingRunState
             ? patch
-            : applyCliSessionIdToSessionPatch(params, entry, patch);
+            : applyCliSessionClearToSessionPatch(params, entry, patch);
         },
         {
           skipMaintenance: true,

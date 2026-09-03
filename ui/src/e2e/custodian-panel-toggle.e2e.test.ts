@@ -85,7 +85,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
     try {
       const response = await page.goto(controlUiSessionUrl(server.baseUrl, WORK_SESSION_KEY));
       expect(response?.status()).toBe(200);
-      await page.locator(".shell-chrome-controls__search").waitFor();
+      await page.locator(".sidebar-brand__search").waitFor();
       await page.locator(".sidebar-identity-card").waitFor();
       await page.locator(".sidebar-footer-bar__home").click();
       const panel = page.locator("openclaw-assistant-panel");
@@ -142,7 +142,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
       // The command palette opens the same conversation directly.
-      await page.locator(".shell-chrome-controls__search").click();
+      await page.locator(".sidebar-brand__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
       const paletteItem = page.getByRole("option", { name: "Ask OpenClaw", exact: true });
       await paletteItem.waitFor();

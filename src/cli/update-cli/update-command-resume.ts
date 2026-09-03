@@ -14,8 +14,8 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
@@ -138,7 +138,8 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       configSnapshot: restoredConfig.snapshot,
       configChanged: restoredConfig.changed,
       restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts: params.opts,
+      json: params.opts.json,
+      acceptCapabilities: params.opts.acceptCapabilities,
       timeoutMs: params.timeoutMs,
       pluginInstallRecords,
     });

@@ -174,10 +174,8 @@ function renderOption(
   </label>`;
 }
 
-function renderContinueStep(props: WizardStepControlsProps) {
-  const step = props.step;
+function renderExternalStepInfo(step: WizardStep) {
   return html`
-    ${renderMessage(props)}
     ${step.externalUrl
       ? html`<a
           class="btn btn--sm wizard-step__external-link"
@@ -189,6 +187,12 @@ function renderContinueStep(props: WizardStepControlsProps) {
         </a>`
       : nothing}
     ${renderDeviceCode(step)}
+  `;
+}
+
+function renderContinueStep(props: WizardStepControlsProps) {
+  return html`
+    ${renderMessage(props)} ${renderExternalStepInfo(props.step)}
     ${renderAnswerButton(props, t("modelSetup.wizard.continue"), () => props.onAnswer(undefined))}
   `;
 }
@@ -254,7 +258,8 @@ function renderTextStep(props: WizardStepControlsProps) {
             <label for=${props.inputId}>${formatUiExternalText(step.message)}</label>
           </div>`
         : nothing}
-      ${input} ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
+      ${renderExternalStepInfo(step)} ${input}
+      ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
     </form>
   `;
 }

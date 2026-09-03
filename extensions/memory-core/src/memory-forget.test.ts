@@ -148,6 +148,73 @@ describe("memory forget", () => {
     ]);
   });
 
+  it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
+    await seedMemoryForgetSession("archived");
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          entryKey: "archived-entry",
+          agentId: "main",
+          sessionId: "archived",
+          sessionKey: "agent:main:archived",
+          originClass: "owner",
+          observedAt: 1_000,
+        },
+      ],
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const originalContent =
+      "# Long-Term Memory\n" +
+      "Curated operator fact that must survive.\n" +
+      "<!-- openclaw-memory-promotion:archived-entry -->\n" +
+      "- Archived secret.\n";
+    await fs.writeFile(memoryPath, originalContent);
+    await deleteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:archived",
+      expectedSessionId: "archived",
+      archiveTranscript: true,
+    });
+
+    // Exercise both the old direct write and the replacement temp write so this
+    // regression fails against the original boundary for the observed data loss.
+    const writeFile = fs.writeFile.bind(fs);
+    const directWriteFault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (args[0] === memoryPath) {
+        await writeFile(memoryPath, "Curated ope");
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await writeFile(...args);
+    });
+    const open = fs.open.bind(fs);
+    const tempPrefix = `${memoryPath}.forget.`;
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(tempPrefix)) {
+        const handle = await open(...args);
+        await handle.writeFile("Curated ope");
+        await handle.close();
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await open(...args);
+    });
+    try {
+      await expect(
+        forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] }),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      fault.mockRestore();
+      directWriteFault.mockRestore();
+    }
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(originalContent);
+
+    // A retry with the fault cleared still completes the purge.
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] });
+    expect(report.entryKeys).toEqual(["archived-entry"]);
+    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Archived secret");
+  });
+
   it.each([
     { label: "LF", content: "# Long-Term Memory\nKeep this.\n" },
     { label: "CRLF", content: "# Long-Term Memory\r\nKeep this.\r\n" },
@@ -631,14 +698,16 @@ describe("memory forget", () => {
       if (failure !== "none") {
         const failureMessage = `synthetic ${failure} storage failure`;
         if (failure === "memory" || failure === "corpus") {
-          const writeFile = fs.writeFile.bind(fs);
+          const open = fs.open.bind(fs);
           const failedPath =
             failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
-          const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-            await writeFile(...args);
-            if (args[0] === failedPath) {
+          const failedTempPrefix = `${failedPath}.forget.`;
+          const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const target = args[0];
+            if (typeof target === "string" && target.startsWith(failedTempPrefix)) {
               throw new Error(failureMessage);
             }
+            return await open(...args);
           });
           try {
             await expect(

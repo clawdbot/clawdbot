@@ -103,6 +103,7 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
+          { consumePendingReset: true },
         );
       }
     }

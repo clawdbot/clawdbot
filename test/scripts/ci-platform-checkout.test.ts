@@ -215,7 +215,9 @@ it.concurrent.each([
           );
           expect(
             report.commands.some(
-              ({ args }) => args.join(" ") === "sparse-checkout set .github/actions",
+              ({ args }) =>
+                args.join(" ") ===
+                "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
             ),
           ).toBe(true);
           expect(report.commands.at(-1)?.args).toEqual([
@@ -234,16 +236,23 @@ it.concurrent.each([
 it.concurrent.each([
   ...[
     ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
+    ...(process.platform === "win32"
+      ? []
+      : [{ kind: "linux-node", retained: false, workflow: "previous", fetches: 2 }]),
     { kind: "platform", retained: false },
     { kind: "platform", retained: true },
+    { kind: "platform", retained: false, workflow: "previous", fetches: 2 },
   ].map((entry) =>
-    Object.assign(entry, {
-      event: "push",
-      workflow: "same",
-      target: "selected",
-      code: 0,
-      fetches: 1,
-    }),
+    Object.assign(
+      {
+        event: "push",
+        workflow: "same",
+        target: "selected",
+        code: 0,
+        fetches: 1,
+      },
+      entry,
+    ),
   ),
   ...(process.platform === "win32"
     ? []
@@ -284,7 +293,7 @@ it.concurrent.each([
         },
       ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
-  "materializes $kind harness actions ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
+  "materializes $kind trusted harness ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
   async ({ kind, retained, event, workflow, target, code, fetches }) => {
     const linux = kind !== "platform";
     const preflight = kind === "preflight";
@@ -297,14 +306,26 @@ it.concurrent.each([
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
+    const evidenceScripts = {
+      "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
+      "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
+    };
+    const releasePolicy = Object.fromEntries(
+      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
+        name,
+        readFileSync(name, "utf8"),
+      ]),
+    );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
       "extensions/browser/icon.png": "complete binary path\0\xff",
       "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
+      "scripts/lib/candidate-only.mjs": "export const candidate = true;\n",
     };
     let revision = "";
     let workflowRevision = "";
     let candidateAction = files[action];
+    let candidateEvidenceScripts: Record<string, string> = evidenceScripts;
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
       (root) => {
@@ -332,7 +353,12 @@ it.concurrent.each([
             encoding: "utf8",
           }).trim();
         run("init");
-        for (const [name, contents] of Object.entries({ ...files, ...candidateFiles })) {
+        for (const [name, contents] of Object.entries({
+          ...files,
+          ...evidenceScripts,
+          ...releasePolicy,
+          ...candidateFiles,
+        })) {
           mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
           writeFileSync(path.join(source, name), contents);
         }
@@ -352,7 +378,16 @@ it.concurrent.each([
         if (workflow === "previous") {
           candidateAction = "name: candidate action must not replace the trusted workflow\n";
           writeFileSync(path.join(source, action), candidateAction);
-          run("add", action);
+          candidateEvidenceScripts = Object.fromEntries(
+            Object.keys(evidenceScripts).map((name) => [
+              name,
+              `candidate ${path.basename(name)} must not replace the trusted workflow\n`,
+            ]),
+          );
+          for (const [name, contents] of Object.entries(candidateEvidenceScripts)) {
+            writeFileSync(path.join(source, name), contents);
+          }
+          run("add", action, ...Object.keys(evidenceScripts));
           run("commit", "--no-gpg-sign", "-m", "selected candidate");
           revision = run("rev-parse", "HEAD");
         } else if (workflow === "missing") {
@@ -427,6 +462,12 @@ it.concurrent.each([
           expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
           expect(existsSync(path.join(harness, name))).toBe(false);
         }
+        const workflowOwnsEvidence = kind === "platform" || kind === "linux-node";
+        for (const name of Object.keys(evidenceScripts)) {
+          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
+            candidateEvidenceScripts[name],
+          );
+        }
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -438,13 +479,40 @@ it.concurrent.each([
           expect(existsSync(harness)).toBe(false);
           return;
         }
-        expect(existsSync(path.join(harness, ".git"))).toBe(false);
+        if (workflow === "same") {
+          expect(existsSync(path.join(harness, ".git"))).toBe(false);
+        }
         for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
         }
+        for (const [name, contents] of Object.entries(evidenceScripts)) {
+          expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
+          if (workflowOwnsEvidence) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
+        for (const [name, contents] of Object.entries(releasePolicy)) {
+          expect(existsSync(path.join(harness, name))).toBe(preflight);
+          if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
+        }
         if (posix) {
-          expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);
+          // Git tracks only executable state; checkout materialization applies the process umask.
+          expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
+        }
+        if (workflow !== "same" && workflowOwnsEvidence) {
+          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual([
+            "sparse-checkout",
+            "set",
+            "--no-cone",
+            "/.github/actions/",
+            "/scripts/ios-screenshot-evidence.mjs",
+            "/scripts/lib/direct-run.mjs",
+          ]);
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
@@ -798,13 +866,16 @@ const inspected = new Set();
 cp.spawnSync = (command, args, options) => {
   if (command === "/bin/ps") {
     const index = args.indexOf("-p");
-    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*$/.test(args[index + 1]), "fixture census must query exactly one PID");
+    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*(?:,[1-9][0-9]*)*$/.test(args[index + 1]), "fixture census must query an explicit PID list");
+    const selected = args[index + 1].split(",").map(Number);
+    assert(process.platform === "linux" || selected.length === 1, "non-Linux census must query exactly one PID");
     assert(args.every(arg => !arg.startsWith("-") || ["-p", "-o"].includes(arg)), "fixture census must select owned PIDs only");
     const records = path.join(process.argv[3], "pids");
     const allowed = new Set(fs.readdirSync(records).filter(name => name.endsWith(".json")).map(name => JSON.parse(fs.readFileSync(path.join(records, name), "utf8"))).filter(record => !fs.existsSync(path.join(records, record.instance + ".dead"))).map(record => record.pid));
-    const pid = Number(args[index + 1]);
-    assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
-    inspected.add(pid);
+    for (const pid of selected) {
+      assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
+      inspected.add(pid);
+    }
   }
   return spawnSync(command, args, options);
 };

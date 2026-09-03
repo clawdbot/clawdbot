@@ -56,7 +56,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
-  /exceeds the available context size/i, // llama.cpp server
+  /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
@@ -105,7 +105,7 @@ const PROVIDER_FALLBACK_OVERFLOW_PATTERNS = [
   /\binput exceeds the maximum number of tokens\b/i, // Google Vertex / Gemini
   /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i, // Cohere
-  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i, // llama.cpp
+  /\b(?:(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size|context size has been exceeded)\b/i, // llama.cpp
   /\binput (?:is )?too long for (?:the )?model\b/i,
 ];
 

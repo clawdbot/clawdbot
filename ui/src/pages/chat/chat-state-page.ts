@@ -216,6 +216,7 @@ export function createPageState(
     chatModelsLoading: false,
     chatModelCatalog: [],
     chatModelCatalogError: null,
+    chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
@@ -285,7 +286,7 @@ export function createPageState(
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
   };
   state.handleChatScroll = (event) => handleChatScroll(state, event);
-  state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
+  state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   state.applySettings = (patch) => {
     const next = { ...state.settings, ...patch };
@@ -357,8 +358,8 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.updateQueuedChatMessageEdit = (draftText) => {
-    updateQueuedMessageEdit(state, draftText);
+  state.updateQueuedChatMessageEdit = (draftText, mentions) => {
+    updateQueuedMessageEdit(state, draftText, mentions);
     renderLifecycle.invalidate();
   };
   state.submitQueuedChatMessageEdit = () => {
@@ -369,6 +370,7 @@ export function createPageState(
     void state
       .handleSendChat(edit.draftText, {
         attachmentsOverride: [...edit.attachments],
+        mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
       .then(

@@ -600,6 +600,42 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
   });
 
+  it.each([
+    { label: "empty", rawText: undefined, expectedKind: undefined },
+    { label: "explicit silence", rawText: "NO_REPLY", expectedKind: "silent-empty" },
+  ])(
+    "keeps reply-optional subagent $label distinct at the terminal producer",
+    async ({ rawText, expectedKind }) => {
+      const assistant = emptyAssistant();
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: rawText ? [rawText] : [],
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      });
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        finalAssistantRawText: rawText,
+        replayState: { ...attempt.replayMetadata, replayInvalid: false },
+        runParams: {
+          lane: "subagent",
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
+        },
+      });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        return;
+      }
+      expect(resolved.result.meta.terminalReplyKind).toBe(expectedKind);
+    },
+  );
+
   it("retries reasoning-only output and surfaces a retained presentation after exhaustion", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [

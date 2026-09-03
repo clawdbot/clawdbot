@@ -4,6 +4,7 @@ import ai.openclaw.app.NotificationNodeEventOutbox
 import ai.openclaw.app.PendingNotificationNodeEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -12,9 +13,11 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -38,22 +41,26 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.IOException
+import java.lang.management.ManagementFactory
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 private const val LIFECYCLE_TEST_TIMEOUT_MS = 8_000L
 private const val LIFECYCLE_CONNECT_CHALLENGE_FRAME =
   """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}"""
 
-private class ReconnectDeviceAuthStore : DeviceAuthTokenStore {
+private class ReconnectDeviceAuthStore(
+  private val entry: DeviceAuthEntry? = null,
+) : DeviceAuthTokenStore {
   override fun loadEntry(
     gatewayId: String,
     deviceId: String,
     role: String,
-  ): DeviceAuthEntry? = null
+  ): DeviceAuthEntry? = entry
 
   override fun saveToken(
     gatewayId: String,
@@ -73,6 +80,7 @@ private class ReconnectDeviceAuthStore : DeviceAuthTokenStore {
 private class BlockingSaveDeviceAuthStore : DeviceAuthTokenStore {
   val saveStarted = CountDownLatch(1)
   val allowSave = CountDownLatch(1)
+  val savedToken = CompletableDeferred<String>()
 
   override fun loadEntry(
     gatewayId: String,
@@ -89,6 +97,7 @@ private class BlockingSaveDeviceAuthStore : DeviceAuthTokenStore {
   ) {
     saveStarted.countDown()
     allowSave.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    savedToken.complete(token)
   }
 
   override fun clearToken(
@@ -137,6 +146,7 @@ private data class TerminalCallbackObservation(
 private data class ReconnectServer(
   val server: MockWebServer,
   val sockets: ConcurrentLinkedQueue<WebSocket>,
+  val requestFrames: ConcurrentLinkedQueue<JsonObject>,
 ) {
   val port: Int
     get() = server.port
@@ -458,6 +468,196 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun retiringConnectionRejectsQueuedRequestsBeforeSocketCancellation() =
+    runBlocking {
+      for (fireAndForget in listOf(false, true)) {
+        val connected = CompletableDeferred<Unit>()
+        val cancelStarted = CompletableDeferred<Unit>()
+        val allowCancel = CountDownLatch(1)
+        val requestSeen = CompletableDeferred<Unit>()
+        val errors = ConcurrentLinkedQueue<GatewaySession.ErrorShape>()
+        val server =
+          startGatewayServer(json = Json) { webSocket, id, method ->
+            if (method == "connect") {
+              webSocket.send(connectResponseFrame(id))
+            } else {
+              requestSeen.complete(Unit)
+            }
+          }
+        val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+        var replacement: Job? = null
+        var pending: Job? = null
+        var writeLock: Mutex? = null
+        val lockOwner = Any()
+        try {
+          connectNodeSession(harness.session, server.port)
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+          val connection = readField<Any>(harness.session, "currentConnection")
+          val socketField = connection.javaClass.getDeclaredField("socket").apply { isAccessible = true }
+          val socket = socketField.get(connection) as WebSocket
+          socketField.set(
+            connection,
+            object : WebSocket by socket {
+              override fun cancel() {
+                // Hold only the interval after logical retirement and before physical cancellation.
+                // All sends still reach the real OkHttp socket and MockWebServer peer.
+                cancelStarted.complete(Unit)
+                check(allowCancel.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                socket.cancel()
+              }
+            },
+          )
+          val heldWriteLock = readField<Mutex>(harness.session, "writeLock").also { writeLock = it }
+          heldWriteLock.lock(lockOwner)
+          val queued =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              runCatching {
+                if (fireAndForget) {
+                  harness.session.sendRequestFrame("transport-fence-test", null, onError = errors::add)
+                } else {
+                  harness.session.request("transport-fence-test", null)
+                }
+              }
+            }.also { pending = it }
+          assertTrue(queued.isActive)
+          replacement = launch(Dispatchers.IO) { connectNodeSession(harness.session, server.port) }
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { cancelStarted.await() }
+          assertFalse(harness.session.isReady())
+          heldWriteLock.unlock(lockOwner)
+          val result = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { queued.await() }
+          if (result.isSuccess) withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { requestSeen.await() }
+          assertTrue(
+            "Retired request reached peer=${requestSeen.isCompleted}; fireAndForget=$fireAndForget",
+            result.exceptionOrNull() is GatewayRequestNotEnqueued,
+          )
+          assertFalse(requestSeen.isCompleted)
+        } finally {
+          allowCancel.countDown()
+          writeLock?.takeIf { it.holdsLock(lockOwner) }?.unlock(lockOwner)
+          pending?.cancelAndJoin()
+          replacement?.join()
+          shutdownReconnectHarness(harness, server)
+        }
+        assertTrue("Rejected enqueue must not create an asynchronous reply watcher", errors.isEmpty())
+      }
+    }
+
+  @Test
+  fun replacementLeaseCannotObserveUnpublishedHelloMetadata() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val threads = ManagementFactory.getThreadMXBean()
+      val initialMethods = setOf("health", "users.prefs.get", "users.prefs.set")
+      val replacementMethods = setOf("health", "users.prefs.get")
+      val connectRequests = AtomicInteger()
+      val publishedMethods = AtomicReference<Set<String>?>(null)
+      val connected = CompletableDeferred<Unit>()
+      val replacementPublished = CompletableDeferred<Unit>()
+      val replacementHelloStarted = CountDownLatch(1)
+      val publicationThread = AtomicReference<Thread?>(null)
+      val allowReplacementHello = CountDownLatch(1)
+      val observerStarted = CountDownLatch(1)
+      val observation = CompletableDeferred<Pair<GatewaySession.RequestLease?, Set<String>?>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> {
+              val methods = if (connectRequests.incrementAndGet() == 1) initialMethods else replacementMethods
+              webSocket.send(connectResponseFrame(id, methods))
+            }
+
+            "health" -> {
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+            }
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onHello = { hello ->
+            if (hello.methods == replacementMethods) {
+              publicationThread.set(Thread.currentThread())
+              replacementHelloStarted.countDown()
+              try {
+                check(allowReplacementHello.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                  "Replacement hello publication was not released"
+                }
+              } catch (err: Throwable) {
+                replacementPublished.completeExceptionally(err)
+                throw err
+              }
+            }
+            publishedMethods.set(hello.methods)
+            if (hello.methods == initialMethods) connected.complete(Unit) else replacementPublished.complete(Unit)
+          },
+        )
+      val gatewayId = "manual|127.0.0.1|${server.port}"
+      val captureLease = harness.session::captureRequestLease
+      val captureMethodName = captureLease.name.substringBefore('$')
+      val observer =
+        Thread {
+          try {
+            observerStarted.countDown()
+            val lease = captureLease(gatewayId)
+            observation.complete(lease to publishedMethods.get())
+          } catch (err: Throwable) {
+            observation.completeExceptionally(err)
+          }
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val initialLease = requireNotNull(captureLease(gatewayId))
+        assertEquals(initialMethods, publishedMethods.get())
+
+        harness.session.reconnect()
+        assertTrue(replacementHelloStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+        assertFalse(initialLease.isCurrent())
+        observer.start()
+        assertTrue(observerStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+        val observerThreadId = observer.threadId()
+        val publicationThreadId = requireNotNull(publicationThread.get()).threadId()
+        // Unrelated parking or class loading must not release hello early. Require
+        // the capture call to be waiting on a lock owned by the paused publisher.
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          while (!observation.isCompleted) {
+            val read = threads.getThreadInfo(observerThreadId, Int.MAX_VALUE)
+            if (
+              read != null &&
+              read.lockOwnerId == publicationThreadId &&
+              read.stackTrace.any {
+                it.className == GatewaySession::class.java.name &&
+                  it.methodName.substringBefore('$') == captureMethodName
+              }
+            ) {
+              break
+            }
+            delay(10)
+          }
+        }
+
+        allowReplacementHello.countDown()
+        val (observedLease, observedMethods) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { observation.await() }
+        if (observedLease != null) {
+          assertEquals("A ready replacement must expose its own hello metadata", replacementMethods, observedMethods)
+          assertTrue(observedLease.isCurrent())
+        }
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { replacementPublished.await() }
+        val currentLease = requireNotNull(captureLease(gatewayId))
+        assertEquals(replacementMethods, publishedMethods.get())
+        assertEquals("{}", currentLease.request("health", null))
+      } finally {
+        allowReplacementHello.countDown()
+        try {
+          observer.join(LIFECYCLE_TEST_TIMEOUT_MS)
+          assertFalse("The hello observer must finish before teardown", observer.isAlive)
+        } finally {
+          shutdownReconnectHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun connectedHelloPublishesCanonicalAndLegacyApprovalMethods() =
     runBlocking {
       val catalogs =
@@ -652,6 +852,287 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun disconnectDrainsConnectionCancelledBeforeInstallation() =
+    runBlocking {
+      val threads = ManagementFactory.getThreadMXBean()
+      val connectingStarted = CountDownLatch(1)
+      val allowConstruction = CountDownLatch(1)
+      val connectionThread = AtomicReference<Thread?>(null)
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onDisconnected = { message ->
+            if (message == "Connecting…") {
+              connectionThread.set(Thread.currentThread())
+              connectingStarted.countDown()
+              check(allowConstruction.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                "Connection construction was not released"
+              }
+            }
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        assertTrue(connectingStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+        val lifecycleLock = readField<Any>(harness.session, "lifecycleLock")
+        val previousChildren = harness.sessionJob.children.toSet()
+        lateinit var constructedOwner: Job
+        lateinit var disconnect: Job
+        synchronized(lifecycleLock) {
+          val observerThreadId = Thread.currentThread().threadId()
+          val connectionThreadId = requireNotNull(connectionThread.get()).threadId()
+          val lockIdentity = System.identityHashCode(lifecycleLock)
+          val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LIFECYCLE_TEST_TIMEOUT_MS)
+          allowConstruction.countDown()
+          var waitingToInstall = false
+          // The callback already passed the loop's first lifecycle read. Blocking on this
+          // exact monitor now proves construction finished before cancellation retires it.
+          while (System.nanoTime() < deadline) {
+            val observed = threads.getThreadInfo(connectionThreadId)
+            if (
+              observed != null &&
+              observed.lockOwnerId == observerThreadId &&
+              observed.lockInfo?.identityHashCode == lockIdentity
+            ) {
+              waitingToInstall = true
+              break
+            }
+            Thread.sleep(1)
+          }
+          assertTrue("The constructed connection must be waiting to install", waitingToInstall)
+          constructedOwner = harness.sessionJob.children.single { it !in previousChildren }
+          assertTrue(constructedOwner.isActive)
+          assertNull(readField<Any?>(harness.session, "currentConnection"))
+          harness.session.disconnect()
+          disconnect = readField(harness.session, "disconnectTail")
+        }
+
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { disconnect.join() }
+        assertTrue("Disconnect must retire even a connection that never installed", constructedOwner.isCompleted)
+        assertEquals(0, server.requestCount)
+      } finally {
+        allowConstruction.countDown()
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun retiredDisconnectCleanupCannotOverwriteReplacementConnectionState() =
+    runBlocking {
+      assertRetiredConnectionCannotOverwriteReplacementState(failTransportBeforeDisconnect = false)
+    }
+
+  @Test
+  fun retiredTransportFailureCannotOverwriteReplacementConnectionState() =
+    runBlocking {
+      assertRetiredConnectionCannotOverwriteReplacementState(failTransportBeforeDisconnect = true)
+    }
+
+  private suspend fun assertRetiredConnectionCannotOverwriteReplacementState(failTransportBeforeDisconnect: Boolean) {
+    val json = Json { ignoreUnknownKeys = true }
+    val authStore = BlockingSaveDeviceAuthStore()
+    val replacementConnected = CompletableDeferred<Unit>()
+    val observedState = AtomicReference("Offline")
+    val firstServer =
+      startGatewayServer(json = json) { webSocket, id, method ->
+        if (method == "connect") {
+          webSocket.send(
+            """{"type":"res","id":"$id","ok":true,"payload":{"auth":{"deviceToken":"issued-token","role":"node","scopes":[]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
+          )
+        }
+      }
+    val secondServer =
+      startGatewayServer(json = json) { webSocket, id, method ->
+        when (method) {
+          "connect" -> webSocket.send(connectResponseFrame(id))
+          "health" -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"connection":2}}""")
+        }
+      }
+    val harness =
+      createReconnectHarness(
+        onConnected = {
+          observedState.set("Connected")
+          replacementConnected.complete(Unit)
+        },
+        onDisconnected = observedState::set,
+        deviceAuthStore = authStore,
+      )
+
+    try {
+      connectNodeSession(harness.session, firstServer.port)
+      assertTrue(authStore.saveStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+      if (failTransportBeforeDisconnect) {
+        val retiredConnection = readField<Any>(harness.session, "currentConnection")
+        val terminalClaimed = readField<AtomicBoolean>(retiredConnection, "terminalCallbackClaimed")
+        val transportState = readField<AtomicReference<*>>(retiredConnection, "state")
+        // Server WebSockets have no client Call for cancel(); shutdown closes the actual peer socket.
+        firstServer.shutdown()
+        // Observe the real peer failure before disconnect; its callback is still held by token persistence.
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          while (!terminalClaimed.get() || transportState.get().toString() != "CLOSED") {
+            delay(10)
+          }
+        }
+      }
+
+      harness.session.disconnect()
+      val retiredCleanup = readField<Job>(harness.session, "disconnectTail")
+      connectNodeSession(harness.session, secondServer.port)
+      withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { replacementConnected.await() }
+      assertFalse(retiredCleanup.isCompleted)
+
+      authStore.allowSave.countDown()
+      withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { retiredCleanup.join() }
+      assertEquals("issued-token", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { authStore.savedToken.await() })
+      assertEquals("""{"connection":2}""", harness.session.request("health", null))
+      assertEquals("Connected", observedState.get())
+    } finally {
+      authStore.allowSave.countDown()
+      shutdownReconnectHarness(harness, firstServer, secondServer)
+    }
+  }
+
+  @Test
+  fun retiredAuthenticationFailureCannotPauseReplacementConnection() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val originalFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val replacementConnected = CompletableDeferred<Unit>()
+      var currentSession: GatewaySession? = null
+      val firstServer =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"authentication failed","details":{"code":"AUTH_TOKEN_MISMATCH"}}}""",
+            )
+          }
+        }
+      val secondServer =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { replacementConnected.complete(Unit) },
+          onConnectFailure = { error, pauseReconnect ->
+            if (originalFailure.complete(error to pauseReconnect)) {
+              connectNodeSession(checkNotNull(currentSession), secondServer.port)
+            }
+          },
+        )
+      currentSession = harness.session
+
+      try {
+        connectNodeSession(harness.session, firstServer.port)
+        val (error, pauseReconnect) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { originalFailure.await() }
+        assertEquals("AUTH_TOKEN_MISMATCH", error.details?.code)
+        assertTrue(pauseReconnect)
+        assertTrue(
+          "The retired authentication failure must not pause the replacement requested by its callback",
+          withTimeoutOrNull(LIFECYCLE_TEST_TIMEOUT_MS) { replacementConnected.await() } != null,
+        )
+      } finally {
+        shutdownReconnectHarness(harness, firstServer, secondServer)
+      }
+    }
+
+  @Test
+  fun passwordMissingFromStoredDeviceTokenPausesAndExplicitReconnectSucceeds() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val secondAttempt = CompletableDeferred<Unit>()
+      val reconnected = CompletableDeferred<Unit>()
+      val connectAttempts = AtomicInteger()
+      val storedToken = "stored-device-token"
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method != "connect") return@startGatewayServer
+          when (connectAttempts.incrementAndGet()) {
+            1 -> {
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"gateway password required","details":{"code":"AUTH_PASSWORD_MISSING"}}}""",
+              )
+            }
+
+            else -> {
+              secondAttempt.complete(Unit)
+              webSocket.send(connectResponseFrame(id))
+            }
+          }
+        }
+      val authStore =
+        ReconnectDeviceAuthStore(
+          DeviceAuthEntry(
+            token = storedToken,
+            role = "node",
+            scopes = listOf("node:invoke"),
+            updatedAtMs = 1,
+          ),
+        )
+      val harness =
+        createReconnectHarness(
+          onConnected = { reconnected.complete(Unit) },
+          deviceAuthStore = authStore,
+          onConnectFailure = { error, pauseReconnect ->
+            connectFailure.complete(error to pauseReconnect)
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port, token = null)
+        val (error, pauseReconnect) =
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
+        val desiredConnection = readField<Any>(harness.session, "desired")
+
+        assertEquals("AUTH_PASSWORD_MISSING", error.details?.code)
+        assertTrue(pauseReconnect)
+        assertTrue(readField<Boolean>(desiredConnection, "reconnectPausedForAuthFailure"))
+        val firstAuth =
+          server.requestFrames
+            .first { it["method"]?.jsonPrimitive?.content == "connect" }
+            .getValue("params")
+            .jsonObject
+            .getValue("auth")
+            .jsonObject
+        assertEquals(storedToken, firstAuth.getValue("token").jsonPrimitive.content)
+        assertNull(firstAuth["deviceToken"])
+        assertNull(firstAuth["password"])
+
+        assertNull(
+          "Terminal authentication failure must suppress automatic reconnects",
+          withTimeoutOrNull(LIFECYCLE_TEST_TIMEOUT_MS) { secondAttempt.await() },
+        )
+        assertTrue(readField<Boolean>(desiredConnection, "reconnectPausedForAuthFailure"))
+        assertEquals(1, connectAttempts.get())
+
+        harness.session.reconnect()
+        assertFalse(readField<Boolean>(desiredConnection, "reconnectPausedForAuthFailure"))
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { secondAttempt.await() }
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
+
+        assertEquals(2, connectAttempts.get())
+        val reconnectAuth =
+          server.requestFrames
+            .filter { it["method"]?.jsonPrimitive?.content == "connect" }
+            .last()
+            .getValue("params")
+            .jsonObject
+            .getValue("auth")
+            .jsonObject
+        assertEquals(storedToken, reconnectAuth.getValue("token").jsonPrimitive.content)
+        assertNull(reconnectAuth["deviceToken"])
+        assertNull(reconnectAuth["password"])
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun failureOrdersDisconnectAfterInFlightHandlerAndAcceptedConnectResponse() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -749,7 +1230,10 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
             "node.event" -> {
               receivedNodeEventCount.incrementAndGet()
               receivedNodeEvent.complete(Unit)
@@ -1023,8 +1507,10 @@ class GatewaySessionReconnectTest {
         Triple("AUTH_TOKEN_MISMATCH", true, false),
         Triple("AUTH_DEVICE_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_NOT_CONFIGURED", false, true),
+        Triple("AUTH_PASSWORD_MISSING", false, true),
         Triple("AUTH_PASSWORD_NOT_CONFIGURED", false, true),
         Triple("AUTH_SCOPE_MISMATCH", false, true),
+        Triple("AUTH_VERIFIED_USER_REQUIRED", false, true),
       )
 
     for ((code, pendingDeviceTokenRetry, expected) in cases) {
@@ -1278,13 +1764,17 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
-            "question.list" ->
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "question.list" -> {
               webSocket.send(
                 """
                 {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
                 """.trimIndent(),
               )
+            }
           }
         }
       val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
@@ -1335,9 +1825,10 @@ class GatewaySessionReconnectTest {
     return ReconnectHarness(session = session, sessionJob = sessionJob)
   }
 
-  private suspend fun connectNodeSession(
+  private fun connectNodeSession(
     session: GatewaySession,
     port: Int,
+    token: String? = "test-token",
   ) {
     session.connect(
       endpoint =
@@ -1348,7 +1839,7 @@ class GatewaySessionReconnectTest {
           port = port,
           tlsEnabled = false,
         ),
-      token = "test-token",
+      token = token,
       bootstrapToken = null,
       password = null,
       options =
@@ -1409,6 +1900,7 @@ class GatewaySessionReconnectTest {
     onRequestFrame: (webSocket: WebSocket, id: String, method: String) -> Unit,
   ): ReconnectServer {
     val sockets = ConcurrentLinkedQueue<WebSocket>()
+    val requestFrames = ConcurrentLinkedQueue<JsonObject>()
     val server =
       MockWebServer().apply {
         dispatcher =
@@ -1429,6 +1921,7 @@ class GatewaySessionReconnectTest {
                     text: String,
                   ) {
                     val frame = json.parseToJsonElement(text).jsonObject
+                    requestFrames += frame
                     if (frame["type"]?.jsonPrimitive?.content != "req") return
                     val id = frame["id"]?.jsonPrimitive?.content ?: return
                     val method = frame["method"]?.jsonPrimitive?.content ?: return
@@ -1464,7 +1957,11 @@ class GatewaySessionReconnectTest {
           }
         start()
       }
-    return ReconnectServer(server = server, sockets = sockets)
+    return ReconnectServer(
+      server = server,
+      sockets = sockets,
+      requestFrames = requestFrames,
+    )
   }
 }
 

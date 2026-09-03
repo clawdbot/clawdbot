@@ -5,7 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { runUpdateFailureTriage } from "./update-triage.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareUpdateFailureTriage, runUpdateFailureTriage } from "./update-triage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -35,6 +36,54 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
 }
 
 describe("update triage child lifecycle", () => {
+  it.each(["abort", "owner closure"] as const)(
+    "does not start prepared interactive triage after %s during cwd validation",
+    async (closure) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const triage = await import("../commands/triage.js");
+        const handoff = vi.spyOn(triage, "triageCommand").mockResolvedValue();
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const prepared = await prepareUpdateFailureTriage({
+          mode: "interactive",
+          runtime,
+          invocationCwd: state.workspaceDir,
+        });
+        const cwdStat = await fs.stat(state.workspaceDir);
+        let release!: () => void;
+        let started!: () => void;
+        const validating = new Promise<void>((resolve) => {
+          started = resolve;
+        });
+        const blocked = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
+          started();
+          await blocked;
+          return cwdStat;
+        });
+        const controller = new AbortController();
+        let current = true;
+        const pending = prepared({
+          failure: { error: "Update failed" },
+          target: { env: { ...process.env } },
+          signal: controller.signal,
+          isCurrent: () => current,
+        });
+        await validating;
+        if (closure === "abort") {
+          controller.abort();
+        } else {
+          current = false;
+        }
+        release();
+        expect(await pending).toEqual({ status: "cancelled" });
+        expect(handoff).not.toHaveBeenCalled();
+        expect(runtime.error).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath } = await createInstalledTriage();
     const runtime = { log: vi.fn(), error: vi.fn() };

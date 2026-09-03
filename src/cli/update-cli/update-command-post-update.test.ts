@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   createServiceConfigIO: vi.fn(),
   readServiceState: vi.fn(),
-  restart: vi.fn(async () => undefined),
   restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
     async () => true,
   ),
@@ -88,7 +87,6 @@ vi.mock("./restart-helper.js", () => ({
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
-  maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
@@ -361,6 +359,7 @@ describe("successful update finalization ordering", () => {
     await expect(finishSuccessfulPackageSwitch()).rejects.toMatchObject({
       name: "UpdateCommandFailure",
       exitCode: 1,
+      result: { status: "error", reason: "restart-unhealthy" },
     });
 
     expect(mocks.printResult).toHaveBeenCalledOnce();
@@ -402,8 +401,9 @@ describe("successful update finalization ordering", () => {
   });
 
   it("reports Windows autostart recovery failure before exiting", async () => {
+    const restoreError = new Error("task restore failed");
     const restore = vi.fn(async () => {
-      throw new Error("task restore failed");
+      throw restoreError;
     });
 
     await expect(
@@ -414,12 +414,19 @@ describe("successful update finalization ordering", () => {
         json: true,
         windowsTaskAutoStartRecovery: {
           suspended: Promise.resolve(true),
+          beginMutation: () => {},
           restore,
           complete: () => {},
           interrupted: () => false,
         },
       }),
-    ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
+    ).rejects.toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      cause: restoreError,
+      detail: expect.stringContaining(restoreError.message),
+      result: { status: "error", reason: "windows-task-autostart-restore-failed" },
+    });
 
     expect(restore).toHaveBeenCalledOnce();
     expect(mocks.restartService).not.toHaveBeenCalled();
@@ -557,7 +564,12 @@ describe("successful update finalization ordering", () => {
           previousRoot,
           packageRoot: path.join(home, "package"),
         }),
-      ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
+      ).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        exitCode: 1,
+        detail: expect.stringContaining("unlink denied"),
+        result: { status: "error", reason: "wrapper-retirement-failed" },
+      });
 
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.printResult).toHaveBeenCalledWith(
@@ -798,7 +810,11 @@ describe("successful update finalization ordering", () => {
             sealed: true,
             json: true,
           }),
-        ).rejects.toMatchObject({ name: "UpdateCommandFailure", exitCode: 1 });
+        ).rejects.toMatchObject({
+          name: "UpdateCommandFailure",
+          exitCode: 1,
+          result: { status: "error", reason: "service-revalidation-failed" },
+        });
 
         expect(mocks.restartService).not.toHaveBeenCalled();
         expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
@@ -853,6 +869,7 @@ describe("successful update finalization ordering", () => {
         await expect(finishing).rejects.toMatchObject({
           name: "UpdateCommandFailure",
           exitCode: 1,
+          result: { status: "error", reason: "restart-unhealthy" },
         });
       }
 

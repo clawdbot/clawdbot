@@ -26,6 +26,7 @@ import {
   discoverAuthStorageFacts,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
+import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -162,6 +163,8 @@ export async function prepareWorkspaceBuildGroup(
     providerDiscoveryProviderIds?: readonly string[];
     preferBuiltPluginArtifacts?: boolean;
     includeCredentialProviders?: boolean;
+    getConfiguredHarnessRuntimes?: () => readonly string[];
+    basePluginIds?: readonly string[];
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -202,6 +205,8 @@ export async function prepareWorkspaceBuildGroup(
     loadInboundPluginRegistry,
     preferBuiltPluginArtifacts,
     reusablePluginGeneration,
+    options.getConfiguredHarnessRuntimes,
+    options.basePluginIds,
   );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
@@ -252,16 +257,18 @@ export async function prepareWorkspaceBuildGroup(
     };
     const configuredProviderIds = [
       ...new Set([
-        ...inputs.flatMap(({ config, agentId }) => [
-          ...collectPreparedModelRuntimeProviderIds(
-            config,
-            {},
-            false,
-            collectPreparedModelRuntimeConfiguredRefs(config, agentId),
-            agentId,
-          ),
-          ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
-        ]),
+        ...inputs.flatMap(({ config, agentId }) =>
+          withAgentRosterFactsBatch(config, () => [
+            ...collectPreparedModelRuntimeProviderIds(
+              config,
+              {},
+              false,
+              collectPreparedModelRuntimeConfiguredRefs(config, agentId),
+              agentId,
+            ),
+            ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+          ]),
+        ),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -348,12 +355,14 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
     const agentBaseFacts = inputs.map((candidate) =>
-      prepareAgentFacts(
-        candidate,
-        catalogMode,
-        ambientCredentials,
-        options.providerDiscoveryProviderIds,
-        options.includeCredentialProviders,
+      withAgentRosterFactsBatch(candidate.config, () =>
+        prepareAgentFacts(
+          candidate,
+          catalogMode,
+          ambientCredentials,
+          options.providerDiscoveryProviderIds,
+          options.includeCredentialProviders,
+        ),
       ),
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;

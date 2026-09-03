@@ -32,7 +32,7 @@ import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
@@ -97,7 +97,7 @@ export async function recoverEmbeddedRunAttempt(input: {
           : never
         : never;
     }
-  | { action: "proceed"; shouldSurfaceCodexCompletionTimeout: boolean }
+  | { action: "proceed" }
 > {
   const {
     runInput,
@@ -201,11 +201,6 @@ export async function recoverEmbeddedRunAttempt(input: {
         : updates.lastRetryFailoverReason,
     thinkLevel: updates?.thinkLevel ?? runtime.thinkLevel,
   });
-  const replayUnsafeOutcome = {
-    action: "proceed" as const,
-    shouldSurfaceCodexCompletionTimeout:
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
-  };
   const buildAttemptErrorMeta = () =>
     buildErrorAgentMeta({
       sessionId: sessionIdUsed,
@@ -241,7 +236,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !canContinueSettledMidTurnOverflow &&
     !settledTransportDropAssistant
   ) {
-    return replayUnsafeOutcome;
+    return { action: "proceed" };
   }
 
   const requestedSelection = shouldSwitchToLiveModel({
@@ -386,12 +381,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   // transport-drop recovery. Every path below can replay or replace the original
   // attempt and remains fail-closed.
   if (!currentAttemptReplaySafe) {
-    return replayUnsafeOutcome;
+    return { action: "proceed" };
   }
-  const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
-    attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
+  const hasCodexAppServerTimeoutOutcome = Boolean(
+    attempt.codexAppServerFailure &&
+    (attempt.promptTimeoutOutcome || isEmbeddedRunTimeoutFinal(attempt)),
   );
-  let shouldSurfaceCodexCompletionTimeout = false;
   if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
     const recoveryRetry = resolveCodexAppServerRecoveryRetry({
       attempt,
@@ -406,14 +401,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       );
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
     }
-    shouldSurfaceCodexCompletionTimeout =
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
-      projectAgentRunAttemptTerminal(attempt.terminal).timedOut;
-    if (
-      attempt.codexAppServerFailure &&
-      !hasRecoverableCodexAppServerTimeoutOutcome &&
-      !shouldSurfaceCodexCompletionTimeout
-    ) {
+    if (!hasCodexAppServerTimeoutOutcome) {
       throw toErrorObject(promptError, "Prompt failed");
     }
   }
@@ -421,8 +409,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptError &&
     !terminalInterrupted &&
     promptErrorSource !== "compaction" &&
-    !hasRecoverableCodexAppServerTimeoutOutcome &&
-    !shouldSurfaceCodexCompletionTimeout
+    !hasCodexAppServerTimeoutOutcome
   ) {
     const promptFailureOutcome = await handleEmbeddedPromptFailure({
       runParams: params,
@@ -472,5 +459,5 @@ export async function recoverEmbeddedRunAttempt(input: {
       thinkLevel: promptFailureOutcome.thinkLevel,
     });
   }
-  return { action: "proceed", shouldSurfaceCodexCompletionTimeout };
+  return { action: "proceed" };
 }

@@ -43,6 +43,14 @@ const operatorRoles = await import("./operator-role-policy.js");
 const githubIdentity = await import("./github-user-identity.js");
 const { authorizeGatewayHttpRequestOrReply } = await import("./http-utils.js");
 
+const ownerProfile = {
+  profileId: "profile-owner",
+  displayName: "Owner",
+  avatarRevision: "2",
+  hasAvatar: false,
+  updatedAt: 2,
+};
+
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
@@ -59,35 +67,48 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       createdAt: 1,
       updatedAt: 2,
     });
-    vi.spyOn(profileStore, "getUserProfileDisplay").mockReturnValue({
-      id: "profile-guest",
-      displayName: "Guest",
+    vi.spyOn(profileStore, "ensureGatewayOwnerProfile").mockReturnValue({
+      id: ownerProfile.profileId,
+      displayName: ownerProfile.displayName,
+      avatarMime: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: ownerProfile.updatedAt,
+    });
+    vi.spyOn(profileStore, "getUserProfileDisplay").mockImplementation((id) => ({
+      id,
+      displayName: id === ownerProfile.profileId ? ownerProfile.displayName : "Guest",
       avatarRevision: "2",
       hasAvatar: false,
-    });
+    }));
     vi.spyOn(githubIdentity, "createAuthenticatedGitHubIdentitySync").mockReturnValue(undefined);
   });
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("marks token-authenticated requests as untrusted for declared HTTP scopes", async () => {
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-      ok: true,
-      method: "token",
-    });
+  it.each(["token", "password"] as const)(
+    "marks %s-authenticated requests as untrusted for declared HTTP scopes",
+    async (method) => {
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+        ok: true,
+        method,
+      });
 
-    await expect(
-      authorizeGatewayHttpRequestOrReply({
-        req: createReq({ authorization: "Bearer secret" }),
-        res: {} as ServerResponse,
-        auth: { mode: "trusted-proxy", allowTailscale: false, token: "secret" },
-        trustedProxies: ["127.0.0.1"],
-      }),
-    ).resolves.toEqual({
-      authMethod: "token",
-      trustDeclaredOperatorScopes: false,
-    });
-  });
+      await expect(
+        authorizeGatewayHttpRequestOrReply({
+          req: createReq({ authorization: "Bearer secret" }),
+          res: {} as ServerResponse,
+          auth: { mode: "trusted-proxy", allowTailscale: false, token: "secret" },
+          trustedProxies: ["127.0.0.1"],
+        }),
+      ).resolves.toEqual({
+        authMethod: method,
+        trustDeclaredOperatorScopes: false,
+        authenticatedUserProfile: ownerProfile,
+        operatorRoleActor: { kind: "system" },
+      });
+    },
+  );
 
   it("keeps trusted-proxy requests eligible for declared HTTP scopes", async () => {
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
@@ -323,7 +344,11 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         res: {} as ServerResponse,
         auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
       }),
-    ).resolves.toEqual({ authMethod: "device-token", trustDeclaredOperatorScopes: true });
+    ).resolves.toEqual({
+      authMethod: "device-token",
+      trustDeclaredOperatorScopes: true,
+      authenticatedUserProfile: ownerProfile,
+    });
   });
 
   it.each(["trusted-proxy", "tailscale", "bootstrap-token"] as const)(
@@ -390,7 +415,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           res: {} as ServerResponse,
           auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
         }),
-      ).resolves.toEqual({ authMethod: "token", trustDeclaredOperatorScopes: false });
+      ).resolves.toEqual({
+        authMethod: "token",
+        trustDeclaredOperatorScopes: false,
+        authenticatedUserProfile: ownerProfile,
+        operatorRoleActor: { kind: "system" },
+      });
     } finally {
       vi.mocked(getRuntimeConfig).mockReturnValue({
         gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },

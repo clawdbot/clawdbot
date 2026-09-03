@@ -139,12 +139,11 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
     }),
     renderSettingsRow({
       title: t("updates.page.cliFallback"),
+      description: t("updates.triage.hostHint"),
       stacked: true,
       control: html`<details class="updates-attempt-details">
         <summary>${t("updates.page.showCliFallback")}</summary>
-        <pre><code>openclaw triage
-openclaw update status --json
-openclaw update</code></pre>
+        <pre><code>openclaw triage</code></pre>
       </details>`,
     }),
   ]);

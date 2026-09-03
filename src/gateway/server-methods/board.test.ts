@@ -8,6 +8,7 @@ import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
 
 const reviewWidgetApproval = vi.hoisted(() => vi.fn());
 const readSessionEntry = vi.hoisted(() => vi.fn());
@@ -250,7 +251,8 @@ describe("board gateway methods", () => {
   });
 
   it("applies updates and broadcasts board.changed", async () => {
-    const { invoke, broadcast } = createHarness();
+    const { invoke, broadcast, context } = createHarness();
+    const before = readSessionsMutationVersion(context);
     const response = await invoke("board.update", {
       sessionKey: "session",
       ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
@@ -263,6 +265,7 @@ describe("board gateway methods", () => {
       sessionKey: "agent:main:session",
       revision: 1,
     });
+    expect(readSessionsMutationVersion(context)).toBe(before + 1);
   });
 
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {

@@ -1155,6 +1155,47 @@ export interface SessionWatchCursors {
   watcher_session_key: string;
 }
 
+export interface SkillLibraryEntries {
+  author_profile_id: string;
+  created_at: number;
+  current_revision: string;
+  enabled: number;
+  owner_profile_id: string | null;
+  removed: number;
+  shared: number;
+  skill_id: string;
+  slug: string;
+  updated_at: number;
+}
+
+export interface SkillLibraryEvents {
+  action: string;
+  actor_profile_id: string;
+  created_at: number;
+  event_id: string;
+  revision: string;
+  skill_id: string;
+}
+
+export interface SkillLibraryRevisions {
+  created_at: number;
+  description: string;
+  files_json: string;
+  revision: string;
+  skill_id: string;
+}
+
+export interface SkillLibraryUploads {
+  archive_blob: Uint8Array;
+  expires_at: number;
+  owner_profile_id: string;
+  published_skill_id: string | null;
+  sha256: string;
+  size_bytes: number;
+  slug: string;
+  upload_id: string;
+}
+
 export interface SkillUploadChunks {
   byte_offset: number;
   chunk_blob: Uint8Array;
@@ -1643,6 +1684,10 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  skill_library_entries: SkillLibraryEntries;
+  skill_library_events: SkillLibraryEvents;
+  skill_library_revisions: SkillLibraryRevisions;
+  skill_library_uploads: SkillLibraryUploads;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;

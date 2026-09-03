@@ -116,6 +116,27 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
+  it("refuses paths from an authenticated hello without service fallback", async () => {
+    const gatewayStateDir = path.join(root, "gateway");
+    const gatewayConfigPath = path.join(gatewayStateDir, "openclaw.json");
+    await fs.mkdir(gatewayStateDir);
+    mocks.callGateway.mockImplementation(
+      async (options: {
+        onHelloOk?: (hello: { snapshot: { stateDir?: string; configPath?: string } }) => void;
+      }) => {
+        options.onHelloOk?.({
+          snapshot: { stateDir: gatewayStateDir, configPath: gatewayConfigPath },
+        });
+        return {};
+      },
+    );
+
+    await expect(
+      checkCliGatewayStateDir({ command: "openclaw channels add", config: {} }),
+    ).resolves.toMatchObject({ kind: "refuse" });
+    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
+  });
+
   it("warns only when a credential-blocked protocol probe reaches an unowned Gateway", async () => {
     mocks.callGateway.mockRejectedValue(
       new GatewayCredentialsRequiredError({ method: "status", configPath: cliConfigPath }),

@@ -102,10 +102,8 @@ function rawDataText(data: RawData): string {
 async function openExtensionSocket(
   handle: ExtensionRelayHandle,
   protocols: string | string[],
-  localAddress?: string,
 ): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/extension`, protocols, {
-    localAddress,
     origin: "chrome-extension://relay-auth-v2-test",
   });
   ws.on("error", () => {});
@@ -113,11 +111,8 @@ async function openExtensionSocket(
   return ws;
 }
 
-async function authenticateV2Extension(
-  handle: ExtensionRelayHandle,
-  localAddress?: string,
-): Promise<WebSocket> {
-  const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL, localAddress);
+async function authenticateV2Extension(handle: ExtensionRelayHandle): Promise<WebSocket> {
+  const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL);
   const challengeMessage = once(ws, "message");
   ws.send(
     JSON.stringify({
@@ -655,7 +650,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     }
   });
 
-  it("collapses loopback aliases into one relay authentication source", async () => {
+  it("keeps an active extension at the pending source limit and recovers after release", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
     const active = await openExtensionSocket(handle, [
       "openclaw-extension-relay",
@@ -672,9 +667,11 @@ describe.sequential("extension relay HTTP auth v2", () => {
     );
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
+    // Alias equivalence is covered at the authority boundary in auth-v2.test.ts.
+    // Real sockets use the configured loopback address on every platform.
     const attacker = await Promise.all(
       Array.from({ length: 32 }, () =>
-        openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL, "127.0.0.2"),
+        openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL),
       ),
     );
     expect(active.readyState).toBe(WebSocket.OPEN);
@@ -683,7 +680,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     const overflow = new WebSocket(
       `ws://127.0.0.1:${handle.port}/extension`,
       BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-      { localAddress: "127.0.0.3", origin: "chrome-extension://relay-auth-v2-test" },
+      { origin: "chrome-extension://relay-auth-v2-test" },
     );
     overflow.on("error", () => {});
     const overflowClosed = once(overflow, "close");
@@ -696,7 +693,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     const released = once(attacker[0]!, "close");
     attacker[0]!.close();
     await released;
-    const promoted = await authenticateV2Extension(handle, "127.0.0.3");
+    const promoted = await authenticateV2Extension(handle);
     promoted.send(
       JSON.stringify({
         type: "hello",

@@ -28,7 +28,8 @@ describe("config schema", () => {
           description: "Outbound voice calls",
           configUiHints: {
             provider: { label: "Provider" },
-            "twilio.authToken": { label: "Auth Token", sensitive: true },
+            "twilio.authToken": { label: "Original Token", sensitive: true },
+            " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
           },
         },
       ],
@@ -59,12 +60,17 @@ describe("config schema", () => {
       channels: [
         {
           id: "matrix",
-          label: "Matrix",
+          label: " Matrix ",
+          description: " Matrix channel help ",
           configSchema: {
             type: "object",
             properties: {
               accessToken: { type: "string" },
             },
+          },
+          configUiHints: {
+            accessToken: { label: "Original Token", sensitive: true },
+            " .accessToken ": { label: "Access Token", help: "Matrix credential" },
           },
         },
       ],
@@ -602,10 +608,11 @@ describe("config schema", () => {
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label).toBe(
-      "Auth Token",
-    );
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]).toMatchObject({
+      label: "Auth Token",
+      help: "Twilio credential",
+      sensitive: true,
+    });
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
@@ -653,7 +660,12 @@ describe("config schema", () => {
     expect(progressPropsFor("slack")).toHaveProperty("commentary");
     expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
-    expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.matrix"]?.help).toBe("Matrix channel help");
+    expect(res.uiHints["channels.matrix.accessToken"]).toMatchObject({
+      label: "Access Token",
+      help: "Matrix credential",
+      sensitive: true,
+    });
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
@@ -1212,6 +1224,7 @@ describe("config schema", () => {
           ssrfPolicy: {
             dangerouslyAllowPrivateNetwork: true,
             allowedHostnames: ["127.0.0.1"],
+            blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -1222,6 +1235,7 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["127.0.0.1"],
+      blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });

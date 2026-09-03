@@ -17,6 +17,12 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
 export { resolveBootstrapFilesForPreparation } from "../agents/bootstrap-files.js";
+export { loadCodexBundleMcpApprovalConfig } from "../agents/codex-mcp-config.js";
+export {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "../agents/mcp-codex-tool-approval.js";
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
 export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
 
@@ -51,13 +57,13 @@ export {
   runWithCronCreatorAuthorityResolver,
 } from "../agents/cron-creator-authority-context.js";
 
-/** Materialize static configured MCP under a scheduled Codex authority envelope. */
-export async function materializeStaticMcpToolsForScheduledHarnessRun(
+/** Materialize static configured MCP under the Codex harness authority envelope. */
+export async function materializeStaticMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForScheduledHarnessRunCore
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForHarnessRunCore
   >[0],
 ) {
-  const { materializeStaticMcpToolsForScheduledHarnessRunCore: materialize } =
+  const { materializeStaticMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

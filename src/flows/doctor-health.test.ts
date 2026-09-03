@@ -1,3 +1,5 @@
+// Install fixture mocks before importing the real maintenance owners.
+import "./doctor-health.test-support.js";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,14 +11,26 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   resolvePreparedGatewayUpdatePolicy,
 } from "../cli/update-cli/update-command-service-maintenance.js";
+import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import {
+  readExecApprovalsConfigRow,
+  serializeExecApprovals,
+  writeExecApprovalsConfigRow,
+} from "../infra/exec-approvals-sqlite.js";
+import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
+import {
+  detectLegacyExecApprovals,
+  migrateLegacyExecApprovals,
+} from "../infra/state-migrations.exec-approvals.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
   detectLegacyWorkspaceState,
@@ -52,133 +66,7 @@ const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDocto
   },
 };
 
-const mocks = vi.hoisted(() => ({
-  outro: vi.fn(),
-  config: vi.fn<() => OpenClawConfig>(),
-  runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
-  writeUpdatePostInstallDoctorResult: vi.fn(),
-  service: vi.fn(),
-  packageRoot: vi.fn<() => string | undefined>(),
-  restartedHealthy: true,
-  emulateNativeInstall: true,
-  servicePlatform: undefined as NodeJS.Platform | undefined,
-  taskDefinitelyStopped: vi.fn(() => true),
-  startupFallbackRuntime: vi.fn<() => Promise<{ status: string } | null>>(async () => null),
-}));
-
-vi.mock("@clack/prompts", () => ({
-  intro: vi.fn(),
-  note: vi.fn(),
-  outro: mocks.outro,
-}));
-
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({}),
-}));
-
-vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
-}));
-
-vi.mock("../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service.js")>()),
-  resolveGatewayService: () => mocks.service(),
-}));
-
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    // Native-manager cases use isolated storage; runtime-only coverage retains
-    // the real install-identity policy instead of adopting the host service.
-    isDefaultInstallIdentity: (env: NodeJS.ProcessEnv) =>
-      mocks.emulateNativeInstall || actual.isDefaultInstallIdentity(env),
-  };
-});
-
-vi.mock("../daemon/schtasks-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/schtasks-runtime.js")>()),
-  isScheduledTaskDefinitelyNotRunning: mocks.taskDefinitelyStopped,
-  readWindowsStartupFallbackRuntimeForUpdate: mocks.startupFallbackRuntime,
-}));
-
-vi.mock("../cli/update-cli/update-command-service-maintenance.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../cli/update-cli/update-command-service-maintenance.js")
-    >();
-  return {
-    ...actual,
-    maybeStopManagedServiceBeforeMutableUpdate: async (
-      params: Parameters<typeof actual.maybeStopManagedServiceBeforeMutableUpdate>[0],
-    ) => {
-      // Emulate the native manager only; workspace and SQLite identities must
-      // retain the host filesystem's case semantics during real migration.
-      const platform = mocks.servicePlatform
-        ? vi.spyOn(process, "platform", "get").mockReturnValue(mocks.servicePlatform)
-        : undefined;
-      try {
-        return await actual.maybeStopManagedServiceBeforeMutableUpdate(params);
-      } finally {
-        platform?.mockRestore();
-      }
-    },
-  };
-});
-
-vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/update-cli/update-command-service-plan.js")>()),
-  // The fixture owns an in-memory manager; native machine profile policy is
-  // covered at the updater boundary and must not select a host service here.
-  assertGatewayServiceManagementAllowedForUpdate: () => undefined,
-  resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
-}));
-
-vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: async () => ({ healthy: mocks.restartedHealthy }),
-  renderRestartDiagnostics: () => ["synthetic readiness failure"],
-}));
-
-vi.mock("../commands/doctor-update.js", () => ({
-  maybeOfferUpdateBeforeDoctor: async () => ({ handled: false }),
-}));
-
-vi.mock("../commands/doctor-ui.js", () => ({
-  maybeRepairUiProtocolFreshness: async () => undefined,
-}));
-
-vi.mock("../commands/doctor-install.js", () => ({
-  noteSourceInstallIssues: () => undefined,
-}));
-
-vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
-  noteStalePluginRuntimeSymlinks: async () => undefined,
-}));
-
-vi.mock("../commands/doctor-platform-notes.js", () => ({
-  noteStartupOptimizationHints: () => undefined,
-}));
-
-vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({ cfg: mocks.config(), shouldWriteConfig: true }),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  CONFIG_PATH: "/tmp/openclaw.json",
-}));
-
-vi.mock("../infra/update-doctor-result.js", () => ({
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE: 86,
-  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
-  writeUpdatePostInstallDoctorResult: mocks.writeUpdatePostInstallDoctorResult,
-}));
-
-vi.mock("./doctor-health-contributions.js", () => ({
-  runDoctorHealthContributions: mocks.runContributions,
-}));
+const { mocks } = await import("./doctor-health.test-support.js");
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -409,6 +297,9 @@ describe("runDoctorHealthFlow", () => {
     "store-close-failed",
     "config-refused",
     "workspace-cleanup-failed",
+    "approvals-malformed",
+    "approvals-conflicting",
+    "approvals-migrated",
     "restart-unhealthy",
     "ancestor-blocked",
   ] as const)(
@@ -439,6 +330,27 @@ describe("runDoctorHealthFlow", () => {
         );
         mocks.config.mockReturnValue(cfg);
         const configBefore = fs.readFileSync(state.configPath);
+        const approvalsCase = outcome.startsWith("approvals-");
+        const approvalsBlocked = approvalsCase && outcome !== "approvals-migrated";
+        const approvalsPath = state.statePath("exec-approvals.json");
+        const canonicalApprovals = {
+          version: 1 as const,
+          defaults: { security: "deny" as const },
+          agents: {},
+        };
+        const approvalsBefore =
+          outcome === "approvals-malformed"
+            ? '{"version":1,"agents":'
+            : serializeExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+        if (approvalsCase) {
+          fs.writeFileSync(approvalsPath, approvalsBefore);
+          if (outcome === "approvals-conflicting") {
+            writeExecApprovalsConfigRow({
+              db: openOpenClawStateDatabase({ env: state.env }).db,
+              file: canonicalApprovals,
+            });
+          }
+        }
         if (outcome === "workspace-cleanup-failed") {
           fs.mkdirSync(state.workspaceDir, { recursive: true });
           fs.writeFileSync(
@@ -527,6 +439,18 @@ describe("runDoctorHealthFlow", () => {
           }
           const result = await migrateLegacyMediaPersistence();
           expect(result.warnings).toEqual([]);
+          if (approvalsCase) {
+            const approvals = await migrateLegacyExecApprovals({
+              stateDir: state.stateDir,
+              env: state.env,
+              detected: detectLegacyExecApprovals({
+                stateDir: state.stateDir,
+                doctorOnlyStateMigrations: true,
+              }),
+            });
+            expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
+            await collectSecurityWarnings(ctx.cfg, state.env);
+          }
           if (outcome === "ready" || outcome === "store-close-failed") {
             // Later diagnostics reopen runtime handles after the migration closes its own.
             const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -635,6 +559,9 @@ describe("runDoctorHealthFlow", () => {
             expectCoordinatorReleased();
           } else if (outcome === "workspace-cleanup-failed") {
             await expect(run).rejects.toThrow(/workspace.*requires migration/);
+          } else if (approvalsBlocked) {
+            await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
+            expectCoordinatorReleased();
           } else if (outcome === "restart-unhealthy") {
             await expect(run).rejects.toThrow("managed Gateway did not become ready");
           } else {
@@ -652,6 +579,7 @@ describe("runDoctorHealthFlow", () => {
             outcome === "ready" ||
             outcome === "restart-unhealthy" ||
             outcome === "clean-repair" ||
+            outcome === "approvals-migrated" ||
             outcome === "update-legacy";
           expect(events).toEqual(
             outcome === "clean-inspect"
@@ -666,7 +594,24 @@ describe("runDoctorHealthFlow", () => {
             expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
           }
-          if (outcome === "ready" || clean) {
+          if (approvalsCase) {
+            if (approvalsBlocked) {
+              expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsBefore);
+              expect(() => loadExecApprovalsReadOnly()).toThrow(
+                ExecApprovalsMigrationRequiredError,
+              );
+            } else {
+              expect(fs.existsSync(approvalsPath)).toBe(false);
+              expect(loadExecApprovalsReadOnly().defaults?.security).toBe("full");
+            }
+            if (outcome === "approvals-conflicting") {
+              expect(
+                readExecApprovalsConfigRow(openOpenClawStateDatabase({ env: state.env }).db)
+                  ?.raw_json,
+              ).toBe(serializeExecApprovals(canonicalApprovals));
+            }
+          }
+          if (outcome === "ready" || clean || outcome === "approvals-migrated") {
             expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
           } else {
             expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

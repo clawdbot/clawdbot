@@ -240,6 +240,27 @@ describe("healthCommand", () => {
     expect(output).not.toContain("inactive plugin load failed");
   });
 
+  it.each([
+    { everyMs: 65_001, expected: "1m 5s 1ms" },
+    { everyMs: 604_800_001, expected: "1w 1ms" },
+    { everyMs: 691_200_000, expected: "1w 1d" },
+  ])(
+    "preserves configured duration precision in heartbeat: $everyMs ms",
+    async ({ everyMs, expected }) => {
+      const snapshot = createHealthSummary();
+      const agent = createMainAgentSummary();
+      agent.heartbeat = { ...agent.heartbeat, every: `${everyMs}ms`, everyMs };
+      snapshot.agents = [agent];
+      snapshot.heartbeatSeconds = Math.round(everyMs / 1_000);
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+
+      await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`Heartbeat interval: ${expected} (main)`);
+    },
+  );
+
   it("prints the gateway probe duration in text output", async () => {
     const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -494,55 +515,77 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Config hot reload");
   });
 
-  it("prints the rich text summary and verbose gateway details", async () => {
-    const recent = [
-      { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
-      { key: "foo", updatedAt: null, age: null },
-    ];
-    const snapshot = createHealthSummary({
-      channels: {
-        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
-        telegram: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: true,
-            elapsedMs: 7,
-            bot: { username: "bot" },
-            webhook: { url: "https://example.com/h" },
+  it.each(
+    [0, -600_000, 600_000].flatMap((clockSkewMs) =>
+      ["agent", "top-level"].map((surface) => ({ clockSkewMs, surface })),
+    ),
+  )(
+    "prints $surface gateway ages with $clockSkewMs ms client clock skew",
+    async ({ clockSkewMs, surface }) => {
+      const gatewayNow = Date.now();
+      const recent = [
+        { key: "main", updatedAt: gatewayNow - 60_000, age: 60_000 },
+        { key: "fresh", updatedAt: gatewayNow, age: 0 },
+        { key: "foo", updatedAt: null, age: null },
+      ];
+      const snapshot = createHealthSummary({
+        channels: {
+          whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+          telegram: {
+            accountId: "default",
+            configured: true,
+            probe: {
+              ok: true,
+              elapsedMs: 7,
+              bot: { username: "bot" },
+              webhook: { url: "https://example.com/h" },
+            },
           },
+          discord: { accountId: "default", configured: false },
         },
-        discord: { accountId: "default", configured: false },
-      },
-      channelOrder: ["whatsapp", "telegram", "discord"],
-      channelLabels: {
-        whatsapp: "WhatsApp",
-        telegram: "Telegram",
-        discord: "Discord",
-      },
-      sessions: {
-        path: "/tmp/sessions.json",
-        count: 2,
-        recent,
-      },
-    });
-    callGatewayMock.mockResolvedValueOnce(snapshot);
+        channelOrder: ["whatsapp", "telegram", "discord"],
+        channelLabels: {
+          whatsapp: "WhatsApp",
+          telegram: "Telegram",
+          discord: "Discord",
+        },
+        sessions: {
+          path: "/tmp/sessions.json",
+          count: recent.length,
+          recent,
+        },
+      });
+      if (surface === "top-level") {
+        snapshot.agents = [];
+      }
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(gatewayNow + clockSkewMs);
+      try {
+        await healthCommand(
+          {
+            json: false,
+            verbose: true,
+            timeoutMs: 1000,
+            config: { agents: { ownership: "explicit", entries: {} } },
+          },
+          runtime as never,
+        );
+      } finally {
+        clock.mockRestore();
+      }
 
-    await healthCommand(
-      { json: false, verbose: true, timeoutMs: 1000, config: {} },
-      runtime as never,
-    );
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toMatch(/WhatsApp: linked/i);
-    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
-      ["Gateway connection:"],
-      ["  Gateway mode: local"],
-      [`  Gateway target: ${TEST_GATEWAY_URL}`],
-    ]);
-    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
-  });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+      expect(output).toContain("- main (1m ago)\n- fresh (0m ago)\n- foo (no activity)");
+      expect(output).toMatch(/WhatsApp: linked/i);
+      expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+        ["Gateway connection:"],
+        ["  Gateway mode: local"],
+        [`  Gateway target: ${TEST_GATEWAY_URL}`],
+      ]);
+      expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    },
+  );
 
   it("passes explicit gateway credentials through to the gateway call", async () => {
     const snapshot = createHealthSummary();

@@ -125,6 +125,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
   return {
     commands: [CODEX_NODE_EXEC_SERVER_COMMAND],
     dangerous: true,
+    standingApproval: { kind: "placement", scope: CODEX_NODE_EXEC_SERVER_CAPABILITY },
     classifyRisk: () => ({ level: "high", family: CODEX_NODE_EXEC_SERVER_CAPABILITY }),
     handle: async (context) => {
       if (context.risk?.level !== "high") {
@@ -167,27 +168,19 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       }
       const nodeName = context.node?.displayName ?? context.nodeId;
       const approval = await context.approvals.request({
-        title: "Run Codex execution on node",
+        title: "Run Codex on this node placement",
         // Keep the risk visible when the Gateway bounds a long workspace description.
-        description: `Allows arbitrary processes and filesystem access across the node account, not only this workspace. ${nodeName}: ${placement.cwd}`,
+        description: `Allows arbitrary processes and filesystem access across the node account, not only this workspace. Allow always applies only while this exact placement remains active. ${nodeName}: ${placement.cwd}`,
         severity: "critical",
-        allowedDecisions: ["allow-once"],
+        allowedDecisions: ["allow-once", "allow-always"],
       });
-      if (approval.decision !== "allow-once") {
+      if (approval.decision !== "allow-once" && approval.decision !== "allow-always") {
         if (approval.decision === "deny") {
           return {
             ok: false,
             code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
             message:
-              "Codex node execution was denied. Retry the action and choose Allow once to continue.",
-          };
-        }
-        if (approval.decision === "allow-always") {
-          return {
-            ok: false,
-            code: "CODEX_NODE_EXEC_APPROVAL_INVALID",
-            message:
-              "Codex node execution cannot use permanent approval. Retry the action and choose Allow once.",
+              "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
           };
         }
         return {

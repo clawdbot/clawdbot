@@ -28,7 +28,10 @@ import {
   removePluginInstallOwnerFromConfig,
   removePluginRuntimePolicyFromConfig,
 } from "./uninstall-package-config.js";
-import { resolvePluginPackageUninstallPlan } from "./uninstall-package-plan.js";
+import {
+  prepareConfigForDisabledPluginSet,
+  resolvePluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
 
 export { resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
 
@@ -37,7 +40,7 @@ type UninstallActions = PluginConfigUninstallActions & {
 };
 
 export const UNINSTALL_ACTION_LABELS = {
-  entry: "config entry",
+  entry: "plugin settings",
   install: "install record",
   allowlist: "allowlist entry",
   denylist: "denylist entry",
@@ -386,6 +389,12 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   newConfig = ownerRemoval.config;
   for (const key of Object.keys(configActions) as Array<keyof PluginConfigUninstallActions>) {
     configActions[key] ||= ownerRemoval.actions[key];
+  }
+
+  if (hasInstall && runtimePluginIds.length > 0) {
+    // Preserve explicit uninstall intent so remaining provider/model references do not
+    // make startup repair treat the now-missing package as required.
+    newConfig = prepareConfigForDisabledPluginSet(newConfig, runtimePluginIds);
   }
 
   if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {

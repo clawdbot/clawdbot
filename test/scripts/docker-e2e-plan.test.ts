@@ -702,6 +702,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: "update-first-hop-compat",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command:
           "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
         imageKind: "bare",
         live: false,
@@ -842,8 +853,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -888,6 +899,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "update-channel-switch",
       "published-upgrade-survivor",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
@@ -1063,11 +1075,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
-  it("keeps SQLite volume stress out of release soak and in far-reaching runs", () => {
-    const scenariosFor = (upgradeSurvivorScenarios: string) =>
+  it("keeps expensive platform survivors out of release soak and in far-reaching runs", () => {
+    const scenariosFor = (
+      upgradeSurvivorScenarios: string,
+      upgradeSurvivorBaselines = "2026.7.1-2",
+    ) =>
       planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.7.1-2",
+        upgradeSurvivorBaselines,
         upgradeSurvivorScenarios,
       }).lanes.map((lane) => lane.name);
 
@@ -1077,6 +1092,24 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(scenariosFor("far-reaching")).toContain(
       "published-upgrade-survivor-2026.7.1-2-sqlite-volume",
     );
+    expect(scenariosFor("reported-issues", "2026.8.1")).not.toContain(
+      "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+    );
+    expect(scenariosFor("far-reaching", "2026.8.1")).toContain(
+      "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+    );
+  });
+
+  it("runs the watchOS direct-node survivor only from its shipped gateway floor", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.1 2026.8.1",
+      upgradeSurvivorScenarios: "watchos-direct-node",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+    ]);
   });
 
   it("omits trusted-current scenarios unsupported by a frozen target harness", () => {

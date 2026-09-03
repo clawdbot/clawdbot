@@ -27,11 +27,13 @@ const mocks = vi.hoisted(() => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   getRegisteredAgentHarness: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
-  isCliRuntimeAliasForProvider: vi.fn(() => false),
+  isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
+    () => false,
+  ),
   prepareSimpleCompletionModel: vi.fn(),
   prepareAgentRuntimeAuth: vi.fn(),
   resolveModelWithRegistry: vi.fn(),
-  resolveCliRuntimeCanonicalProvider: vi.fn(() => undefined),
+  resolveCliRuntimeCanonicalProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveCliBackendConfig: vi.fn<
     () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
   >(() => ({ config: { command: "test-cli" } })),
@@ -167,6 +169,8 @@ beforeEach(() => {
     release: releaseRuntimeLease,
   });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
+  mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
+  mocks.resolveEffectiveAgentRuntime.mockReturnValue("codex");
   mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
   mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
   mocks.prepareSimpleCompletionModel.mockResolvedValue({
@@ -200,6 +204,136 @@ function registerHarness(overrides: Partial<AgentHarness>): void {
 }
 
 describe("runIsolatedCompletion", () => {
+  it.each(["v1", "v2"] as const)(
+    "rejects a retained %s dispatch callback after isolated completion closes",
+    async (version) => {
+      const dispatch = vi.fn();
+      let dispatchLater: (() => void) | undefined;
+      const run = async (params: { assertCurrent?: () => void }) => {
+        dispatchLater = () => {
+          params.assertCurrent?.();
+          dispatch();
+        };
+        return { assistant: assistant([{ type: "text", text: "done" }]) };
+      };
+      registerHarness(
+        version === "v1" ? { runIsolatedCompletion: run } : { runIsolatedCompletionV2: run },
+      );
+      await runIsolatedCompletion(request());
+      if (!dispatchLater) {
+        throw new Error("The harness did not receive its dispatch callback.");
+      }
+      expect(dispatchLater).toThrow("Isolated completion has ended");
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["runtime", "v2"],
+    ["plugin", "v2"],
+    ["host auth", "v1"],
+    ["host auth", "v2"],
+  ] as const)("rejects retired authority after %s preparation for %s", async (stage, version) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const expired = new Error("The completion owner retired.");
+    let current = true;
+    const dispatch = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "done" }]),
+    }));
+    registerHarness(
+      version === "v1"
+        ? { runIsolatedCompletion: dispatch }
+        : { runIsolatedCompletionV2: dispatch },
+    );
+    const pause = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    if (stage === "runtime") {
+      mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+        await pause();
+        return { snapshot: preparedModelRuntime, release: releaseRuntimeLease };
+      });
+    } else if (stage === "plugin") {
+      mocks.ensureSelectedAgentHarnessPlugin.mockImplementationOnce(pause);
+    } else {
+      mocks.prepareSimpleCompletionModel.mockImplementationOnce(async () => {
+        await pause();
+        return {
+          model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+          auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
+        };
+      });
+    }
+    const completion = runIsolatedCompletion({
+      ...request(),
+      assertCurrent() {
+        if (!current) {
+          throw expired;
+        }
+      },
+    });
+    try {
+      await Promise.race([
+        entered.promise,
+        completion.then(() => {
+          throw new Error("Completion settled before the preparation barrier.");
+        }),
+      ]);
+      current = false;
+      release.resolve();
+      await expect(completion).rejects.toBe(expired);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([completion]);
+    }
+  });
+
+  it.each(["claude-cli", "anthropic"])(
+    "keeps the CLI execution owner for a %s utility model without resolving HTTP credentials",
+    async (provider) => {
+      mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(
+        provider === "claude-cli" ? "anthropic" : undefined,
+      );
+      mocks.resolveEffectiveAgentRuntime.mockReturnValue(
+        provider === "anthropic" ? "claude-cli" : "codex",
+      );
+      mocks.isCliRuntimeAliasForProvider.mockImplementation(
+        ({ runtime, provider: modelProvider }) =>
+          runtime === "claude-cli" && modelProvider === "anthropic",
+      );
+      mocks.prepareSimpleCompletionModel.mockRejectedValue(
+        new Error("native-auth markers must never become HTTP credentials"),
+      );
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+
+      await expect(
+        runIsolatedCompletion({
+          ...request(),
+          provider,
+          model: "claude-test",
+          agentHarnessRuntimeOverride: undefined,
+        }),
+      ).resolves.toMatchObject({
+        text: "Utility result",
+        provider: "anthropic",
+        owner: { kind: "cli", id: "claude-cli" },
+      });
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "claude-cli",
+          modelProvider: "anthropic",
+          isolatedCompletion: true,
+          cliToolAvailability: { native: [], openClaw: [] },
+        }),
+      );
+    },
+  );
+
   it("hands harness-owned authorization to the V2 owner without resolving a host key", async () => {
     const runIsolatedCompletionV2 = vi.fn(async () => ({
       assistant: assistant([{ type: "text", text: "native result" }]),
@@ -253,7 +387,9 @@ describe("runIsolatedCompletion", () => {
     );
   });
 
-  it("keeps automatic harness fallback core-owned and scopes one profile per call", async () => {
+  it.each([false, true])("keeps harness fallback core-owned (retired: %s)", async (retired) => {
+    let current = true;
+    const expired = new Error("The completion owner retired.");
     const firstPlan = {
       ...nativeAuthPlan,
       forwardedAuthProfileId: "openai:first",
@@ -281,7 +417,10 @@ describe("runIsolatedCompletion", () => {
     });
     const runIsolatedCompletionV2 = vi
       .fn()
-      .mockRejectedValueOnce(new Error("first profile unavailable"))
+      .mockImplementationOnce(async () => {
+        current = !retired;
+        throw new Error("first profile unavailable");
+      })
       .mockResolvedValueOnce({
         assistant: assistant([{ type: "text", text: "backup result" }]),
       });
@@ -290,7 +429,21 @@ describe("runIsolatedCompletion", () => {
       runIsolatedCompletionV2,
     });
 
-    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+    const completion = runIsolatedCompletion({
+      ...request(),
+      assertCurrent() {
+        if (!current) {
+          throw expired;
+        }
+      },
+    });
+    if (retired) {
+      await expect(completion).rejects.toBe(expired);
+      expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+      return;
+    }
+    await expect(completion).resolves.toMatchObject({
       text: "backup result",
     });
     expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);

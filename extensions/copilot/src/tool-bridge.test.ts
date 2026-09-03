@@ -37,6 +37,9 @@ type CopilotToolBridgeTestInput = Omit<
     attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
       Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
   };
+type CopilotCodingToolsOptions = NonNullable<
+  Parameters<NonNullable<CopilotToolBridgeInput["createOpenClawCodingTools"]>>[0]
+>;
 const testHostCapabilities = createCopilotTestHostCapabilities();
 
 function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
@@ -1171,12 +1174,13 @@ describe("createCopilotToolBridge", () => {
       expect(exec).toMatchObject({ security: "fast", elevated: { allowed: true } });
     });
 
-    it("forwards run-trace and scheduled policy context", async () => {
+    it("forwards active thinking, run-trace and scheduled policy context", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
 
       await createCopilotToolBridge({
         attemptParams: {
           trigger: "cron",
+          thinkLevel: "off",
           jobId: "job-1",
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
@@ -1186,12 +1190,13 @@ describe("createCopilotToolBridge", () => {
             ownerSessionKey: "agent:main:discord:group:ops",
             ownerAccountId: "default",
           },
-        } as never,
+        },
         createOpenClawCodingTools,
       });
 
       const opts = getOpts();
       expect(opts.trigger).toBe("cron");
+      expect(opts.requesterThinkingLevel).toBe("off");
       expect(opts.jobId).toBe("job-1");
       expect(opts.memoryFlushWritePath).toBe(".memory/append.md");
       // buildEmbeddedAttemptToolRunContext renames toolsAllow ->
@@ -1462,6 +1467,37 @@ describe("createCopilotToolBridge", () => {
         expect(names).not.toContain("write");
         expect(names).not.toContain("edit");
         expect(names).not.toContain("ask_user");
+      });
+    });
+
+    it("hands the question tools this run's own way to show a prompt", async () => {
+      // Bridged tools are dispatched here, not through the embedded tool lifecycle,
+      // so nothing reserves a blocking question's prompt before the tool runs. Without
+      // this the question is never shown and the turn waits out its full timeout.
+      await withTempDir("openclaw-copilot-question-prompt-", async (workspaceDir) => {
+        const onToolResult = vi.fn();
+        let capturedQuestionPrompt: CopilotCodingToolsOptions["questionPrompt"];
+        const createOpenClawCodingTools = vi.fn(async (options?: CopilotCodingToolsOptions) => {
+          capturedQuestionPrompt = options?.questionPrompt;
+          return [];
+        });
+
+        await createCopilotToolBridge({
+          attemptParams: {
+            messageChannel: "telegram",
+            onToolResult,
+            runId: "question-prompt-run",
+            sessionKey: "agent:agent-1:question-prompt",
+            workspaceDir,
+          },
+          createOpenClawCodingTools,
+          sessionId: "question-prompt-session",
+          sessionKey: "agent:agent-1:question-prompt",
+          workspaceDir,
+        });
+
+        expect(capturedQuestionPrompt?.send).toBe(onToolResult);
+        expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
       });
     });
 

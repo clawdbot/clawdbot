@@ -12,6 +12,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 import type {
@@ -335,20 +336,17 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];
-  if (stateSchema.warnings.length > 0) {
-    return {
-      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+  if (stateSchema.warnings.length > 0 && params.doctorOnlyStateMigrations !== true) {
+    throw new Error(formatStartupMigrationFailure(stateSchema.warnings));
   }
   const input: PluginDoctorInput = { config: params.config, env, stateDir, oauthDir };
-  const plans = await collectPluginDoctorStateMigrationPlans(input, {
-    includeDoctorOnly: params.doctorOnlyStateMigrations === true,
-    warnings,
-  });
+  const plans =
+    stateSchema.warnings.length > 0
+      ? []
+      : await collectPluginDoctorStateMigrationPlans(input, {
+          includeDoctorOnly: params.doctorOnlyStateMigrations === true,
+          warnings,
+        });
   const migrated = await migratePluginDoctorStatePlans(input, plans);
   changes.push(...migrated.changes);
   warnings.push(...migrated.warnings);

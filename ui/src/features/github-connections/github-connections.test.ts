@@ -99,7 +99,7 @@ it("uses explicit unbound admin context for System without probing personal stat
   expect(element.textContent).not.toContain("@agent-account");
 });
 
-it("shows an identified status failure without substituting a System mutation route", async () => {
+it("shows an identified status failure once while opening personal setup", async () => {
   const request = vi.fn(async () => {
     throw new Error("GitHub status temporarily unavailable");
   });
@@ -112,4 +112,9 @@ it("shows an identified status failure without substituting a System mutation ro
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(element.textContent).not.toContain("Change System GitHub");
   expect(element.textContent).toContain("Retry");
+  Array.from(element.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Connect GitHub")
+    ?.click();
+  await waitForFast(() => expect(element.querySelector("[data-github-setup]")).not.toBeNull());
+  expect(element.querySelectorAll('[role="alert"]')).toHaveLength(1);
 });

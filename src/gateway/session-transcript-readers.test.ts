@@ -99,10 +99,7 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
     const visited: Array<{ message: unknown; seq: number }> = [];
     await expect(
-      visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq }), {
-        mode: "full",
-        reason: "visitor active branch test",
-      }),
+      visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
     ).resolves.toBe(2);
     expect(visited).toEqual([
       { message: { role: "user", content: "root prompt" }, seq: 1 },
@@ -162,17 +159,13 @@ describe("session transcript reader facade", () => {
         .run(sessionId, sessionId);
       const stopped = new Error("visitor stopped");
       const visited: Array<{ message: unknown; seq: number }> = [];
-      const traversal = visitSessionMessagesAsync(
-        scope,
-        (message, seq) => {
-          expect(database.db.isTransaction).toBe(true);
-          visited.push({ message, seq });
-          if (failure === "visitor") {
-            throw stopped;
-          }
-        },
-        { mode: "full", reason: "incremental acquisition test" },
-      );
+      const traversal = visitSessionMessagesAsync(scope, (message, seq) => {
+        expect(database.db.isTransaction).toBe(true);
+        visited.push({ message, seq });
+        if (failure === "visitor") {
+          throw stopped;
+        }
+      });
       if (failure === "visitor") {
         await expect(traversal).rejects.toBe(stopped);
       } else {
@@ -505,10 +498,7 @@ describe("session transcript reader facade", () => {
 
     const visited: unknown[] = [];
     await expect(
-      visitSessionMessagesAsync(scope, (message) => visited.push(message), {
-        mode: "full",
-        reason: "visitor unavailable projection test",
-      }),
+      visitSessionMessagesAsync(scope, (message) => visited.push(message)),
     ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
     expect(visited).toEqual([]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);

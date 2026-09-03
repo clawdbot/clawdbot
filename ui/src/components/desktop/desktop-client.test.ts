@@ -165,4 +165,36 @@ describe("DesktopClient", () => {
 
     expect(onDisconnect).toHaveBeenCalledWith({ code: 4000, reason: "control-taken" });
   });
+
+  it.each([
+    ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
+    ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
+    ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
+    ["astral Unicode", "🦞\nΩ", ["\ud83e", "\udd9e", "Enter", "Ω"]],
+    ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
+  ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
+    const { Rfb } = createFakeRfb();
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
+    const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
+    const target = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    const events: KeyboardEvent[] = [];
+    const onKey = (event: KeyboardEvent) => events.push(event);
+    canvas.addEventListener("keydown", onKey);
+    canvas.addEventListener("keyup", onKey);
+    target.append(canvas);
+    const handle = await client.connect({
+      wsUrl: "ws://control.example.test/desktop/observe",
+      isCurrent: () => true,
+      viewOnly: false,
+      target,
+    });
+
+    handle.sendText?.(text);
+
+    expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
+      keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),
+    );
+    handle.disconnect();
+  });
 });

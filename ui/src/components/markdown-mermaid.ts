@@ -1,3 +1,4 @@
+import { renderMermaidSvg, type MermaidTheme } from "@openclaw/mermaid-renderer";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -5,7 +6,6 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-import { renderMermaidSvg, type MermaidTheme } from "./markdown-mermaid.runtime.ts";
 import "./image-lightbox.ts";
 import "./web-awesome.ts";
 

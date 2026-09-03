@@ -348,6 +348,12 @@ export function resolveBuildAllSteps(
         return step;
       }
       const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
+      // Source-run rebuilds share qaRuntime but retain the caller's explicit
+      // declaration choice. The other partial profiles remain runtime-only.
+      if (profile === "qaRuntime" && step.label === "tsdown") {
+        mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] =
+          buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV];
+      }
       const merged: BuildAllStep = Object.assign({}, step, { env: mergedEnv });
       return merged;
     });

@@ -62,7 +62,6 @@ type CodexAttemptResultInput = {
     | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
-    | "createAssistantMirrorMessage"
     | "createCurrentAttemptAssistantMessage"
     | "hasAssistantItemTextForSynthesis"
   >;
@@ -161,8 +160,6 @@ export function buildCodexAttemptResult(
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
-    createAssistantMirrorMessage: (title, text) =>
-      input.assistantProjection.createAssistantMirrorMessage(title, text),
   });
   const turnFailed = input.completedTurn?.status === "failed";
   const promptError =

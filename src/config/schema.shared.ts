@@ -1,5 +1,13 @@
 // Provides shared JSON schema helpers for generated config metadata.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+
+export type ConfigSchemaResponse = {
+  schema: Record<string, unknown>;
+  uiHints: ConfigUiHints;
+  version: string;
+  generatedAt: string;
+};
 
 export type ConfigJsonSchemaObject = Record<string, unknown> & {
   type?: string | string[];

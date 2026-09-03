@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
 import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
+  CHANNEL_CONTRACT_CONFIG_PATTERNS,
+  CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
@@ -14,7 +17,9 @@ import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
   estimateExtensionTestCost,
@@ -33,6 +38,7 @@ import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  groups?: NodeTestShardGroup[];
   env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
@@ -43,6 +49,7 @@ type ChangedNodeTestShard = {
   shardName: string;
   targets?: string[];
 };
+type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -50,6 +57,8 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 240;
+const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -319,7 +328,7 @@ function resolvePreciseChangedTargets(
   ) {
     return null;
   }
-  return targetPlans.map(({ target }) => target);
+  return targetPlans;
 }
 
 function createChangedTargetShards(
@@ -362,7 +371,9 @@ function resolveChangedExtensionRoots(changedPaths: string[]) {
   ];
 }
 
-function createChangedExtensionConfigShards(extensionRoots: string[]) {
+function createChangedExtensionConfigShards(
+  extensionRoots: string[],
+): ChangedExtensionConfigShard[] {
   const rootsByConfig = new Map<string, string[]>();
   for (const root of extensionRoots) {
     const config = resolveExtensionTestConfig(root);
@@ -408,7 +419,7 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
   });
   return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-    const shard: ChangedNodeTestShard = {
+    const shard: ChangedExtensionConfigShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
       // No plans overlap in this row, so CI can scale the single process's worker budget.
@@ -475,12 +486,57 @@ export function createChangedExtensionFallbackShards(
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
-  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
-    return createChangedExtensionConfigShards(
-      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+  const shards = hasCoreExtensionImpact(changedPaths, { cwd })
+    ? createChangedExtensionConfigShards(
+        listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+      )
+    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  const bins = packNodeTestGroups(
+    shards.toSorted(
+      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
+    ),
+    // Each envelope retains its own child process. Share only the checkout;
+    // runtime preparation stays separate from other configs' readers.
+    (bin, shard) =>
+      !shard.pretestBuildMode &&
+      bin.every(
+        (entry) =>
+          !entry.pretestBuildMode &&
+          entry.runner === shard.runner &&
+          entry.requiresDist === shard.requiresDist,
+      ) &&
+      bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
+        CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
+  );
+  if (bins.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
+    throw new Error(
+      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${bins.length} planned)`,
     );
   }
-  return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  // Singleton objects keep their full metadata and original relative order.
+  return bins
+    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
+    .map((bin, index) =>
+      bin.length === 1
+        ? bin[0]
+        : {
+            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+            configs: [],
+            groups: bin.map((shard) => ({
+              configs: shard.configs,
+              ...(shard.env ? { env: shard.env } : {}),
+              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+              requiresDist: shard.requiresDist,
+              runner: shard.runner,
+              shard_name: shard.shardName,
+            })),
+            planConcurrency: 1,
+            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            requiresDist: bin[0].requiresDist,
+            runner: bin[0].runner,
+            shardName: `changed-extensions-bundle-${index + 1}`,
+          },
+    );
 }
 
 /**
@@ -489,7 +545,9 @@ export function createChangedExtensionFallbackShards(
  */
 export function createChangedNodeTestShards(
   changedPaths: string[],
-  options: CwdOptions = {},
+  options: CwdOptions & {
+    dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+  } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -530,7 +588,7 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+  const targetPlans = resolvePreciseChangedTargets(regularLivePaths, cwd, [
     ...[...policyTargetsByPath.values()].flat(),
     // Plugin changes normally select only extension suites. This host-owned
     // proof also exercises the real Copilot entrypoint and manifest discovery.
@@ -538,9 +596,33 @@ export function createChangedNodeTestShards(
       ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
       : []),
   ]);
-  if (targets === null) {
+  if (targetPlans === null) {
     return null;
   }
+  // CI supplies the same enabled envelopes it emits. Validate all changed paths
+  // first, then subtract only exact targets owned by those configs and includes.
+  const targets = targetPlans
+    .filter(
+      ({ target, plans }) =>
+        !plans.every((plan) => {
+          const plugin = plan.config === CONTRACTS_PLUGIN_VITEST_CONFIG;
+          const patterns = plugin
+            ? pluginContractPatterns
+            : CHANNEL_CONTRACT_CONFIG_PATTERNS.get(plan.config);
+          return (
+            !plan.watchMode &&
+            plan.forwardedArgs.length === 0 &&
+            plan.includePatterns?.every((pattern) => pattern === target) &&
+            patterns?.some((pattern) => path.matchesGlob(target, pattern)) &&
+            options.dedicatedContractShards?.some(
+              (shard) =>
+                shard.task === (plugin ? "contracts-plugins" : "contracts-channels") &&
+                shard.includePatterns.includes(target),
+            )
+          );
+        }),
+    )
+    .map(({ target }) => target);
 
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
@@ -556,5 +638,6 @@ export function createChangedNodeTestShards(
     ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
-  return shards.length > 0 ? shards : null;
+  // Covered source targets keep build-artifacts ownership even with no Node rows.
+  return shards.length > 0 || targets.length < targetPlans.length ? shards : null;
 }

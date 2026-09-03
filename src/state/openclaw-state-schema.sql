@@ -39,6 +39,47 @@ CREATE TABLE IF NOT EXISTS skill_usage (
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
 
+-- Profile-owned skill library: additive, absent until first publication/import.
+CREATE TABLE IF NOT EXISTS skill_library_entries (
+  skill_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT,
+  author_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  current_revision TEXT NOT NULL,
+  shared INT NOT NULL,
+  enabled INT NOT NULL,
+  removed INT NOT NULL,
+  created_at INT NOT NULL,
+  updated_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_revisions (
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  description TEXT NOT NULL,
+  files_json TEXT NOT NULL,
+  created_at INT NOT NULL,
+  PRIMARY KEY (skill_id, revision)
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_events (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor_profile_id TEXT NOT NULL,
+  created_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_uploads (
+  upload_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  size_bytes INT NOT NULL,
+  sha256 TEXT NOT NULL,
+  archive_blob BLOB NOT NULL,
+  expires_at INT NOT NULL,
+  published_skill_id TEXT
+) STRICT;
+-- End profile-owned skill library.
+
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,

@@ -20,8 +20,10 @@ import { icons } from "./icons.ts";
 type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
+  | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
+  | "verified-user-required"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -51,13 +53,8 @@ type LoginFailureFeedback = {
   rawError: string;
 };
 
-type LoginGateProps = {
+type LoginGateProps = LoginFailureFeedbackParams & {
   resourceBasePath: string;
-  connected: boolean;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-  hasToken: boolean;
-  hasPassword: boolean;
   gatewayUrl: string;
   token: string;
   password: string;
@@ -71,13 +68,7 @@ type LoginGateProps = {
   onConnect: () => void;
 };
 
-type LoginFailureFeedbackParams = {
-  connected: boolean;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-  hasToken: boolean;
-  hasPassword: boolean;
-};
+type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0];
 
 function buildFeedback(params: {
   kind: LoginFailureKind;
@@ -127,6 +118,20 @@ function resolveLoginFailureFeedback(
         "login.failure.profileUnavailable.stepAdmin",
       ],
       docsHref: "https://docs.openclaw.ai/concepts/user-model#gateway-profile-and-github-credit",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
+    return buildFeedback({
+      kind: "verified-user-required",
+      rawError,
+      titleKey: "login.failure.verifiedUserRequired.title",
+      summaryKey: "login.failure.verifiedUserRequired.summary",
+      stepKeys: [
+        "login.failure.verifiedUserRequired.stepIdentity",
+        "login.failure.verifiedUserRequired.stepSharedSecret",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
     });
   }
 
@@ -253,6 +258,20 @@ function resolveLoginFailureFeedback(
   }
 
   const authHintKind = resolveAuthHintKind(params);
+  if (authHintKind === "trusted-proxy") {
+    return buildFeedback({
+      kind: "trusted-proxy",
+      rawError,
+      titleKey: "login.failure.trustedProxy.title",
+      summaryKey: "login.failure.trustedProxy.summary",
+      stepKeys: [
+        "login.failure.trustedProxy.stepSignIn",
+        "login.failure.trustedProxy.stepHeaders",
+        "login.failure.trustedProxy.stepNoToken",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+    });
+  }
   if (authHintKind === "required") {
     return buildFeedback({
       kind: "auth-required",

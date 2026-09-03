@@ -9,13 +9,13 @@ Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked
 
 ## Install
 
-`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from ClawHub first, falling back to npm. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
+`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/whatsapp
+openclaw plugins install @openclaw/whatsapp
 ```
 
-Use the bare npm package (`@openclaw/whatsapp`) only for the registry fallback; pin an exact version only for a reproducible install.
+Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -444,6 +444,8 @@ A liveness probe sent to your own number can therefore become agent input with `
 | `"first"`         | Quote only the first outbound reply chunk                      |
 | `"all"`           | Quote every outbound reply chunk                               |
 | `"batched"`       | Quote queued batched replies; leave immediate replies unquoted |
+
+If the original message text and media details are no longer cached, OpenClaw sends the reply as a plain message. The reply body is preserved, but its visual link to the original message is lost.
 
 Per-account override: `channels.whatsapp.accounts.<id>.replyToMode`.
 

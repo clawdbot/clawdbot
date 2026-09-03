@@ -49,7 +49,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 
 /**
  * Sensitive control-plane tools. `automations` can persist scheduled runs; `gateway`
- * exposes configuration and schema details even though its agent actions are read-only.
+ * exposes configuration/schema details and an owner-only self-update action.
  */
 export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway"] as const;
 

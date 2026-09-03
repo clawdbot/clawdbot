@@ -60,12 +60,30 @@ export type PreparedModelWorkerResult =
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
+  | Readonly<{
+      status: "generation-mismatch";
+      generationFingerprint: string;
+      reconstructedFingerprint: string;
+    }>
   | Readonly<{ status: "failed"; error: string }>;
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
+
+class PreparedModelCatalogGenerationMismatchError extends Error {
+  constructor(
+    readonly agentDir: string,
+    readonly generationFingerprint: string,
+    readonly reconstructedFingerprint: string,
+  ) {
+    super(
+      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
+    );
+    this.name = "PreparedModelCatalogGenerationMismatchError";
+  }
+}
 
 function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
   return fingerprintPreparedRuntimeFacts({
@@ -174,41 +192,58 @@ export function createPreparedModelCatalogWorker(params: {
       throw superseded();
     }
   };
-  const pool = new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "prepared-model-catalog.worker",
-      distWorkerPath: "agents/prepared-model-catalog.worker.js",
-    }),
-    maxWorkers: 1,
-    // Recreating this worker would import changed plugin code under the old generation.
-    // Only the lifecycle owner may retire it; crashes close the generation permanently.
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      workerData: params.input,
-      // Establish state/config environment before worker module initialization reads process.env.
-      env: { ...process.env, ...params.input.input.env },
-    },
-    validateResult: (message) => {
-      assertCurrent();
-      if (
-        message.status === "ok" &&
-        message.generationFingerprint !== params.input.generationFingerprint
-      ) {
-        throw new Error("prepared model catalog worker returned a stale generation");
-      }
-    },
-  });
+  let pool: WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult> | undefined;
+  const mismatch = (
+    message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
+  ) =>
+    new PreparedModelCatalogGenerationMismatchError(
+      params.input.input.agentDir,
+      message.generationFingerprint,
+      message.reconstructedFingerprint,
+    );
+  const createPool = () =>
+    new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
+      workerUrl: resolveRuntimeWorkerUrl({
+        currentModuleUrl: import.meta.url,
+        sourceWorkerName: "prepared-model-catalog.worker",
+        distWorkerPath: "agents/prepared-model-catalog.worker.js",
+      }),
+      maxWorkers: 1,
+      // Recreating this worker would import changed plugin code under the old generation.
+      // Only the lifecycle owner may retire it; crashes close the generation permanently.
+      idleTimeoutMs: 0,
+      restartOnError: false,
+      workerOptions: {
+        workerData: params.input,
+        // Establish state/config environment before worker module initialization reads process.env.
+        env: { ...process.env, ...params.input.input.env },
+      },
+      validateResult: (message) => {
+        assertCurrent();
+        if (message.status === "generation-mismatch") {
+          // Fence before any successor dispatches: rejecting here closes the pool, so a queued
+          // auth or catalog request never runs on the retired worker and rejects with this
+          // same typed outcome instead of a generic failure.
+          throw mismatch(message);
+        }
+        if (
+          message.status === "ok" &&
+          message.generationFingerprint !== params.input.generationFingerprint
+        ) {
+          throw new Error("prepared model catalog worker returned a stale generation");
+        }
+      },
+    });
   const stop = (error: Error) => {
     clearInterval(generationPoll);
     generationPoll = undefined;
-    return pool.close(error);
+    return pool?.close(error) ?? Promise.resolve();
   };
   const request = async (
     value: PreparedModelWorkerRequest,
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
     let message: PreparedModelWorkerResult;
+    let requestPool: typeof pool;
     try {
       assertCurrent();
       generationPoll ??= setInterval(() => {
@@ -217,7 +252,8 @@ export function createPreparedModelCatalogWorker(params: {
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
-      message = await pool.run(
+      requestPool = pool ??= createPool();
+      message = await requestPool.run(
         () => {
           assertCurrent();
           return value;
@@ -226,11 +262,25 @@ export function createPreparedModelCatalogWorker(params: {
       );
       assertCurrent();
     } catch (error) {
-      await stop(error instanceof Error ? error : new Error(String(error)));
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof PreparedModelCatalogGenerationMismatchError) {
+        // Keep the generation open, but retire only this request's pool: a delayed rejection
+        // from it must not close a replacement already serving the same lifecycle plan.
+        if (pool === requestPool) {
+          pool = undefined;
+        }
+        await requestPool?.close(failure);
+        throw failure;
+      }
+      await stop(failure);
       throw error;
     }
     if (message.status === "failed") {
       throw new Error(message.error);
+    }
+    if (message.status === "generation-mismatch") {
+      // validateResult fences this reply before the pool can resolve it.
+      throw mismatch(message);
     }
     return message;
   };

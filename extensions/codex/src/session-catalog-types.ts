@@ -107,6 +107,7 @@ export type CodexSessionCatalogHost = {
   nodeId?: string;
   canContinueCodex?: boolean;
   canOpenTerminalCodex?: boolean;
+  canStartTerminal?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;

@@ -5,6 +5,7 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import {
   isUiGlobalScopeConfigured,
   parseAgentSessionKey,
@@ -16,13 +17,13 @@ import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
-  assistantMessageExpansionSignature,
   buildCachedChatItems,
   collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  deleteExpansionState,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -91,8 +92,7 @@ export function projectChatTranscript(
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
@@ -100,14 +100,19 @@ export function projectChatTranscript(
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const archiveActor = activeSession?.archivedBy;
+  const archiveLabel = archiveActor?.id
+    ? t("sessionsView.archivedBy", {
+        name: archiveActor.label ?? archiveActor.id,
+      })
+    : activeSession?.archiveReason
+      ? formatSessionArchiveReason(activeSession.archiveReason)
+      : undefined;
   const archiveNotice =
-    activeSession?.archived && activeSession.archivedAt !== undefined && archiveActor?.id
+    activeSession?.archived && activeSession.archivedAt !== undefined && archiveLabel
       ? ({
           kind: "notice",
           key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
-          label: t("sessionsView.archivedBy", {
-            name: archiveActor.label ?? archiveActor.id,
-          }),
+          label: archiveLabel,
           text: "",
           timestamp: activeSession.archivedAt,
         } satisfies Extract<ChatItem, { kind: "notice" }>)
@@ -117,6 +122,7 @@ export function projectChatTranscript(
     sessionKey: props.sessionKey,
     archiveNotice,
     runId: props.runId ?? null,
+    compactionStatus: props.compactionStatus,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -171,7 +177,7 @@ export function projectChatTranscript(
     );
     for (const key of expandedAssistantMessages.keys()) {
       if (!retainedKeys.has(key)) {
-        expandedAssistantMessages.delete(key);
+        deleteExpansionState(expandedAssistantMessages, key);
       }
     }
   }
@@ -195,7 +201,7 @@ export function projectChatTranscript(
     }
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
-    expandedAssistantMessages.set(key, pending);
+    setExpansionState(expandedAssistantMessages, key, pending);
     requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
@@ -207,7 +213,8 @@ export function projectChatTranscript(
         result?.ok && result.message && typeof result.message === "object"
           ? extractTextCached(result.message)
           : null;
-      expandedAssistantMessages.set(
+      setExpansionState(
+        expandedAssistantMessages,
         key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
@@ -265,6 +272,9 @@ export function projectChatTranscript(
   const messageRowKeysById = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    onReply: props.onSetReply
+      ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+      : undefined,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
@@ -337,9 +347,6 @@ export function projectChatTranscript(
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply
-        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
-        : undefined,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
       onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
@@ -537,7 +544,8 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+        // The preview resolves content lazily; indexing only needs persisted identities.
+        if (sourceMessageId) {
           messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
             message: source.message,
@@ -596,13 +604,13 @@ export function projectChatTranscript(
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
-    chatItems,
     locale,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
-    assistantMessageExpansionSignature(expandedAssistantMessages),
+    expandedAssistantMessages,
+    getExpansionStateVersion(expandedAssistantMessages),
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),

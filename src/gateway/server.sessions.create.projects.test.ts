@@ -7,7 +7,10 @@ import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
 import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
+import { requireGit } from "../agents/worktrees/git.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { materializeManagedWorktreeFixture } from "../agents/worktrees/service.test-support.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -26,6 +29,7 @@ import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lif
 import { createDeferredCore } from "../shared/deferred.js";
 import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 import {
@@ -788,126 +792,177 @@ test("sessions.create starts directly in an outside registered project at write 
   ).toBe(project.id);
 });
 
-test("sessions.create provisions a managed worktree from a registered project at write scope", async () => {
-  const root = tempDirs.make("openclaw-session-registered-project-");
-  const workspace = await initializeRepository(root, "workspace");
-  const projectRoot = await initializeRepository(root, "project");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-  let worktreeId: string | undefined;
-  let sessionKey: string | undefined;
-  const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+test("sessions.create with an empty message preserves its owned checkout above the 100 cleanup target", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-target-",
+  });
   try {
-    const created = await directSessionReq<{
-      key?: string;
-      entry?: {
-        spawnedCwd?: string;
-        worktree?: {
-          id: string;
-          branch: string;
-          repoRoot: string;
-          canonicalWorkspaceDir?: string;
-        };
-      };
-      worktree?: { id: string; path: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", projectId: project.id, worktree: true },
-      { client: { connect: { scopes: ["operator.write"] } } as never },
-    );
-
-    expect(created.ok).toBe(true);
-    worktreeId = created.payload?.worktree?.id;
-    expect(created.payload?.entry?.spawnedCwd).toBe(created.payload?.worktree?.path);
-    expect(created.payload?.entry?.worktree?.canonicalWorkspaceDir).toBe(projectRoot);
-    sessionKey = created.payload?.key ?? "";
-    const original = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    if (!original) {
-      throw new Error("expected created session");
+    const workspace = await initializeRepository(state.root, "workspace");
+    const projectRoot = await initializeRepository(state.root, "project");
+    await requireGit(projectRoot, ["tag", "selected-base"]);
+    const baseCommit = await requireGit(projectRoot, ["rev-parse", "selected-base"]);
+    await fs.writeFile(path.join(projectRoot, "README.md"), "newer project head\n");
+    await requireGit(projectRoot, ["commit", "-am", "advance main beyond selected base"]);
+    testState.agentConfig = { workspace };
+    const { storePath } = await createSessionStoreDir();
+    const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+    for (let index = 0; index < 100; index += 1) {
+      await materializeManagedWorktreeFixture({
+        env: state.env,
+        stateDir: state.stateDir,
+        repoRoot: workspace,
+        name: `kept-${index}`,
+        now: Date.now(),
+      });
     }
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { ...original, displayName: "Repository review" },
-    );
-    dispatchInboundMessageMock.mockResolvedValueOnce({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
-    const reused = await directSessionReq<{ worktree?: { id: string }; runStarted: boolean }>(
-      "sessions.create",
-      {
-        key: sessionKey,
-        agentId: "main",
-        projectId: project.id,
-        worktree: true,
-        message: "Continue in this checkout",
-      },
-      { ...controlUiClient, context },
-    );
-    expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
-    expect(reused.payload).toMatchObject({ worktree: { id: worktreeId }, runStarted: true });
-    expect(titleMocks.generate).not.toHaveBeenCalled();
-    await settleWorkspaceRuns(context, storePath, sessionKey);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    if (!entry?.worktree) {
-      throw new Error("expected persisted project worktree session");
-    }
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        ...entry,
-        worktree: {
-          id: entry.worktree.id,
-          branch: entry.worktree.branch,
-          repoRoot: entry.worktree.repoRoot,
+    const kept = managedWorktrees.listRegistryRecords();
+    const key = "agent:main:worktree-above-cleanup-target";
+    const scope = { agentId: "main", sessionKey: key, storePath };
+    const originalCreate = managedWorktrees.create.bind(managedWorktrees);
+    const createSpy = vi
+      .spyOn(managedWorktrees, "create")
+      .mockImplementationOnce(async (params) => {
+        const record = await originalCreate(params);
+        // GC can run after allocation but before the session row is published.
+        expect(loadSessionEntry(scope)).toBeUndefined();
+        expect(
+          await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
+        ).toMatchObject({ removed: [] });
+        expect(managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("project\n");
+        return record;
+      });
+    const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+    try {
+      const created = await directSessionReq<{
+        key: string;
+        runStarted: boolean;
+        worktree: { id: string; path: string; branch: string };
+      }>(
+        "sessions.create",
+        {
+          key,
+          agentId: "main",
+          message: "",
+          projectId: project.id,
+          worktree: true,
+          worktreeBaseRef: "selected-base",
         },
-      },
-    );
-    await migrateManagedWorktreeCanonicalWorkspaces({
-      agentId: "main",
-      cfg: getRuntimeConfig(),
-      storePath,
-    });
-    const migrated = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    const canonicalWorkspaceDir = migrated?.worktree?.canonicalWorkspaceDir;
-    const spawnedCwd = migrated?.spawnedCwd;
-    if (!canonicalWorkspaceDir || !spawnedCwd) {
-      throw new Error("expected migrated project worktree session");
-    }
-    expect(canonicalWorkspaceDir).toBe(projectRoot);
-    const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
-      const tool = createConfiguredSkillWorkshopTool({
-        workspaceDir: spawnedCwd,
-        config: getRuntimeConfig(),
+        controlUiClient,
+      );
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload).toMatchObject({ key, runStarted: false });
+      const worktree = created.payload!.worktree;
+      const original = expectDefined(loadSessionEntry(scope), "created project session");
+      expect(original).toMatchObject({
+        projectId: project.id,
+        sessionRoot: worktree.path,
+        spawnedCwd: worktree.path,
+        worktree: { id: worktree.id, repoRoot: projectRoot, canonicalWorkspaceDir: projectRoot },
+      });
+      expect(managedWorktrees.findLiveByOwner("session", key)).toMatchObject({
+        id: worktree.id,
+        repoRoot: projectRoot,
+        baseRef: "selected-base",
+      });
+      expect(
+        await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
+      ).toMatchObject({ removed: [] });
+      expect(managedWorktrees.findLiveById(worktree.id)).toBeDefined();
+      expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+      expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
+      expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
+      expect(managedWorktrees.listRegistryRecords()).toHaveLength(101);
+      for (const record of kept) {
+        expect(managedWorktrees.findLiveById(record.id)).toEqual(record);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
+      }
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const sessionKey = key;
+      const worktreeId = worktree.id;
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { ...original, displayName: "Repository review" },
+      );
+      dispatchInboundMessageMock.mockResolvedValueOnce({
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      });
+      const reused = await directSessionReq<{ worktree?: { id: string }; runStarted: boolean }>(
+        "sessions.create",
+        {
+          key: sessionKey,
+          agentId: "main",
+          projectId: project.id,
+          worktree: true,
+          message: "Continue in this checkout",
+        },
+        { ...controlUiClient, context },
+      );
+      expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+      expect(reused.payload).toMatchObject({ worktree: { id: worktreeId }, runStarted: true });
+      expect(titleMocks.generate).not.toHaveBeenCalled();
+      await settleWorkspaceRuns(context, storePath, sessionKey);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+      if (!entry?.worktree) {
+        throw new Error("expected persisted project worktree session");
+      }
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        {
+          ...entry,
+          worktree: {
+            id: entry.worktree.id,
+            branch: entry.worktree.branch,
+            repoRoot: entry.worktree.repoRoot,
+          },
+        },
+      );
+      await migrateManagedWorktreeCanonicalWorkspaces({
         agentId: "main",
-        sessionKey,
+        cfg: getRuntimeConfig(),
+        storePath,
       });
-      return await tool.execute("legacy-project-proposal", {
-        action: "create",
-        name: "legacy-project-learning",
-        description: "Preserve learning from a resumed project worktree.",
-        proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
+      const migrated = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+      const canonicalWorkspaceDir = migrated?.worktree?.canonicalWorkspaceDir;
+      const spawnedCwd = migrated?.spawnedCwd;
+      if (!canonicalWorkspaceDir || !spawnedCwd) {
+        throw new Error("expected migrated project worktree session");
+      }
+      expect(canonicalWorkspaceDir).toBe(projectRoot);
+      const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
+        const tool = createConfiguredSkillWorkshopTool({
+          workspaceDir: spawnedCwd,
+          config: getRuntimeConfig(),
+          agentId: "main",
+          sessionKey,
+        });
+        return await tool.execute("legacy-project-proposal", {
+          action: "create",
+          name: "legacy-project-learning",
+          description: "Preserve learning from a resumed project worktree.",
+          proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
+        });
       });
-    });
-    const proposalDetails = proposal.details as { id: string };
-    const inspected = await inspectSkillProposal(proposalDetails.id, {
-      agentId: "main",
-      workspaceDir: projectRoot,
-    });
-    expect(inspected?.record.target.skillFile).toBe(
-      path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
-    );
-  } finally {
-    await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
+      const proposalDetails = proposal.details as { id: string };
+      const inspected = await inspectSkillProposal(proposalDetails.id, {
+        agentId: "main",
+        workspaceDir: projectRoot,
       });
+      expect(inspected?.record.target.skillFile).toBe(
+        path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
+      );
+    } finally {
+      createSpy.mockRestore();
+      await settleWorkspaceRuns(context, storePath, key, true);
     }
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    testState.sessionConfig = undefined;
+    await state.cleanup();
   }
 });
 

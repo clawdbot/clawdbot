@@ -48,6 +48,7 @@ import {
   getLineSourceInfo,
   readLineTextMessageBody,
   type LineInboundContext,
+  type LineInboundMentionAccess,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
@@ -170,6 +171,7 @@ async function resolveLineEventAdmission(
   resolveBoundAccess: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
+  mentions?: LineInboundMentionAccess;
 } | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
@@ -197,12 +199,7 @@ async function resolveLineEventAdmission(
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
-      return {
-        canDetectMention: false,
-        wasMentioned: false,
-        hasAnyMention: false,
-        implicitMentionKinds: [],
-      };
+      return undefined;
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -218,6 +215,7 @@ async function resolveLineEventAdmission(
     return {
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      explicitlyMentionedBot: wasMentionedByNative,
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
@@ -247,15 +245,7 @@ async function resolveLineEventAdmission(
       ...(isGroup && groupConfig?.enabled === false
         ? { route: { id: "line:group-config", enabled: false } }
         : {}),
-      mentionFacts:
-        isGroup && event.type === "message"
-          ? {
-              canDetectMention: mentionFacts.canDetectMention,
-              wasMentioned: mentionFacts.wasMentioned,
-              hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: mentionFacts.implicitMentionKinds,
-            }
-          : undefined,
+      mentionFacts,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
@@ -303,7 +293,16 @@ async function resolveLineEventAdmission(
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
-    return { access, resolveBoundAccess: resolveAccess };
+    // Quotes and authorized commands can address the bot without a native LINE
+    // mention. Preserve that effective result separately from explicit evidence.
+    const mentions = mentionFacts
+      ? {
+          ...mentionFacts,
+          wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
+          requireMention,
+        }
+      : undefined;
+    return { access, resolveBoundAccess: resolveAccess, mentions };
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -488,6 +487,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
       inboundHistory: historyReservation.inboundHistory,
+      mentions: decision.mentions,
       buildContext: context.buildContext,
     });
 

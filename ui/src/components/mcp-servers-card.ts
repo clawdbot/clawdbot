@@ -59,22 +59,36 @@ class McpServersCard extends OpenClawLightDomElement {
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
+  private feedbackGeneration = 0;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
+        const generation = this.feedbackGeneration;
         this.syncRows();
-        void runtimeConfig
-          .ensureLoaded()
-          .then(() => this.syncRows())
-          .catch((error: unknown) => {
-            this.message = {
-              kind: "error",
-              text: formatUiError(error),
-            };
-          });
-        return runtimeConfig.subscribe(() => this.syncRows());
+        void runtimeConfig.ensureLoaded().catch((error: unknown) => {
+          if (
+            generation !== this.feedbackGeneration ||
+            !this.isConnected ||
+            runtimeConfig !== this.context?.runtimeConfig
+          ) {
+            return;
+          }
+          this.message = {
+            kind: "error",
+            text: formatUiError(error),
+          };
+        });
+        const unsubscribe = runtimeConfig.subscribe(() => this.syncRows());
+        return () => {
+          // Async config work belongs to one connected source. Retire its UI
+          // feedback before a replacement source or retained card can reuse it.
+          this.feedbackGeneration += 1;
+          this.busy = false;
+          this.message = null;
+          unsubscribe();
+        };
       },
     )
     .effect(
@@ -115,9 +129,13 @@ class McpServersCard extends OpenClawLightDomElement {
     if (!this.context || !this.canMutate() || this.busy) {
       return false;
     }
+    const generation = this.feedbackGeneration;
     this.busy = true;
     this.message = null;
     const result = await patchMcpServers(this.context.runtimeConfig, options);
+    if (generation !== this.feedbackGeneration) {
+      return false;
+    }
     this.busy = false;
     if (!result.ok) {
       this.message = { kind: "error", text: result.error };

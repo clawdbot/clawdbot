@@ -795,8 +795,9 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           sandbox: options.sandbox,
           signal,
         });
-      if (options.memoryWriteProvenance?.classifies(allowedAbsolutePath)) {
-        await options.memoryWriteProvenance.write({
+      const memoryWriteProvenance = options.memoryWriteProvenance;
+      if (memoryWriteProvenance && (await memoryWriteProvenance.classifies(allowedAbsolutePath))) {
+        await memoryWriteProvenance.write({
           absolutePath: allowedAbsolutePath,
           contentBefore,
           contentAfter: `${contentBefore}${separator}${content}`,

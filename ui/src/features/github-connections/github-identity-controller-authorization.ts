@@ -165,10 +165,6 @@ export class GitHubDeviceAuthorizationController {
       }
       operation.cancelTooLate = true;
       this.present(operation, "finishing");
-      // A cancellation made during start has no poll timer yet.
-      if (operation.timer === undefined && !operation.pollInFlight) {
-        this.schedule(operation, operation.start!.pollAfterMs);
-      }
     } catch (error) {
       if (!this.isCurrent(operation)) {
         return;
@@ -176,11 +172,12 @@ export class GitHubDeviceAuthorizationController {
       operation.cancelRequested = false;
       operation.cancelError = formatUiError(error);
       this.present(operation, "cancel_error");
-      if (operation.timer === undefined && !operation.pollInFlight) {
-        this.schedule(operation, operation.start!.pollAfterMs);
-      }
     } finally {
       operation.cancelInFlight = false;
+    }
+    // A cancellation made during start has no poll timer yet.
+    if (operation.timer === undefined && !operation.pollInFlight) {
+      this.schedule(operation, operation.start!.pollAfterMs);
     }
   }
 
