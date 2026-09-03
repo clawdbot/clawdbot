@@ -121,6 +121,13 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   // shared by every member, so the sender is what keeps one member's parts out
   // of another's turn - the turn is authorized once, for its holder.
   const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
+  // A set whose parts straddle the wait is delivered in pieces, and the pieces
+  // already handed over are not missing from the send. Each entry carries its own
+  // removal timer, so a set nobody finishes cannot accumulate here.
+  const deliveredBySet = new Map<
+    string,
+    { count: number; timer?: ReturnType<typeof setTimeout> }
+  >();
   const pendingKey = (laneKey: string, senderKey: string, setId: string) =>
     `${laneKey}\u0000${senderKey}\u0000${setId}`;
   // Tail of each lane's queue: everything that deferred waits behind it in turn.
@@ -205,6 +212,12 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       },
     };
     pendingBySet.set(key, pending);
+    const carried = deliveredBySet.get(key);
+    if (carried) {
+      clearTimeout(carried.timer);
+      deliveredBySet.delete(key);
+    }
+    const carriedDelivered = carried?.count ?? 0;
     const releaseLane = await enterLane(input.laneKey);
     // The wait starts here, not on arrival: time spent queued behind earlier work
     // on this lane is not time LINE spent delivering the rest of the set.
@@ -218,7 +231,14 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     // queues behind this delivery rather than joining a snapshot it missed.
     pendingBySet.delete(key);
     const ordered = orderedParts(pending);
-    const missing = pending.total === undefined ? 0 : pending.total - ordered.length;
+    const delivered = carriedDelivered + ordered.length;
+    const missing = pending.total === undefined ? 0 : pending.total - delivered;
+    if (missing > 0) {
+      const carry: { count: number; timer?: ReturnType<typeof setTimeout> } = { count: delivered };
+      carry.timer = setTimeout(() => deliveredBySet.delete(key), pending.flushDelayMs * 5);
+      carry.timer.unref?.();
+      deliveredBySet.set(key, carry);
+    }
     return {
       events: ordered.map((entry) => entry.event),
       lifecycles: ordered.map((entry) => entry.lifecycle),

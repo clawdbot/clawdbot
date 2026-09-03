@@ -284,6 +284,26 @@ describe("createLineImageSetIngressBuffer", () => {
     expect(laneFree).toBe(true);
   });
 
+  it("does not report parts an earlier piece of the same set already delivered", async () => {
+    const first = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const firstSet = await first;
+    if (!firstSet) {
+      throw new Error("the first part should hold the set");
+    }
+    expect(firstSet.missing).toBe(1);
+    firstSet.finish();
+
+    // The straggler opens its own set carrying the same total. Counting it
+    // against that total alone would tell the model two images were lost.
+    const second = arrive({ index: 3, total: 3, flushDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const secondSet = await second;
+    expect(secondSet?.missing).toBeUndefined();
+    secondSet?.finish();
+  });
+
   it("lets an unrelated lane through while a set is still forming", async () => {
     const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
 
