@@ -471,6 +471,24 @@ describe("memory dreaming host helpers", () => {
     ).toBe("memos-local-openclaw-plugin");
   });
 
+  it("normalizes a mixed-case memory slot before reading its Dreaming config", () => {
+    const cfg = {
+      plugins: {
+        slots: { memory: "Memory-LanceDB" },
+        entries: {
+          "memory-lancedb": {
+            config: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingPluginId(cfg)).toBe("memory-lancedb");
+    expect(resolveMemoryDreamingPluginConfig(cfg)).toEqual({
+      dreaming: { enabled: false },
+    });
+  });
+
   it("reads dreaming config from the configured memory-slot owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
