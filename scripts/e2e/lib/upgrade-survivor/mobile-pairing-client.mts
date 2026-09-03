@@ -472,7 +472,7 @@ function loadWebSocket(packageRoot: string): WebSocketConstructor {
   return WebSocket;
 }
 
-async function attemptConnect(params: {
+export async function attemptConnect(params: {
   WebSocket: WebSocketConstructor;
   url: string;
   client: MobileClientMetadata;
@@ -488,26 +488,34 @@ async function attemptConnect(params: {
 }> {
   const socket = new params.WebSocket(params.url);
   const closeCode = waitForClose(socket);
-  const challenge = receiveFrame(
-    socket,
-    (frame) => frame.type === "event" && frame.event === "connect.challenge",
-  );
-  await waitForOpen(socket);
-  const challengeFrame = await challenge;
-  const payload = isRecord(challengeFrame.payload) ? challengeFrame.payload : null;
-  const connectRequest = buildConnectRequest({
-    challengePayload: payload,
-    client: params.client,
-    mode: params.mode,
-    role: params.role,
-    scopes: params.scopes,
-    auth: params.auth,
-    identity: params.identity,
-  });
-  const requestId = requireString(connectRequest.id, "connect request id");
-  const response = receiveFrame(socket, (frame) => frame.type === "res" && frame.id === requestId);
-  socket.send(JSON.stringify(connectRequest));
-  return { socket, response: await response, closeCode };
+  try {
+    const challenge = receiveFrame(
+      socket,
+      (frame) => frame.type === "event" && frame.event === "connect.challenge",
+    );
+    await waitForOpen(socket);
+    const challengeFrame = await challenge;
+    const payload = isRecord(challengeFrame.payload) ? challengeFrame.payload : null;
+    const connectRequest = buildConnectRequest({
+      challengePayload: payload,
+      client: params.client,
+      mode: params.mode,
+      role: params.role,
+      scopes: params.scopes,
+      auth: params.auth,
+      identity: params.identity,
+    });
+    const requestId = requireString(connectRequest.id, "connect request id");
+    const response = receiveFrame(
+      socket,
+      (frame) => frame.type === "res" && frame.id === requestId,
+    );
+    socket.send(JSON.stringify(connectRequest));
+    return { socket, response: await response, closeCode };
+  } catch (error) {
+    await closeSocket(socket, params.WebSocket);
+    throw error;
+  }
 }
 
 async function connect(params: Parameters<typeof attemptConnect>[0]): Promise<ConnectResult> {

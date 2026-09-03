@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MOBILE_PAIRING_AUDIT_CLIENT,
   MOBILE_PAIRING_APPROVAL_SCOPES,
@@ -22,6 +23,7 @@ import {
   MOBILE_PAIRING_OPERATOR_CAPS,
   approveBaselineNodePairing,
   assertGatewayHealth,
+  attemptConnect,
   buildConnectRequest,
   buildDeviceAuthCompatibilityPayloadV2,
   buildRedactedEvidence,
@@ -37,6 +39,10 @@ import {
 
 const CLIENT_PATH = "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
 const RUNNER_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function tokenHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -67,6 +73,58 @@ function bootstrapHello(nodeToken: string, operatorToken: string) {
 }
 
 describe("upgrade survivor mobile pairing client", () => {
+  it("closes the WebSocket when the connect response times out", async () => {
+    vi.useFakeTimers();
+    class SilentResponseSocket extends EventEmitter {
+      static CLOSED = 3;
+      static instances: SilentResponseSocket[] = [];
+      readyState = 0;
+      closeCalls = 0;
+
+      constructor(_url: string) {
+        super();
+        SilentResponseSocket.instances.push(this);
+        queueMicrotask(() => {
+          this.readyState = 1;
+          this.emit("open");
+          this.emit(
+            "message",
+            JSON.stringify({
+              type: "event",
+              event: "connect.challenge",
+              payload: { nonce: "nonce-timeout", ts: 1_700_000_000_000 },
+            }),
+          );
+        });
+      }
+
+      send(_value: string): void {}
+
+      close(): void {
+        this.closeCalls += 1;
+        this.readyState = SilentResponseSocket.CLOSED;
+        this.emit("close", 1000);
+      }
+    }
+
+    const connectAttempt = expect(
+      attemptConnect({
+        WebSocket: SilentResponseSocket,
+        url: "ws://127.0.0.1:18789",
+        client: MOBILE_PAIRING_CLIENT,
+        mode: "node",
+        role: "node",
+        scopes: [],
+      }),
+    ).rejects.toThrow("Gateway response timed out");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await connectAttempt;
+
+    expect(SilentResponseSocket.instances).toHaveLength(1);
+    expect(SilentResponseSocket.instances[0]?.closeCalls).toBe(1);
+    expect(SilentResponseSocket.instances[0]?.readyState).toBe(SilentResponseSocket.CLOSED);
+  });
+
   it("requires the Gateway health RPC to report ok", () => {
     expect(() => assertGatewayHealth({ ok: true })).not.toThrow();
     expect(() => assertGatewayHealth({ ok: false })).toThrow(/health response invalid/);
