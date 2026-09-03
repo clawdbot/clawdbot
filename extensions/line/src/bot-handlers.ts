@@ -581,6 +581,21 @@ async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext)
   logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
+/** What a tap that did not answer the question has to tell the person who tapped. */
+function lineQuestionOutcomeNotice(status: "custom-input" | "already-terminal" | "failed"): string {
+  if (status === "custom-input") {
+    // The Gateway leaves the question pending for a typed answer, so without this
+    // the tap only echoes its own label and then looks like nothing happened.
+    return "Reply with your own answer.";
+  }
+  if (status === "already-terminal") {
+    // The Gateway reports one terminal state for answered, cancelled and expired
+    // questions alike, so the notice claims only what it knows.
+    return "That question is no longer waiting for an answer.";
+  }
+  return "Could not record that answer. Reply with the option text instead.";
+}
+
 async function handlePostbackEvent(
   event: PostbackEvent,
   context: LineHandlerContext,
@@ -606,7 +621,7 @@ async function handlePostbackEvent(
     // A recorded answer needs no acknowledgement: the agent's next reply is the
     // feedback, and LINE already echoed the label through the action's displayText.
     const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
-    if (outcome.status === "answered" || outcome.status === "custom-input" || !pushTarget) {
+    if (outcome.status === "answered" || !pushTarget) {
       return;
     }
     await sendLineHandlerText({
@@ -614,10 +629,7 @@ async function handlePostbackEvent(
       replyToken: event.replyToken,
       pushTarget,
       logLabel: "line: question answer notice failed",
-      text:
-        outcome.status === "already-terminal"
-          ? "That question was already answered."
-          : "Could not record that answer. Reply with the option text instead.",
+      text: lineQuestionOutcomeNotice(outcome.status),
     });
     return;
   }
