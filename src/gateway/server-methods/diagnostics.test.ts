@@ -251,9 +251,7 @@ describe("diagnostics gateway methods", () => {
     const queued = owner.enqueue(async () => undefined);
     try {
       const payload = await requestLaneDiagnostics();
-      expect(
-        payload.lanes.find((snapshot) => snapshot.lane === CommandLane.Background),
-      ).toMatchObject({
+      expect(payload.lanes.find((snapshot) => snapshot.lane === "background")).toMatchObject({
         activeCount: 1,
         queuedCount: 1,
         maxConcurrent: 3,

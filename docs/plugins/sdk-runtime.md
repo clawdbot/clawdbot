@@ -527,7 +527,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     Cancellation removes queued work immediately. Running work keeps its slot
     until underlying runtime cleanup finishes, then rejects; late output is not
     returned after cancellation, timeout, or runtime retirement. Calls require
-    a live Gateway binding and plugin identity. Model overrides retain the
+    a live Gateway binding and plugin identity. Request-scoped calls retain the
+    caller's operator scopes and agent access; completions started inside an
+    operator tool invocation are cancelled when that invocation ends.
+    Model overrides retain the
     existing subagent authorization and `allowedModels` policy below.
 
     Use `run(...)` when you need a session or an agent tool surface:

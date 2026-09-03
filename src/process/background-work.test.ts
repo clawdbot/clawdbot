@@ -89,9 +89,9 @@ describe("background work admission", () => {
       const started = createDeferred();
       const active = owner.enqueue(async (signal) => {
         started.resolve();
-        await new Promise<void>((resolve) =>
-          signal.addEventListener("abort", () => resolve(), { once: true }),
-        );
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
         signal.throwIfAborted();
       });
       await started.promise;

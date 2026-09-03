@@ -17,6 +17,7 @@ declare const WORKER_DEPLOY_BUILD: boolean;
 type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
+  assertCurrent?: () => void;
   shell: string;
   args: string[];
   cwd?: string;
@@ -47,6 +48,7 @@ export async function createPtyAdapter(params: {
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
+  params.assertCurrent?.();
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
     env: spawnEnv,

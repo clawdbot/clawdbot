@@ -39,21 +39,21 @@ type OperatorToolGatewayAuthority = {
   >;
   scopes: readonly string[];
   operatorRoleActor?: GatewayOperatorRoleActor;
-  active: boolean;
+  signal: AbortSignal;
 };
 
 const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
 
 /** Retains operator attribution and authority only for the awaited tool invocation. */
 export async function withOperatorToolGatewayAuthority<T>(
-  authority: Omit<OperatorToolGatewayAuthority, "active">,
+  authority: Omit<OperatorToolGatewayAuthority, "signal">,
   run: () => Promise<T>,
 ): Promise<T> {
-  const activeAuthority = { ...authority, active: true };
+  const lifetime = new AbortController();
   try {
-    return await operatorToolGatewayAuthority.run(activeAuthority, run);
+    return await operatorToolGatewayAuthority.run({ ...authority, signal: lifetime.signal }, run);
   } finally {
-    activeAuthority.active = false;
+    lifetime.abort(new Error("operator tool invocation authority expired"));
   }
 }
 
@@ -101,9 +101,7 @@ function resolveInProcessGatewayDispatch(
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
   const inheritedOperatorAuthority = operatorToolGatewayAuthority.getStore();
-  if (inheritedOperatorAuthority && !inheritedOperatorAuthority.active) {
-    throw new Error("operator tool invocation authority expired");
-  }
+  inheritedOperatorAuthority?.signal.throwIfAborted();
   const scope = getPluginRuntimeGatewayRequestScope();
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
@@ -295,9 +293,7 @@ export function prepareInProcessAgentExecution(params: {
   const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
   const assertLifetime = () => {
     resolved.assertContextCurrent();
-    if (inheritedAuthority && !inheritedAuthority.active) {
-      throw new Error("operator tool invocation authority expired");
-    }
+    inheritedAuthority?.signal.throwIfAborted();
   };
   const assertCurrent = () => {
     assertLifetime();
@@ -312,6 +308,7 @@ export function prepareInProcessAgentExecution(params: {
   };
   return {
     context: resolved.context,
+    signal: inheritedAuthority?.signal,
     assertCurrent,
     async authorize() {
       assertLifetime();

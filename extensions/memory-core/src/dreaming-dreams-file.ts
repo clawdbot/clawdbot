@@ -12,7 +12,7 @@ export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 
-export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   for (const name of DREAMS_FILENAMES) {
     const target = path.join(workspaceDir, name);
     try {

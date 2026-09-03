@@ -310,6 +310,13 @@ route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
+When supplied, call `params.assertCurrent()` immediately before each inference
+request or process start, including after preparation awaits and on retries.
+It revalidates the caller's live authority and expires when the completion ends.
+A thrown assertion ends execution; do not treat it as a credential failure or
+retry with another profile. Continue to honor `abortSignal`; cleanup must remain
+available after authority expires.
+
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
 output are rejected. Title requests set `outputTextPolicy: "strict-visible"`:

@@ -369,8 +369,10 @@ describe("plugin background completions", () => {
       const blockers = blockBackgroundSlots(phase === "queued" ? 3 : 0);
       const started = createDeferred();
       const cleanup = createDeferred();
+      let runningSignal: AbortSignal | undefined;
       if (phase === "running") {
         isolated.mockImplementationOnce(async (params) => {
+          runningSignal = params.abortSignal;
           started.resolve();
           await cleanup.promise;
           return {
@@ -394,6 +396,9 @@ describe("plugin background completions", () => {
           }
         },
       );
+      if (phase === "running") {
+        expect(runningSignal?.aborted).toBe(true);
+      }
       blockers.release();
       cleanup.resolve();
       await rejected;
@@ -401,6 +406,31 @@ describe("plugin background completions", () => {
       expect(isolated).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
     },
   );
+
+  it("revalidates the captured Gateway before inference after isolated preparation", async () => {
+    const preparing = createDeferred();
+    const finishPreparation = createDeferred();
+    const inference = vi.fn();
+    isolated.mockImplementationOnce(async (params) => {
+      preparing.resolve();
+      await finishPreparation.promise;
+      params.assertCurrent?.();
+      inference();
+      return {
+        text: "must not be generated",
+        provider: params.provider,
+        model: params.model,
+        owner: { kind: "harness", id: "test-runtime" },
+      };
+    });
+    const result = complete(createRuntime());
+    const rejected = expect(result).rejects.toThrow("current gateway instance binding");
+    await preparing.promise;
+    context = { getRuntimeConfig: () => config } as GatewayRequestContext;
+    finishPreparation.resolve();
+    await rejected;
+    expect(inference).not.toHaveBeenCalled();
+  });
 
   it.each(["caller cancellation", "runtime retirement", "binding replacement"])(
     "never starts queued inference after %s",

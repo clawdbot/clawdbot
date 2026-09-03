@@ -27,7 +27,7 @@ import {
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
 
-export function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
+function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -48,7 +48,7 @@ export function normalizePluginSubagentAllowedModelRef(raw: string): string | nu
   return `${parsed.provider}/${modelId}`;
 }
 
-export function resolvePluginSubagentRequestedModelRef(params: {
+function resolvePluginSubagentRequestedModelRef(params: {
   provider?: string;
   model?: string;
 }): string | null {
@@ -67,7 +67,7 @@ export function resolvePluginSubagentRequestedModelRef(params: {
   return `${parsed.provider}/${parsed.model}`;
 }
 
-export function normalizePluginSubagentRunRuntime(
+function normalizePluginSubagentRunRuntime(
   value: unknown,
 ): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -264,9 +264,9 @@ export function createGatewaySubagentRuntime(
   };
 
   const subagentRuntime: PluginRuntime["subagent"] = {
-    async complete(params) {
+    async complete(request) {
       // Authorization and credential selection must use the same request across queue waits.
-      params = { ...params };
+      const params = { ...request };
       const scope = getPluginRuntimeGatewayRequestScope();
       const pluginId = scope?.pluginId?.trim();
       if (!pluginId) {
@@ -287,7 +287,7 @@ export function createGatewaySubagentRuntime(
       await execution.authorize();
       assertCurrent();
       authorizeModelOverride(params);
-      const signals = [params.signal, runtimeLifetime].filter(
+      const signals = [params.signal, runtimeLifetime, execution.signal].filter(
         (signal): signal is AbortSignal => signal !== undefined,
       );
       // Preserve subagent authority while sharing the sessionless inference owner.
@@ -338,6 +338,7 @@ export function createGatewaySubagentRuntime(
               prompt: params.message,
               timeoutMs,
               abortSignal: runSignal,
+              assertCurrent,
             }),
           );
           runSignal.throwIfAborted();
