@@ -237,11 +237,14 @@ export async function maybeSpawnVisibleSession(params: {
     modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
   const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg,
-    requesterInternalKey: requesterKey,
-    requesterAgentId,
-  });
+  // The active turn owns inherited effort; the stored row may describe a later turn.
+  const callerThinkingRaw =
+    params.options?.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg,
+      requesterInternalKey: requesterKey,
+      requesterAgentId,
+    });
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg,
     requesterAgentConfig,

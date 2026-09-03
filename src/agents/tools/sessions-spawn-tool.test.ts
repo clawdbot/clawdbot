@@ -808,6 +808,42 @@ describe("sessions_spawn tool", () => {
     });
   });
 
+  it("prefers the active caller thinking level over the persisted preference", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-active-thinking-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { thinkingLevel: "off" },
+      );
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-active-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        requesterThinkingLevel: "ultra",
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { subagents: {} }, list: [{ id: "main" }] },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-active-thinking", {
+        task: "inspect",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ thinkingLevel: "ultra" }),
+      );
+    });
+  });
+
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
