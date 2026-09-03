@@ -168,6 +168,20 @@ jobs:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
+      - name: Checkout trusted Linux packaging tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/scripts/stage-appimage-gstreamer.sh
+            apps/linux/scripts/finalize-appimage.sh
+            apps/linux/tests/packaged_runtime_smoke.py
+            apps/linux/tests/first_run.py
+          sparse-checkout-cone-mode: false
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -215,7 +229,7 @@ jobs:
       - name: Stage AppImage GStreamer plugins
         run: |
           plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
-          apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
+          .release-tooling/apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
@@ -225,16 +239,39 @@ jobs:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           RELEASE_TAG: ${{ inputs.tag }}
-          # Sign the AppImage updater artifact so the companion can verify updates.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           # Stamp the release version into the bundles; the committed manifests
           # keep a placeholder 0.1.0 so releases stay tag-driven.
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
-            --config "{\"version\":\"${version}\"}"
+            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
+
+      - name: Finalize AppImage
+        run: |
+          set -euo pipefail
+          bundle_dir=apps/linux/src-tauri/target/release/bundle/appimage
+          .release-tooling/apps/linux/scripts/finalize-appimage.sh "$bundle_dir"
+
+      - name: Sign finalized AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bundle_dir=apps/linux/src-tauri/target/release/bundle/appimage
+          shopt -s nullglob
+          appimages=("$bundle_dir"/*.AppImage)
+          if [[ ${#appimages[@]} -ne 1 ]]; then
+            echo "Expected one finalized AppImage, found ${#appimages[@]}"
+            exit 1
+          fi
+          appimage=${appimages[0]}
+          pnpm dlx @tauri-apps/cli@2.11.4 signer sign "$appimage"
+          if [[ ! -s "${appimage}.sig" ]]; then
+            echo "Finalized AppImage signature was not created"
+            exit 1
+          fi
 
       - name: Verify and rename Linux bundles
         env:
@@ -268,7 +305,7 @@ jobs:
         run: |
           version="${RELEASE_TAG#v}"
           xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
-            /usr/bin/python3 apps/linux/tests/packaged_runtime_smoke.py \
+            /usr/bin/python3 .release-tooling/apps/linux/tests/packaged_runtime_smoke.py \
             "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage" \
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
             --require-fuse \

@@ -7,6 +7,7 @@ Run as a non-root user inside a private X11 and D-Bus session:
 """
 
 import argparse
+from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
@@ -54,6 +55,13 @@ REQUIRED_GSTREAMER_ELEMENTS = (
     "avdec_aac",
     "avdec_h264",
     "avdec_mp3",
+)
+
+FORBIDDEN_APPIMAGE_LIBRARY_PATTERNS = (
+    "libwayland-client.so*",
+    "libwayland-cursor.so*",
+    "libwayland-egl.so*",
+    "libwayland-server.so*",
 )
 
 
@@ -424,6 +432,22 @@ def main():
         for required in (apprun, binary):
             if not required.is_file():
                 raise RuntimeError(f"Missing packaged runtime file: {required.relative_to(appdir)}")
+
+        usr_lib = appdir / "usr/lib"
+        forbidden_libraries = sorted(
+            path.relative_to(appdir).as_posix()
+            for path in usr_lib.rglob("*")
+            if (path.is_file() or path.is_symlink())
+            and any(
+                fnmatchcase(path.name, pattern)
+                for pattern in FORBIDDEN_APPIMAGE_LIBRARY_PATTERNS
+            )
+        )
+        if forbidden_libraries:
+            raise RuntimeError(
+                "AppImage bundles host Wayland libraries: "
+                + ", ".join(forbidden_libraries)
+            )
 
         shutil.copyfile(apprun, output / "AppRun.txt")
         hooks = appdir / "apprun-hooks"

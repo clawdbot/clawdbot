@@ -15859,6 +15859,123 @@ it("pins simple release admission owners before selected checkout and preserves 
       "${{ needs.validate_release.outputs.tag_sha }}",
     );
   }
+  const linuxBuildSteps = linux.jobs.build_linux.steps as WorkflowStep[];
+  const selectedTagCheckout = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Checkout selected tag",
+  );
+  const trustedToolingCheckout = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Checkout trusted Linux packaging tooling",
+  );
+  expect(selectedTagCheckout).toBe(0);
+  expect(trustedToolingCheckout).toBe(selectedTagCheckout + 1);
+  const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
+  expect(trustedToolingOptions).toMatchObject({
+    ref: "${{ github.workflow_sha }}",
+    path: ".release-tooling",
+    "fetch-depth": 1,
+    "persist-credentials": false,
+    "sparse-checkout-cone-mode": false,
+  });
+  const trustedToolingFiles = [
+    "apps/linux/scripts/stage-appimage-gstreamer.sh",
+    "apps/linux/scripts/finalize-appimage.sh",
+    "apps/linux/tests/packaged_runtime_smoke.py",
+    "apps/linux/tests/first_run.py",
+  ];
+  expect(String(trustedToolingOptions?.["sparse-checkout"]).trim().split("\n")).toEqual(
+    trustedToolingFiles,
+  );
+  const packagedRuntimeSmoke = "apps/linux/tests/packaged_runtime_smoke.py";
+  const firstRunDriver = path.posix.join(path.posix.dirname(packagedRuntimeSmoke), "first_run.py");
+  expect(readFileSync(packagedRuntimeSmoke, "utf8")).toContain(
+    'Path(__file__).with_name("first_run.py")',
+  );
+  expect(firstRunDriver).toBe("apps/linux/tests/first_run.py");
+  expect(trustedToolingFiles).toContain(firstRunDriver);
+  expect(
+    path.posix.join(path.posix.dirname(`.release-tooling/${packagedRuntimeSmoke}`), "first_run.py"),
+  ).toBe(".release-tooling/apps/linux/tests/first_run.py");
+  const tauriSigningEnvNames = [
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PATH",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "TAURI_PRIVATE_KEY",
+    "TAURI_PRIVATE_KEY_PATH",
+    "TAURI_PRIVATE_KEY_PASSWORD",
+    "TAURI_KEY_PASSWORD",
+  ];
+  const linuxBundleBuild = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Build Linux companion bundles"),
+    "Linux companion bundle build step",
+  );
+  expect(linuxBundleBuild["working-directory"]).toBe("apps/linux/src-tauri");
+  for (const name of tauriSigningEnvNames) {
+    expect(linuxBundleBuild.env ?? {}).not.toHaveProperty(name);
+  }
+  expect(linuxBundleBuild.run).toContain(
+    '--config "{\\"version\\":\\"${version}\\",\\"bundle\\":{\\"createUpdaterArtifacts\\":false}}"',
+  );
+  const finalizeAppImage = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Finalize AppImage"),
+    "Linux AppImage finalizer step",
+  );
+  for (const name of tauriSigningEnvNames) {
+    expect(finalizeAppImage.env ?? {}).not.toHaveProperty(name);
+  }
+  expect(finalizeAppImage.run).not.toContain("signer sign");
+  const signAppImage = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Sign finalized AppImage"),
+    "Linux AppImage signing step",
+  );
+  expect(signAppImage.env).toMatchObject({
+    TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+  });
+  expect(
+    linuxBuildSteps.filter(({ env }) =>
+      tauriSigningEnvNames.some((name) => Object.hasOwn(env ?? {}, name)),
+    ),
+  ).toEqual([signAppImage]);
+  expect(signAppImage.run).toContain("appimage=${appimages[0]}");
+  expect(signAppImage.run).toContain('signer sign "$appimage"');
+  expect(signAppImage.run).toContain('! -s "${appimage}.sig"');
+  expect(signAppImage.run).not.toContain("finalize-appimage.sh");
+  expect(linuxBuildSteps.indexOf(finalizeAppImage)).toBeLessThan(
+    linuxBuildSteps.indexOf(signAppImage),
+  );
+  const verifyLinuxBundles = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Verify and rename Linux bundles"),
+    "Linux bundle verification step",
+  );
+  expect(linuxBuildSteps.indexOf(signAppImage)).toBeLessThan(
+    linuxBuildSteps.indexOf(verifyLinuxBundles),
+  );
+  expect(verifyLinuxBundles.run).toContain('! -f "${appimages[0]}.sig"');
+  expect(verifyLinuxBundles.run).toContain('cp "${appimages[0]}.sig"');
+  expect(verifyLinuxBundles.run).toContain(
+    '"dist/linux-app/signatures/OpenClaw-${version}-amd64.AppImage.sig"',
+  );
+  const publishLinuxBundles = expectDefined(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Assemble release assets and updater manifest",
+    ),
+    "Linux release publication step",
+  );
+  expect(publishLinuxBundles.run).toContain(
+    'linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")',
+  );
+  expect(publishLinuxBundles.run).toContain(
+    '"linux-x86_64": {signature: $linux_signature, url: $linux_url}',
+  );
+  const linuxBuildBodies = linuxBuildSteps.map(({ run }) => run ?? "").join("\n");
+  for (const helper of [
+    "apps/linux/scripts/stage-appimage-gstreamer.sh",
+    "apps/linux/scripts/finalize-appimage.sh",
+    "apps/linux/tests/packaged_runtime_smoke.py",
+  ]) {
+    expect(linuxBuildBodies).toContain(`.release-tooling/${helper}`);
+    expect(linuxBuildBodies).not.toMatch(new RegExp(`(^|\\s)${helper.replaceAll(".", "\\.")}`));
+  }
   const linuxBody = expectDefined(
     (linux.jobs.validate_release.steps as WorkflowStep[]).find(
       ({ name }) => name === workflows[0].validation,
