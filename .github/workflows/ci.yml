@@ -3674,8 +3674,8 @@ jobs:
               ;;
           esac
 
-  # The github/hybrid planner profile aggregates core targets into five Programs
-  # across five hosted jobs. All-Blacksmith mode keeps one lint job.
+  # Keep five core Programs; ordinary hybrid runs pair them across three hosted jobs.
+  # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
@@ -3688,7 +3688,7 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        stripe: [1, 2, 3, 4, 5]
+        stripe: ${{ fromJSON(needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') && '[1,2,3]' || '[1,2,3,4,5]') }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3729,6 +3729,7 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
+          CORE_STRIPE: ${{ matrix.stripe }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
@@ -3745,13 +3746,22 @@ jobs:
             echo "[skip] target does not support core lint stripes"
             exit 0
           fi
-          node --import tsx scripts/run-oxlint-shards.mts \
-            --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
-          if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
-            grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
-            node --import tsx scripts/run-oxlint-shards.mts \
-              --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
+          stripes=("$CORE_STRIPE")
+          if ${{ needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') }}; then
+            stripes=("$((2 * CORE_STRIPE - 1))" "$((2 * CORE_STRIPE))")
           fi
+          for stripe in "${stripes[@]}"; do
+            if [ "$stripe" -gt 5 ]; then
+              continue
+            fi
+            node --import tsx scripts/run-oxlint-shards.mts \
+              --only=core --split-core --core-stripe="$stripe/5" --threads=1
+            if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
+              grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+              node --import tsx scripts/run-oxlint-shards.mts \
+                --only=extensions --extension-stripe="$stripe/6" --threads=1
+            fi
+          done
 
   # Pair four original core stripes; check-test-types owns the fifth and its tail.
   # Each stripe retains fresh compiler processes and its two-child limit;

@@ -248,14 +248,18 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
     try {
-      // Model catalog provisioning is independent of plugin-owned MCP revocation.
-      // Keep both Gateway refresh calls observable without starting provider discovery.
+      // Model provisioning is independent of plugin-owned MCP revocation.
+      // Keep Gateway refreshes observable without starting provider discovery or auth warmup.
       const refreshPreparedModelRuntimeSnapshots = vi
         .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
         .mockResolvedValue(undefined);
       const refreshContextWindowCache = vi
         .spyOn(await import("./context.js"), "refreshContextWindowCache")
         .mockResolvedValue(undefined);
+      vi.spyOn(
+        await import("./model-provider-auth.js"),
+        "warmCurrentProviderAuthStateOffMainThread",
+      ).mockResolvedValue(undefined);
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
