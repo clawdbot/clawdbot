@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
@@ -6,7 +5,6 @@ import {
   getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
-import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
@@ -17,7 +15,6 @@ import {
   getPreparedModelRuntimeAuthMaterializations,
 } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -32,6 +29,7 @@ import type {
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
+import { projectChatSessionMetadata } from "./chat-metadata-session-projection.js";
 import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
@@ -617,40 +615,6 @@ export function createGatewayChatMetadataRuntime(params: {
     }
   };
 
-  const readSessionMetadata = (
-    readParams: ChatMetadataReadParams,
-    metadata: ChatMetadataResult,
-  ): ChatMetadataResult => {
-    const config = deps.getConfig();
-    const ownership = readSessionRuntimeOwnership({ ...readParams, config });
-    if (ownership?.auth !== "native" || !metadata.models) {
-      return metadata;
-    }
-    // Pending native branches have no tuple yet. Remove the host-only gate from
-    // the rendered placeholder, without calling it a native selection or proving credentials.
-    const renderedModel =
-      ownership.modelRef ??
-      resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
-        allowPluginNormalization: false,
-      });
-    return {
-      ...metadata,
-      models: metadata.models.map((model) => {
-        const row = asOptionalRecord(model);
-        if (row?.provider !== renderedModel.provider || row.id !== renderedModel.model) {
-          return model;
-        }
-        const {
-          available: _available,
-          unavailableReason: _reason,
-          unavailableUntil: _until,
-          ...native
-        } = row;
-        return native;
-      }),
-    };
-  };
-
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> =>
     await readCurrent(async (generation) => {
       const agentId = normalizeAgentId(readParams.agentId);
@@ -663,7 +627,7 @@ export function createGatewayChatMetadataRuntime(params: {
       const projection = await projectAgent(generation, agent, readParams.sessionEntry);
       return {
         isCurrent: projection.isCurrent,
-        read: () => readSessionMetadata(readParams, projection.read()),
+        read: () => projectChatSessionMetadata(readParams, projection.read(), deps.getConfig()),
       };
     });
 
@@ -677,7 +641,7 @@ export function createGatewayChatMetadataRuntime(params: {
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
       ...(readParams.readPolicy === "ready"
         ? {}
-        : { metadata: readSessionMetadata(readParams, session.read()) }),
+        : { metadata: projectChatSessionMetadata(readParams, session.read(), deps.getConfig()) }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
     });
