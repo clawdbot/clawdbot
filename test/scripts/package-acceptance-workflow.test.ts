@@ -2731,9 +2731,24 @@ describe("package acceptance workflow", () => {
   );
 
   it.each([
-    { name: "standalone FRV", fullReleasePreflight: true, independentProducer: true },
-    { name: "direct FRV", fullReleasePreflight: true, independentProducer: false },
-    { name: "historical NPM", fullReleasePreflight: false, independentProducer: false },
+    {
+      name: "standalone FRV",
+      fullReleasePreflight: true,
+      independentProducer: true,
+      version: "2026.8.1",
+    },
+    {
+      name: "direct FRV",
+      fullReleasePreflight: true,
+      independentProducer: false,
+      version: "2026.9.1",
+    },
+    {
+      name: "historical NPM",
+      fullReleasePreflight: false,
+      independentProducer: false,
+      version: "2026.8.1-beta.3",
+    },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
@@ -2772,7 +2787,7 @@ describe("package acceptance workflow", () => {
     const fixture = createReleasePublishFixture(
       {
         EXPECTED_PRODUCER_RUN_ID: producerRunId,
-        RELEASE_TAG: "v2026.8.1-beta.3",
+        RELEASE_TAG: `v${mode.version}`,
         TARGET_SHA: "d".repeat(40),
         OPENCLAW_NPM_RESUME_RUN_ID: "777",
         NPM_TELEGRAM_RUN_ID: "",
@@ -2832,6 +2847,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       JSON.stringify({
         openclawNpmTarball: "https://example.invalid/openclaw.tgz",
         openclawNpmIntegrity: "sha512-fixture",
+        ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
       }),
     );
     const resume = fixture.run(
@@ -2868,6 +2884,11 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     expect(proof.status, proof.stderr).toBe(0);
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
+    expect(proofText).toContain(
+      mode.fullReleasePreflight
+        ? `Telegram integration checks: waived by the release owner for ${mode.version} (source QA, Package Acceptance, published-package E2E); not run.`
+        : "npm Telegram beta E2E: not supplied",
+    );
     expect
       .soft(proofText)
       .toContain(
@@ -7023,26 +7044,31 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
   );
 
-  it.each(["stable", "full"])(
-    "waives only Telegram integration lanes for approved %s 2026.8.1",
-    (profile) => {
-      const options = { telegramWaiver: "2026.8.1-owner-approved" };
-      const direct = runReleaseChecksInputValidation(profile, "false", "all", "false", "", options);
-      const umbrella = runFullReleaseInputValidation(profile, "false", options);
-      expect(direct.result.status, direct.result.stderr).toBe(0);
-      expect(umbrella.status, umbrella.stderr).toBe(0);
-      const output = readFileSync(direct.outputPath, "utf8");
-      expect(output).toContain("telegram_waiver=2026.8.1-owner-approved");
-      expect(output).toContain("qa_live_telegram_enabled=false");
-      expect(output).toContain("run_release_soak=true");
-      expect(output).toContain("skip_package_telegram_e2e=false");
-    },
-  );
+  it.each([
+    ["stable", "2026.8.1"],
+    ["full", "2026.8.1"],
+    ["stable", "2026.9.1"],
+    ["full", "2026.9.1"],
+  ])("waives only Telegram integration lanes for approved %s %s", (profile, version) => {
+    const options = { telegramWaiver: `${version}-owner-approved`, version };
+    const direct = runReleaseChecksInputValidation(profile, "false", "all", "false", "", options);
+    const umbrella = runFullReleaseInputValidation(profile, "false", options);
+    expect(direct.result.status, direct.result.stderr).toBe(0);
+    expect(umbrella.status, umbrella.stderr).toBe(0);
+    const output = readFileSync(direct.outputPath, "utf8");
+    expect(output).toContain(`telegram_waiver=${version}-owner-approved`);
+    expect(output).toContain("qa_live_telegram_enabled=false");
+    expect(output).toContain("run_release_soak=true");
+    expect(output).toContain("skip_package_telegram_e2e=false");
+  });
 
   it.each([
     { version: "2026.8.2" },
     { version: "2026.8.1-beta.3" },
     { telegramWaiver: "true" },
+    { telegramWaiver: "2026.9.1-owner-approved" },
+    { telegramWaiver: "2026.8.1-owner-approval" },
+    { version: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
     { rerunGroup: "npm-telegram" },
     { liveSuiteFilter: "qa-telegram" },
     { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },

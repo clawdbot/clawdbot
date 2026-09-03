@@ -337,8 +337,7 @@ export function validateReleaseCoveragePolicyBinding(plan, validationInputs = {}
   }
 }
 
-// The release owner approved only these Telegram integration omissions for
-// 2026.8.1. This declaration never turns a failed or unrun test into a pass.
+// Owner declarations bind omissions to one release; waived or unrun never means passed.
 export function normalizeReleaseTelegramWaiver({
   telegramWaiver,
   targetVersion,
@@ -354,11 +353,11 @@ export function normalizeReleaseTelegramWaiver({
     return "";
   }
   if (
-    telegramWaiver !== "2026.8.1-owner-approved" ||
-    targetVersion !== "2026.8.1" ||
+    telegramWaiver !== `${targetVersion}-owner-approved` ||
+    parseReleaseVersion(stringValue(targetVersion))?.baseVersion !== stringValue(targetVersion) ||
     !["stable", "full"].includes(releaseProfile)
   ) {
-    throw new Error("Telegram waiver requires owner-approved 2026.8.1 stable/full validation");
+    throw new Error("Telegram waiver requires an exact stable/full owner declaration");
   }
   if (candidateVersion !== undefined && candidateVersion !== targetVersion) {
     throw new Error("Telegram waiver target version differs from the release candidate");
@@ -390,10 +389,10 @@ export function normalizeReleaseTelegramWaiver({
   // the waived release exactly; a moving dist-tag does not establish version.
   if (
     [releasePackageSpec, packageAcceptancePackageSpec, npmTelegramPackageSpec].some(
-      (spec) => spec !== "" && spec !== "openclaw@2026.8.1",
+      (spec) => spec !== "" && spec !== `openclaw@${targetVersion}`,
     )
   ) {
-    throw new Error("Telegram waiver package overrides must be openclaw@2026.8.1");
+    throw new Error(`Telegram waiver package overrides must be openclaw@${targetVersion}`);
   }
   return telegramWaiver;
 }
