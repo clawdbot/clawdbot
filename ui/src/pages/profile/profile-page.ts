@@ -132,7 +132,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.connected = nextConnected;
     this.canWrite = nextCanWrite;
     this.selfUser = nextSelfUser;
-    // connected/client are plain fields; an unidentified (token-auth) connect or
+    // connected/client are plain fields; an unidentified connect or
     // disconnect changes no @state, so the render branch must be invalidated
     // explicitly or the page sticks on the stale offline/connected view.
     this.requestUpdate();
@@ -352,7 +352,12 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderIdentity() {
     if (!this.selfUser) {
-      return nothing;
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          renderSettingsEmpty(t("profilePage.identity.unidentified")),
+        )}
+      </div>`;
     }
     if (!this.canWrite) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>

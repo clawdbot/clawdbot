@@ -18,6 +18,7 @@ import {
 import { renderSessionColorDot } from "./session-color.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
+import "./session-hovercard.css";
 import "./tooltip.ts";
 import "./viewer-facepile.ts";
 

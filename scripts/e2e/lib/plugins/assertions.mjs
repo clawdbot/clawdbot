@@ -6,6 +6,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../../../lib/bounded-response.mjs";
+import { createTimeoutError } from "../../../lib/timeout-error.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   readPluginInstallIndex,
@@ -30,12 +31,6 @@ function readClawHubPreflightLimits() {
     ),
     timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
   };
-}
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
 }
 
 async function withTimeout(label, timeoutMs, run) {

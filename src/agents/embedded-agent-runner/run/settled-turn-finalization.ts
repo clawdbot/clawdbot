@@ -384,13 +384,17 @@ function buildSettledTurnFinalizationAttemptResult(input: {
   const { result, settledAttempt } = input;
   const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
   // Finalization replaces terminal ownership, not host-private facts from settled tools.
-  // Keep those facts while replay, abort, and lifecycle state remain finalizer-local.
+  // Its response model does not replace the original runtime-owned selection.
+  // Replay, abort, and lifecycle state remain finalizer-local.
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
     modelAttempt: resolveRuntimeModelAttempt(input.runtimePlan),
+    ...(settledAttempt.runtimeModelSelection
+      ? { runtimeModelSelection: settledAttempt.runtimeModelSelection }
+      : {}),
     contextTokens: settledAttempt.contextTokens,
     contextTokensSource: settledAttempt.contextTokensSource,
     authBindingFingerprint: settledAttempt.authBindingFingerprint,

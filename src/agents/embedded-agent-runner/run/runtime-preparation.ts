@@ -45,6 +45,7 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 export async function prepareEmbeddedRunRuntime(input: {
   runParams: RunEmbeddedAgentInternalParams;
+  sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
   provider: string;
   modelId: string;
   agentDir: string;
@@ -65,6 +66,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
     runParams: params,
+    sessionAdmission: input.sessionAdmission,
     provider,
     modelId,
     agentDir: input.agentDir,
@@ -83,8 +85,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     modelSelectionChangedByHook,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
-    nativeModelOwnedHarnessId,
+    pinnedHarnessId,
     nativeModelOwned,
+    nativeSessionRuntime,
     modelConfigProvider,
     model,
     authStorage,
@@ -104,7 +107,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       runtimeModel: candidate,
       nativeModelOwned,
       requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
+      pinnedHarnessId,
     });
   const initialResolvedRuntimeModel = resolveEffectiveModel(runtimeModel);
   let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
@@ -144,29 +147,33 @@ export async function prepareEmbeddedRunRuntime(input: {
     plan?: AgentRuntimeAuthPlan,
     preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
   ) =>
-    selectEmbeddedRunHarness({
-      runParams: params,
-      provider,
-      modelId,
-      model: candidate,
-      plan,
-      preparedAuthAttempt,
-      requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
-    });
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarness({
+          runParams: params,
+          provider,
+          modelId,
+          model: candidate,
+          plan,
+          preparedAuthAttempt,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof effectiveModel,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) =>
-    selectEmbeddedRunHarnessForPreparedAttempts({
-      runParams: params,
-      provider,
-      modelId,
-      model: candidate,
-      attempts,
-      requestStreamTransportOverrides,
-      nativeModelOwnedHarnessId,
-    });
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarnessForPreparedAttempts({
+          runParams: params,
+          provider,
+          modelId,
+          model: candidate,
+          attempts,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
@@ -182,6 +189,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     workspaceDir: input.workspaceDir,
     requestStreamTransportOverrides,
     nativeModelOwned,
+    nativeSessionRuntime,
     authStorage,
     modelRegistry,
     preparedModelRuntime: input.preparedModelRuntime,
@@ -550,6 +558,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     requestedModelId,
     expectedHarnessArtifact,
     nativeModelOwned,
+    nativeSessionRuntime,
     model,
     authStorage,
     modelRegistry,

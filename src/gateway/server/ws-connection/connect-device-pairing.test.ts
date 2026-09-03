@@ -4,6 +4,8 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { HelloOk } from "../../../../packages/gateway-protocol/src/schema/frames.js";
+import type { UsersSelfResult } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import { loadDeviceAuthToken } from "../../../infra/device-auth-store.js";
@@ -57,6 +59,93 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
+  test("keeps the owner's renamed profile across shared-token and cached device-token connections", async () => {
+    const origin = "https://localhost";
+    const auth = { mode: "token", token: "local-owner-secret" } as const;
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await replaceConfigFile({
+      nextConfig: { gateway: { auth, controlUi: { allowedOrigins: [origin] } } },
+      afterWrite: { mode: "auto" },
+    });
+    const started = await startServer(undefined, { auth, controlUiEnabled: true });
+    const loaded = loadDeviceIdentity("durable-gateway-owner");
+    const clients: GatewayClient[] = [];
+    const scopes = ["operator.read", "operator.write"];
+    const connect = (token?: string) =>
+      new Promise<{ client: GatewayClient; hello: HelloOk }>((resolve, reject) => {
+        const client = new GatewayClient({
+          url: `ws://127.0.0.1:${started.port}`,
+          origin,
+          token,
+          deviceIdentity: loaded.identity,
+          clientName: CONTROL_UI_CLIENT.id,
+          clientVersion: CONTROL_UI_CLIENT.version,
+          platform: CONTROL_UI_CLIENT.platform,
+          mode: CONTROL_UI_CLIENT.mode,
+          role: "operator",
+          scopes,
+          onHelloOk: (hello) => resolve({ client, hello }),
+          onConnectError: reject,
+        });
+        clients.push(client);
+        client.start();
+      });
+    try {
+      const first = await connect(auth.token);
+      expect(first.hello.auth.scopes).toEqual(scopes);
+      const { profile } = await first.client.request<UsersSelfResult>("users.self", {});
+      expect(profile.emails).toEqual([]);
+      expect(profile.role).toBeUndefined();
+      expect(await first.client.request("users.github.status", {})).toMatchObject({
+        personal: { state: "disconnected" },
+      });
+      await first.client.request("users.setDisplayName", {
+        profileId: profile.id,
+        displayName: "Ada Owner",
+      });
+      const cachedToken = loadDeviceAuthToken({
+        deviceId: loaded.identity.deviceId,
+        role: "operator",
+      })?.token;
+      expect(cachedToken).toBe(first.hello.auth.deviceToken);
+      expect(cachedToken).toBeTruthy();
+
+      // No shared secret: the real client must reload the issued device token.
+      const second = await connect();
+      expect(second.hello.auth.scopes).toEqual(scopes);
+      const secondProfile = await second.client.request<UsersSelfResult>("users.self", {});
+      expect(secondProfile.profile).toMatchObject({
+        id: profile.id,
+        displayName: "Ada Owner",
+        emails: [],
+      });
+      const ownerRows = second.hello.snapshot.presence.filter(
+        (entry) => entry.user?.id === profile.id && entry.reason !== "disconnect",
+      );
+      expect(ownerRows).toHaveLength(2);
+      for (const entry of ownerRows) {
+        expect(entry.user).toMatchObject({
+          id: profile.id,
+          identity: { type: "profile", id: profile.id },
+          name: "Ada Owner",
+        });
+        expect(entry.user).not.toHaveProperty("email");
+      }
+      await second.client.request("users.setDisplayName", {
+        profileId: profile.id,
+        displayName: "Augusta Owner",
+      });
+      expect(await first.client.request<UsersSelfResult>("users.self", {})).toMatchObject({
+        profile: { id: profile.id, displayName: "Augusta Owner", emails: [] },
+      });
+    } finally {
+      await Promise.all(clients.map((client) => client.stopAndWait()));
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("returns terminal identity details and pauses a rejected real device-token client", async () => {
     const origin = "https://localhost";
     const auth = { mode: "token", token: "local-secret" } as const;

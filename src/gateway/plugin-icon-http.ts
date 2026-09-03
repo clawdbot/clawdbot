@@ -25,6 +25,7 @@ import { sendMethodNotAllowed } from "./http-common.js";
 import {
   createHttpImageRepresentation,
   resolveHttpImageMimeType,
+  startsWithSvgRootElement,
   sendHttpImageResponse,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
@@ -72,9 +73,7 @@ async function validateImageMime(body: Buffer, contentType: string): Promise<boo
   if (contentType === SVG_MIME_TYPE) {
     const text = body.toString("utf8");
     return (
-      !text.includes("\0") &&
-      !/<!doctype|<!entity/iu.test(text) &&
-      /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/iu.test(text)
+      !text.includes("\0") && !/<!doctype|<!entity/iu.test(text) && startsWithSvgRootElement(text)
     );
   }
   const detected = await fileTypeFromBuffer(body);

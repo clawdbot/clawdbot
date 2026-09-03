@@ -138,6 +138,7 @@ describe("listGatewayMethods", () => {
     "mentions.dismiss",
     "transcripts.list",
     "transcripts.get",
+    "models.authOrderSet",
   ];
 
   it("advertises plugin surface refresh for capability rotation", () => {

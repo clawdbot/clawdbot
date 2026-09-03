@@ -147,8 +147,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
-    probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => string = (probe) => probe.threadId,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -162,7 +161,7 @@ async function checkCodexUpstreamActivity(
         continue;
       }
       try {
-        const threadId = await resolveThreadId(probe);
+        const threadId = resolveThreadId(probe);
         const page = await pinned.listTurnPage({
           threadId,
           limit: CODEX_UPSTREAM_TURN_LIMIT,
@@ -202,7 +201,7 @@ export function createChecker(params: {
   control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+  const resolveThreadId = (probe: SessionUpstreamProbe) => {
     const config = params.getRuntimeConfig();
     const entry = params.api.runtime.agent.session.getSessionEntry({
       agentId: probe.agentId,
@@ -213,7 +212,7 @@ export function createChecker(params: {
     if (!sessionId) {
       return probe.threadId;
     }
-    const binding = await params.bindingStore.read(
+    const binding = params.bindingStore.read(
       sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
     );
     return binding?.connectionScope === "supervision" &&

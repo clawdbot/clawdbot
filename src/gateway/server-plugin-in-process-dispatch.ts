@@ -37,12 +37,13 @@ type OperatorToolGatewayAuthority = {
     NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
   >;
   scopes: readonly string[];
+  operatorRoleActor?: GatewayOperatorRoleActor;
   active: boolean;
 };
 
 const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
 
-/** Retains one verified operator identity only for its awaited tool invocation. */
+/** Retains operator attribution and authority only for the awaited tool invocation. */
 export async function withOperatorToolGatewayAuthority<T>(
   authority: Omit<OperatorToolGatewayAuthority, "active">,
   run: () => Promise<T>,
@@ -118,19 +119,21 @@ function resolveInProcessGatewayDispatch(
   // retain the verified role actor separately so target policy remains enforced.
   const isHostOwnedAgentRun = method === "agent" && Boolean(options?.agentRunTracking);
   const operatorAuthority = isHostOwnedAgentRun ? undefined : verifiedOperatorAuthority;
-  const operatorRoleActor: GatewayOperatorRoleActor | undefined = isHostOwnedAgentRun
-    ? inheritedOperatorAuthority
-      ? {
-          kind: "operator",
-          profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
-        }
-      : (scopedRoleActor ??
-        (scopedOperatorProfile?.profileId
-          ? { kind: "operator", profileId: scopedOperatorProfile.profileId }
-          : scope?.client
-            ? undefined
-            : (explicitSystemActor ?? { kind: "system" })))
-    : (scopedRoleActor ?? explicitSystemActor);
+  const operatorRoleActor: GatewayOperatorRoleActor | undefined =
+    inheritedOperatorAuthority?.operatorRoleActor ??
+    (isHostOwnedAgentRun
+      ? inheritedOperatorAuthority
+        ? {
+            kind: "operator",
+            profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
+          }
+        : (scopedRoleActor ??
+          (scopedOperatorProfile?.profileId
+            ? { kind: "operator", profileId: scopedOperatorProfile.profileId }
+            : scope?.client
+              ? undefined
+              : (explicitSystemActor ?? { kind: "system" })))
+      : (scopedRoleActor ?? explicitSystemActor));
   // The router installs a nested scope; retain the admitted resolver for later commit checks.
   const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);

@@ -87,6 +87,7 @@ const CURRENT_TRAIN_METHODS = [
   "openclaw.setup.activate.start",
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
+  "models.authOrderSet",
   "sessions.patchMany",
   "sessions.goal.update",
   "sessions.goal.clear",

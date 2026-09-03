@@ -152,22 +152,22 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        const rejectedEventId = readRealtimeErrorEventId(event.error);
-        if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {
-          this.responseCreateInFlight = false;
-          this.standaloneSpeechActive = false;
-          this.standaloneSpeechEventId = null;
-          this.config.onError?.(new Error(detail));
-          if (this.standaloneSpeechQueue.length > 0) {
-            this.flushStandaloneSpeech();
-          } else if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          }
-          return;
-        }
+        const error = isRecord(event.error) ? event.error : undefined;
+        // Validation errors can omit event_id. The response parameter still belongs
+        // to our single pending create; an explicit id always overrides that evidence.
+        const rejectedEventId =
+          readRealtimeErrorEventId(event.error) ??
+          (this.responseCreateInFlight &&
+          error?.type === "invalid_request_error" &&
+          typeof error.param === "string" &&
+          (error.param === "response" || error.param.startsWith("response."))
+            ? (this.manualResponseCreateEventId ?? this.standaloneSpeechEventId)
+            : undefined);
+        const rejectsStandaloneSpeech =
+          this.standaloneSpeechEventId !== null && rejectedEventId === this.standaloneSpeechEventId;
         const rejectsManualResponseCreate =
           this.manualResponseCreateEventId !== null &&
-          readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
+          rejectedEventId === this.manualResponseCreateEventId;
         if (
           rejectsManualResponseCreate &&
           detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
@@ -195,14 +195,18 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           }
           return;
         }
-        if (rejectsManualResponseCreate) {
-          this.responseCreateInFlight = false;
-          this.manualResponseCreateEventId = null;
-          if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          } else {
-            this.restoreAutoRespondAfterManualResponse();
-          }
+        if (rejectsManualResponseCreate || rejectsStandaloneSpeech) {
+          // Rejected creates never emit response.done. Retire the same response owner
+          // so transports release speech and reentrant callbacks drain only afterward.
+          this.handleResponseDone(
+            {
+              type: "response.done",
+              response: { status: "failed", status_details: { error: event.error } },
+            },
+            connection,
+            () => this.config.onError?.(new Error(detail)),
+          );
+          return;
         }
         this.config.onError?.(new Error(detail));
       }

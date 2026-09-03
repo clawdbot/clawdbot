@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import {
   resolveSessionModelIdentityRef,
@@ -53,9 +54,20 @@ export function resolveSessionSelectedModelRef(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   agentId: string;
+  sessionKey?: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
 }): ReturnType<typeof resolveSessionModelRef> {
+  // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
+  const ownership = readSessionRuntimeOwnership({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+  });
+  if (ownership?.modelRef) {
+    return ownership.modelRef;
+  }
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,

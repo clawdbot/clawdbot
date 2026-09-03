@@ -1,10 +1,11 @@
 // Codex tests cover shared client plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { SemVer } from "semver";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
@@ -99,15 +100,6 @@ vi.mock("./desktop-generation.js", () => ({
   waitForCodexDesktopGeneration: mocks.waitForCodexDesktopGeneration,
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
-  AgentHarnessPreflightError: (
-    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()
-  ).AgentHarnessPreflightError,
-  embeddedAgentLog: mocks.embeddedAgentLog,
-  formatErrorMessage: (error: unknown) => String(error),
-  OPENCLAW_VERSION: "test",
-}));
-
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
@@ -149,6 +141,18 @@ async function sendInitializeResult(
   const initialize = JSON.parse(await harness.waitForWrite(0)) as { id: number; method: string };
   expect(initialize.method).toBe("initialize");
   harness.send({ id: initialize.id, result: { userAgent } });
+}
+
+// Capture reads runtime files before startup; respond when initialize reaches the wire.
+function createInitializingClientHarness(userAgent: string) {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "initialize") {
+        send({ id: request.id, result: { userAgent } });
+      }
+    },
+  });
 }
 
 async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
@@ -242,6 +246,11 @@ function configureManagedDesktopFallback(): CodexAppServerStartOptions {
 }
 
 describe("shared Codex app-server client", () => {
+  beforeEach(() => {
+    vi.spyOn(embeddedAgentLog, "debug").mockImplementation(mocks.embeddedAgentLog.debug);
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(mocks.embeddedAgentLog.warn);
+  });
+
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
     ({
@@ -909,8 +918,8 @@ describe("shared Codex app-server client", () => {
     await withTempDir("openclaw-codex-capture-client-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
-      const normal = createClientHarness();
-      const captured = createClientHarness();
+      const normal = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
+      const captured = createInitializingClientHarness("openclaw/0.149.0 (Linux; test)");
       const startSpy = vi
         .spyOn(CodexAppServerClient, "start")
         .mockResolvedValueOnce(normal.client)
@@ -923,26 +932,26 @@ describe("shared Codex app-server client", () => {
         headers: {},
       };
 
-      const normalPromise = getLeasedSharedCodexAppServerClient({ startOptions });
-      await sendInitializeResult(normal, "openclaw/0.149.0 (Linux; test)");
-      const normalClient = await normalPromise;
-      const capturedPromise = getLeasedSharedCodexAppServerClient({
-        startOptions,
-        runtimeArtifactMode: "capture",
-      });
-      await sendInitializeResult(captured, "openclaw/0.149.0 (Linux; test)");
-      const capturedClient = await capturedPromise;
+      try {
+        const normalClient = await getLeasedSharedCodexAppServerClient({ startOptions });
+        const capturedClient = await getLeasedSharedCodexAppServerClient({
+          startOptions,
+          runtimeArtifactMode: "capture",
+        });
 
-      expect(capturedClient).not.toBe(normalClient);
-      expect(startSpy).toHaveBeenCalledTimes(2);
-      const { readCodexAppServerClientRuntimeArtifact } = await import("./runtime-artifact.js");
-      expect(readCodexAppServerClientRuntimeArtifact(normalClient)).toBeUndefined();
-      expect(readCodexAppServerClientRuntimeArtifact(capturedClient)).toEqual({
-        id: expect.stringMatching(/^codex-app-server:v1:/u),
-        fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      });
-      expect(releaseLeasedSharedCodexAppServerClient(normalClient)).toBe(true);
-      expect(releaseLeasedSharedCodexAppServerClient(capturedClient)).toBe(true);
+        expect(capturedClient).not.toBe(normalClient);
+        expect(startSpy).toHaveBeenCalledTimes(2);
+        const { readCodexAppServerClientRuntimeArtifact } = await import("./runtime-artifact.js");
+        expect(readCodexAppServerClientRuntimeArtifact(normalClient)).toBeUndefined();
+        expect(readCodexAppServerClientRuntimeArtifact(capturedClient)).toEqual({
+          id: expect.stringMatching(/^codex-app-server:v1:/u),
+          fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        });
+        expect(releaseLeasedSharedCodexAppServerClient(normalClient)).toBe(true);
+        expect(releaseLeasedSharedCodexAppServerClient(capturedClient)).toBe(true);
+      } finally {
+        await Promise.all([normal.client.closeAndWait(), captured.client.closeAndWait()]);
+      }
     });
   });
 
@@ -956,8 +965,8 @@ describe("shared Codex app-server client", () => {
         fs.writeFile(fallbackCommand, "package-launcher"),
         fs.writeFile(`${fallbackCommand}.native`, "package-native"),
       ]);
-      const desktop = createClientHarness();
-      const fallback = createClientHarness();
+      const desktop = createInitializingClientHarness("openclaw/0.124.9 (macOS; test)");
+      const fallback = createInitializingClientHarness("openclaw/0.149.0 (macOS; test)");
       vi.spyOn(CodexAppServerClient, "start")
         .mockResolvedValueOnce(desktop.client)
         .mockResolvedValueOnce(fallback.client);
@@ -977,25 +986,26 @@ describe("shared Codex app-server client", () => {
         headers: {},
       };
 
-      const acquire = getLeasedSharedCodexAppServerClient({
-        startOptions: requested,
-        runtimeArtifactMode: "capture",
-      });
-      await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
-      await sendInitializeResult(fallback, "openclaw/0.149.0 (macOS; test)");
-      const client = await acquire;
-      const { readCodexAppServerClientRuntimeArtifact, validateCodexAppServerRuntimeArtifact } =
-        await import("./runtime-artifact.js");
-      const binding = readCodexAppServerClientRuntimeArtifact(client);
-      if (!binding) {
-        throw new Error("expected captured Codex runtime artifact");
-      }
+      try {
+        const client = await getLeasedSharedCodexAppServerClient({
+          startOptions: requested,
+          runtimeArtifactMode: "capture",
+        });
+        const { readCodexAppServerClientRuntimeArtifact, validateCodexAppServerRuntimeArtifact } =
+          await import("./runtime-artifact.js");
+        const binding = readCodexAppServerClientRuntimeArtifact(client);
+        if (!binding) {
+          throw new Error("expected captured Codex runtime artifact");
+        }
 
-      await fs.writeFile(`${desktopCommand}.native`, "desktop-native-updated");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-      await fs.writeFile(`${fallbackCommand}.native`, "package-native-updated");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
-      expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+        await fs.writeFile(`${desktopCommand}.native`, "desktop-native-updated");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+        await fs.writeFile(`${fallbackCommand}.native`, "package-native-updated");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+        expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+      } finally {
+        await Promise.all([desktop.client.closeAndWait(), fallback.client.closeAndWait()]);
+      }
     });
   });
 

@@ -757,26 +757,32 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("adopts a Tailscale name only while the display-name slot is empty", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Ada Provider" },
-      options,
-    );
+  it.each([null, "", " \t "])(
+    "adopts a Tailscale name only into an empty slot: %s",
+    (emptyName) => {
+      const options = stateOptions();
+      const profile = ensureProfileForTailscaleIdentity(
+        { login: "ada@github", name: "Ada Provider" },
+        options,
+      );
 
-    setDisplayName(profile.id, null, options);
-    const version = readUserProfileVersion();
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-    ).toMatchObject({ displayName: "Ada Adopted" });
-    expect(readUserProfileVersion()).toBe(version + 1);
+      setDisplayName(profile.id, emptyName, options);
+      const version = readUserProfileVersion();
+      expect(
+        ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
+      ).toMatchObject({ displayName: "Ada Adopted" });
+      expect(readUserProfileVersion()).toBe(version + 1);
 
-    setDisplayName(profile.id, "User Chosen", options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
-    ).toMatchObject({ displayName: "User Chosen" });
-    expect(readUserProfileVersion()).toBe(version + 2);
-  });
+      setDisplayName(profile.id, "User Chosen", options);
+      expect(
+        ensureProfileForTailscaleIdentity(
+          { login: "ada@github", name: "Provider Changed" },
+          options,
+        ),
+      ).toMatchObject({ displayName: "User Chosen" });
+      expect(readUserProfileVersion()).toBe(version + 2);
+    },
+  );
 
   it("updates display names", () => {
     const options = stateOptions();

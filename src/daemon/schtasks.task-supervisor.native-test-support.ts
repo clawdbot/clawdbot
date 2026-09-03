@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
@@ -16,6 +17,7 @@ type WindowsProcessDiagnostic = {
 export type GatewayTaskSupervisorProbe = {
   childPidPath: string;
   failedAttemptPidPath: string;
+  failedSupervisorPidPath: string;
   probePath: string;
   supervisorPidPath: string;
 };
@@ -39,15 +41,20 @@ async function waitForRecordedPid(pidPath: string, label: string): Promise<numbe
   throw new Error(`Timed out waiting for Scheduled Task ${label} process id`);
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+export async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        return;
-      }
+    if (!isProcessAlive(pid)) {
+      return;
     }
     await sleep();
   }
@@ -58,6 +65,7 @@ export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSu
   return {
     childPidPath: path.join(rootDir, "child-pid.txt"),
     failedAttemptPidPath: path.join(rootDir, "failed-attempt-pid.txt"),
+    failedSupervisorPidPath: path.join(rootDir, "failed-supervisor-pid.txt"),
     probePath: path.join(rootDir, "probe.mts"),
     supervisorPidPath: path.join(rootDir, "supervisor-pid.txt"),
   };
@@ -83,11 +91,14 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       "const childPidPath = process.argv[7];",
       "const supervisorPidPath = process.argv[8];",
       "const failedAttemptPidPath = process.argv[9];",
+      "const failedSupervisorPidPath = process.argv[10];",
       "const appendEvent = (phase) => fs.appendFileSync(eventsPath, `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid })}\\n`);",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
       "  await runWindowsGatewayTaskSupervisor();",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
+      // Preserve this run's supervisor before a recovery launch overwrites its live PID file.
+      "  fs.copyFileSync(supervisorPidPath, failedSupervisorPidPath);",
       "  fs.writeFileSync(failedAttemptPidPath, String(process.pid));",
       "  process.exit(23);",
       "} else {",
@@ -119,10 +130,12 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
   gatewayPort: number;
   probe: GatewayTaskSupervisorProbe;
 }): string[] {
+  // The task runs from a temporary workspace, not the checkout that owns tsx.
+  const tsxImportUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
   return [
     process.execPath,
     "--import",
-    "tsx",
+    tsxImportUrl,
     params.probe.probePath,
     "gateway",
     "--port",
@@ -132,22 +145,24 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
     params.probe.childPidPath,
     params.probe.supervisorPidPath,
     params.probe.failedAttemptPidPath,
+    params.probe.failedSupervisorPidPath,
   ];
 }
 
 export async function waitForGatewayTaskSupervisorProcesses(params: {
   probe: GatewayTaskSupervisorProbe;
-  requireFailedAttempt?: boolean;
+  failedAttempt?: boolean;
 }): Promise<{ childPid: number; supervisorPid: number }> {
+  const childPidPath = params.failedAttempt
+    ? params.probe.failedAttemptPidPath
+    : params.probe.childPidPath;
+  const supervisorPidPath = params.failedAttempt
+    ? params.probe.failedSupervisorPidPath
+    : params.probe.supervisorPidPath;
   const [childPid, supervisorPid] = await Promise.all([
-    waitForRecordedPid(params.probe.childPidPath, "child"),
-    waitForRecordedPid(params.probe.supervisorPidPath, "supervisor"),
+    waitForRecordedPid(childPidPath, "child"),
+    waitForRecordedPid(supervisorPidPath, "supervisor"),
   ]);
-  if (params.requireFailedAttempt) {
-    await waitForProcessExit(
-      await waitForRecordedPid(params.probe.failedAttemptPidPath, "failed child"),
-    );
-  }
   return { childPid, supervisorPid };
 }
 

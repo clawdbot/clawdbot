@@ -12,22 +12,14 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-
-function readOption(name: string): string | undefined {
-  const prefix = `--${name}=`;
-  const inline = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
-  if (inline) {
-    return inline.slice(prefix.length);
-  }
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
+import { readControlUiProofOption } from "./lib/control-ui-proof-args.mts";
 
 const outputDir = createControlUiE2eArtifactDir(
   "model-picker-proof",
-  readOption("output-dir") ?? ".artifacts/control-ui-e2e/model-picker-proof",
+  readControlUiProofOption(process.argv, "output-dir") ??
+    ".artifacts/control-ui-e2e/model-picker-proof",
 );
-const label = readOption("label") ?? "after";
+const label = readControlUiProofOption(process.argv, "label") ?? "after";
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);

@@ -37,6 +37,7 @@ dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                                                                                                                                | Always on non-draft pushes and PRs                     |
 | `pnpm-store-warmup`                | Warm the lockfile-pinned Actions cache for fork PRs, manual runs, and same-repo docs-only PRs                                                                                                                                                                                                            | Node or docs-check lanes without an exact-cache writer |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                                  |
+| `control-ui-performance`           | Compare Control UI CSS with the exact base revision and enforce asset budgets independently of artifact generation                                                                                                                                                                                       | Runtime-build or Control UI test changes               |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI         |
 | `checks-fast-core`                 | Fast Linux correctness lanes: environment-variable, max-lines, and assertion-safety baseline ratchets, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                                                    | Node-relevant changes                                  |
 | `qa-smoke-ci-profile`              | Self-contained balanced parts of the automatic QA Smoke coverage set; one private-overlay build per part (the smoke set has no docker-lane or Control UI scenarios; the run step fails closed if one returns)                                                                                            | Pushes and manual runs; PRs only on QA-owned surfaces  |
@@ -120,6 +121,37 @@ including the SDK declaration writer, so local builds do not depend on CI's
 and reserves native-memory headroom. If the default budget cannot fit the build,
 it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
 remains the explicit operator override for attempting a different budget.
+
+## Control UI size budgets
+
+`pnpm ui:build` produces and verifies the bundle, then reports its compressed
+sizes. Budget violations do not prevent artifact generation. The separate
+`control-ui-performance` job enforces the budgets without blocking other jobs
+from building or testing the same source.
+
+Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
+1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
+CSS file fails the comparison. The existing largest-file, JavaScript, request-count,
+and isolated-renderer ceilings still apply independently. Reports include exact
+bytes, base deltas, and remaining headroom, with an early warning when the largest
+CSS file has less than 1 KiB of headroom.
+
+CI builds the selected checkout and the exact preflight base with the same
+installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
+normalized through the candidate's pinned compressor before comparison. The
+report identifies both revisions and the toolchain. There is no manually updated
+CSS baseline, and the cumulative ceilings still bound a series of small changes.
+
+Run the same comparison locally after installing dependencies:
+
+```bash
+pnpm ui:check-performance:base <base-commit-sha>
+```
+
+To enforce absolute budgets on an existing build, run `pnpm ui:check-performance`.
+Use `--base-dist <directory>` to compare with an already-built base, or
+`--report-only` to report violations without failing. Missing or malformed build
+artifacts remain errors in report-only mode.
 
 ## Watching pull request CI
 

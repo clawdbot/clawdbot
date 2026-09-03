@@ -85,8 +85,11 @@ export async function sendGatewayHello(
     deviceToken,
     bootstrapDeviceTokens,
   } = state;
-  // Prefer the authenticated human; principal scopes never inherit device-token rows.
-  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  // Only an upstream-verified identity owns principal recovery; owner profiles
+  // attribute shared-secret/device connections without changing their recovery scope.
+  const authenticatedPrincipal = authResult.user
+    ? (authenticatedUserProfileId ?? authResult.user)
+    : undefined;
   const recoveryScopeMaterial = authenticatedPrincipal
     ? ["principal", authenticatedPrincipal, device?.id ?? ""]
     : deviceToken?.token

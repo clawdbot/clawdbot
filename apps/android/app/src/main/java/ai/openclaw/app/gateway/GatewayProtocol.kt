@@ -900,6 +900,7 @@ enum class GatewayMethod(
   MentionsDismiss("mentions.dismiss"),
   TranscriptsList("transcripts.list"),
   TranscriptsGet("transcripts.get"),
+  ModelsAuthOrderSet("models.authOrderSet"),
 }
 
 enum class GatewayEvent(

@@ -3,7 +3,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
+import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -208,6 +210,41 @@ describe("Control UI plugin and catalog icon routes", () => {
       readIdleTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
     });
     expect(fetchOptions).not.toHaveProperty("ssrfPolicy");
+  });
+
+  it("keeps the Gateway responsive while rejecting an adversarial SVG favicon", async () => {
+    const validationStarted = createDeferredCore();
+    mocks.readRemoteMediaBuffer.mockImplementationOnce(async () => {
+      validationStarted.resolve();
+      return {
+        buffer: Buffer.from(`<!--${"--><!--".repeat(26)}-->X`),
+        contentType: "image/svg+xml",
+      };
+    });
+
+    await withGatewayServer({
+      prefix: "link-favicon-svg-validation-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        getRuntimeConfig: () => ({}),
+      },
+      run: async (gateway) => {
+        const started = process.hrtime.bigint();
+        const favicon = sendRequest(gateway, {
+          path: "/__openclaw__/link-favicon/example.com",
+        });
+        await validationStarted.promise;
+        const health = sendRequest(gateway, { path: "/healthz" });
+        const [faviconResponse, healthResponse] = await Promise.all([favicon, health]);
+        const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+        expect(faviconResponse.res.statusCode).toBe(404);
+        expect(healthResponse.res.statusCode).toBe(200);
+        expect(elapsedMs).toBeLessThan(500);
+      },
+    });
   });
 
   it("serves standard ICO favicon bytes without invoking raster processing", async () => {
