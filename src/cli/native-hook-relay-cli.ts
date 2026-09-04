@@ -6,7 +6,7 @@ import {
 } from "../agents/harness/native-hook-relay-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
-import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 

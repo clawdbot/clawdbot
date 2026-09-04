@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
+import { isSqliteLockError } from "./sqlite-error-classification.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);

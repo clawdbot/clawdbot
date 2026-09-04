@@ -173,20 +173,25 @@ function isProcessAlive(pid: number): boolean {
 async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
+  entryPath?: string;
   label: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
 }) {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/entry.ts", ...params.args], {
-    cwd: path.resolve("."),
-    env: {
-      ...process.env,
-      NODE_ENV: undefined,
-      VITEST: undefined,
-      ...params.env,
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", params.entryPath ?? "src/entry.ts", ...params.args],
+    {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        NODE_ENV: undefined,
+        VITEST: undefined,
+        ...params.env,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  );
   activeChildren.add(child);
   let stdout = "";
   let stderr = "";
@@ -247,7 +252,57 @@ async function runHooksCli(params: {
   });
 }
 
+async function runHooksRelay(params: {
+  entryPath?: string;
+  event: "post_tool_use" | "pre_tool_use";
+  stdin: string;
+}) {
+  const fixture = await createLingeringPreloadFixture();
+  const result = await runHooksCli({
+    args: [
+      "hooks",
+      "relay",
+      "--provider",
+      "codex",
+      "--relay-id",
+      "missing-relay",
+      "--event",
+      params.event,
+      "--timeout",
+      "50",
+    ],
+    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
+    ...(params.entryPath ? { entryPath: params.entryPath } : {}),
+    label: `hooks relay ${params.event}`,
+    env: {
+      LINGER_MARKER: fixture.markerPath,
+      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: fixture.stateDir,
+    },
+    stdin: params.stdin,
+  });
+  await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
+  return result;
+}
+
 describe("hooks CLI process lifecycle", () => {
+  it("drains the dedicated relay entry output before forcing one-shot exit", async () => {
+    const result = await runHooksRelay({
+      entryPath: "src/cli/native-hook-relay-entry.ts",
+      event: "pre_tool_use",
+      stdin: "{}",
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+      },
+    });
+  }, 90_000);
+
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
     async () => {

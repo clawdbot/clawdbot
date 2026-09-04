@@ -811,6 +811,15 @@ const configs = [
     },
     false,
   ),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      entry: { entry: "src/cli/native-hook-relay-entry.ts" },
+      outDir: "dist/native-hook-relay",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
   workerDeployBuildConfig(),
   nodeBuildConfig(
     {
