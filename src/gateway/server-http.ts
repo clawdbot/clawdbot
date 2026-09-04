@@ -540,12 +540,7 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      let pluginNodeCapabilityFallback:
-        | import("./server/plugin-node-capability-auth.js").PluginNodeCapabilityFallback
-        | undefined;
-      let revalidatePluginNodeCapabilityFallback:
-        | typeof import("./server/plugin-node-capability-auth.js").revalidatePluginNodeCapabilityFallback
-        | undefined;
+      let rejectStalePluginNodeCapability = () => false;
       addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
       addRequestStage(Boolean(nodeCapability), async () => {
         const {
@@ -567,8 +562,10 @@ export function createGatewayHttpServer(opts: {
           sendGatewayAuthFailure(res, ok);
           return true;
         }
-        pluginNodeCapabilityFallback = ok.pluginNodeCapabilityFallback;
-        revalidatePluginNodeCapabilityFallback = revalidate;
+        rejectStalePluginNodeCapability = () =>
+          ok.pluginNodeCapabilityFallback !== undefined &&
+          !revalidate(ok.pluginNodeCapabilityFallback) &&
+          (sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" }), true);
         return false;
       });
       addRequestStage(
@@ -577,11 +574,7 @@ export function createGatewayHttpServer(opts: {
           isCanvasDocumentHttpPath(scopedRequestPath),
         async () => {
           const canvasServe = await getCanvasServeModule();
-          if (
-            pluginNodeCapabilityFallback &&
-            !revalidatePluginNodeCapabilityFallback?.(pluginNodeCapabilityFallback)
-          ) {
-            sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+          if (rejectStalePluginNodeCapability()) {
             return true;
           }
           return await canvasServe.handleCanvasDocumentHttpRequest(req, res);
@@ -652,11 +645,7 @@ export function createGatewayHttpServer(opts: {
             return false;
           },
           async () => {
-            if (
-              pluginNodeCapabilityFallback &&
-              !revalidatePluginNodeCapabilityFallback?.(pluginNodeCapabilityFallback)
-            ) {
-              sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+            if (rejectStalePluginNodeCapability()) {
               return true;
             }
             return await handlePluginRequest(req, res, pluginPathContext, {
