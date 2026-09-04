@@ -54,6 +54,21 @@ const boardSnapshots = dashboardRows.map((row) => ({
       revision: 1,
       frameUrl: `data:text/html,${previewMarkup}`,
     },
+    ...(row.key === selectedSessionKey
+      ? [
+          {
+            name: "release-tools",
+            tabId: "main",
+            title: "Release tools",
+            contentKind: "mcp-app",
+            sizeW: 12,
+            sizeH: 6,
+            position: 1,
+            grantState: "granted",
+            revision: 1,
+          },
+        ]
+      : []),
   ],
 }));
 suite.define(() => {
@@ -67,7 +82,13 @@ suite.define(() => {
     try {
       const gateway = await installMockGateway(page, {
         sessionKey: selectedSessionKey,
-        featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.resolve"],
+        featureMethods: [
+          "board.get",
+          "board.widget.appView",
+          "chat.metadata",
+          "chat.startup",
+          "sessions.resolve",
+        ],
         methodResponses: {
           "sessions.describe": {
             cases: dashboardRows.map((row) => ({
@@ -80,6 +101,11 @@ suite.define(() => {
               match: { sessionKey: snapshot.sessionKey },
               response: snapshot,
             })),
+          },
+          "board.widget.appView": {
+            status: "ready",
+            viewId: "release-tools-view",
+            expiresAtMs: now + 60_000,
           },
           "sessions.resolve": {
             ok: true,
@@ -116,6 +142,8 @@ suite.define(() => {
       const previewFrame = releaseCard.locator('iframe[title="Live Gateway Pulse"]');
       await previewFrame.waitFor();
       await previewFrame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
+      expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
+      expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
       const capacityKey = "agent:main:dashboard:capacity";
       const capacityRequested = async () =>
         (await gateway.getRequests("board.get")).some(

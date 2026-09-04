@@ -37,6 +37,7 @@ class OpenClawDashboardPreview extends OpenClawLightDomElement {
           ${t("dashboardDocument.loadFailed", { error: this.error })}
         </div>`
       : html`<openclaw-board-document
+          .passive=${true}
           .gatewaySnapshot=${this.gatewaySnapshot}
           .preparedSession=${{ sessionKey: this.sessionKey, agentId: this.agentId }}
         ></openclaw-board-document>`;

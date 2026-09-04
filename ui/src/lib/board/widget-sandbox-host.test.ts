@@ -141,6 +141,50 @@ describe("BoardWidgetSandboxHost", () => {
     );
   });
 
+  it("delivers passive preview HTML without accepting its capability bridge", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>weather</p>")),
+    );
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client,
+      bridgeEnabled: false,
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed: vi.fn(),
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded,
+      onError: vi.fn(),
+    });
+
+    notifyProxyReady(host, frame);
+    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+    const channel = new MessageChannel();
+    const close = vi.spyOn(channel.port1, "close");
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: { type: "openclaw:widget-bridge-port-offer" },
+        ports: [channel.port1],
+      }),
+    );
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("routes transient document fetch failures through the refresh budget", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);

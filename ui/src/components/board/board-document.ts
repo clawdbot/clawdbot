@@ -45,6 +45,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey: string | null = null;
   @property({ attribute: false }) preparedSession: BoardGetParams | null = null;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
+  @property({ type: Boolean }) passive = false;
 
   @state() private documentState: DashboardDocumentState = "loading";
   @state() private snapshot?: BoardSnapshot;
@@ -298,19 +299,29 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
         this.activeTabId = tabId;
       },
       frameLoadFailed: (name) => provider.refreshWidgetFrame(name),
-      widgetAppView: (name, revision) => provider.widgetAppView(name, revision),
-      refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
+      ...(!this.passive
+        ? {
+            widgetAppView: (name, revision) => provider.widgetAppView(name, revision),
+            refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
+          }
+        : {}),
     } satisfies BoardViewCallbacks;
+    // A gallery thumbnail may render saved HTML, but it must not bootstrap
+    // executable plugin surfaces or MCP App leases merely by entering view.
+    const renderSnapshot = this.passive
+      ? { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.contentKind === "html") }
+      : snapshot;
     return html`<openclaw-board-view
       .active=${true}
+      .bridgeEnabled=${!this.passive}
       .fitAutoContent=${true}
       .session=${session}
-      .snapshot=${snapshot}
+      .snapshot=${renderSnapshot}
       .activeTabId=${this.activeTabId}
       .widgetFrameUrl=${(name: string, revision: number) => provider.widgetFrameUrl(name, revision)}
       .callbacks=${callbacks}
-      .canMutate=${provider.canMutate}
-      .canGrant=${provider.canGrant}
+      .canMutate=${!this.passive && provider.canMutate}
+      .canGrant=${!this.passive && provider.canGrant}
     ></openclaw-board-view>`;
   }
 

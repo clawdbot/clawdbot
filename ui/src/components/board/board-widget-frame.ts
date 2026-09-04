@@ -52,6 +52,7 @@ type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
   active: () => boolean;
+  bridgeEnabled?: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
@@ -412,6 +413,7 @@ export class BoardWidgetFrameLifecycle {
     return {
       frame,
       widget,
+      bridgeEnabled: this.host.bridgeEnabled?.() ?? true,
       sandboxOrigin: this.sandboxOrigin,
       sandboxUrl: frame.src,
       sourceOrigin: resolveGatewayHttpOrigin(
