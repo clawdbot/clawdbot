@@ -123,7 +123,7 @@ describe("personal model accounts", () => {
           type: "api_key",
           provider: "xai",
           key: "  synthetic-personal-api-key\r\n",
-          displayName: "Personal Grok",
+          displayName: `${"x".repeat(255)}🤖`,
           metadata: { account: "synthetic-account" },
         },
         assertCurrent() {},
@@ -137,7 +137,7 @@ describe("personal model accounts", () => {
       type: "api_key",
       provider: "xai",
       key: "synthetic-personal-api-key",
-      displayName: "Personal Grok",
+      displayName: `${"x".repeat(255)}🤖`,
       metadata: { account: "synthetic-account" },
     });
     expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({
@@ -145,7 +145,7 @@ describe("personal model accounts", () => {
         {
           authProfileId,
           provider: "xai",
-          label: "Personal Grok",
+          label: "x".repeat(255),
           authType: "api_key",
           selected: true,
         },
