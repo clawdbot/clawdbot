@@ -4,8 +4,9 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import * as llm from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -24,10 +25,112 @@ import {
   filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
+  translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
+
+describe("translation provider privacy and fallback", () => {
+  const primary = "private-primary-fixture";
+  const fallback = "private-fallback-fixture";
+  const entries = Array.from({ length: 21 }, (_, index) => ({
+    id: `label${index}`,
+    source: "Open",
+    sourcePath: "fixture.ts",
+  }));
+  const response = (overrides: Partial<llm.AssistantMessage> = {}): llm.AssistantMessage => ({
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(Object.fromEntries(entries.map((entry) => [entry.id, "Ouvrir"]))),
+      },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: primary,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    ...overrides,
+  });
+  beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROVIDER", "openai");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", primary);
+    vi.stubEnv("OPENCLAW_I18N_FALLBACK_MODEL", fallback);
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("switches only an unavailable model and keeps the fallback for later batches", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockResolvedValueOnce(
+        response({
+          stopReason: "error",
+          errorCode: "model_not_found",
+          errorMessage: `Cannot use ${primary}`,
+        }),
+      )
+      .mockResolvedValue(response());
+    expect((await translateNativeEntries(entries, "fr")).size).toBe(entries.length);
+    expect(complete.mock.calls.map(([model]) => model.id)).toEqual([primary, fallback, fallback]);
+    const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+    expect(log).toContain("primary model unavailable");
+    expect(log).not.toContain(primary);
+    expect(log).not.toContain(fallback);
+  });
+
+  it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
+    "keeps %s failures private without changing models",
+    async (errorCode) => {
+      const complete = vi.spyOn(llm, "completeSimple").mockResolvedValue(
+        response({
+          stopReason: "error",
+          errorCode,
+          errorMessage: `${errorCode}: ${primary} unavailable; try ${fallback}`,
+        }),
+      );
+      await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+        "translation provider failed",
+      );
+      expect(complete.mock.calls.every(([model]) => model.id === primary)).toBe(true);
+      const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+      expect(log).not.toContain(primary);
+      expect(log).not.toContain(fallback);
+    },
+  );
+
+  it("does not expose rejected provider errors or escaped model echoes", async () => {
+    const complete = vi
+      .spyOn(llm, "completeSimple")
+      .mockRejectedValue(new Error(`Transport for ${primary}`));
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    complete.mockResolvedValue(
+      response({ content: [{ type: "text", text: '{"label0":"private-\\u0070rimary-fixture"}' }] }),
+    );
+    await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
+      "provider_error",
+    );
+    expect(vi.mocked(process.stdout.write).mock.calls.flat().join("")).not.toContain(primary);
+  });
+});
 
 describe("control-ui-i18n generated ownership", () => {
   it("keeps generated locale snapshots out of source PRs", () => {

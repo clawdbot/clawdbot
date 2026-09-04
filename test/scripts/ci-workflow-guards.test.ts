@@ -2594,7 +2594,7 @@ NODE
     const nativeFinalize = workflow.jobs.finalize;
     const controlUiFinalize = controlUiWorkflow.jobs.finalize;
     const refreshStep = refresh.steps.find(
-      (step: { name?: string }) => step.name === "Refresh native locale artifact",
+      (step: { name?: string }) => step.name === "Refresh locale translations",
     );
     const nativeArtifactStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
@@ -2609,7 +2609,7 @@ NODE
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
-      (step: { name?: string }) => step.name === "Refresh control UI locale files",
+      (step: { name?: string }) => step.name === "Refresh locale translations",
     );
     const controlUiAggregateStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Finalize control UI generated artifacts",
@@ -2652,7 +2652,12 @@ NODE
       default: false,
       type: "boolean",
     });
-    expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
+    for (const owner of [workflow, controlUiWorkflow]) {
+      expect(owner.on.workflow_dispatch.inputs.full_refresh).toMatchObject({
+        default: false,
+        type: "boolean",
+      });
+    }
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
@@ -2670,14 +2675,17 @@ NODE
         generatorInput,
       );
     }
-    expect(refreshStep.run).toContain("run_refresh anthropic");
-    expect(refreshStep.run).toContain("retrying with OpenAI");
-    expect(refreshStep.run).toContain("run_openai_refresh");
-    expect(refreshStep.run).toContain("repository OpenAI key");
-    expect(refreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
-      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    expect(refreshStep.env.OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
     );
-    expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(refreshStep.env.OPENCLAW_CONTROL_UI_I18N_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_MODEL }}",
+    );
+    expect(refreshStep.env.OPENCLAW_I18N_FALLBACK_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}",
+    );
+    expect(refreshStep.env.FULL_REFRESH).toBe("${{ inputs.full_refresh || false }}");
+    expect(refreshStep.run).toContain("args+=(--force)");
     expect(nativeArtifactStep.run).toContain("git add -A apps/.i18n/native");
     expect(nativeArtifactStep.run).not.toContain("native-source.json");
     expect(nativeGeneratedStep.run).toBe(
@@ -2710,14 +2718,17 @@ NODE
       "apps/android/app/src/thirdParty",
     );
     expect(nativePublishStep.with["auto-merge"]).toBe("true");
-    expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
-    expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
-    expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
-    expect(controlUiRefreshStep.run).toContain("repository OpenAI key");
-    expect(controlUiRefreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
-      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
     );
-    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_MODEL }}",
+    );
+    expect(controlUiRefreshStep.env.OPENCLAW_I18N_FALLBACK_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}",
+    );
+    expect(controlUiRefreshStep.env.FULL_REFRESH).toBe("${{ inputs.full_refresh || false }}");
+    expect(controlUiRefreshStep.run).toContain("args+=(--force)");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
     const controlUiArtifactStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
