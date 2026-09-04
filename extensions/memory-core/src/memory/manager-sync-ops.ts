@@ -612,7 +612,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return {
             nextMeta,
             vectorIndexComplete,
-            sourceHasVectors: memoryDatabaseTableExists(shadow.db, "main", MEMORY_INDEX_VECTOR_TABLE),
+            hasVectors: memoryDatabaseTableExists(shadow.db, "main", MEMORY_INDEX_VECTOR_TABLE),
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -627,7 +627,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             sourcePath: tempDbPath,
             metaKey: MEMORY_INDEX_META_KEY,
             expectedRevision: originalRevision,
-            sourceHasVectors: rebuilt.sourceHasVectors,
+            sourceHasVectors: rebuilt.hasVectors,
             vectorExtensionPath: shadow.vector.extensionPath,
           });
         });
