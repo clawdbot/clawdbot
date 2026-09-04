@@ -17,7 +17,6 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
-const CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH = 10;
 
 type ComparableHistoryMessage = {
   message: unknown;
@@ -25,10 +24,13 @@ type ComparableHistoryMessage = {
   externalIdentityKey?: string;
   hasCliImageMentions: boolean;
   cliImageTurnKey?: string;
+  importedCliAssistantSegment?: boolean;
   role?: string;
   text?: string;
   timestamp?: number;
 };
+
+type CliAssistantSegment = ComparableHistoryMessage & { text: string };
 
 type TimestampSummary = {
   hasMissingTimestamp: boolean;
@@ -263,36 +265,83 @@ function readCliAssistantIdempotencyKey(message: unknown): string | undefined {
   return nested?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX) ? nested : undefined;
 }
 
-function importedAssistantCoversCliAggregate(
-  aggregateText: string | undefined,
-  importedAssistantTexts: readonly string[],
-): boolean {
-  if (!aggregateText || importedAssistantTexts.length === 0) {
+function hasComparableText(entry: ComparableHistoryMessage): entry is CliAssistantSegment {
+  return typeof entry.text === "string" && entry.text.length > 0;
+}
+
+function isImportedClaudeCliAssistantSegment(entry: ComparableHistoryMessage): boolean {
+  if (entry.role !== "assistant" || !entry.externalIdentityKey || !hasComparableText(entry)) {
     return false;
   }
-  for (let start = 0; start < importedAssistantTexts.length; start += 1) {
-    let acc = importedAssistantTexts[start];
-    if (!acc) {
-      continue;
-    }
-    for (let end = start; end < importedAssistantTexts.length; end += 1) {
-      if (end > start) {
-        const next = importedAssistantTexts[end];
-        if (!next) {
-          break;
-        }
-        acc = `${acc}\n${next}`;
+  const meta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
+  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
+// Comparable texts are already whitespace-collapsed, so joining with one space
+// matches how the producer's "\n"-joined aggregate normalizes.
+function findCoveringSegmentRun(
+  aggregateText: string,
+  segments: readonly CliAssistantSegment[],
+  consumed: Set<CliAssistantSegment>,
+): CliAssistantSegment[] | undefined {
+  for (let start = 0; start < segments.length; start += 1) {
+    let acc = "";
+    for (let end = start; end < segments.length; end += 1) {
+      const segment = segments[end];
+      if (!segment || consumed.has(segment)) {
+        break;
       }
-      const normalized = acc.replace(/\s+/g, " ").trim();
-      if (normalized === aggregateText) {
-        return normalized.length >= CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH;
+      acc = acc ? `${acc} ${segment.text}` : segment.text;
+      if (acc === aggregateText) {
+        return segments.slice(start, end + 1);
       }
-      if (normalized.length > aggregateText.length) {
+      if (acc.length >= aggregateText.length) {
         break;
       }
     }
   }
-  return false;
+  return undefined;
+}
+
+// The durable `cli-assistant:<runId>` row and the imported claude-cli segments
+// of the same run share nothing but their turn: the CLI transcript never sees
+// the runId. So coverage is only proven inside one turn, between the same user
+// rows, and each imported segment can stand in for one aggregate at most. Equal
+// text from a later turn is a different reply and keeps the earlier one.
+function dropCoveredCliAssistantAggregates(
+  sorted: ComparableHistoryMessage[],
+): ComparableHistoryMessage[] {
+  const dropped = new Set<ComparableHistoryMessage>();
+  let aggregates: CliAssistantSegment[] = [];
+  let segments: CliAssistantSegment[] = [];
+  const reconcileTurn = () => {
+    const consumed = new Set<CliAssistantSegment>();
+    for (const aggregate of aggregates) {
+      const run = findCoveringSegmentRun(aggregate.text, segments, consumed);
+      if (!run) {
+        continue;
+      }
+      for (const segment of run) {
+        consumed.add(segment);
+      }
+      dropped.add(aggregate);
+    }
+    aggregates = [];
+    segments = [];
+  };
+  for (const entry of sorted) {
+    if (entry.role === "user") {
+      reconcileTurn();
+    } else if (!hasComparableText(entry)) {
+      continue;
+    } else if (entry.importedCliAssistantSegment) {
+      segments.push(entry);
+    } else if (entry.role === "assistant" && readCliAssistantIdempotencyKey(entry.message)) {
+      aggregates.push(entry);
+    }
+  }
+  reconcileTurn();
+  return dropped.size === 0 ? sorted : sorted.filter((entry) => !dropped.has(entry));
 }
 
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
@@ -331,7 +380,6 @@ export function mergeImportedChatHistoryMessages(params: {
     }
   }
   let nextOrder = merged.length;
-  const acceptedImportedAssistantTexts: string[] = [];
   for (const message of params.importedMessages) {
     const externalIdentityKey = resolveImportedExternalIdentityKey(message);
     if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
@@ -352,28 +400,13 @@ export function mergeImportedChatHistoryMessages(params: {
     if (!imported.hasCliImageMentions && duplicate) {
       continue;
     }
+    if (isImportedClaudeCliAssistantSegment(imported)) {
+      imported.importedCliAssistantSegment = true;
+    }
     merged.push(imported);
     indexEntry(imported);
     nextOrder += 1;
-    const importedFrom = normalizeOptionalString(
-      asOptionalRecord(asOptionalRecord(imported.message)?.["__openclaw"])?.importedFrom,
-    );
-    if (
-      imported.role === "assistant" &&
-      imported.text &&
-      imported.externalIdentityKey &&
-      importedFrom === "claude-cli"
-    ) {
-      acceptedImportedAssistantTexts.push(imported.text);
-    }
   }
-  const importedAssistantTexts = acceptedImportedAssistantTexts;
-  const uncovered = merged.filter((entry) => {
-    if (entry.role !== "assistant" || !readCliAssistantIdempotencyKey(entry.message)) {
-      return true;
-    }
-    return !importedAssistantCoversCliAggregate(entry.text, importedAssistantTexts);
-  });
-  uncovered.sort(compareHistoryMessages);
-  return uncovered.map((entry) => entry.message);
+  merged.sort(compareHistoryMessages);
+  return dropCoveredCliAssistantAggregates(merged).map((entry) => entry.message);
 }
