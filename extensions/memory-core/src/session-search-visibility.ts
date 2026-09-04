@@ -1,5 +1,4 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Memory Core plugin module implements session search visibility behavior.
 import {
   buildSessionEntry,
   loadArchivedSessions,
@@ -41,8 +40,9 @@ type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversa
 type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
 
 function isSameStoredTranscript(
-  anchor: SessionStore[string] | undefined,
-  candidate: SessionStore[string] | undefined,
+  // Keep the existing file-alias privacy check even though the public store type omits locators.
+  anchor: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
+  candidate: (SessionStore[string] & { sessionFile?: unknown }) | undefined,
 ): boolean {
   if (!anchor || !candidate) {
     return false;
