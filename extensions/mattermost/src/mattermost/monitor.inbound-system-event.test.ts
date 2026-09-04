@@ -1415,116 +1415,131 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
-    const draftStream = {
-      update: vi.fn(),
-      flush: vi.fn(async () => {}),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-    };
-    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
-    const progressConfig: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
-          dmPolicy: "open",
-          groupPolicy: "open",
-          streaming: {
-            mode: "progress",
-            progress: {
-              label: false,
-              toolProgress: true,
+  it.each([undefined, false, true])(
+    "keeps Mattermost progress useful and clears after delivery with toolProgress=%s",
+    async (toolProgress) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      const draftStream = {
+        update: vi.fn(),
+        flush: vi.fn(async () => {}),
+        clear: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
+      mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+      const progressConfig: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            baseUrl: "https://mattermost.example.com",
+            botToken: "bot-token",
+            chatmode: "onmessage",
+            dmPolicy: "open",
+            groupPolicy: "open",
+            streaming: {
+              mode: "progress",
+              progress: {
+                label: "Working",
+                toolProgress,
+              },
             },
           },
         },
-      },
-    };
-    mockState.runtimeCore = createRuntimeCore(progressConfig);
-    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
-      await params.replyOptions?.onToolStart?.({
-        toolCallId: "read-1",
-        name: "read",
-        phase: "start",
+      };
+      mockState.runtimeCore = createRuntimeCore(progressConfig);
+      mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+        await params.replyOptions?.onToolStart?.({
+          toolCallId: "read-1",
+          name: "read",
+          phase: "start",
+        });
+        params.replyOptions?.onAssistantMessageStart?.();
+        params.replyOptions?.onReasoningEnd?.();
+        await params.replyOptions?.onToolStart?.({
+          toolCallId: "exec-1",
+          name: "exec",
+          phase: "start",
+        });
+        await params.replyOptions?.onItemEvent?.({
+          itemId: "tool:read-1",
+          kind: "tool",
+          name: "read",
+          status: "completed",
+          progressText: "done",
+        });
+        await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+        await params.replyOptions?.onReasoningEnd?.();
+        await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
+        await params.replyOptions?.onItemEvent?.({
+          itemId: "tool:read-1",
+          kind: "tool",
+          name: "read",
+          status: "completed",
+          progressText: "done",
+        });
+        await params.replyOptions?.onItemEvent?.({
+          itemId: "tool:failed-1",
+          kind: "tool",
+          name: "exec",
+          status: "failed",
+        });
+        await params.replyOptions?.onObservedReplyDelivery?.();
+        abortController.abort();
       });
-      params.replyOptions?.onAssistantMessageStart?.();
-      params.replyOptions?.onReasoningEnd?.();
-      await params.replyOptions?.onToolStart?.({
-        toolCallId: "exec-1",
-        name: "exec",
-        phase: "start",
-      });
-      await params.replyOptions?.onItemEvent?.({
-        itemId: "tool:read-1",
-        kind: "tool",
-        name: "read",
-        status: "completed",
-        progressText: "done",
-      });
-      await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
-      await params.replyOptions?.onReasoningEnd?.();
-      await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
-      await params.replyOptions?.onItemEvent?.({
-        itemId: "tool:read-1",
-        kind: "tool",
-        name: "read",
-        status: "completed",
-        progressText: "done",
-      });
-      await params.replyOptions?.onObservedReplyDelivery?.();
-      abortController.abort();
-    });
 
-    const monitor = monitorMattermostProvider({
-      config: progressConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+      const monitor = monitorMattermostProvider({
+        config: progressConfig,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
 
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-progress",
+      await socket.emitMessage({
+        event: "posted",
+        data: {
+          channel_id: "chan-1",
+          channel_name: "town-square",
+          channel_display_name: "Town Square",
+          sender_name: "alice",
+          post: JSON.stringify({
+            id: "post-progress",
+            channel_id: "chan-1",
+            user_id: "user-1",
+            message: "run this",
+            create_at: 1_714_000_000_000,
+          }),
+        },
+        broadcast: {
           channel_id: "chan-1",
           user_id: "user-1",
-          message: "run this",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
-    });
-    socket.emitClose(1000);
-    await monitor;
+        },
+      });
+      socket.emitClose(1000);
+      await monitor;
 
-    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
-    expect(updates.at(-1)).toContain("Read");
-    expect(updates.at(-1)).toContain("Exec");
-    expect(updates.at(-1)).toContain("done");
-    expect(updates.at(-1)).toContain("Checking");
-    expect(updates.at(-1)).not.toContain("ThinkingChecking");
-  });
+      const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+      expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(draftStream.clear).toHaveBeenCalledTimes(1);
+      const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+      if (toolProgress) {
+        expect(updates.at(-1)).toContain("Read");
+        expect(updates.at(-1)).toContain("done");
+      } else {
+        expect(updates[0]).toBe("Working");
+        expect(updates.at(-1)).not.toContain("Read");
+        expect(updates.at(-1)).not.toContain("done");
+      }
+      expect(updates.at(-1)).toContain("failed");
+      expect(updates.at(-1)).toContain("Checking");
+      expect(updates.at(-1)).not.toContain("ThinkingChecking");
+    },
+  );
 
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
     const socket = new FakeWebSocket();
@@ -1670,6 +1685,69 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
     const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("/reset");
+    expect(ctx?.CommandBody).toBe("/reset");
+    expect(ctx?.CommandAuthorized).toBe(true);
+    expect(ctx?.CommandSource).toBe("text");
+  });
+
+  // "@bot /reset" is how a control command gets typed in a mention-gated channel: Mattermost's
+  // composer executes a bare "/reset" as a Mattermost slash command instead of posting it. The
+  // mention must be stripped before command detection and before the debounce gate, or the
+  // command is batched with chat text and reaches the model as prose.
+  it("routes a mention-prefixed text command without debouncing", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const mentionConfig: OpenClawConfig = {
+      messages: { inbound: { debounceMs: 60_000 } },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "oncall",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
+        },
+      },
+    };
+    const isControlCommandMessage = vi.fn((text?: string) => text?.trim() === "/reset");
+    mockState.runtimeCore = createRuntimeCore(mentionConfig, undefined, {
+      inboundDebounceMs: 60_000,
+      createInboundDebouncer,
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized: () => true,
+      shouldHandleTextCommands: () => true,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-mention-command",
+      message: "@openclaw /reset",
+    });
+    // Control commands bypass the 60s debounce window, so the turn dispatches right away.
+    await vi.waitFor(() => {
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("/reset", mentionConfig);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.WasMentioned).toBe(true);
     expect(ctx?.BodyForAgent).toBe("/reset");
     expect(ctx?.CommandBody).toBe("/reset");
     expect(ctx?.CommandAuthorized).toBe(true);
@@ -2702,7 +2780,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: { mode: "progress" },
+          streaming: { mode: "progress", progress: { toolProgress: true } },
         },
       },
     };

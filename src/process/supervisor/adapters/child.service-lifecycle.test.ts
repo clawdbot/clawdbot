@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
 import { createProcessSupervisor } from "../supervisor.js";
@@ -47,6 +48,57 @@ function parsePidPair(output: string): [number, number] {
     throw new Error(`expected PID pair in output: ${JSON.stringify(output)}`);
   }
   return [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10)];
+}
+
+function createRetainedDescendantFixture() {
+  const cwd = tempDirs.make("openclaw-service-retained-descendant-");
+  const pidPath = path.join(cwd, "descendant.pid");
+  const releasePath = path.join(cwd, "descendant.release");
+  const descendantScript = `
+    const { existsSync, writeFileSync } = require("node:fs");
+    const releaseTimer = setInterval(() => {
+      if (existsSync(${JSON.stringify(releasePath)})) {
+        clearInterval(releaseTimer);
+      }
+    }, 20);
+    writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+  `;
+  const readPid = async () => {
+    const pid = await waitForPidFile(pidPath, 5_000);
+    activePids.add(pid);
+    return pid;
+  };
+  return {
+    // Only lineage is inherited, so root output EOF is independent of descendant lifetime.
+    rootScript: `
+      const { spawn } = require("node:child_process");
+      const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
+        stdio: ["ignore", "ignore", "ignore", 3],
+      });
+      descendant.unref();
+    `,
+    readPid,
+    releaseAndJoin: async (waitForExtinction: () => Promise<void>) => {
+      await writeFile(releasePath, "", "utf8");
+      // Read again on failure paths where readiness was not observed before cleanup.
+      const pid = await readPid();
+      await Promise.all([
+        withTestTimeout(waitForExtinction(), 5_000, "retained descendant scope did not close"),
+        waitFor(() => !isAlive(pid)),
+      ]);
+      activePids.delete(pid);
+    },
+  };
+}
+
+async function expectPending(promise: Promise<void>) {
+  const settled = await Promise.race([
+    promise.then(() => true),
+    new Promise<false>((resolve) => {
+      setImmediate(() => resolve(false));
+    }),
+  ]);
+  expect(settled).toBe(false);
 }
 
 afterEach(async () => {
@@ -226,30 +278,30 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     }
   });
 
-  it("preserves root-result timing while retaining descendant cleanup ownership", async () => {
+  it("settles the root result while retaining descendant cleanup ownership", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const fixture = createRetainedDescendantFixture();
     const adapter = await createChildAdapter({
-      argv: [
-        "/bin/sh",
-        "-c",
-        'sleep 0.4 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; exit 0',
-      ],
+      argv: [process.execPath, "-e", fixture.rootScript],
       stdinMode: "pipe-closed",
     });
-    let output = "";
-    adapter.onStdout((chunk) => {
-      output += chunk;
-    });
-    const startedAt = Date.now();
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    const elapsed = Date.now() - startedAt;
-    const [, descendantPid] = parsePidPair(output);
-    activePids.add(descendantPid);
+    try {
+      const descendantPid = await fixture.readPid();
+      await expect(
+        withTestTimeout(adapter.wait(), 5_000, "root result waited for descendant release"),
+      ).resolves.toEqual({ code: 0, signal: null });
 
-    expect(elapsed).toBeLessThan(300);
-    expect(isAlive(descendantPid)).toBe(true);
-    await adapter.waitForExtinction?.();
-    await waitFor(() => !isAlive(descendantPid));
+      expect(isAlive(descendantPid)).toBe(true);
+      expect(adapter.waitForExtinction).toBeTypeOf("function");
+      await expectPending(adapter.waitForExtinction!());
+    } finally {
+      try {
+        await fixture.releaseAndJoin(adapter.waitForExtinction!);
+      } finally {
+        adapter.kill("SIGKILL");
+        adapter.dispose();
+      }
+    }
   });
 
   it("flushes forwarded output before exposing the root result", async () => {
@@ -561,18 +613,15 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
   it("flushes incomplete UTF-8 before exposing a root result with retained authority", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const descendantScript = "setTimeout(() => {}, 1500)";
+    const fixture = createRetainedDescendantFixture();
     const rootScript = `
-      const { spawn } = require("node:child_process");
-      const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
-        stdio: ["ignore", "ignore", "ignore", 3],
-      });
-      descendant.unref();
-      process.stderr.write(descendant.pid + "\\n");
+      ${fixture.rootScript}
       process.stdout.write(Buffer.from([0x58, 0xe2, 0x82]), () => process.exit(0));
     `;
     let streamed = "";
-    const run = await createProcessSupervisor().spawn({
+    const raw: Buffer[] = [];
+    const supervisor = createProcessSupervisor();
+    const run = await supervisor.spawn({
       mode: "child",
       argv: [process.execPath, "-e", rootScript],
       stdinMode: "pipe-closed",
@@ -581,18 +630,32 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       onStdout: (chunk) => {
         streamed += chunk;
       },
+      onStdoutRaw: (chunk) => {
+        raw.push(chunk);
+      },
     });
-    const startedAt = Date.now();
-    const exit = await run.wait();
-    const elapsed = Date.now() - startedAt;
-    const descendantPid = Number.parseInt(exit.stderr.trim(), 10);
-    activePids.add(descendantPid);
+    try {
+      const descendantPid = await fixture.readPid();
+      const exit = await withTestTimeout(
+        run.wait(),
+        5_000,
+        "root result waited for descendant release",
+      );
 
-    expect(exit.stdout).toBe("X�");
-    expect(streamed).toBe("X�");
-    expect(elapsed).toBeLessThan(1_000);
-    expect(isAlive(descendantPid)).toBe(true);
-    await waitFor(() => !isAlive(descendantPid));
+      expect(exit).toMatchObject({ reason: "exit", exitCode: 0, exitSignal: null });
+      expect(exit.stdout).toBe("X�");
+      expect(streamed).toBe("X�");
+      expect(Buffer.concat(raw)).toEqual(Buffer.from([0x58, 0xe2, 0x82]));
+      expect(isAlive(descendantPid)).toBe(true);
+      expect(run.waitForExtinction).toBeTypeOf("function");
+      await expectPending(run.waitForExtinction!());
+    } finally {
+      try {
+        await fixture.releaseAndJoin(run.waitForExtinction!);
+      } finally {
+        await withTestTimeout(supervisor.shutdown(), 5_000, "supervisor cleanup did not finish");
+      }
+    }
   });
 
   it("reports startup failure before secret-pipe failure without an unhandled rejection", async () => {
