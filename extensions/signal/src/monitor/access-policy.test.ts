@@ -279,6 +279,25 @@ describe("resolveSignalAccessState", () => {
     expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 
+  it("authorizes plugin command syntax without the control-command drop", async () => {
+    const access = await resolveSignalAccessState({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      groupAllowFrom: [SIGNAL_SENDER.e164],
+      sender: SIGNAL_SENDER,
+      groupId: SIGNAL_GROUP_ID,
+      isGroup: true,
+      shouldComputeCommandAuthorized: true,
+    });
+
+    expect(access.senderAccess.decision).toBe("allow");
+    expect(access.commandAccess.requested).toBe(true);
+    expect(access.commandAccess.authorized).toBe(true);
+    expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
+  });
+
   it("authorizes group control commands through a sender UUID alias", async () => {
     const access = await resolveSignalAccessState({
       accountId: "default",
