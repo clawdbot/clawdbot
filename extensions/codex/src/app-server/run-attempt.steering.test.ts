@@ -18,6 +18,7 @@ import {
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
@@ -151,6 +152,7 @@ describe("runCodexAppServerAttempt steering", () => {
       if (incognito) {
         params.sessionKey = `agent:main:dashboard:incognito-${params.sessionId}`;
       }
+      await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
       const onAttemptAbort = vi.fn();
       params.onAttemptAbort = onAttemptAbort;
       const onAgentEvent = vi.fn();

@@ -95,6 +95,51 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
+  it.each([
+    { pressure: "bytes", expected: true },
+    { pressure: "tokens", expected: true },
+    { pressure: "bytes", expected: false },
+    { pressure: "tokens", expected: false },
+  ])(
+    "handles preserve-only $pressure pressure with expected ownership=$expected",
+    async ({ pressure, expected }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      await writeExistingBinding(sessionFile, workspaceDir, { preserveNativeModel: true });
+      const before = await readCodexAppServerBinding(sessionFile);
+      const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+        JSON.stringify({
+          payload: {
+            type: "token_count",
+            info: { last_token_usage: { total_tokens: 120_000 }, model_context_window: 128_000 },
+          },
+        }) + "\n",
+      );
+      const operation = rotateOversizedCodexAppServerStartupBinding({
+        binding: before,
+        sessionFile,
+        agentDir,
+        config:
+          pressure === "bytes"
+            ? { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "1b" } } } }
+            : undefined,
+        expectedSessionRuntimeOwnership: expected ? { model: "native", auth: "host" } : undefined,
+      });
+
+      if (expected) {
+        await expect(operation).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      } else {
+        await expect(operation).resolves.toBeUndefined();
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      }
+    },
+  );
+
   it("never rotates a provisional supervision source binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

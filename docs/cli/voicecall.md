@@ -52,8 +52,8 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
 | `status`   | Inspect active calls (or one by `--call-id`).                   |
-| `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
-| `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
+| `tail`     | Tail persisted call records or an explicit custom JSONL log.    |
+| `latency`  | Summarize turn latency from call history or a custom JSONL log. |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
 
 ## Setup and smoke
@@ -171,8 +171,13 @@ openclaw voicecall status --call-id <id>
 
 ### `tail`
 
-Tail the voice-call JSONL log. Prints the last `--since` lines on start, then
-streams new lines as they are written.
+Tail persisted voice-call records from SQLite: print the last `--since` records
+initially, then only new snapshots (`--since 0` starts with new snapshots only).
+With an existing custom `--file`
+whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
+lines on start, then streams new complete lines. Partial lines wait for a newline;
+file replacement or observed truncation starts a fresh stream. Slow output pipes
+pause reading instead of accumulating the rest of the log in memory.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |
@@ -182,8 +187,15 @@ streams new lines as they are written.
 
 ### `latency`
 
-Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is
-JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
+Summarize turn-latency and listen-wait metrics from SQLite or an existing custom
+log selected with `--file`. Output is JSON with `recordsScanned`, `turnLatency`,
+and `listenWait` summaries.
+
+Custom logs are scanned incrementally without a byte cap on requested history.
+`latency` selects the last N nonempty records, skips malformed JSON, and accepts
+a final JSON record without a newline. It parses one selected record at a time;
+memory still scales with the largest selected JSON record and the requested
+number of metric samples.
 
 | Flag            | Default                    | Description                          |
 | --------------- | -------------------------- | ------------------------------------ |

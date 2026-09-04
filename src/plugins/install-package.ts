@@ -61,6 +61,7 @@ function pickPackageInstallCommonParams(
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
     onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+    beforePersistentApply: params.beforePersistentApply,
     onEffectiveMode: params.onEffectiveMode,
   });
 }
@@ -197,6 +198,7 @@ async function installBundleFromSourceDir(
       hasDeps: false,
       depsLogMessage: "",
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
     }),
   );
   return installed.ok
@@ -338,6 +340,7 @@ async function installPluginFromPackageDir(
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
         return await scanAndLinkInstalledPackage({
           runtime,
@@ -405,6 +408,7 @@ export async function installPluginFromArchive(
             requirePluginManifest: true,
             installPolicyRequest,
             onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+            beforePersistentApply: params.beforePersistentApply,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

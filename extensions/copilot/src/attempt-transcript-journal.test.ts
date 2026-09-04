@@ -11,16 +11,14 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
   cleanupAttemptTranscriptJournalFixtures,
-  createFakeSession,
   createFixture,
+  createJournalSession,
+  emitReplayGroup,
   event,
-  type FakeSession,
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
-import { attachEventBridge } from "./event-bridge.js";
 
 afterEach(async () => {
   resetGlobalHookRunner();
@@ -175,7 +173,7 @@ describe("Copilot attempt transcript journal", () => {
     ]);
   });
 
-  it("publishes the exact storage anchor for the recorder admission", async () => {
+  it("publishes the storage anchor without treating a replay as a fresh user append", async () => {
     const { journal, recorder } = await createFixture();
 
     await journal.persistInitialUser();
@@ -188,7 +186,82 @@ describe("Copilot attempt transcript journal", () => {
       logicalTurnId: "logical-turn-1",
       role: "user",
     });
+    await journal.persistInitialUser();
+    expect(recorder.markRuntimePersisted.mock.calls.map((call) => call[2])).toEqual([
+      { appended: true },
+      { appended: false },
+    ]);
   });
+
+  it.each(["unchanged", "sdk-rewrite", "hook-rewrite", "hook-metadata"] as const)(
+    "keeps selected steering mentions only on unchanged committed text (%s)",
+    async (rewrite) => {
+      const { journal, recorder, session, target } = await createFixture();
+      await journal.persistInitialUser();
+      session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+      const mentions = [{ profileId: "profile-taylor", start: 3, end: 10 }];
+      const sourceMessage = {
+        role: "user" as const,
+        content: "Hi @Taylor",
+        timestamp: 3,
+        provenance: { kind: "external_user" as const },
+        __openclaw: { humanMentions: mentions },
+      };
+      const sourceRecorder = {
+        ...recorder,
+        message: sourceMessage,
+        resolveMessage: vi.fn(async () => sourceMessage),
+        markRuntimePersisted: vi.fn(),
+      };
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (input: unknown) => {
+              const message = (input as { message: AgentMessage }).message;
+              if (rewrite === "hook-rewrite") {
+                Object.assign(message, { content: "Changed @Taylor" });
+              }
+              if (rewrite === "hook-metadata") {
+                Object.assign(message, {
+                  __openclaw: {
+                    humanMentions: [{ profileId: "profile-other", start: 3, end: 10 }],
+                  },
+                });
+              }
+              return { message };
+            },
+          },
+        ]),
+      );
+
+      await journal.sendSdkUser(async () => "selected-steering", sourceRecorder);
+      session.emit(
+        event("user.message", "selected-steering", {
+          content: rewrite === "sdk-rewrite" ? "Changed @Taylor" : sourceMessage.content,
+        }),
+      );
+      await journal.waitForSdkUserPersisted("selected-steering");
+
+      const persisted = transcriptMessages(await readSessionTranscriptEvents(target)).at(-1);
+      const contentChanged = rewrite === "sdk-rewrite" || rewrite === "hook-rewrite";
+      expect(persisted?.message).toMatchObject({
+        role: "user",
+        content: contentChanged ? "Changed @Taylor" : sourceMessage.content,
+        provenance: sourceMessage.provenance,
+      });
+      if (contentChanged) {
+        expect(persisted?.message).not.toHaveProperty("__openclaw.humanMentions");
+      } else {
+        expect(persisted?.message).toHaveProperty("__openclaw.humanMentions", mentions);
+      }
+      expect(sourceRecorder.markRuntimePersisted).toHaveBeenCalledExactlyOnceWith(
+        persisted?.message,
+        expect.objectContaining({ entryId: "selected-steering" }),
+        { appended: true },
+      );
+    },
+  );
 
   it("removes the originally staged user when its resolved replacement is blocked", async () => {
     initializeGlobalHookRunner(
@@ -1144,49 +1217,20 @@ describe("Copilot attempt transcript journal", () => {
       createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
     );
     const { attempt, journal, session, target } = await createFixture();
-    const emitGroup = (targetSession: FakeSession) => {
-      targetSession.emit(event("user.message", "initial-user", { content: "inspect both files" }));
-      targetSession.emit(
-        event("assistant.message", "assistant-replay", {
-          content: "checking",
-          messageId: "assistant-replay",
-          toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-replay" }],
-        }),
-      );
-      targetSession.emit(
-        event("tool.execution_complete", "result-replay", {
-          result: { content: "done" },
-          success: true,
-          toolCallId: "call-replay",
-        }),
-      );
-    };
     await journal.persistInitialUser();
-    emitGroup(session);
+    emitReplayGroup(session);
     await journal.barrier("first commit");
     expect(hook).toHaveBeenCalledTimes(3);
     const existingMessages = transcriptMessages(await readSessionTranscriptEvents(target)).map(
       (row) => row.message,
     );
 
-    const replaySession = createFakeSession();
-    const replayJournal = createAttemptTranscriptJournal({
-      abortSession: () => replaySession.abort(),
+    const { session: replaySession, journal: replayJournal } = createJournalSession(
       attempt,
-      messages: existingMessages,
-      sdkSessionId: "sdk-session",
-    });
-    attachEventBridge(replaySession, {
-      getSdkSessionId: () => "sdk-session",
-      isAborted: () => false,
-      transcriptProjection: {
-        journal: replayJournal,
-        modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
-        now: () => 2,
-      },
-    });
+      existingMessages,
+    );
     await replayJournal.persistInitialUser();
-    emitGroup(replaySession);
+    emitReplayGroup(replaySession);
     await replayJournal.barrier("replay");
 
     expect(hook).toHaveBeenCalledTimes(3);

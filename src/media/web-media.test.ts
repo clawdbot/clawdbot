@@ -562,7 +562,13 @@ describe("loadWebMedia", () => {
           models: [{ maxBytes: 8 }],
         },
       }),
-    ).rejects.toThrow(/exceeds/i);
+    ).rejects.toThrow("Media exceeds 8B limit");
+  });
+
+  it("reports the configured byte cap when image optimization cannot meet it", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
+    ).rejects.toThrow(/^Media could not be reduced below 8B \(got /);
   });
 
   it("uses the strictest model image maxBytes across fallback candidates", () => {
@@ -641,31 +647,37 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("rejects oversized local media before an unbounded file-handle read", async () => {
-    const maxBytes = 1024 * 1024;
-    const oversizedFile = path.join(fixtureRoot, "oversized.bin");
-    await fs.writeFile(oversizedFile, Buffer.alloc(maxBytes + 1));
-    let unboundedReadCalled = false;
-    __setFsSafeTestHooksForTest({
-      afterOpen: (filePath, handle) => {
-        if (filePath !== oversizedFile) {
-          return;
-        }
-        vi.spyOn(handle, "readFile").mockImplementation(async () => {
-          unboundedReadCalled = true;
-          throw new Error("unbounded read invoked");
-        });
-      },
-    });
+  it.each([
+    { maxBytes: 1024 * 1024, expectedLimit: "1MB" },
+    { maxBytes: 256 * 1024, expectedLimit: "256KB" },
+    { maxBytes: 1.5 * 1024 * 1024, expectedLimit: "1.50MB" },
+  ])(
+    "rejects oversized local media before an unbounded file-handle read ($expectedLimit)",
+    async ({ maxBytes, expectedLimit }) => {
+      const oversizedFile = path.join(fixtureRoot, "oversized.bin");
+      await fs.writeFile(oversizedFile, Buffer.alloc(maxBytes + 1));
+      let unboundedReadCalled = false;
+      __setFsSafeTestHooksForTest({
+        afterOpen: (filePath, handle) => {
+          if (filePath !== oversizedFile) {
+            return;
+          }
+          vi.spyOn(handle, "readFile").mockImplementation(async () => {
+            unboundedReadCalled = true;
+            throw new Error("unbounded read invoked");
+          });
+        },
+      });
 
-    await expect(
-      loadWebMediaRaw(oversizedFile, {
-        maxBytes,
-        localRoots: [fixtureRoot],
-      }),
-    ).rejects.toThrow("Media exceeds 1MB limit");
-    expect(unboundedReadCalled).toBe(false);
-  });
+      await expect(
+        loadWebMediaRaw(oversizedFile, {
+          maxBytes,
+          localRoots: [fixtureRoot],
+        }),
+      ).rejects.toThrow(`Media exceeds ${expectedLimit} limit`);
+      expect(unboundedReadCalled).toBe(false);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects local media when an allowed ancestor symlink retargets before open",

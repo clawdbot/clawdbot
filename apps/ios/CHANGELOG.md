@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2026.8.11
+
 - Choose one of eight session colors from existing session menus, with matching sidebar stripes and chat title dots; select Default to clear a color.
 
 ## 2026.8.10

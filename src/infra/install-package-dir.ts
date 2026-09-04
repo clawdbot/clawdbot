@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -28,6 +29,16 @@ type HiddenProjectConfigFile = {
 
 type InstallPackageDirFailure = { ok: false; error: string };
 type InstallPackageDirSuccess = { ok: true };
+
+export function hasPackageRuntimeDependencies(manifest: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
+}
 
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
@@ -56,20 +67,6 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
   await writeJson(manifestPath, manifest, { trailingNewline: true });
-}
-
-function formatNpmDependencyInstallFailure(result: SpawnResult): string {
-  const detail = result.stderr.trim() || result.stdout.trim();
-  if (detail) {
-    return detail;
-  }
-  if (result.code !== null) {
-    return `exit code ${result.code} (no output from npm)`;
-  }
-  if (result.signal) {
-    return `signal ${result.signal} (no output from npm)`;
-  }
-  return `termination ${result.termination} (no output from npm)`;
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -166,7 +163,7 @@ async function resolveInstallPublishTarget(params: {
   };
 }
 
-type PackageDirInstallTransaction = {
+export type PackageDirInstallTransaction = {
   commit(): Promise<void>;
   rollback(): Promise<void>;
 };
@@ -183,6 +180,15 @@ export function requestDeferredPackageDirInstall<T extends object>(params: T): T
     value: true,
   });
   return params;
+}
+
+export function copyPackageDirInstallTransactionRequest<T extends object>(
+  source: object,
+  target: T,
+): T {
+  return isPackageDirInstallCommitDeferred(source)
+    ? requestDeferredPackageDirInstall(target)
+    : target;
 }
 
 function isPackageDirInstallCommitDeferred(params: object): boolean {
@@ -233,6 +239,7 @@ export async function installPackageDir<
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const deferCommit = isPackageDirInstallCommitDeferred(params);
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
@@ -352,7 +359,7 @@ export async function installPackageDir<
         }
       })();
       if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${formatNpmDependencyInstallFailure(npmRes)}`);
+        return await fail(`npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
@@ -373,17 +380,20 @@ export async function installPackageDir<
 
   if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
-    backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
+    const backupPath = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {
       await fs.mkdir(backupRoot, { recursive: true });
       await assertInstallBoundaryPaths({
         installBaseDir: installBaseRealPath,
-        candidatePaths: [backupDir],
+        candidatePaths: [backupPath],
       });
       await assertInstallBaseStable({
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
+      // Moving the current install is a mutation too; do not displace it after ownership closes.
+      params.beforePersistentApply?.();
+      backupDir = backupPath;
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
         sourceHardlinks,
@@ -413,6 +423,7 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    params.beforePersistentApply?.();
     await movePathWithCopyFallback({
       from: stageDir,
       sourceHardlinks,
@@ -476,31 +487,4 @@ export async function installPackageDir<
       },
     },
   );
-}
-
-/**
- * Installs a manifest-backed package directory while deriving whether npm
- * dependencies must be installed and which hardlink policy is safe to use.
- */
-export async function installPackageDirWithManifestDeps<
-  TAfterInstallFailure extends InstallPackageDirFailure = InstallPackageDirFailure,
->(params: {
-  sourceDir: string;
-  targetDir: string;
-  mode: "install" | "update";
-  timeoutMs: number;
-  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
-  copyErrorPrefix: string;
-  depsLogMessage: string;
-  manifestDependencies?: Record<string, unknown>;
-  afterCopy?: (installedDir: string) => void | Promise<void>;
-  afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-}): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
-  const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
-  return installPackageDir<TAfterInstallFailure>({
-    ...params,
-    hasDeps,
-    sourceHardlinks: hasDeps ? "package-manager" : "reject",
-  });
 }

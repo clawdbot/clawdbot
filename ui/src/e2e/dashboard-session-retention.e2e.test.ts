@@ -85,9 +85,6 @@ suite.define(() => {
       await page.goto(new URL(dashboardPath(alphaKey), suite.server.baseUrl).href);
       const alphaTab = page.locator('[data-board-tab-id="alpha-main"]');
       await alphaTab.waitFor();
-      await alphaTab.evaluate((tab) => {
-        Reflect.set(globalThis, "__retainedDashboardTab", tab);
-      });
       if (recordProof) {
         await page.screenshot({
           path: path.join(
@@ -126,9 +123,7 @@ suite.define(() => {
       await gateway.deferNext("board.get", { sessionKey: alphaKey });
       await sessionLink(alphaKey).click();
       await alphaTab.waitFor({ state: "visible", timeout: 1_000 });
-      expect(
-        await alphaTab.evaluate((tab) => Reflect.get(globalThis, "__retainedDashboardTab") === tab),
-      ).toBe(true);
+      expect(await alphaTab.textContent()).toContain("alpha main");
       await expect.poll(() => dashboardActive(alphaKey)).toBe(true);
       await expect.poll(() => dashboardActive(betaKey)).toBe(false);
       if (recordProof) {

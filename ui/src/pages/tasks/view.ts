@@ -99,76 +99,94 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             })}</span
           >
           <span>${taskRuntimeLabel(task)}</span>
-          ${task.agentId
-            ? html`<span>${t("tasksPage.agent", { agent: task.agentId })}</span>`
-            : nothing}
+          ${
+            task.agentId
+              ? html`<span>${t("tasksPage.agent", { agent: task.agentId })}</span>`
+              : nothing
+          }
         </div>
         ${detail ? html`<div class="settings-row__desc">${detail}</div>` : nothing}
-        ${retainedResult
-          ? html`<div class="task-row__warning">
-              <span
-                >${t(
-                  dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked",
-                )}</span
-              >
-              ${recoverableDelivery
-                ? html`<span class="muted">${t("tasksPage.duplicateRisk")}</span>`
-                : nothing}
-            </div>`
-          : nothing}
+        ${
+          retainedResult
+            ? html`<div class="task-row__warning">
+                <span
+                  >${t(
+                    dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked",
+                  )}</span
+                >
+                ${
+                  recoverableDelivery
+                    ? html`<span class="muted">${t("tasksPage.duplicateRisk")}</span>`
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
       </div>
       <div class="settings-row__control task-row__control">
         <div class="task-row__links">
-          ${timestamp > 0
-            ? html`<span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
-            : html`<span>${t("common.na")}</span>`}
+          ${
+            timestamp > 0
+              ? html`<span title=${formatMs(timestamp)}
+                  >${formatRelativeTimestamp(timestamp)}</span
+                >`
+              : html`<span>${t("common.na")}</span>`
+          }
           ${renderSessionLink(task, props)}
         </div>
-        ${showActions
-          ? html`<div class="task-row__actions">
-              ${active && props.canCancel
-                ? html`<button
-                    class="btn btn--sm"
-                    type="button"
-                    aria-label=${t("tasksPage.cancelTask", { title })}
-                    ?disabled=${cancelling || !props.connected}
-                    @click=${() => props.onCancel(task.taskId)}
-                  >
-                    ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
-                  </button>`
-                : nothing}
-              ${retainedResult && props.canCopy
-                ? html`<button
-                    class="btn btn--sm"
-                    type="button"
-                    ?disabled=${cancelling || !props.connected}
-                    @click=${() => props.onCopyResult(task.taskId)}
-                  >
-                    ${t("tasksPage.copyResult")}
-                  </button>`
-                : nothing}
-              ${recoverableDelivery && props.canCancel
-                ? html`
-                    <button
-                      class="btn btn--sm"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onRetry(task.taskId)}
-                    >
-                      ${t("tasksPage.retryDelivery")}
-                    </button>
-                    <button
-                      class="btn btn--sm"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onDismiss(task.taskId)}
-                    >
-                      ${t("tasksPage.dismissDelivery")}
-                    </button>
-                  `
-                : nothing}
-            </div>`
-          : nothing}
+        ${
+          showActions
+            ? html`<div class="task-row__actions">
+                ${
+                  active && props.canCancel
+                    ? html`<button
+                        class="btn btn--sm"
+                        type="button"
+                        aria-label=${t("tasksPage.cancelTask", { title })}
+                        ?disabled=${cancelling || !props.connected}
+                        @click=${() => props.onCancel(task.taskId)}
+                      >
+                        ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
+                      </button>`
+                    : nothing
+                }
+                ${
+                  retainedResult && props.canCopy
+                    ? html`<button
+                        class="btn btn--sm"
+                        type="button"
+                        ?disabled=${cancelling || !props.connected}
+                        @click=${() => props.onCopyResult(task.taskId)}
+                      >
+                        ${t("tasksPage.copyResult")}
+                      </button>`
+                    : nothing
+                }
+                ${
+                  recoverableDelivery && props.canCancel
+                    ? html`
+                        <button
+                          class="btn btn--sm"
+                          type="button"
+                          ?disabled=${cancelling || !props.connected}
+                          @click=${() => props.onRetry(task.taskId)}
+                        >
+                          ${t("tasksPage.retryDelivery")}
+                        </button>
+                        <button
+                          class="btn btn--sm"
+                          type="button"
+                          ?disabled=${cancelling || !props.connected}
+                          @click=${() => props.onDismiss(task.taskId)}
+                        >
+                          ${t("tasksPage.dismissDelivery")}
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
       </div>
     </div>
   `;
@@ -239,19 +257,27 @@ export function renderTasks(props: TasksProps) {
   const { active, recent } = partitionTasks(props.tasks);
   return renderSettingsPage(
     html`<div class="tasks-page-list">
-      ${!props.connected
-        ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
-        : nothing}
+      ${
+        !props.connected
+          ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
+          : nothing
+      }
       ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
-      ${props.copyResultError
-        ? html`<div class="callout danger" role="alert">${props.copyResultError}</div>`
-        : nothing}
-      ${props.loading && props.tasks.length === 0
-        ? renderSettingsEmpty(t("tasksPage.loading"))
-        : nothing}
-      ${!props.loading && props.tasks.length === 0
-        ? renderSettingsEmpty(t("tasksPage.empty"))
-        : nothing}
+      ${
+        props.copyResultError
+          ? html`<div class="callout danger" role="alert">${props.copyResultError}</div>`
+          : nothing
+      }
+      ${
+        props.loading && props.tasks.length === 0
+          ? renderSettingsEmpty(t("tasksPage.loading"))
+          : nothing
+      }
+      ${
+        !props.loading && props.tasks.length === 0
+          ? renderSettingsEmpty(t("tasksPage.empty"))
+          : nothing
+      }
       ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props)}
       ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props)}
     </div>`,

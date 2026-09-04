@@ -5,7 +5,6 @@
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -16,6 +15,7 @@ import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -225,14 +225,11 @@ export function createLsToolDefinition(
       }
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatLsCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatLsCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatLsResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatLsResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

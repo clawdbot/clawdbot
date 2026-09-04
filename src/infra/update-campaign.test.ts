@@ -428,6 +428,37 @@ describe("UpdateCampaignController", () => {
     },
   );
 
+  it("keeps the applying campaign owner when a newer target is announced", async () => {
+    const controller = createController();
+    const firstApply = vi.fn(async () => "handoff" as const);
+    const nextApply = vi.fn(async () => "handoff" as const);
+    const onChange = vi.fn();
+    const inspect = createInspectors(() => 0);
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect,
+      apply: firstApply,
+      onChange,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const applying = controller.getState();
+    onChange.mockClear();
+
+    controller.announce({
+      target: { kind: "package", version: "3.0.0" },
+      inspect,
+      apply: nextApply,
+      onChange,
+    });
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+    expect(controller.getState()).toEqual(applying);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(firstApply).toHaveBeenCalledOnce();
+    expect(nextApply).not.toHaveBeenCalled();
+    controller.clear();
+  });
+
   it("does not clear a replacement campaign when an earlier apply fails", async () => {
     const controller = createController();
     let resolveApply!: (outcome: "failed") => void;
@@ -447,6 +478,7 @@ describe("UpdateCampaignController", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
 
+    controller.clear();
     controller.announce({
       target: { kind: "package", version: "3.0.0" },
       inspect: createInspectors(() => 0),

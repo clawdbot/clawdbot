@@ -14,7 +14,6 @@ import {
   type AgentWaitResult,
   type AssistantReplySnapshot,
   hasUpdatedAssistantReplySnapshot,
-  isRecoverableAgentWaitError,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
 } from "../run-wait.js";
@@ -52,7 +51,7 @@ function sameOwnedSession(params: {
 }
 function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
   return (
-    (wait.status === "error" && !isRecoverableAgentWaitError(wait.error)) ||
+    (wait.status === "error" && !wait.retryableTransportError) ||
     (wait.status === "timeout" && wait.pendingError === true)
   );
 }

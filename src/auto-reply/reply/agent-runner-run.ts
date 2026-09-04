@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -209,6 +210,38 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  const pendingQuestionText = (
+    transcriptCommandBody ??
+    followupRun.transcriptPrompt ??
+    commandBody
+  ).trim();
+  const isExternalUserInput =
+    followupRun.run.inputProvenance === undefined ||
+    followupRun.run.inputProvenance.kind === "external_user";
+  if (
+    !isHeartbeat &&
+    isExternalUserInput &&
+    pendingQuestionText &&
+    !followupRun.images?.length &&
+    !followupRun.media?.length &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text: pendingQuestionText,
+      persist: followupRun.userTurnTranscriptRecorder
+        ? async () => {
+            await followupRun.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+    }
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return undefined;
+  }
+
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
     storePath,
@@ -230,7 +263,8 @@ export async function runReplyAgent(
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
-    const updatedAt = Date.now();
+    // Keep the in-memory snapshot aligned with the pending-reset write boundary.
+    const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {

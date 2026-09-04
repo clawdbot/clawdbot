@@ -14,6 +14,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   addSubagentRunForTests,
+  releaseSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
@@ -176,6 +177,64 @@ describe("subagents status", () => {
     for (const blocked of unexpectedText) {
       expect(text).not.toContain(blocked);
     }
+  });
+});
+
+describe("subagents command snapshots", () => {
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it("captures controlled runs after lazy action loading", async () => {
+    const controllerSessionKey = "agent:main:main";
+    const parentSessionKey = "agent:main:subagent:snapshot-parent";
+    const parentRunId = "snapshot-parent-run";
+
+    await handleSubagentsCommand(
+      buildCommandTestParams("/subagents list", baseCommandTestConfig),
+      true,
+    );
+    addSubagentRunForTests({
+      runId: parentRunId,
+      childSessionKey: parentSessionKey,
+      controllerSessionKey,
+      requesterSessionKey: controllerSessionKey,
+      requesterDisplayKey: "main",
+      task: "removed parent",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 2_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    const pendingReply = handleSubagentsCommand(
+      buildCommandTestParams("/agents", baseCommandTestConfig),
+      true,
+    );
+    queueMicrotask(() => {
+      releaseSubagentRun(parentRunId);
+      addSubagentRunForTests({
+        runId: "snapshot-child-run",
+        childSessionKey: `${parentSessionKey}:subagent:child`,
+        controllerSessionKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        requesterDisplayKey: parentSessionKey,
+        task: "new child",
+        cleanup: "keep",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+    });
+
+    const text = requireReplyText((await pendingReply)?.reply);
+    expect(text).toContain("(none)");
+    expect(text).not.toContain("removed parent");
+    expect(text).not.toContain("waiting on 1 child");
   });
 });
 

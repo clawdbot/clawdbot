@@ -8,6 +8,7 @@ read_when:
   - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
   - You need to exclude specific session sources from automatic dreaming ingestion
+  - You see a memory file-watching pressure warning
 ---
 
 This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
@@ -168,6 +169,11 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
 | Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
+
+For custom OpenAI-compatible providers, `models.providers.<id>.apiKey` can name
+an API-key or bearer-token profile saved with [`openclaw models auth`](/cli/models#auth-profiles),
+such as `my-embeddings:default`. Literal keys keep their configured value even
+when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
 Codex OAuth covers chat/completions only and does not satisfy embedding requests.
@@ -366,6 +372,26 @@ Memory engines own synchronization, batching, watch, and post-compaction
 indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
 defaults rather than exposing per-install timing switches.
 
+### File-watcher pressure
+
+The "Memory file watching is tracking ..." warning reports an advisory count of
+watched paths or directories, not a measured host limit or confirmed exhaustion.
+Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
+roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
+are combined: an empty per-agent list does not remove global roots. Changing only
+an entry's `pattern` filters indexed files, not the directory tree being watched.
+
+Removing extra-path entries does not exclude files that still belong to the
+default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
+insufficient, review file-watch and open-file limits on the Gateway host. There is no supported
+`memory.search.sync.watch` setting.
+
+After changes, restart the Gateway. To refresh the affected index, run
+`openclaw memory index --force --agent <id>` on the Gateway host using its profile
+and environment, including any `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH`
+overrides. Use the affected agent's ID; the command printed in the warning includes
+it and the active profile or container hint. See [memory index](/cli/memory#memory-index).
+
 ## Hybrid search config
 
 All under `memory.search.query`:
@@ -508,13 +534,16 @@ when you intentionally want both representations.
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
-`agent` visibility exposes same-agent sessions to unsandboxed callers, including
-non-main sessions and conversations with other users sharing the agent. Set
-`tree` explicitly for current plus spawned scope (main still sees all
+`all` visibility permits cross-agent session access for unsandboxed callers,
+including other users' transcripts. `memory_search` remains scoped to the selected
+agent's indexed corpus; use [`sessions_search`](/concepts/session-search) for
+Gateway-wide transcript search. Cross-agent access is on by default and governed
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+or use `allow` to restrict agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. Set `agent` for same-agent recall or
+`tree` for current plus spawned scope (main still sees all
 same-agent sessions), or `self` for strict current-session access. A per-peer
-DM scope alone does not restrict session-tool recall. Cross-agent recall
-requires `all` and agent-to-agent policy; sandbox clamps and incognito
-exclusions still apply.
+DM scope alone does not restrict session-tool recall. Sandbox clamps and
+incognito exclusions still apply.
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private
@@ -528,7 +557,8 @@ The examples below place these settings under top-level `memory.search`. You can
 apply equivalent settings in a per-agent `memory.search` override when only one
 agent should index and search session transcripts.
 
-For same-agent gateway-to-DM recall:
+To keep transcript recall same-agent only, narrow session visibility from the
+default `all`:
 
 ```json5
 {

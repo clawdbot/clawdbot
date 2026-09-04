@@ -74,6 +74,8 @@ export type RealtimeVoiceBridgeSessionParams = {
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
+  /** Admit a host-requested response before the provider can complete it synchronously. */
+  onResponseRequest?: () => void;
   onToolCall?: (
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -103,6 +105,16 @@ export function createRealtimeVoiceBridgeSession(
       throw new Error("Realtime voice bridge is not ready");
     }
     return bridgeRef.current;
+  };
+  const requestResponse = (send: (() => void) | undefined) => {
+    if (!isAdmitting() || !send) {
+      return;
+    }
+    params.onResponseRequest?.();
+    // Admission callbacks can close the session before the provider receives the request.
+    if (isAdmitting()) {
+      send();
+    }
   };
   // The provider may call callbacks during createBridge(); keep the public session facade
   // stable while blocking use until the bridge object has actually been returned.
@@ -138,7 +150,12 @@ export function createRealtimeVoiceBridgeSession(
         requireBridge().sendAudio(audio);
       }
     },
-    sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    sendUserMessage: (text) => {
+      if (text.trim()) {
+        const bridge = requireBridge();
+        requestResponse(bridge.sendUserMessage?.bind(bridge, text));
+      }
+    },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) => {
@@ -148,7 +165,10 @@ export function createRealtimeVoiceBridgeSession(
       }
       return bridge.submitToolResult(callId, result, options);
     },
-    triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
+    triggerGreeting: (instructions) => {
+      const bridge = requireBridge();
+      requestResponse(bridge.triggerGreeting?.bind(bridge, instructions));
+    },
   };
   // Session inactivity is the shared admission boundary for both audio directions.
   // Provider and transport callbacks may still race after close, but cannot retain new audio.
@@ -220,9 +240,11 @@ export function createRealtimeVoiceBridgeSession(
         return;
       }
       if (params.triggerGreetingOnReady) {
-        bridgeRef.current.triggerGreeting?.(params.initialGreetingInstructions);
+        session.triggerGreeting(params.initialGreetingInstructions);
       }
-      params.onReady?.(session);
+      if (isAdmitting()) {
+        params.onReady?.(session);
+      }
     },
     onError: params.onError,
     onClose: (reason) => {

@@ -22,10 +22,7 @@ import {
   resolvePublishedModelCatalogOwner,
 } from "./prepared-model-catalog-owner.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
-import {
-  startSerializedSnapshotBuild,
-  startSerializedSnapshotBuildBatch,
-} from "./prepared-model-runtime.build.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import {
   activateStandalonePreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -247,7 +244,7 @@ describe("prepared build candidate lifetime", () => {
     const source = createDeferred<{ agentDir: string; wrote: false }>();
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => await source.promise);
     const input = { config: {}, agentDir: state.agentDir("timeout") };
-    const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuild");
+    const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
     try {
       await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
         "prepared model runtime publication timed out",
@@ -370,44 +367,16 @@ describe("prepared build candidate lifetime", () => {
     }
   });
 
-  it("allows a direct serialized build without a lifecycle generation guard", async () => {
-    const input = {
-      config: {},
-      agentDir: state.agentDir("direct-prepared-model-runtime-build"),
-      readOnly: true,
-    };
-    const build = startSerializedSnapshotBuild(
-      { input, catalogOwner: preparePublishedModelCatalogOwnerIdentity(input) },
-      new Map(),
-      1_000,
-      "static",
-    );
-
-    try {
-      await expect(build.pending).resolves.toMatchObject({
-        snapshot: {
-          agentDir: input.agentDir,
-          config: input.config,
-        },
-        pluginGeneration: expect.any(Object),
-      });
-    } finally {
-      await build.completion;
-    }
-  });
-
   it.each([
     {
-      name: "single default",
-      single: true,
-      generation: undefined,
-      build: undefined,
+      name: "batch explicit generation",
+      generation: true,
+      build: true,
       allowed: true,
       callbacks: true,
     },
     {
       name: "batch default",
-      single: false,
       generation: undefined,
       build: undefined,
       allowed: true,
@@ -415,7 +384,6 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch build-only",
-      single: false,
       generation: undefined,
       build: true,
       allowed: true,
@@ -423,7 +391,6 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch missing build predicate",
-      single: false,
       generation: false,
       build: undefined,
       allowed: true,
@@ -431,13 +398,12 @@ describe("prepared build candidate lifetime", () => {
     },
     {
       name: "batch inherited generation predicate",
-      single: false,
       generation: false,
       build: false,
       allowed: false,
       callbacks: false,
     },
-  ])("preserves $name semantics", async ({ single, generation, build, allowed, callbacks }) => {
+  ])("preserves $name semantics", async ({ generation, build, allowed, callbacks }) => {
     const input = { config: {}, agentDir: state.agentDir("candidate-lifetime"), readOnly: true };
     const candidate = {
       input,
@@ -445,15 +411,12 @@ describe("prepared build candidate lifetime", () => {
       ...(generation === undefined ? {} : { isGenerationCurrent: () => generation }),
       ...(build === undefined ? {} : { isBuildCurrent: () => build }),
     };
-    const started = single
-      ? startSerializedSnapshotBuild(candidate, new Map(), 1_000, "static")
-      : startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
+    const started = startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
     try {
       if (!allowed) {
         await expect(started.pending).rejects.toThrow("superseded");
       } else {
-        const result = await started.pending;
-        const { snapshot } = Array.isArray(result) ? result[0]! : result;
+        const { snapshot } = (await started.pending)[0]!;
         if (callbacks) {
           await expect(snapshot.loadFullModelCatalog!()).resolves.toMatchObject({ entries: [] });
         } else {

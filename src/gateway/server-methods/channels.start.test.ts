@@ -176,19 +176,17 @@ describe("channelsHandlers channels.stop", () => {
           context: {
             getRuntimeConfig: mocks.getRuntimeConfig,
             stopChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {},
-                channelAccounts: {
-                  whatsapp: {
-                    "default-account": {
-                      accountId: "default-account",
-                      running: false,
-                    },
+            getRuntimeSnapshot: vi.fn((): ChannelRuntimeSnapshot => ({
+              channels: {},
+              channelAccounts: {
+                whatsapp: {
+                  "default-account": {
+                    accountId: "default-account",
+                    running: false,
                   },
                 },
-              }),
-            ),
+              },
+            })),
           } as unknown as GatewayRequestHandlerOptions["context"],
         },
       ),

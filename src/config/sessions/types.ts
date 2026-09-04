@@ -7,7 +7,11 @@ import type {
 } from "@openclaw/acp-core/types";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionEntryArchiveReason,
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
@@ -330,6 +334,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedAt?: number;
     /** Actor that archived the session; cleared when the session is restored. */
     archivedBy?: SessionActor;
+    /** Stable lifecycle cause; absent values are legacy archives and remain manually protected. */
+    archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
@@ -512,7 +518,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** One-run rollback guard for a model selected by the agent sessions tool. */
     modelFallback?: AgentPatchedSessionModelFallback;
     authProfileOverride?: string;
-    authProfileOverrideSource?: "auto" | "user";
+    authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
     /**
      * Set on explicit user-driven session model changes (for example `/model`
@@ -597,6 +603,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Explicit authorized immutable library pins; current speakers never replace this selection. */
+    skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
     /**
      * Generic plugin-owned runtime debug entries shown in verbose status surfaces.

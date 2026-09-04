@@ -248,6 +248,7 @@ describe("managed service update handoff single-flight", () => {
         cancelManagedServiceUpdateHandoff,
         claimManagedServiceUpdateHandoff,
         startManagedServiceUpdateHandoff,
+        transferManagedServiceUpdateHandoff,
       } = await import("./update-managed-service-handoff.js");
       const started = await startManagedServiceUpdateHandoff({
         root,
@@ -263,6 +264,7 @@ describe("managed service update handoff single-flight", () => {
       }
       const identity = { kind: "managed-update-handoff" as const, ...started };
       expect(claimManagedServiceUpdateHandoff(identity)).toBe(true);
+      await expect(transferManagedServiceUpdateHandoff(identity)).resolves.toBe(true);
       if (failure === "dead") {
         vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(false);
       } else {
@@ -740,7 +742,7 @@ describe("managed service update handoff single-flight", () => {
       .get() as { payload_json: string };
     sentinel.close();
     expect(JSON.parse(terminal.payload_json)).toMatchObject({
-      status: "error",
+      status: "skipped",
       stats: { reason: "managed-service-handoff-cancelled" },
     });
     if (joinedAfterExit) {

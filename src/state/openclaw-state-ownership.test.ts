@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +69,7 @@ function claimFixture(managerId = "gateway-supervisor") {
   return { databasePath, externalEnv, ownership, unmarkedEnv: withoutExternalMarker(externalEnv) };
 }
 
+// Compare snapshots with Node: Vitest expands every Buffer byte into a JavaScript entry.
 function snapshotSqliteFamily(databasePath: string) {
   const directory = path.dirname(databasePath);
   const entries = fs.readdirSync(directory).toSorted();
@@ -276,7 +278,7 @@ describe("external shared-state ownership", () => {
         env: withoutExternalMarker(env),
       }),
     ).rejects.toThrow(OpenClawStateOwnershipError);
-    expect(snapshotSqliteFamily(copyPath)).toEqual(before);
+    assert.deepStrictEqual(snapshotSqliteFamily(copyPath), before);
   });
 
   it("observes committed ownership that is still resident in the live WAL", () => {
@@ -492,7 +494,7 @@ describe("external shared-state ownership", () => {
       }
     }
 
-    expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
+    assert.deepStrictEqual(snapshotSqliteFamily(fixture.databasePath), before);
     expect(fs.readdirSync(stateDir)).toEqual(["state"]);
   });
 
@@ -576,7 +578,7 @@ describe("external shared-state ownership", () => {
       OpenClawStateOwnershipError,
     );
 
-    expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
+    assert.deepStrictEqual(snapshotSqliteFamily(fixture.databasePath), before);
     for (const suffix of ["-wal", "-shm", "-journal"]) {
       expect(fs.existsSync(`${fixture.databasePath}${suffix}`)).toBe(false);
     }
@@ -823,7 +825,7 @@ describe("external shared-state ownership", () => {
     }
   });
 
-  it("fences Doctor repair, startup checkpoint, compaction, and config health", async () => {
+  it("fences state repair and config health writes while allowing health reads", async () => {
     const fixture = claimFixture();
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.databasePath, 0o666);
@@ -848,13 +850,13 @@ describe("external shared-state ownership", () => {
       homedir: () => fixture.unmarkedEnv.OPENCLAW_STATE_DIR ?? "",
       logger: { warn: () => undefined },
     };
-    expect(() => readConfigHealthStateFromStore(healthDeps)).toThrow(OpenClawStateOwnershipError);
+    expect(readConfigHealthStateFromStore(healthDeps)).toEqual({ entries: {} });
     expect(() =>
       writeConfigHealthStateToStore(healthDeps, {
         entries: { "/tmp/openclaw.json": { lastObservedSuspiciousSignature: "test" } },
       }),
     ).toThrow(OpenClawStateOwnershipError);
-    expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
+    assert.deepStrictEqual(snapshotSqliteFamily(fixture.databasePath), before);
   });
 
   it("allows read-only access without the external marker", async () => {

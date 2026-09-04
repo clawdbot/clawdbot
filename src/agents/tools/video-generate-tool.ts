@@ -8,6 +8,7 @@ import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.j
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
@@ -207,30 +208,6 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-function resolveVideoGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
-    modelOverride: params.modelOverride,
-    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
-  });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
-    resolveVideoGenerationModelConfigForTool,
-  };
-}
-
 function collectVideoGenerationModelProviderIds(params: {
   cfg: OpenClawConfig;
   modelConfig: ToolModelConfig;
@@ -298,6 +275,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
 
   for (const plugin of snapshot.plugins) {
     if (
+      !plugin.contracts?.videoGenerationProviders?.length ||
       !isManifestPluginAvailableForControlPlane({
         snapshot,
         plugin,
@@ -306,8 +284,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
     ) {
       continue;
     }
-    const providerIds = plugin.contracts?.videoGenerationProviders ?? [];
-    for (const providerId of providerIds) {
+    for (const providerId of plugin.contracts.videoGenerationProviders) {
       knownProviderIds.add(providerId);
       const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
       const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
@@ -488,10 +465,6 @@ type ExecutedVideoGeneration = {
   wakeResult: string;
 };
 
-function isGeneratedMediaSizeLimitError(error: unknown): boolean {
-  return error instanceof Error && /^Media exceeds \d+MB limit$/.test(error.message);
-}
-
 async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
@@ -589,7 +562,7 @@ async function executeVideoGenerationJob(params: {
           savedMedia,
         };
       } catch (error) {
-        if (video.url && isGeneratedMediaSizeLimitError(error)) {
+        if (video.url && error instanceof SaveMediaSourceError && error.code === "too-large") {
           return {
             value: {
               kind: "url" as const,
@@ -858,12 +831,14 @@ export function createVideoGenerateTool(options?: {
       }
 
       const model = readToolStringParam(args, "model");
-      const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
+      const videoGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.video,
         modelOverride: model,
+        providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
       });
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");

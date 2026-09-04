@@ -182,6 +182,16 @@ Choose your plan type and follow the setup steps.
 
 </Tabs>
 
+## Retired Qwen Portal authentication
+
+The `qwen-oauth` Portal provider and its legacy OAuth flow have been removed.
+Portal tokens are not interchangeable with Qwen Cloud or DashScope API keys.
+Using the current Qwen plugin requires fresh API-key authentication for the
+chosen endpoint and updated model configuration. Follow
+[Install plugin](/providers/qwen#install-plugin) and
+[Getting started](/providers/qwen#getting-started); existing Portal credentials
+are not converted automatically.
+
 ## Plan types and endpoints
 
 | Plan                       | Region | Auth choice                | Endpoint                                                         |

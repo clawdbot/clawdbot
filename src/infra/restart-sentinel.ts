@@ -15,6 +15,7 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
   readRestartSentinelRowSync,
+  readRestartSentinelSnapshotSync,
   readUpdateInstallReceiptRowSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
@@ -56,6 +57,44 @@ export async function writeRestartSentinel(
     ({ db }) => writeRestartSentinelRowSync(db, payload),
     { env },
     { operationLabel: "restart-sentinel.write" },
+  );
+}
+
+/** Publish an outcome only while its producer and the captured notification are unchanged. */
+export async function writeRestartSentinelIfUnchanged(params: {
+  payload: RestartSentinelPayload;
+  expectedRevision: number | null;
+  isCurrent: () => boolean;
+}): Promise<RestartSentinel | null> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelSnapshotSync(db);
+      if (current.state.kind === "invalid" || !params.isCurrent()) {
+        return null;
+      }
+      return current.revision === params.expectedRevision
+        ? writeRestartSentinelRowSync(db, params.payload)
+        : null;
+    },
+    {},
+    { operationLabel: "restart-sentinel.write-if-unchanged" },
+  );
+}
+
+export async function readRestartSentinelSnapshot(): Promise<{
+  sentinel: RestartSentinel | null;
+  revision: number | null;
+}> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const snapshot = readRestartSentinelSnapshotSync(db);
+      return {
+        sentinel: snapshot.state.kind === "valid" ? snapshot.state.sentinel : null,
+        revision: snapshot.revision,
+      };
+    },
+    {},
+    { operationLabel: "restart-sentinel.read-snapshot" },
   );
 }
 
@@ -331,6 +370,29 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
     sentinelLog.warn(`Failed to check restart sentinel: ${formatErrorMessage(err)}`);
     return false;
   }
+}
+
+export function formatUpdateOutcomeNotice(payload: RestartSentinelPayload): string {
+  const before = payload.stats?.before?.version;
+  const after = payload.stats?.after?.version;
+  const previous = typeof before === "string" ? before.trim() : "";
+  const current = typeof after === "string" ? after.trim() : "";
+  let outcome = "✅ OpenClaw updated and restarted.";
+  if (payload.status === "ok" && current) {
+    outcome = `✅ OpenClaw updated to ${current}${previous ? ` (from ${previous})` : ""}.`;
+  } else if (payload.status === "skipped") {
+    outcome = `ℹ️ OpenClaw update skipped: ${payload.stats?.reason?.trim() || "unknown reason"}.`;
+  } else if (payload.status === "error") {
+    const reason =
+      payload.stats?.reason?.trim() ||
+      payload.stats?.steps?.find((step) => step.log?.exitCode != null && step.log.exitCode !== 0)
+        ?.name ||
+      "unknown reason";
+    outcome = `⚠️ OpenClaw update failed: ${reason}. The gateway is running ${previous || "the previous version"}.`;
+  }
+  const note = payload.message?.trim() ?? "";
+  const sentence = !note.startsWith("/") && /\s/.test(note) && /[.!?]$/.test(note) ? note : "";
+  return [outcome, sentence, payload.doctorHint?.trim()].filter(Boolean).join("\n");
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {

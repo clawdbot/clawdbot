@@ -7,7 +7,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import {
+  cancelResponseReaderSoon,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../lib/bounded-response.mjs";
 import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -43,6 +46,8 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
     unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
   },
 ];
+
+class AdvisoryRequestTimeoutError extends Error {}
 
 /** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
 /**
@@ -750,7 +755,9 @@ export async function withAdvisoryRequestTimeout({ label, timeoutMs, run }) {
   /** @type {Promise<never>} */
   const timeoutPromise = new Promise((_resolve, reject) => {
     timeout = setTimeout(() => {
-      const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
+      const error = new AdvisoryRequestTimeoutError(
+        `${label} exceeded timeout of ${resolvedTimeoutMs}ms`,
+      );
       controller.abort(error);
       reject(error);
     }, resolvedTimeoutMs);
@@ -796,9 +803,7 @@ export async function readBoundedBulkAdvisoryErrorText(
             read,
             options.timeoutPromise.catch((error) => {
               canceled = true;
-              void Promise.resolve()
-                .then(() => reader.cancel())
-                .catch(() => undefined);
+              cancelResponseReaderSoon(reader);
               throw error;
             }),
           ])
@@ -848,35 +853,44 @@ export async function fetchBulkAdvisories({
   timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  return await withAdvisoryRequestTimeout({
-    label: "Bulk advisory request",
-    timeoutMs,
-    run: async ({ signal, timeoutPromise }) => {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal,
-      });
+  const request = async () =>
+    await withAdvisoryRequestTimeout({
+      label: "Bulk advisory request",
+      timeoutMs,
+      run: async ({ signal, timeoutPromise }) => {
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal,
+        });
 
-      if (!response.ok) {
-        const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+        if (!response.ok) {
+          const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+            timeoutPromise,
+          });
+          throw new Error(
+            `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
+          );
+        }
+
+        return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
+          signal,
           timeoutPromise,
         });
-        throw new Error(
-          `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-        );
-      }
-
-      return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
-        signal,
-        timeoutPromise,
-      });
-    },
-  });
+      },
+    });
+  try {
+    return await request();
+  } catch (error) {
+    if (!(error instanceof AdvisoryRequestTimeoutError)) {
+      throw error;
+    }
+  }
+  return await request();
 }
 
 /** @param {PnpmAuditOptions} [options] */

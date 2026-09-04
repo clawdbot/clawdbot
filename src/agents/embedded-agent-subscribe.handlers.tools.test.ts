@@ -1506,7 +1506,7 @@ describe("handleToolExecutionEnd MCP connect action tracking", () => {
 });
 
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
-  it("records accepted sessions_spawn identifiers", async () => {
+  it("records accepted sessions_spawn completion ownership", async () => {
     const { ctx } = createTestContext();
 
     await endTool(ctx, {
@@ -1518,6 +1518,7 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
           status: "accepted",
           runId: " run-child ",
           childSessionKey: " agent:claude:subagent:child ",
+          expectsCompletionMessage: true,
         },
       },
     });
@@ -1526,6 +1527,7 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
       {
         runId: "run-child",
         childSessionKey: "agent:claude:subagent:child",
+        expectsCompletionMessage: true,
       },
     ]);
     expect(ctx.state.replayState).toEqual({
@@ -2742,7 +2744,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed (exit 1)");
+    expect(payloads[0]?.text).toBe("⚠️ Exec failed (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -3077,7 +3079,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
+    expect(payloads[0]?.text).toBe("⚠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {

@@ -248,7 +248,7 @@ struct PairingCardPresentationTests {
     }
 
     @Test func `panel auto presents only for unseen requests`() {
-        #expect(!PairingApprovalCenter.shouldAutoPresent(cardIds: [], snoozedIds: []))
+        #expect(!PairingApprovalCenter.shouldAutoPresent(cardIds: [String](), snoozedIds: []))
         #expect(PairingApprovalCenter.shouldAutoPresent(cardIds: ["a"], snoozedIds: []))
         // Everything on screen was snoozed: stay hidden.
         #expect(!PairingApprovalCenter.shouldAutoPresent(cardIds: ["a"], snoozedIds: ["a"]))
@@ -302,8 +302,9 @@ struct PairingApprovalCenterBulkDecisionTests {
             self.card(kind: .device, requestId: "req-2"),
         ]
 
+        center._testSetCards(rendered)
         center.decideAll(rendered, .approve)
-        #expect(center.decisionsInFlight == ["req-1", "req-2"])
+        #expect(center.decisionsInFlight == Set(rendered.map(\.id)))
         // A second bulk click while decisions are in flight must not re-fire.
         center.decideAll(rendered, .approve)
 
@@ -325,6 +326,7 @@ struct PairingApprovalCenterBulkDecisionTests {
             self.card(kind: .device, requestId: "req-2"),
         ]
 
+        center._testSetCards(rendered)
         center.decideAll(rendered, .reject)
 
         var attempts = 0
@@ -355,6 +357,24 @@ struct PairingApprovalCenterBulkDecisionTests {
             await Task.yield()
         }
         #expect(recorder.decided == ["node:req-seen:approve"])
-        #expect(!center.decisionsInFlight.contains("req-unseen"))
+        #expect(!center.decisionsInFlight.contains(self.card(kind: .device, requestId: "req-unseen").id))
+    }
+
+    @Test func `node and device decisions do not share request id ownership`() async {
+        let center = PairingApprovalCenter()
+        let recorder = DecisionRecorder()
+        center.register(kind: .node) { recorder.record("node", $0, $1) }
+        center.register(kind: .device) { recorder.record("device", $0, $1) }
+        let rendered = [
+            self.card(kind: .node, requestId: "same-id"),
+            self.card(kind: .device, requestId: "same-id"),
+        ]
+        center._testSetCards(rendered)
+        center.decideAll(rendered, .approve)
+        for _ in 0..<10000 {
+            if center.decisionsInFlight.isEmpty { break }
+            await Task.yield()
+        }
+        #expect(recorder.decided.sorted() == ["device:same-id:approve", "node:same-id:approve"])
     }
 }

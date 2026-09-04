@@ -1,11 +1,15 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { createUtf8PrefixTruncator, truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
     return null;
+  }
+  // Strings, booleans and null need no detachment or JSON normalization.
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
   }
   try {
     const serialized = JSON.stringify(value);
@@ -14,13 +18,8 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
     }
-    if (value === null) {
-      return null;
-    }
     switch (typeof value) {
-      case "string":
       case "number":
-      case "boolean":
         return value;
       case "bigint":
       case "symbol":
@@ -75,17 +74,18 @@ const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 function fitJsonPrefix<T>(text: string, maxBytes: number, project: (prefix: string) => T): T {
   let low = 0;
   let high = Math.min(Buffer.byteLength(text, "utf8"), maxBytes);
+  const prefix = createUtf8PrefixTruncator(text, Math.ceil(high));
   // JSON escaping makes serialized bytes cost more than raw prefix bytes.
   // Measure the complete projection so fitting cannot erase a useful prefix.
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    if (jsonUtf8Bytes(project(truncateUtf8Prefix(text, middle))) <= maxBytes) {
+    if (jsonUtf8Bytes(project(prefix(middle))) <= maxBytes) {
       low = middle;
     } else {
       high = middle - 1;
     }
   }
-  return project(truncateUtf8Prefix(text, low));
+  return project(prefix(low));
 }
 
 function truncationMarker(source: CodeModeJsonSource, maxBytes: number) {

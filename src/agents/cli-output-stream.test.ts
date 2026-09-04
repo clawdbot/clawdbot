@@ -213,6 +213,118 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
+      name: "records a Claude hook-stopped terminal result",
+      frames: [] as unknown[],
+      expected: {
+        text: "",
+        sessionId: "hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "keeps streamed text when a hook stops the turn after a reply",
+      frames: [claudeTextDelta("streamed answer")] as unknown[],
+      expected: { text: "streamed answer", sessionId: "hook-stopped", usage: undefined },
+    },
+    {
+      name: "does not classify a backgrounded turn as a stop",
+      frames: [] as unknown[],
+      terminalReason: "background_requested",
+      expected: { text: "", sessionId: "hook-stopped", usage: undefined },
+    },
+  ])("$name", ({ frames, expected, terminalReason }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        ...frames,
+        {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "hook-stopped",
+          stop_reason: "tool_use",
+          terminal_reason: terminalReason ?? "hook_stopped",
+          result: "",
+          num_turns: 4,
+        },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual(expected);
+  });
+
+  it("records a hook stop that follows an interim result", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "interim-then-stop",
+          terminal_reason: "completed",
+          result: "Agent is running. I'll let you know when it finishes.",
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "interim-then-stop",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+        },
+        "",
+      ),
+    );
+    parser.finish();
+
+    // The interim text was that result's reply, not this turn's: a stopped
+    // turn reports empty text like the JSON and JSONL result paths do.
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "interim-then-stop",
+      usage: undefined,
+      errorText:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+      terminalFailure: {
+        reason: "turn_stopped",
+        terminalReason: "hook_stopped",
+        stopReason: "tool_use",
+      },
+    });
+  });
+
+  it.each([
+    {
       name: "ordinary lookalike",
       frames: [
         {

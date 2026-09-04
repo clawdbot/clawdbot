@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {
@@ -85,6 +86,22 @@ describe("kysely sync helpers", () => {
       expect(select({ name, bytes, count: 42n }).rows).toEqual([
         { name, repeated: name, literal: "literal", bytes, count: 42 },
       ]);
+    }
+  });
+
+  it("preserves string binding and set semantics in JSON-backed selections", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table items (id integer primary key, name text not null unique)");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const values = ["", "plain", "λ🦞", "\uFFFD", "nul\0tail", "'); DROP TABLE items; --"];
+    for (const name of values) {
+      executeSqliteQuerySync(database, db.insertInto("items").values({ name }));
+    }
+    for (const names of [[], values, ["plain", "plain"], ["\uD800"], ["\uDC00"], ["absent"]]) {
+      const query = db.selectFrom("items").selectAll().orderBy("name");
+      expect(
+        executeSqliteQuerySync(database, query.where("name", "in", sqliteStringSet(names))).rows,
+      ).toEqual(executeSqliteQuerySync(database, query.where("name", "in", names)).rows);
     }
   });
 

@@ -91,8 +91,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       }
     };
     const commitDraftChange = state.handleChatDraftChange;
-    state.handleChatDraftChange = (next) => {
-      commitDraftChange(next);
+    state.handleChatDraftChange = (next, mentions) => {
+      commitDraftChange(next, mentions);
       this.composerPersistence.schedule();
     };
     const navigateInputHistory = state.handleChatInputHistoryKey;
@@ -269,6 +269,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   startComposerPersistence() {
     this.composerPersistence.start();
+  }
+
+  pauseComposerPersistence() {
+    this.composerPersistence.stop();
   }
 
   persistComposerForEviction(): ChatComposerPersistResult {

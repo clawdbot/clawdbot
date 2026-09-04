@@ -106,7 +106,9 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     if (compactionIndex >= 0) {
       // Check if there's a valid assistant usage after the compaction boundary
       let hasPostCompactionUsage = false;
-      for (const entry of branchEntries.slice(compactionIndex + 1).toReversed()) {
+      for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
+        // SAFETY: The reverse index stays within the canonical branch entries.
+        const entry = branchEntries[index]!;
         if (entry.type === "message" && entry.message.role === "assistant") {
           const assistant = entry.message;
           if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
@@ -194,25 +196,19 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
    * @returns Text content, or undefined if no assistant message exists
    */
   getLastAssistantText(): string | undefined {
-    const lastAssistant = this.messages
-      .slice()
-      .toReversed()
-      .find((m) => {
-        if (m.role !== "assistant") {
-          return false;
-        }
-        const content = (m as { content?: unknown }).content;
-        if (m.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
-          return false;
-        }
-        return true;
-      });
-
-    if (!lastAssistant) {
-      return undefined;
+    const messages = this.messages;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      // SAFETY: The reverse index stays within the canonical message array.
+      const message = messages[index]!;
+      if (message.role !== "assistant") {
+        continue;
+      }
+      const content = message.content;
+      if (message.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
+        continue;
+      }
+      return extractTextContent(content).trim() || undefined;
     }
-
-    const content = (lastAssistant as { content?: unknown }).content;
-    return extractTextContent(content).trim() || undefined;
+    return undefined;
   }
 }

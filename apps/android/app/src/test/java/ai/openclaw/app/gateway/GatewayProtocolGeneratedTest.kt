@@ -109,7 +109,7 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
-  fun githubPublicationResultsDecodeAsATypedUnion() {
+  fun githubPublicationResultsRoundTripAsATypedUnion() {
     val cases =
       listOf(
         """{"requestId":"request-1","status":"requested","message":"Accepted."}""" to
@@ -120,11 +120,17 @@ class GatewayProtocolGeneratedTest {
           SessionGitHubPublicationPublished::class,
         """{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}""" to
           SessionGitHubPublicationFailed::class,
+        """{"requestId":"request-1","status":"needs_confirmation","publisher":{"source":"personal","accountId":42,"login":"octocat"},"message":"Confirm publication."}""" to
+          SessionGitHubPublicationNeedsConfirmation::class,
       )
 
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(SessionGitHubPublicationResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
+      assertEquals(
+        json.parseToJsonElement(payload),
+        json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded),
+      )
     }
   }
 

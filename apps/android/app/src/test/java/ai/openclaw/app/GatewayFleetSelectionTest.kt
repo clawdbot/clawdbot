@@ -155,7 +155,7 @@ class GatewayControlPageContextPathTest {
       desktopUrl(baseUrl),
     )
     assertEquals(
-      "https://gateway.example:443/tenant%2Fgateway%20west/chat?session=agent%3Amain%3Aqa&face=dashboard",
+      "https://gateway.example:443/tenant%2Fgateway%20west/dashboard/main/qa",
       sessionDashboardUrl(baseUrl, "agent:main:qa"),
     )
     assertEquals("https://gateway.example:443", controlUiOriginRule(baseUrl))

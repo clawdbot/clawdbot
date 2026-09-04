@@ -147,6 +147,7 @@ suite.define(() => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          headBranch: "main",
           repositoryStatus: "git",
         },
         "fs.listDir": {
@@ -187,8 +188,8 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Incognito is a page-level choice on the far end of the same top rail
-      // as the shell controls, rather than an option inside the composer.
+      // Incognito is a page-level choice on the far end of the shell-control
+      // centerline, rather than an option inside the composer.
       const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
       const incognitoBox = await incognitoToggle.boundingBox();
       const commandPaletteBox = await page
@@ -196,7 +197,10 @@ suite.define(() => {
         .boundingBox();
       expect(incognitoBox).not.toBeNull();
       expect(commandPaletteBox).not.toBeNull();
-      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
+      const incognitoCenterY = (incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0) / 2;
+      const commandPaletteCenterY =
+        (commandPaletteBox?.y ?? 0) + (commandPaletteBox?.height ?? 0) / 2;
+      expect(Math.abs(Math.round(incognitoCenterY - commandPaletteCenterY))).toBeLessThanOrEqual(2);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
       expect(
         await page
@@ -368,8 +372,8 @@ suite.define(() => {
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
-      const detailSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
+      const checkoutSelect = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
         "openclaw",
       );
@@ -397,28 +401,45 @@ suite.define(() => {
       );
 
       // Git-backed custom folders stay direct until the user explicitly chooses isolation.
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("false");
-      await detailTrigger.click();
-      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("true");
-      await pollLocatorText(detailSelect.locator(".new-session-page__menu-title").first()).toBe(
-        "Branches",
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("false");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "main",
       );
-      await captureProjectUiProof(suite, page, "new-session-branch-menu-label.png");
-      const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
+      await checkoutTrigger.click();
+      await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("true");
+      await pollLocatorText(checkoutSelect.locator(".new-session-page__menu-title").first()).toBe(
+        "Checkout",
+      );
+      await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png");
+      const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
+      const worktreeItem = checkoutSelect.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
+      await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("true");
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
       await worktreeItem.click();
-      await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("false");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "New worktree from main",
+      );
+      await checkoutSelect.getByLabel("From").waitFor();
+      await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
+      await checkoutSelect
+        .getByText("Creates branch openclaw/<name> in a separate checkout.", { exact: true })
+        .waitFor();
       await page.keyboard.press("Escape");
-      await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("false");
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-detail-trigger");
+        .toBe("new-session-checkout-trigger");
 
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
-      await detailTrigger.click();
-      const afterPointerHide = detailSelect.evaluate(
+      await checkoutTrigger.click();
+      const afterPointerHide = checkoutSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
             element.addEventListener("wa-after-hide", () => resolve(), { once: true });
@@ -426,7 +447,7 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
-      await expect.poll(() => detailSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
@@ -522,10 +543,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
         .toEqual({ repoRoot: "/recorded/openclaw", includeRepositoryStatus: true });
 
-      await page.locator("#new-session-detail-trigger").click();
+      await page.locator("#new-session-checkout-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__detail-popover")
-        .getByRole("button", { name: "Worktree" })
+        .locator("wa-popover.new-session-page__checkout-popover")
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
       await captureProjectUiProof(suite, page, "project-selected.png");
       await page.keyboard.press("Escape");

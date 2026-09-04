@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -19,6 +19,7 @@ type BodyScenario = {
   signedSource?: boolean;
   bodyWriteError?: boolean;
   trailerSeparators?: string;
+  overrideBody?: string;
 };
 
 function prepareBody(scenario: BodyScenario) {
@@ -26,6 +27,10 @@ function prepareBody(scenario: BodyScenario) {
   const sourceRepo = join(root, "source");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
+  const override = join(root, "operator body.md");
+  if (scenario.overrideBody !== undefined) {
+    writeFileSync(override, scenario.overrideBody);
+  }
   let localHead = headSha;
   if (scenario.sourceMessages) {
     mkdirSync(sourceRepo);
@@ -94,7 +99,9 @@ function prepareBody(scenario: BodyScenario) {
       "Unprepared change\n\nCo-authored-by: Unprepared <unprepared@example.com>",
     ]);
   }
-  mkdirSync(join(root, ".local"));
+  // Match the native worktree: Git setup may change cwd when the temp root
+  // itself is inside another repository, so the body belongs in sourceRepo.
+  mkdirSync(join(sourceRepo, ".local"));
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
@@ -102,17 +109,19 @@ PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 git() {
   if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
-  if [[ " $* " = *" interpret-trailers "* ]]; then command git "$@"; else command git -C "$BODY_SOURCE_REPO" "$@"; fi
+  command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
 gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
 gh() { printf 'fixture/repo\\n'; }
 mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }
-file=$(prepare_squash_merge_body 123)
+snapshot=""
+[ -z "$BODY_OVERRIDE" ] || snapshot=$(snapshot_merge_body "$BODY_OVERRIDE")
+file=$(prepare_squash_merge_body 123 "$snapshot")
 [ -z "$file" ] || cp "$file" "$BODY_OUTPUT"
 `;
   const result = spawnSync("bash", ["-c", shell], {
-    cwd: root,
+    cwd: sourceRepo,
     encoding: "utf8",
     env: {
       ...process.env,
@@ -139,6 +148,7 @@ file=$(prepare_squash_merge_body 123)
       BODY_LOCAL_HEAD: localHead,
       BODY_SOURCE_REPO: sourceRepo,
       BODY_OUTPUT: body,
+      BODY_OVERRIDE: scenario.overrideBody === undefined ? "" : override,
       BODY_READ_ERROR: String(scenario.sourceReadError ?? false),
       BODY_WRITE_ERROR: String(scenario.bodyWriteError ?? false),
       BODY_PREVIEW_ERROR: String(scenario.previewError ?? false),
@@ -166,6 +176,98 @@ file=$(prepare_squash_merge_body 123)
 }
 
 describePosix("native squash attribution", () => {
+  it("replaces obsolete closing prose while preserving operator, server and source credit", () => {
+    const source = "Co-authored-by: Source <source@example.com>";
+    const server = "Co-authored-by: Server <server@example.com>";
+    const operator = "Co-authored-by: Operator <operator@example.com>";
+    const result = prepareBody({
+      sourceMessages: [`Repair\n\n${source}`],
+      previewBody: `Obsolete complete fix.\n\nFixes #42\n\n${server}`,
+      overrideBody: `Partial repair. Related: #42.\r\n\r\n${operator}\r\n\r\n`,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(
+      `Partial repair. Related: #42.\r\n\r\n${operator}\n${server}\n${source}\r\n\r\n`,
+    );
+    expect(result.mergeBody).not.toContain("Fixes #42");
+  });
+
+  it.each([
+    "",
+    "é漢字\r\n\r\n",
+    "Co-authored-by: Operator <operator@example.com>\n",
+    "Description\n\nReviewed-by: Reviewer <reviewer@example.com>\n\n",
+  ])("retains exact explicit body bytes without extra credit: %j", (overrideBody) => {
+    const result = prepareBody({
+      sourceMessages: ["Repair"],
+      previewBody: "Fixes #42",
+      overrideBody,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(overrideBody);
+  });
+
+  it("preserves only server credit for an empty explicit body and deduplicates supplied credit", () => {
+    const credit = "Co-authored-by: Server <server@example.com>";
+    const result = prepareBody({
+      sourceMessages: ["Repair"],
+      previewBody: `Fixes: #42\n${credit}`,
+      overrideBody: "",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(credit);
+    const duplicate = prepareBody({
+      sourceMessages: [`Repair\n\n${credit}`],
+      previewBody: credit,
+      overrideBody: `${credit}\n\n`,
+      configuredTrailer: true,
+    });
+    expect(duplicate.status, duplicate.stderr).toBe(0);
+    expect(duplicate.mergeBody).toBe(`${credit}\n\n`);
+    expect(duplicate.trailerCommandCalled).toBe(false);
+  });
+
+  it("appends credit without inventing a final newline in an explicit body", () => {
+    const credit = "Co-authored-by: Source <source@example.com>";
+    const result = prepareBody({
+      sourceMessages: [`Repair\n\n${credit}`],
+      previewBody: "Old prose",
+      overrideBody: "Corrected prose",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(`Corrected prose\n\n${credit}`);
+  });
+
+  it.each(["missing", "directory", "symlink", "fifo", "nul", "invalid-utf8"])(
+    "rejects an invalid explicit body boundary: %s",
+    (kind) => {
+      const root = tempDirs.make("merge-body-input-");
+      const input = join(root, "body");
+      if (kind === "directory") {
+        mkdirSync(input);
+      }
+      if (kind === "symlink") {
+        symlinkSync(join(root, "target"), input);
+      }
+      if (kind === "fifo") {
+        expect(spawnSync("mkfifo", [input]).status).toBe(0);
+      }
+      if (kind === "nul") {
+        writeFileSync(input, Buffer.from([65, 0, 66]));
+      }
+      if (kind === "invalid-utf8") {
+        writeFileSync(input, Buffer.from([0xff]));
+      }
+      const result = spawnSync(
+        process.execPath,
+        [join(process.cwd(), "scripts/pr-lib/merge-body.mjs"), "read", input],
+        { encoding: "utf8", timeout: 5000 },
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+    },
+  );
+
   it("preserves canonical GitHub trailers despite configured separators", () => {
     const credit = "Co-authored-by: Contributor <contributor@example.com>";
     const result = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], trailerSeparators: "%" });
@@ -255,11 +357,14 @@ describePosix("native squash attribution", () => {
     { sourceReadError: true },
     { bodyWriteError: true },
   ])("refuses before merge when attribution evidence is unavailable: %j", (failure) => {
-    const result = prepareBody({
-      sourceMessages: ["Repair\n\nCo-authored-by: Contributor <contributor@example.com>"],
-      ...failure,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
+    for (const overrideBody of [undefined, "Explicit corrected prose"]) {
+      const result = prepareBody({
+        sourceMessages: ["Repair\n\nCo-authored-by: Contributor <contributor@example.com>"],
+        overrideBody,
+        ...failure,
+      });
+      expect(result.status).toBe(1);
+      expect(result.mergeBody).toBeNull();
+    }
   });
 });

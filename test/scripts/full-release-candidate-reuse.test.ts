@@ -25,7 +25,12 @@ const NOW = Date.parse("2026-08-28T12:00:00Z");
 const EXPIRES_AT = "2026-09-04T12:00:00Z";
 const REPOSITORY = "openclaw/openclaw";
 const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
-const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
+// CLI children must use the same clock as the fixed-expiry artifact fixtures.
+const SCRIPT_ARGS = [
+  "--import",
+  `data:text/javascript,Date.now=()=>${NOW}`,
+  resolve("scripts/full-release-candidate-reuse.mjs"),
+];
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -156,13 +161,21 @@ function constituentArtifactReader(manifest: CandidateConstituentSource) {
   };
 }
 
-async function fixture() {
+async function fixture(now = NOW) {
   const manifest = fullReleaseCandidateManifestFixture();
+  // CLI children use the real clock; seal every artifact with the same fixture lifetime.
+  const expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+  manifest.package.artifact.expiresAt = expiresAt;
+  manifest.prepublishPluginRegistry.artifact.expiresAt = expiresAt;
+  manifest.sharedImage.artifact.expiresAt = expiresAt;
   const archive = await archiveWithManifest(manifest);
   return {
     archive,
     manifest,
-    metadata: artifactMetadata(archive),
+    metadata: artifactMetadata(archive, {
+      created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+      expires_at: expiresAt,
+    }),
   };
 }
 
@@ -392,7 +405,7 @@ printf '%s\n' '{"artifacts":[]}'
     const result = spawnSync(
       process.execPath,
       [
-        SCRIPT,
+        ...SCRIPT_ARGS,
         "discover",
         "--request-input",
         requestPath,
@@ -454,17 +467,21 @@ exit 1
     );
     chmodSync(ghPath, 0o755);
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_GH_COUNT: countPath,
-        GH_TOKEN: "test-token",
-        GITHUB_OUTPUT: outputPath,
-        PATH: `${bin}:${process.env.PATH}`,
+    const result = spawnSync(
+      process.execPath,
+      [...SCRIPT_ARGS, "discover", "--request-input", inputPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_GH_COUNT: countPath,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
       },
-      timeout: 10_000,
-    });
+    );
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(countPath, "utf8").trim()).toBe("2");
     expect(readFileSync(outputPath, "utf8")).toContain(
@@ -499,18 +516,22 @@ cat "$FAKE_GH_PAYLOAD"
       payloadPath,
       JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_GH_COUNT: countPath,
-        FAKE_GH_PAYLOAD: payloadPath,
-        GH_TOKEN: "test-token",
-        GITHUB_OUTPUT: outputPath,
-        PATH: `${bin}:${process.env.PATH}`,
+    const result = spawnSync(
+      process.execPath,
+      [...SCRIPT_ARGS, "discover", "--request-input", inputPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_GH_COUNT: countPath,
+          FAKE_GH_PAYLOAD: payloadPath,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
       },
-      timeout: 10_000,
-    });
+    );
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(countPath, "utf8").trim()).toBe("10");
     expect(readFileSync(outputPath, "utf8")).toContain(
@@ -553,15 +574,17 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest } = await fixture();
+    const now = Date.now();
+    const { manifest, metadata } = await fixture(now);
     const artifacts = Array.from({ length: 6 }, (_, index) => {
       const runId = 80 + index;
       const jobs = workflowJobs(manifest, { runId });
       jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
       writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
       writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
-      return artifactMetadata(archive, {
-        created_at: new Date(NOW - index * 1000).toISOString(),
+      return {
+        ...metadata,
+        created_at: new Date(now - index * 1000).toISOString(),
         id: 400 + index,
         workflow_run: {
           head_repository_id: 1,
@@ -569,23 +592,27 @@ esac
           id: runId,
           repository_id: 1,
         },
-      });
+      };
     });
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
-        FAKE_GH_CALL_LOG: callLogPath,
-        FAKE_GH_RESPONSES: responses,
-        GH_TOKEN: "test-token",
-        GITHUB_OUTPUT: outputPath,
-        PATH: `${bin}:${process.env.PATH}`,
+    const result = spawnSync(
+      process.execPath,
+      [...SCRIPT_ARGS, "discover", "--request-input", inputPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
+          FAKE_GH_CALL_LOG: callLogPath,
+          FAKE_GH_RESPONSES: responses,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
       },
-      timeout: 10_000,
-    });
+    );
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toContain(
       "reuse_reason=candidate evaluation exceeded the bounded scan",
@@ -638,7 +665,7 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest, metadata } = await fixture();
+    const { archive, manifest, metadata } = await fixture(Date.now());
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
@@ -665,22 +692,26 @@ globalThis.fetch = async (url) => {
 };
 `,
     );
-    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_ARTIFACT_ARCHIVE: archivePath,
-        FAKE_ARTIFACT_METADATA: artifactMetadataPath,
-        FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
-        FAKE_GH_WORKFLOW_JOBS: workflowJobsPath,
-        FAKE_GH_WORKFLOW_RUN: workflowRunPath,
-        GH_TOKEN: "test-token",
-        GITHUB_OUTPUT: outputPath,
-        NODE_OPTIONS: `--import=${pathToFileURL(fetchPreloadPath).href}`,
-        PATH: `${bin}:${process.env.PATH}`,
+    const result = spawnSync(
+      process.execPath,
+      [...SCRIPT_ARGS, "discover", "--request-input", inputPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_ARTIFACT_ARCHIVE: archivePath,
+          FAKE_ARTIFACT_METADATA: artifactMetadataPath,
+          FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
+          FAKE_GH_WORKFLOW_JOBS: workflowJobsPath,
+          FAKE_GH_WORKFLOW_RUN: workflowRunPath,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          NODE_OPTIONS: `--import=${pathToFileURL(fetchPreloadPath).href}`,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
       },
-      timeout: 10_000,
-    });
+    );
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toContain(
       "reuse_reason=full release candidate package artifact is unavailable",
@@ -719,48 +750,51 @@ describe("candidate archive deadline", () => {
 });
 
 describe("full release candidate loading", () => {
-  it("binds the exact archive, producer attempt, and producer job", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(77, { run_attempt: 2 }),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    const binding = await loadSelectedFullReleaseCandidate({
-      downloadArchive: async ({ expected }) => {
-        expect(expected).toMatchObject({
-          artifactId: 301,
-          artifactName: metadata.name,
-          runId: 77,
-          workflowSha: manifest.request.toolingSha,
-        });
-        return { archiveBytes: archive, artifactMetadata: metadata };
-      },
-      now: NOW,
-      readArtifact: constituentArtifactReader(manifest),
-      readRunAttempt: async (runId, runAttempt) => {
-        expect([runId, runAttempt]).toEqual(["77", "1"]);
-        return workflowRun(77, { run_attempt: 1 });
-      },
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-      selected: selected!,
-      token: "test-token",
-    });
-    expect(binding).toMatchObject({
-      evidenceArtifact: {
-        digest: sha256(archive),
-        id: "301",
-        runAttempt: "1",
-        runId: "77",
-      },
-      producer: manifest.producer,
-      publisher: manifest.publisher,
-      request: manifest.request,
-    });
-  });
+  it.each([WORKFLOW_PATH, ".github/workflows/full-release-artifacts.yml"])(
+    "binds exact candidate artifacts from %s",
+    async (path) => {
+      const { archive, manifest, metadata } = await fixture();
+      const selected = await selectTrustedFullReleaseCandidate({
+        artifacts: [metadata],
+        now: NOW,
+        readWorkflowRun: async () => workflowRun(77, { run_attempt: 2, path }),
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+      });
+      const binding = await loadSelectedFullReleaseCandidate({
+        downloadArchive: async ({ expected }) => {
+          expect(expected).toMatchObject({
+            artifactId: 301,
+            artifactName: metadata.name,
+            runId: 77,
+            workflowSha: manifest.request.toolingSha,
+          });
+          return { archiveBytes: archive, artifactMetadata: metadata };
+        },
+        now: NOW,
+        readArtifact: constituentArtifactReader(manifest),
+        readRunAttempt: async (runId, runAttempt) => {
+          expect([runId, runAttempt]).toEqual(["77", "1"]);
+          return workflowRun(77, { run_attempt: 1, path });
+        },
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+        selected: selected!,
+        token: "test-token",
+      });
+      expect(binding).toMatchObject({
+        evidenceArtifact: {
+          digest: sha256(archive),
+          id: "301",
+          runAttempt: "1",
+          runId: "77",
+        },
+        producer: manifest.producer,
+        publisher: manifest.publisher,
+        request: manifest.request,
+      });
+    },
+  );
 
   it("accepts an active producer run after the exact producer jobs complete", async () => {
     const { archive, manifest, metadata } = await fixture();
@@ -1004,6 +1038,26 @@ describe("full release candidate binding authority", () => {
     expect(fresh).toEqual(binding);
     expect(reused).toEqual(binding);
     expect(candidateArtifactJsonFromBinding(fresh)).toBe(candidateArtifactJsonFromBinding(reused));
+  });
+
+  it("preserves published package provenance across fresh and reused evidence", () => {
+    const binding = fullReleaseCandidateBindingFixture({ packagePublished: true });
+    const fresh = resolveCandidateBinding({
+      freshBinding: binding,
+      now: NOW,
+      request: binding.request,
+      required: true,
+    });
+    const reused = resolveCandidateBinding({
+      now: NOW,
+      request: binding.request,
+      required: true,
+      reusedBinding: binding,
+    });
+    const freshArtifact = candidateArtifactJsonFromBinding(fresh);
+
+    expect(freshArtifact).toBe(candidateArtifactJsonFromBinding(reused));
+    expect(JSON.parse(freshArtifact)).toMatchObject({ packagePublished: true });
   });
 
   it("rejects missing, ambiguous, expired, and wrong-request evidence", () => {

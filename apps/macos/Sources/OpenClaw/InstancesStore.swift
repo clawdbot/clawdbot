@@ -60,7 +60,8 @@ final class InstancesStore {
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.task == nil else { return }
-        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
+        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] delivery in
+            guard let push = delivery.push else { return }
             self?.handle(push: push)
         }
         SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in

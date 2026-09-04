@@ -841,7 +841,10 @@
   min-width: 0;
   min-height: 0;
   max-height: min(300px, 48dvh);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
@@ -870,12 +873,7 @@
 }
 
 .session-progress-card--composer .session-progress-card__steps {
-  min-height: 0;
-  max-height: min(calc(8.4em + 35px), 36dvh);
   padding-inline-end: 4px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .session-progress-card--composer .session-progress-card__markdown progress {

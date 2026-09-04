@@ -33,15 +33,15 @@ import {
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 beforeAll(async () => {
   await globalBeforeAll0();
-  ({ getActiveReplyRunCount, runAfterReplyOperationClear } =
-    await import("./reply-run-registry.js"));
+  ({ getActiveReplyRunCount } = await import("./reply-run-registry.registry.js"));
+  ({ runAfterReplyOperationClear } = await import("./reply-run-registry.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   const { testing } = await import("./reply-run-registry.test-support.js");
   resetReplyRunRegistry = () => testing.resetReplyRunRegistry();

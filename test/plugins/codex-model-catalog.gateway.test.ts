@@ -185,6 +185,7 @@ describe("models.list native account catalog", () => {
             try {
               const result = await listModels({
                 ...scope,
+                pluginRegistry: registry,
                 cfg: config,
                 catalog: [],
                 view: "all",
@@ -217,6 +218,7 @@ describe("models.list native account catalog", () => {
               const configured = (cfg = config) =>
                 listModels({
                   ...scope,
+                  pluginRegistry: registry,
                   cfg,
                   catalog: structuredClone(rows),
                   view: "configured",
@@ -270,6 +272,7 @@ describe("models.list native account catalog", () => {
                 account = observed.value;
                 const refreshed = await listModels({
                   ...scope,
+                  pluginRegistry: registry,
                   cfg: config,
                   catalog: rows,
                   view: "all",
@@ -323,6 +326,7 @@ describe("models.list native account catalog", () => {
                 const hostConfig = { ...config, models };
                 const host = await listModels({
                   ...scope,
+                  pluginRegistry: registry,
                   cfg: hostConfig,
                   catalog: rows,
                   view: "configured",
