@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: mocks.callGateway,
+}));
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
@@ -123,6 +126,13 @@ describe("models auth login owner integration", () => {
           FRESH_PROFILE_ID,
           STALE_PROFILE_ID,
         ]);
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "models.authStatus",
+            params: { refresh: true, agentId: "main" },
+            requireLocalBackendSharedAuth: true,
+          }),
+        );
       },
     );
   });
