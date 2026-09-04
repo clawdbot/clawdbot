@@ -26,6 +26,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
+  unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -42,6 +43,14 @@ vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal)
 describe("concurrent worker workspace results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("accepts the worker-turn environment facade before resources need an owner", () => {
+    const environments: Parameters<typeof executeRemoteExecTurn>[0]["environments"] =
+      unusedEnvironments();
+
+    expect(environments).toBeDefined();
+    expect(environments.skillResourceAllocations).toBeUndefined();
+  });
 
   it("retains failed resource cleanup for recovery after reconciling the completed turn", async () => {
     const remote = path.join(await fs.realpath(root), "remote");

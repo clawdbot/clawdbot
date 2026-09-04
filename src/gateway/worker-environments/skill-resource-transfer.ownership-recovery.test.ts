@@ -263,9 +263,9 @@ describe("remote-exec skill resource ownership recovery", () => {
         onEnvironmentCleanupDeferred: deferred,
         warn,
       });
-      let stopped = false;
-      const stopping = current.coordinator.stop().then(() => {
-        stopped = true;
+      let admissionClosed = false;
+      const closingAdmission = current.coordinator.closeRecoveryAdmission().then(() => {
+        admissionClosed = true;
       });
       await recoveryStarted.promise;
       const lateStart = vi.fn();
@@ -294,13 +294,26 @@ describe("remote-exec skill resource ownership recovery", () => {
         }),
       ).rejects.toThrow(/skill resource allocation owner/iu);
       expect(contenderStart).not.toHaveBeenCalled();
-      expect(stopped).toBe(false);
+      expect(admissionClosed).toBe(false);
       await contender.coordinator.stop();
 
       finishRecovery.resolve();
       await recovery;
-      await stopping;
-      expect(stopped).toBe(true);
+      await closingAdmission;
+      expect(admissionClosed).toBe(true);
+      const contenderBeforeRelease = createCoordinator(stateDir, "f".repeat(32));
+      await expect(
+        contenderBeforeRelease.coordinator.recover({
+          getEnvironment: () => ({
+            state: "attached",
+            ownerEpoch: 2,
+            leaseId: "lease-replacement",
+          }),
+          startTunnel: vi.fn(),
+        }),
+      ).rejects.toThrow(/skill resource allocation owner/iu);
+      await contenderBeforeRelease.coordinator.stop();
+      await current.coordinator.stop();
       if (outcome === "success") {
         await expect(current.ledger.list()).resolves.toEqual([]);
         expect(deferred).not.toHaveBeenCalled();

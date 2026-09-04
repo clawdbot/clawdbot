@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
@@ -251,6 +251,21 @@ async function expectRejectedResourceRequest(
 }
 
 describe("remote-exec skill resources", () => {
+  it("fails closed before remote work when a real resource has no allocation owner", async () => {
+    const { snapshot } = await createSource();
+    const runWorkspaceCommand = vi.fn();
+
+    await expect(
+      transferSkillResourcesImpl({
+        snapshot,
+        tunnel: { runWorkspaceCommand },
+        remoteWorkspaceDir: tunnel.remoteWorkspaceDir,
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("Skill resource allocation owner is unavailable");
+    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps the receiver command below the Windows process limit", () => {
     const conservativeCommandLineLength =
       process.execPath.length + " -e ".length + SKILL_RESOURCE_RUNTIME_SCRIPT.length + 4;

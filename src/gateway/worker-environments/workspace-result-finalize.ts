@@ -42,11 +42,8 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
-type RemoteExecEnvironmentService = Pick<
-  WorkerEnvironmentService,
-  "get" | "startTunnel" | "skillResourceAllocations"
-> &
-  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
+type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+  Partial<Pick<WorkerEnvironmentService, "prepareComputer" | "skillResourceAllocations">>;
 
 export class WorkerWorkspaceReconciliationError extends Error {
   override name = "WorkerWorkspaceReconciliationError";
@@ -381,11 +378,15 @@ export async function executeRemoteExecTurn(params: {
           throw new Error("Skill transfer lost its exact placement authority.");
         }
       },
-      allocationOwner: {
-        coordinator: params.environments.skillResourceAllocations,
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-      },
+      ...(params.environments.skillResourceAllocations
+        ? {
+            allocationOwner: {
+              coordinator: params.environments.skillResourceAllocations,
+              environmentId: environment.environmentId,
+              ownerEpoch: environment.ownerEpoch,
+            },
+          }
+        : {}),
     });
     computer = await params.environments.prepareComputer?.(params.turnClaim);
     const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(

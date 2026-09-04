@@ -375,12 +375,16 @@ export class SkillResourceAllocationCoordinator {
     }
   }
 
-  async stop(): Promise<void> {
+  async closeRecoveryAdmission(): Promise<void> {
     this.stopping = true;
     const recovery = this.recoveryInFlight;
     if (recovery) {
       await Promise.allSettled([recovery]);
     }
+  }
+
+  async stop(): Promise<void> {
+    await this.closeRecoveryAdmission();
     if (this.ownershipContext) {
       this.releaseOwnership?.();
     } else {

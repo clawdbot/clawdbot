@@ -564,9 +564,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     unsubscribeTurnClaimClosed = undefined;
     let shutdownError: unknown;
     try {
-      // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
-      // inference or tunnel teardown can invalidate its closure-bound placement authority.
+      // Shutdown owns both admission handoffs before tunnel teardown. Allocation recovery may
+      // open a tunnel, so drain it while retaining the global allocation lease until all other
+      // admitted work has settled below.
       await closeReconcileEnvironmentGuard();
+      await skillResourceAllocations.closeRecoveryAdmission();
       await options
         .closeComputers?.()
         .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));

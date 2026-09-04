@@ -108,6 +108,66 @@ describe("worker environment service", () => {
     expect(stopAllocations).toHaveBeenCalledOnce();
   });
 
+  it("drains allocation recovery before tunnel teardown and releases ownership afterward", async () => {
+    const order: string[] = [];
+    const admissionStarted = createDeferred();
+    const finishAdmission = createDeferred();
+    const tunnelManager = {
+      stopAll: vi.fn(async () => {
+        order.push("tunnels");
+      }),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+    vi.spyOn(workerService.skillResourceAllocations, "closeRecoveryAdmission").mockImplementation(
+      async () => {
+        order.push("admission-start");
+        admissionStarted.resolve();
+        await finishAdmission.promise;
+        order.push("admission-finished");
+      },
+    );
+    vi.spyOn(workerService.skillResourceAllocations, "stop").mockImplementation(async () => {
+      order.push("ownership-released");
+    });
+
+    let stopped = false;
+    const stopping = workerService.stop().then(() => {
+      stopped = true;
+    });
+    await admissionStarted.promise;
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(tunnelManager.stopAll).not.toHaveBeenCalled();
+
+    finishAdmission.resolve();
+    await stopping;
+    expect(order).toEqual([
+      "admission-start",
+      "admission-finished",
+      "tunnels",
+      "ownership-released",
+    ]);
+  });
+
+  it("closes idle allocation recovery before tunnel teardown", async () => {
+    const tunnelManager = {
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+    const closeRecoveryAdmission = vi.spyOn(
+      workerService.skillResourceAllocations,
+      "closeRecoveryAdmission",
+    );
+
+    await workerService.stop();
+
+    expect(closeRecoveryAdmission).toHaveBeenCalledTimes(2);
+    expect(tunnelManager.stopAll).toHaveBeenCalledOnce();
+    expect(closeRecoveryAdmission.mock.invocationCallOrder[0]).toBeLessThan(
+      tunnelManager.stopAll.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("reports failed maintenance and retries on the next sweep", async () => {
     const warn = vi.fn();
     const maintainProviders = vi.fn(async () => {

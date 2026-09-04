@@ -513,6 +513,7 @@ export async function transferSkillResources(params: {
     await retireIntent().catch(() => undefined);
     throw error;
   }
+  const commitDispatchedAt = Date.now();
   try {
     await execute({ op: "commit", ...leaseLocation });
   } catch (error) {
@@ -523,8 +524,8 @@ export async function transferSkillResources(params: {
   }
   let renewalStopped = false;
   let renewalFailure: Error | undefined;
-  let leaseDeadline = Date.now() + RESOURCE_LEASE_MS;
-  let nextRenewAt = Date.now() + RESOURCE_LEASE_RENEW_MS;
+  let leaseDeadline = commitDispatchedAt + RESOURCE_LEASE_MS;
+  let nextRenewAt = commitDispatchedAt + RESOURCE_LEASE_RENEW_MS;
   let renewalRunning = false;
   let renewalAbort: AbortController | undefined;
   let renewalInFlight = Promise.resolve();
@@ -537,6 +538,7 @@ export async function transferSkillResources(params: {
     clearInterval(renewalTimer);
   };
   const runRenewal = () => {
+    const dispatchedAt = Date.now();
     const controller = new AbortController();
     renewalAbort = controller;
     const signal = params.signal
@@ -561,12 +563,14 @@ export async function transferSkillResources(params: {
       }
       signal.addEventListener("abort", () => reject(abortReason()), { once: true });
     });
-    return Promise.race([operation, aborted]).finally(() => {
-      clearTimeout(timeout);
-      if (renewalAbort === controller) {
-        renewalAbort = undefined;
-      }
-    });
+    return Promise.race([operation, aborted])
+      .then(() => dispatchedAt)
+      .finally(() => {
+        clearTimeout(timeout);
+        if (renewalAbort === controller) {
+          renewalAbort = undefined;
+        }
+      });
   };
   const renewalTimer = setInterval(() => {
     if (renewalStopped || renewalRunning || Date.now() < nextRenewAt) {
@@ -574,9 +578,9 @@ export async function transferSkillResources(params: {
     }
     renewalRunning = true;
     renewalInFlight = runRenewal()
-      .then(() => {
-        leaseDeadline = Date.now() + RESOURCE_LEASE_MS;
-        nextRenewAt = Date.now() + RESOURCE_LEASE_RENEW_MS;
+      .then((dispatchedAt) => {
+        leaseDeadline = dispatchedAt + RESOURCE_LEASE_MS;
+        nextRenewAt = dispatchedAt + RESOURCE_LEASE_RENEW_MS;
       })
       .catch((error: unknown) => {
         try {

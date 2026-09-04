@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
@@ -1170,6 +1171,94 @@ describe("remote-exec skill resource lifecycle", () => {
       expect(renewCalls).toBe(3);
       expect(() => resources!.assertCurrent()).not.toThrow();
     } finally {
+      await resources?.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews immediately when a delayed commit reply consumes the first renewal window", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+    });
+    const { snapshot } = await createSource();
+    const commitExecuted = createDeferred<void>();
+    const releaseCommitReply = createDeferred<void>();
+    let renewCalls = 0;
+    let resources: Awaited<ReturnType<typeof transferSkillResources>>;
+    try {
+      const transfer = transferSkillResources({
+        snapshot,
+        assertCurrent: () => {},
+        tunnel: {
+          runWorkspaceCommand: async (command) => {
+            const operation = JSON.parse(command.input!);
+            if (operation.op === "renew") {
+              renewCalls += 1;
+            }
+            const result = await tunnel.runWorkspaceCommand(command);
+            if (operation.op === "commit") {
+              commitExecuted.resolve();
+              await releaseCommitReply.promise;
+            }
+            return result;
+          },
+        },
+      });
+      await commitExecuted.promise;
+      await vi.advanceTimersByTimeAsync(41_000);
+      releaseCommitReply.resolve();
+      resources = await transfer;
+      expect(renewCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(renewCalls).toBe(2);
+      expect(() => resources!.assertCurrent()).not.toThrow();
+    } finally {
+      releaseCommitReply.resolve();
+      await resources?.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("anchors the next renewal to dispatch when a successful reply is delayed", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+    });
+    const { snapshot } = await createSource();
+    const periodicRenewalExecuted = createDeferred<void>();
+    const releaseRenewalReply = createDeferred<void>();
+    let renewCalls = 0;
+    let resources: Awaited<ReturnType<typeof transferSkillResources>>;
+    try {
+      resources = await transferSkillResources({
+        snapshot,
+        assertCurrent: () => {},
+        tunnel: {
+          runWorkspaceCommand: async (command) => {
+            const operation = JSON.parse(command.input!);
+            if (operation.op === "renew") {
+              renewCalls += 1;
+            }
+            const result = await tunnel.runWorkspaceCommand(command);
+            if (operation.op === "renew" && renewCalls === 2) {
+              periodicRenewalExecuted.resolve();
+              await releaseRenewalReply.promise;
+            }
+            return result;
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await periodicRenewalExecuted.promise;
+      await vi.advanceTimersByTimeAsync(25_000);
+      releaseRenewalReply.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(renewCalls).toBe(3);
+      expect(() => resources!.assertCurrent()).not.toThrow();
+    } finally {
+      releaseRenewalReply.resolve();
       await resources?.cleanup();
       vi.useRealTimers();
     }
