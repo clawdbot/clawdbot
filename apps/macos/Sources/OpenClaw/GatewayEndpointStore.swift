@@ -369,7 +369,7 @@ actor GatewayEndpointStore {
 
     private var state: GatewayEndpointState
     private var subscribers: [UUID: AsyncStream<GatewayEndpointState>.Continuation] = [:]
-    private var remoteEnsure: (token: UUID, task: Task<RemoteTunnelManager.Route, Error>)?
+    private var remoteEnsure: (token: UUID, task: Task<GatewayConnection.EndpointSnapshot, Error>)?
     private var resolvedEndpoint: GatewayConnection.EndpointSnapshot?
     private nonisolated let endpointRevision = LockIsolated<UInt64>(1)
     private var resolutionGeneration: UInt64 = 0
@@ -551,15 +551,19 @@ actor GatewayEndpointStore {
                 self.publishReadyEndpoint(source: source, url: url)
                 return
             }
+            let endpointBeforeLookup = self.resolvedEndpoint
             let route = await deps.remoteRouteIfRunning()
+            guard await self.sourceIsCurrent(source, generation: generation) else { return }
+            // An overlapping ensure owns completion. Its new endpoint also wins
+            // over a lookup that captured the previous tunnel before suspending.
+            guard self.remoteEnsure == nil,
+                  self.resolvedEndpoint?.revision == endpointBeforeLookup?.revision,
+                  self.resolvedEndpoint?.routeAuthority == endpointBeforeLookup?.routeAuthority
+            else { return }
             guard let route else {
-                guard await self.sourceIsCurrent(source, generation: generation) else { return }
-                self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
-                self.kickRemoteEnsureIfNeeded(detail: Self.remoteConnectingDetail)
+                self.kickRemoteEnsureIfNeeded(source: source, generation: generation)
                 return
             }
-            guard await self.sourceIsCurrent(source, generation: generation) else { return }
-            self.cancelRemoteEnsure()
             let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
             self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
         case .unconfigured:
@@ -608,8 +612,7 @@ actor GatewayEndpointStore {
         } else {
             try await self.ensureRemoteEndpoint(
                 source: context.source,
-                generation: context.generation,
-                detail: Self.remoteConnectingDetail)
+                generation: context.generation)
         }
         guard let portInt = endpoint.config.url.port, let port = UInt16(exactly: portInt) else {
             throw NSError(
@@ -650,8 +653,7 @@ actor GatewayEndpointStore {
             }
             return try await self.ensureRemoteEndpoint(
                 source: context.source,
-                generation: context.generation,
-                detail: Self.remoteConnectingDetail)
+                generation: context.generation)
         case let .unavailable(mode, reason, _):
             guard mode == .remote else {
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
@@ -663,8 +665,7 @@ actor GatewayEndpointStore {
                 "endpoint unavailable; ensuring remote control tunnel reason=\(reason, privacy: .public)")
             return try await self.ensureRemoteEndpoint(
                 source: context.source,
-                generation: context.generation,
-                detail: Self.remoteConnectingDetail)
+                generation: context.generation)
         }
     }
 
@@ -674,28 +675,27 @@ actor GatewayEndpointStore {
     }
 
     @discardableResult
-    private func kickRemoteEnsureIfNeeded(detail: String) -> Bool {
-        guard self.deps.canStartRemoteTunnel() else {
-            self.setState(.connecting(mode: .remote, detail: detail))
-            return false
-        }
-        if self.remoteEnsure != nil {
-            self.setState(.connecting(mode: .remote, detail: detail))
-            return true
-        }
+    private func kickRemoteEnsureIfNeeded(
+        source: SourceSnapshot,
+        generation: UInt64) -> Task<GatewayConnection.EndpointSnapshot, Error>?
+    {
+        if let ensure = self.remoteEnsure { return ensure.task }
+        self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
+        guard self.deps.canStartRemoteTunnel() else { return nil }
 
-        let deps = deps
         let token = UUID()
-        let task = Task.detached(priority: .utility) { try await deps.ensureRemoteTunnel() }
+        // The endpoint owner publishes completion even if every requester leaves.
+        // Canceling a waiter must not strand a successfully recreated SSH tunnel.
+        let task = Task(priority: .utility) {
+            try await self.runRemoteEnsure(source: source, generation: generation, token: token)
+        }
         self.remoteEnsure = (token: token, task: task)
-        self.setState(.connecting(mode: .remote, detail: detail))
-        return true
+        return task
     }
 
     private func ensureRemoteEndpoint(
         source: SourceSnapshot,
-        generation: UInt64,
-        detail: String) async throws -> GatewayConnection.EndpointSnapshot
+        generation: UInt64) async throws -> GatewayConnection.EndpointSnapshot
     {
         try Task.checkCancellation()
         guard source.mode == .remote,
@@ -717,88 +717,55 @@ actor GatewayEndpointStore {
             return self.publishReadyEndpoint(source: source, url: url)
         }
 
-        guard self.kickRemoteEnsureIfNeeded(detail: detail) else {
+        guard let task = self.kickRemoteEnsureIfNeeded(source: source, generation: generation) else {
             throw CancellationError()
         }
-        guard let ensure = remoteEnsure else {
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
-        }
-
-        let route: RemoteTunnelManager.Route
         do {
-            route = try await ensure.task.value
-        } catch {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            guard self.remoteEnsure?.token == ensure.token,
-                  await self.sourceIsCurrent(source, generation: generation),
-                  self.remoteEnsure?.token == ensure.token
+            let endpoint = try await task.value
+            guard await self.sourceIsCurrent(source, generation: generation),
+                  self.resolvedEndpoint?.revision == endpoint.revision
             else { throw CancellationError() }
-            self.remoteEnsure = nil
-            if error is CancellationError {
-                self.setState(.connecting(mode: .remote, detail: detail))
-                throw error
-            }
-            let msg = "Remote control tunnel failed (\(error.localizedDescription))"
-            self.setState(.unavailable(mode: .remote, reason: msg))
-            self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+            return endpoint
+        } catch {
+            guard await self.sourceIsCurrent(source, generation: generation) else { throw CancellationError() }
+            throw error
         }
-
-        try Task.checkCancellation()
-        let routeIsCurrent = await deps.remoteRouteIsCurrent(route)
-        try Task.checkCancellation()
-        guard await self.sourceIsCurrent(source, generation: generation) else {
-            throw CancellationError()
-        }
-        guard routeIsCurrent else {
-            if self.remoteEnsure?.token == ensure.token {
-                self.remoteEnsure = nil
-            }
-            return try await self.ensureRemoteEndpoint(
-                source: source,
-                generation: generation,
-                detail: detail)
-        }
-        guard self.remoteEnsure?.token == ensure.token else {
-            if let endpoint = matchingReadyRemoteEndpoint(
-                route: route,
-                source: source,
-                generation: generation)
-            {
-                return endpoint
-            }
-            throw CancellationError()
-        }
-        self.remoteEnsure = nil
-
-        let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
-        return self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
     }
 
-    private func matchingReadyRemoteEndpoint(
-        route: RemoteTunnelManager.Route,
+    private func runRemoteEnsure(
         source: SourceSnapshot,
-        generation: UInt64) -> GatewayConnection.EndpointSnapshot?
+        generation: UInt64,
+        token: UUID) async throws -> GatewayConnection.EndpointSnapshot
     {
-        let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
-        guard generation == self.resolutionGeneration,
-              self.activeSource == source,
-              let endpoint = resolvedEndpoint,
-              endpoint.config.url == url,
-              endpoint.config.token == source.token,
-              endpoint.config.password == source.password,
-              endpoint.deviceAuthGatewayID == source.deviceAuthGatewayID,
-              endpoint.routeAuthority == route.generation,
-              state == .ready(
-                  mode: .remote,
-                  url: url,
-                  token: source.token,
-                  password: source.password,
-                  routeRevision: endpoint.revision ?? 0)
-        else { return nil }
-        return endpoint
+        defer {
+            if self.remoteEnsure?.token == token { self.remoteEnsure = nil }
+        }
+        do {
+            while true {
+                guard self.remoteEnsure?.token == token,
+                      await self.sourceIsCurrent(source, generation: generation)
+                else { throw CancellationError() }
+                let route = try await self.deps.ensureRemoteTunnel()
+                try Task.checkCancellation()
+                let routeIsCurrent = await self.deps.remoteRouteIsCurrent(route)
+                guard await self.sourceIsCurrent(source, generation: generation),
+                      self.remoteEnsure?.token == token
+                else { throw CancellationError() }
+                guard routeIsCurrent else { continue }
+
+                let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
+                return self.publishReadyEndpoint(source: source, url: url, routeAuthority: route.generation)
+            }
+        } catch {
+            guard await self.sourceIsCurrent(source, generation: generation),
+                  self.remoteEnsure?.token == token
+            else { throw CancellationError() }
+            if error is CancellationError { throw error }
+            let message = "Remote control tunnel failed (\(error.localizedDescription))"
+            self.setState(.unavailable(mode: .remote, reason: message))
+            self.logger.error("remote control tunnel ensure failed \(message, privacy: .public)")
+            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
     }
 
     private func removeSubscriber(_ id: UUID) {
@@ -992,8 +959,12 @@ extension GatewayEndpointStore {
                     generation: AppStateStore.shared.gatewayRoutingGeneration,
                     tailscaleIP: TailscaleService.shared.tailscaleIP)
             },
-            generationIsCurrent: { generation in
-                AppStateStore.shared.gatewayRoutingGeneration == generation
+            acceptSource: { source in
+                guard AppStateStore.shared.gatewayRoutingGeneration == source.routingGeneration else { return false }
+                // Close the old native transcript owner before a new route can reach
+                // RPC, including disk edits that beat the config watcher.
+                WebChatManager.shared.preparePrimaryGateway(gatewayID: source.deviceAuthGatewayID)
+                return true
             },
             profile: .current,
             beforeConfigRead: {})
@@ -1014,7 +985,7 @@ extension GatewayEndpointStore {
 
     private static func liveSourceSnapshot(
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
-        generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
+        acceptSource: @escaping @MainActor @Sendable (SourceSnapshot) -> Bool,
         profile: AppProfile,
         beforeConfigRead: @escaping @Sendable () async -> Void) async throws -> SourceSnapshot
     {
@@ -1051,13 +1022,7 @@ extension GatewayEndpointStore {
         } else {
             sshRouteIdentity = nil
         }
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
-            connectionMode: mode,
-            remoteTransport: remoteResolution.transport,
-            remoteURL: remoteResolution.directURL?.absoluteString
-                ?? GatewayRemoteConfig.resolveUrlString(root: root)
-                ?? "",
-            remoteTarget: sshRouteIdentity?.target ?? "")
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: mode)
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
@@ -1088,7 +1053,7 @@ extension GatewayEndpointStore {
             directRemoteURL: remoteResolution.directURL,
             remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
             sshRouteIdentity: sshRouteIdentity)
-        let selectionIsCurrent = await generationIsCurrent(app.generation)
+        let selectionIsCurrent = await acceptSource(source)
         guard selectionIsCurrent, !Task.isCancelled else {
             // An obsolete read is not an unconfigured selection. Do not publish
             // a fabricated route that can retire the newer selection's authority.
@@ -1327,8 +1292,8 @@ extension GatewayEndpointStore {
                     generation: state.gatewayRoutingGeneration,
                     tailscaleIP: nil)
             },
-            generationIsCurrent: { generation in
-                state.gatewayRoutingGeneration == generation
+            acceptSource: { source in
+                state.gatewayRoutingGeneration == source.routingGeneration
             },
             profile: profile,
             beforeConfigRead: beforeConfigRead)

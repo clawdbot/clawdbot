@@ -52,6 +52,19 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
   };
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function requireExaTool(webSearch: JsonRecord, searchConfig: JsonRecord = {}) {
+  const tool = createExaWebSearchProvider().createTool({
+    config: { plugins: { entries: { exa: { config: { webSearch } } } } },
+    searchConfig,
+  } as never);
+  if (!tool) {
+    throw new Error("Expected Exa tool definition");
+  }
+  return tool;
+}
+
 describe("exa web search provider", () => {
   it("does not send or cache an already canceled search", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -184,65 +197,145 @@ describe("exa web search provider", () => {
     expect(pluginEntry.enabled).toBe(true);
   });
 
-  it("prefers scoped configured api keys over environment fallbacks", () => {
-    expect(testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
-  });
-
-  it("resolves Exa search base URL overrides", () => {
-    expect(testing.resolveExaSearchEndpoint()).toEqual({
-      endpoint: "https://api.exa.ai/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
-      endpoint: "https://proxy.example/exa/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
-      endpoint: "https://proxy.example/exa/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
-      docs: "https://docs.openclaw.ai/tools/exa-search",
-      error: "invalid_base_url",
-      message:
-        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
-    });
-  });
-
-  it("partitions Exa cache keys by resolved endpoint", () => {
-    const base = {
-      type: "auto" as const,
-      query: "openclaw",
-      count: 5,
-    };
-    expect(
-      testing.buildExaCacheKey({
-        ...base,
-        endpoint: "https://api.exa.ai/search",
-      }),
-    ).not.toBe(
-      testing.buildExaCacheKey({
-        ...base,
-        endpoint: "https://proxy.example/exa/search",
-      }),
+  it("applies scoped auth, endpoint, contents, freshness, and result normalization at the tool boundary", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                url: "https://example.test/highlights",
+                highlights: ["first", "", "second"],
+                text: "ignored",
+              },
+              { url: "https://example.test/text", text: "text fallback" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
+    const tool = requireExaTool(
+      { apiKey: "exa-config-key", baseUrl: "https://proxy.example/exa/" },
+      { maxResults: 120 },
+    );
+
+    try {
+      const args = {
+        query: "Exa boundary",
+        freshness: "month",
+        contents: {
+          text: { maxCharacters: 1200 },
+          highlights: {
+            maxCharacters: 4000,
+            query: "latest model launches",
+            numSentences: 4,
+            highlightsPerUrl: 2,
+          },
+          summary: { query: "launch details" },
+        },
+      };
+      const result = await tool.execute(args);
+      const descriptions = (result.results as Array<{ description: string }>).map(
+        (entry) => entry.description,
+      );
+      expect(descriptions[0]?.split("\n---\n")[1]?.split("\n<<<END")[0]).toBe("first\nsecond");
+      expect(descriptions[1]?.split("\n---\n")[1]?.split("\n<<<END")[0]).toBe("text fallback");
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example/exa/search");
+      expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        "x-api-key": "exa-config-key",
+      });
+      const bodyAt = (index: number) => {
+        const body = fetchMock.mock.calls[index]?.[1]?.body;
+        if (typeof body !== "string") {
+          throw new Error("Expected Exa JSON request body");
+        }
+        return JSON.parse(body);
+      };
+      expect(bodyAt(0)).toMatchObject({
+        query: "Exa boundary",
+        numResults: 100,
+        contents: args.contents,
+      });
+      expect(Date.parse(bodyAt(0).startPublishedDate)).not.toBeNaN();
+
+      await tool.execute({ query: "cache partitions" });
+      await tool.execute({ query: "cache partitions", contents: { highlights: true } });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await tool.execute({ query: "cache partitions", contents: { highlights: false } });
+      await tool.execute({ query: "cache partitions", contents: { text: false } });
+      await tool.execute({ query: "cache partitions", contents: { summary: false } });
+      const defaultTool = requireExaTool({ apiKey: "exa-config-key" }, { maxResults: 120 });
+      await defaultTool.execute(args);
+      await requireExaTool(
+        { apiKey: "exa-config-key", baseUrl: "proxy.example/exa/search/" },
+        { maxResults: 120 },
+      ).execute({ ...args, query: "bare endpoint" });
+      expect(fetchMock.mock.calls[5]?.[0]).toBe("https://api.exa.ai/search");
+      expect(fetchMock.mock.calls[6]?.[0]).toBe("https://proxy.example/exa/search");
+
+      for (const [count, expected] of [
+        ["+05", 5],
+        ["2e1", 20],
+      ] as const) {
+        await defaultTool.execute({ query: `count ${count}`, count });
+        expect(bodyAt(fetchMock.mock.calls.length - 1).numResults).toBe(expected);
+      }
+      for (const count of ["0x10", 1.5]) {
+        await expect(defaultTool.execute({ query: `count ${count}`, count })).rejects.toThrow(
+          "count must be an integer from 1 to 100",
+        );
+      }
+      const inheritedText = { maxCharacters: 1 };
+      const inheritedPrototype = Object.defineProperty({}, "query", {
+        get: () => {
+          throw new Error("read");
+        },
+      });
+      Object.setPrototypeOf(inheritedText, inheritedPrototype);
+      await defaultTool.execute({ query: "inherited", contents: { text: inheritedText } });
+      expect(bodyAt(fetchMock.mock.calls.length - 1).contents).toEqual({
+        text: { maxCharacters: 1 },
+      });
+    } finally {
+      clock.mockRestore();
+      fetchMock.mockRestore();
+    }
   });
 
-  it("partitions Exa cache keys by effective content options", () => {
-    const base = {
-      endpoint: "https://api.exa.ai/search",
-      type: "auto" as const,
-      query: "openclaw",
-      count: 5,
-    };
-    const defaultKey = testing.buildExaCacheKey(base);
-
-    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
-
-    const disabledKeys = [
-      testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),
-      testing.buildExaCacheKey({ ...base, contents: { text: false } }),
-      testing.buildExaCacheKey({ ...base, contents: { summary: false } }),
-    ];
-    expect(disabledKeys).not.toContain(defaultKey);
-    expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
+  it.each([
+    [
+      { baseUrl: "ftp://proxy.example/exa" },
+      { query: "invalid endpoint" },
+      "invalid_base_url",
+      "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    ],
+    [
+      {},
+      { query: "invalid contents", contents: { highlights: { numSentences: 0 } } },
+      "invalid_contents",
+      "contents.highlights.numSentences must be a positive integer.",
+    ],
+    [
+      {},
+      { query: "latest gpu news", freshness: "day", date_after: "2026-03-01" },
+      "conflicting_time_filters",
+      "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
+    ],
+    [
+      {},
+      { query: "latest gpu news", date_after: "2026-02-31" },
+      "invalid_date",
+      "date_after must be YYYY-MM-DD format.",
+    ],
+  ])("returns public validation errors", async (webSearch, args, error, message) => {
+    await expect(
+      requireExaTool({ apiKey: "exa-test-key", ...webSearch }).execute(args),
+    ).resolves.toEqual({
+      error,
+      message,
+      docs: `https://docs.openclaw.ai/tools/${error === "invalid_base_url" ? "exa-search" : "web"}`,
+    });
   });
 
   it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
@@ -297,89 +390,8 @@ describe("exa web search provider", () => {
     }
   });
 
-  it("normalizes Exa result descriptions from highlights before text", () => {
-    expect(
-      testing.resolveExaDescription({
-        highlights: ["first", "", "second"],
-        text: "full text",
-      }),
-    ).toBe("first\nsecond");
-    expect(testing.resolveExaDescription({ text: "full text" })).toBe("full text");
-  });
-
-  it("handles month freshness without date overflow", () => {
-    const iso = testing.resolveFreshnessStartDate("month");
-    expect(Number.isNaN(Date.parse(iso))).toBe(false);
-  });
-
-  it("accepts current Exa contents object options from the docs", () => {
-    expect(
-      testing.parseExaContents({
-        text: { maxCharacters: 1200 },
-        highlights: {
-          maxCharacters: 4000,
-          query: "latest model launches",
-          numSentences: 4,
-          highlightsPerUrl: 2,
-        },
-        summary: { query: "launch details" },
-      }),
-    ).toEqual({
-      value: {
-        text: { maxCharacters: 1200 },
-        highlights: {
-          maxCharacters: 4000,
-          query: "latest model launches",
-          numSentences: 4,
-          highlightsPerUrl: 2,
-        },
-        summary: { query: "launch details" },
-      },
-    });
-  });
-
-  it.each([
-    { name: "a non-string value", query: { value: 123 } },
-    {
-      name: "a throwing getter",
-      query: {
-        get() {
-          throw new Error("Unrelated inherited contents option was accessed");
-        },
-      },
-    },
-  ])("ignores inherited text query with $name", ({ query }) => {
-    const prototype = Object.defineProperty({}, "query", query);
-    const text = Object.assign(Object.create(prototype), { maxCharacters: 1 });
-
-    expect(testing.parseExaContents({ text })).toEqual({
-      value: { text: { maxCharacters: 1 } },
-    });
-  });
-
-  it("rejects invalid Exa contents objects", () => {
-    expect(
-      testing.parseExaContents({
-        highlights: { numSentences: 0 },
-      }),
-    ).toEqual({
-      error: "invalid_contents",
-      message: "contents.highlights.numSentences must be a positive integer.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
   it("exposes newer documented Exa search types and count limits", () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = requireExaTool({ apiKey: "exa-secret" });
 
     const parameters = tool.parameters as {
       properties?: {
@@ -397,62 +409,6 @@ describe("exa web search provider", () => {
       "deep-reasoning",
       "instant",
     ]);
-    expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
-    expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
-    expect(testing.resolveExaSearchCount("+05", 10)).toBe(5);
-    expect(testing.resolveExaSearchCount("0x10", 10)).toBe(10);
-    expect(testing.resolveExaSearchCount("1e2", 10)).toBe(10);
-    expect(testing.resolveExaSearchCount(1.5, 10)).toBe(10);
-  });
-
-  it("returns validation errors for conflicting time filters", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({
-      query: "latest gpu news",
-      freshness: "day",
-      date_after: "2026-03-01",
-    });
-
-    expect(result).toEqual({
-      error: "conflicting_time_filters",
-      message:
-        "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
-  it("returns validation errors for invalid date input", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({
-      query: "latest gpu news",
-      date_after: "2026-02-31",
-    });
-
-    expect(result).toEqual({
-      error: "invalid_date",
-      message: "date_after must be YYYY-MM-DD format.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
   });
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {

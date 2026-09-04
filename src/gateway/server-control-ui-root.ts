@@ -144,10 +144,12 @@ export function createGatewayControlUiRootLifecycle(
         const resolvedRoot = resolveAutoRoot();
         if (!resolvedRoot || !isControlUiStartupAssetsReady(resolvedRoot)) {
           const message = resolvedRoot
-            ? `Control UI assets at ${resolvedRoot} remain incomplete. Run \`openclaw doctor --fix\` or reinstall OpenClaw.`
-            : "Control UI build completed, but its assets are still unavailable. Run `pnpm ui:build`.";
+            ? `Control UI assets at ${resolvedRoot} remain incomplete.`
+            : "Control UI build completed, but its assets are still unavailable.";
           Object.assign(preparingState, { kind: "failed" });
-          params.log.warn(`gateway: ${message}`);
+          params.log.warn(
+            `gateway: ${message} Run \`openclaw doctor --fix\` or reinstall OpenClaw.`,
+          );
           return;
         }
         // Listeners retain this object from before bind; replacing it would strand

@@ -29,6 +29,7 @@ import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
@@ -104,6 +105,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const { rich, label, accent, infoText, okText, warnText, errorText } =
     createCliStatusTextStyles();
   const spacer = () => defaultRuntime.log("");
+  // Advice belongs to this shell, not the stored service environment or probe target.
+  const installBlock = resolveDaemonInstallBlockMessage("gateway");
+  const installCommand = formatCliCommand("openclaw gateway install");
+  const reinstallCommand = formatCliCommand("openclaw gateway install --force");
 
   const { service, rpc, extraServices } = status;
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
@@ -168,11 +173,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const detail = issue.detail ? ` (${issue.detail})` : "";
       defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
-    defaultRuntime.error(
-      warnText(
-        `Recommendation: run "${formatCliCommand("openclaw doctor")}" (or "${formatCliCommand("openclaw doctor --repair")}").`,
-      ),
-    );
+    const recommendation =
+      installBlock ??
+      `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`;
+    defaultRuntime.error(warnText(recommendation));
   }
 
   if (status.config) {
@@ -222,11 +226,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           "Root cause: CLI and service are using different config paths (likely a profile/state-dir mismatch).",
         ),
       );
-      defaultRuntime.error(
-        errorText(
-          `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`,
-        ),
-      );
+      const recovery =
+        installBlock ??
+        `Fix: rerun \`${reinstallCommand}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`;
+      defaultRuntime.error(errorText(recovery));
     }
     spacer();
   }
@@ -423,9 +426,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
-    for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
-      defaultRuntime.error(errorText(hint));
-    }
+    const recovery = installBlock ?? `Run: ${installCommand}`;
+    defaultRuntime.error(errorText(recovery));
   } else if (service.runtime?.missingGuiSession) {
     defaultRuntime.error(
       errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
@@ -472,14 +474,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.runtime?.cachedLabel) {
     const env = service.command?.environment ?? process.env;
     const labelValue = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
-    defaultRuntime.error(
-      errorText(
-        `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${labelValue}`,
-      ),
-    );
-    defaultRuntime.error(
-      errorText(`Then reinstall: ${formatCliCommand("openclaw gateway install")}`),
-    );
+    const recovery =
+      installBlock ??
+      `Clear with: launchctl bootout gui/$UID/${labelValue}\nThen reinstall: ${installCommand}`;
+    defaultRuntime.error(errorText(`LaunchAgent label cached but plist missing. ${recovery}`));
     spacer();
   }
 

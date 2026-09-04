@@ -327,6 +327,14 @@ describe("parseSlashCommand", () => {
     expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
   });
 
+  it("formats structured argument choices with the shared command serializer", () => {
+    expect(requireCommandByName("exec").argOptions).toEqual([
+      "host=sandbox",
+      "host=gateway",
+      "host=node",
+    ]);
+  });
+
   it("parses slash aliases through the shared registry", () => {
     const exportCommand = requireCommandByKey("export-session");
     expectRecordFields(exportCommand, "export-session command", {

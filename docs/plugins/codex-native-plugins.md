@@ -326,7 +326,10 @@ entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
 Missing inventory methods, authentication errors, transport failures, and
-connector refresh failures fail closed.
+connector refresh failures do not admit app tools. Ordinary turns, including
+those using `allow_destructive_actions: "ask"`, can continue with native apps
+disabled when inventory exceeds its startup budget. Scheduled runs stop if
+their captured app policy cannot be revalidated within that budget.
 
 Migration and runtime use separate cache keys:
 
@@ -433,10 +436,11 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   turns ownership-proven MCP approval elicitations into OpenClaw plugin
   approvals before returning the Codex approval response.
 - `"ask"`: OpenClaw uses the same Codex write/destructive gating as
-  `"auto"`, clears durable Codex per-tool and per-account approval overrides
-  for the app before the thread starts, and offers only one-shot approval or
-  denial so durable approvals cannot suppress later write-action prompts. These
-  checks also run before reusing a thread or answering a `/btw` side question.
+  `"auto"`, overrides saved per-tool and per-account approvals in the native
+  thread's configuration, and offers only one-shot approval or denial. Saved
+  native settings stay unchanged, and user-config reloads preserve the thread's
+  approval policy. These checks also run before reusing a thread or answering a
+  `/btw` side question. Changed override keys rebuild the thread with current policy.
   For each admitted app using `"ask"`, OpenClaw selects Codex's human approvals
   reviewer for that app so Codex sends its approval elicitations to
   OpenClaw; other apps and non-app thread approvals keep their configured
@@ -448,7 +452,10 @@ Apps outside the admitted policy stay disabled even if native Codex settings
 enable them. Native settings must be verified before an enabled policy can admit
 app tools. When no app can be admitted, Codex's app tool surface is disabled
 without reading native app settings. Disabling plugin apps also skips app
-inventory discovery.
+inventory discovery. Active legacy managed app settings outrank native thread
+configuration and prevent app admission; move those app settings to a supported
+user or project configuration layer. Native administrative requirements remain
+authoritative.
 
 ## Troubleshooting
 

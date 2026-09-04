@@ -148,7 +148,9 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
-  LaunchedEffect(sessionKey, timeline, historyLoading) {
+  // Loading only changes empty-timeline transitions. A populated-history refresh
+  // must not cancel a moving scroll after its content version has been recorded.
+  LaunchedEffect(sessionKey, timeline, historyLoading && timeline.items.isEmpty()) {
     val transition =
       if (readerState.initialized) {
         readerState.onTimelineChanged(timeline, historyLoading)

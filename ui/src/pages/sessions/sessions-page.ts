@@ -1437,12 +1437,14 @@ class SessionsPage extends OpenClawLightDomElement {
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
         .work=${this.sessionMenuWork}
-        .workboard=${canCapture && row.kind !== "global"
-          ? {
-              captured: capturedSessionKeys.has(row.key),
-              busy: workboardState.capturingSessionKeys.has(row.key),
-            }
-          : null}
+        .workboard=${
+          canCapture && row.kind !== "global"
+            ? {
+                captured: capturedSessionKeys.has(row.key),
+                busy: workboardState.capturingSessionKeys.has(row.key),
+              }
+            : null
+        }
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {

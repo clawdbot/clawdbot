@@ -62,7 +62,10 @@ export async function activateChatHeaderPanelAction(page: Page, label: string): 
     // Web Awesome clears `open` before its hide animation; reopening while the popup is active
     // skips showMenu setup and can let the previous close hide the newly opened submenu.
     const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
-    return (!dropdown || Reflect.get(dropdown, "open") !== true) && !popup?.active;
+    return (
+      (!dropdown || Reflect.get(dropdown, "open") !== true) &&
+      (!popup || !Reflect.get(popup, "active"))
+    );
   });
   await action.waitFor({ state: "hidden" });
 }

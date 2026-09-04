@@ -40,7 +40,6 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
-  modelSelectionRuntimeId?: string;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
@@ -363,13 +362,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   ) {
     activeModelOption.contextTokens = activeSession.contextTokens;
   }
-  const lockedModelLabel =
-    props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
-      ? t("chat.selectors.nativeCodexModel")
-      : t("chat.selectors.lockedSessionModel");
+  // A lock prevents model changes; the concrete selection still owns its label.
+  // Without a selection, neither the runtime nor the agent default identifies it.
   const committedModelLabel =
-    props.modelSelectionLocked === true
-      ? lockedModelLabel
+    props.modelSelectionLocked === true && !currentOverride
+      ? t("chat.selectors.lockedSessionModel")
       : (modelOptions.find((entry) => entry.value === currentOverride)?.label ??
         resolveChatModelPickerLabel(
           currentOverride,
@@ -459,8 +456,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
-        triggerStatusLabel: catalogTriggerStatus,
-        triggerLoading: catalogLoadingWithoutSnapshot && !selectionKnown,
+        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerLoading:
+          !props.modelSelectionLocked && catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,
@@ -470,25 +468,27 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${!showEffortPicker
-        ? nothing
-        : renderChatEffortPicker({
-            disabled: effortDisabled,
-            disabledReason: props.effortMutationDisabledReason,
-            fastMode: {
-              ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-            },
-            sessionKey: props.sessionKey,
-            thinkingDisabled,
-            thinking,
-            onFastModeSelect: async (next, targetSessionKey) =>
-              props.onFastModeSelect?.(next, targetSessionKey),
-            onRequestUpdate: props.onRequestUpdate,
-            onThinkingSelect: async (next, targetSessionKey) =>
-              props.onThinkingSelect?.(next, targetSessionKey),
-            reserved: reserveEffortPicker,
-          })}
+      ${
+        !showEffortPicker
+          ? nothing
+          : renderChatEffortPicker({
+              disabled: effortDisabled,
+              disabledReason: props.effortMutationDisabledReason,
+              fastMode: {
+                ...fastMode,
+                disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+              },
+              sessionKey: props.sessionKey,
+              thinkingDisabled,
+              thinking,
+              onFastModeSelect: async (next, targetSessionKey) =>
+                props.onFastModeSelect?.(next, targetSessionKey),
+              onRequestUpdate: props.onRequestUpdate,
+              onThinkingSelect: async (next, targetSessionKey) =>
+                props.onThinkingSelect?.(next, targetSessionKey),
+              reserved: reserveEffortPicker,
+            })
+      }
     </div>
   `;
 }

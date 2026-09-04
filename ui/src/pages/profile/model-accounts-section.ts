@@ -18,6 +18,9 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
+
+registerModelAccountsEnglish();
 
 type ModelAccountsContext = {
   gatewayUrl: string;
@@ -100,9 +103,9 @@ function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuth
       >
       <span class="model-accounts__provider">${providerDisplayLabel(link.provider)}</span>
     `,
-    description: html`${t("profilePage.modelAccounts.linkedDescription")}${account
-      ? accountIdDetail(props.accounts, account)
-      : ""}`,
+    description: html`${t("profilePage.modelAccounts.linkedDescription")}${
+      account ? accountIdDetail(props.accounts, account) : ""
+    }`,
     control: html`
       ${renderSettingsStatus({ kind: "ok", label: t("profilePage.modelAccounts.linkedStatus") })}
       <button
@@ -163,27 +166,31 @@ function renderSignIn(props: ModelAccountsSectionProps) {
     stacked: true,
     control: flow
       ? html`<div class="model-accounts-flow">
-          ${step
-            ? renderWizardStepControls({
-                step,
-                value: props.stepValue,
-                busy: props.busy,
-                inputId: "profile-account-auth-answer",
-                leadingAction: cancel,
-                onValueChange: (value) => props.onStepValueChange(step.id, value),
-                onAnswer: (value) => props.onStepAnswer(step.id, value),
-              })
-            : html`<span role="status">${t("common.loading")}</span>${cancel}`}
-          ${props.statusUnavailable
-            ? html`<button
-                type="button"
-                class="btn btn--sm profile-auth-connect-check"
-                ?disabled=${props.cancelBusy}
-                @click=${props.onConnectCheck}
-              >
-                ${t("profilePage.modelAccounts.checkStatusAction")}
-              </button>`
-            : ""}
+          ${
+            step
+              ? renderWizardStepControls({
+                  step,
+                  value: props.stepValue,
+                  busy: props.busy,
+                  inputId: "profile-account-auth-answer",
+                  leadingAction: cancel,
+                  onValueChange: (value) => props.onStepValueChange(step.id, value),
+                  onAnswer: (value) => props.onStepAnswer(step.id, value),
+                })
+              : html`<span role="status">${t("common.loading")}</span>${cancel}`
+          }
+          ${
+            props.statusUnavailable
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm profile-auth-connect-check"
+                  ?disabled=${props.cancelBusy}
+                  @click=${props.onConnectCheck}
+                >
+                  ${t("profilePage.modelAccounts.checkStatusAction")}
+                </button>`
+              : ""
+          }
         </div>`
       : html`<div class="model-accounts-choice">
           ${renderPicker({
@@ -195,23 +202,27 @@ function renderSignIn(props: ModelAccountsSectionProps) {
             renderLeading: (entry) => renderProviderBrandIcon(entry.value),
             onChange: props.onProviderChange,
           })}
-          ${provider
-            ? renderPicker({
-                label: t("profilePage.modelAccounts.method"),
-                className: "profile-auth-method",
-                value: choice.method || null,
-                options: provider.methods.map((method) => ({
-                  value: method.id,
-                  label: method.label,
-                  description: method.hint,
-                })),
-                disabled: props.busy,
-                onChange: props.onMethodChange,
-              })
-            : ""}
-          ${!props.busy && !props.error && choice.providers.length === 0
-            ? html`<span>${t("profilePage.modelAccounts.noMethods")}</span>`
-            : ""}
+          ${
+            provider
+              ? renderPicker({
+                  label: t("profilePage.modelAccounts.method"),
+                  className: "profile-auth-method",
+                  value: choice.method || null,
+                  options: provider.methods.map((method) => ({
+                    value: method.id,
+                    label: method.label,
+                    description: method.hint,
+                  })),
+                  disabled: props.busy,
+                  onChange: props.onMethodChange,
+                })
+              : ""
+          }
+          ${
+            !props.busy && !props.error && choice.providers.length === 0
+              ? html`<span>${t("profilePage.modelAccounts.noMethods")}</span>`
+              : ""
+          }
           <div class="wizard-step__actions">
             ${cancel}
             <button
@@ -263,41 +274,51 @@ function renderManualLinkRow(props: ModelAccountsSectionProps) {
 
 function renderModelAccountRows(props: ModelAccountsSectionProps) {
   return html`
-    ${props.links.length === 0
-      ? renderSettingsEmpty(t("profilePage.modelAccounts.empty"))
-      : props.links.map((link) => renderLinkedRow(props, link))}
+    ${
+      props.links.length === 0
+        ? renderSettingsEmpty(t("profilePage.modelAccounts.empty"))
+        : props.links.map((link) => renderLinkedRow(props, link))
+    }
     ${props.accounts
       .filter((account) => !account.selected)
       .map((account) => renderSavedAccountRow(props, account))}
-    ${props.hasMore
-      ? renderSettingsRow({
-          title: t("profilePage.modelAccounts.savedAccounts"),
-          control: html`<button
-            type="button"
-            class="btn btn--sm profile-auth-accounts-more"
-            ?disabled=${props.busy}
-            @click=${props.onLoadMore}
-          >
-            ${t("profilePage.modelAccounts.loadMore")}
-          </button>`,
-        })
-      : ""}
+    ${
+      props.hasMore
+        ? renderSettingsRow({
+            title: t("profilePage.modelAccounts.savedAccounts"),
+            control: html`<button
+              type="button"
+              class="btn btn--sm profile-auth-accounts-more"
+              ?disabled=${props.busy}
+              @click=${props.onLoadMore}
+            >
+              ${t("profilePage.modelAccounts.loadMore")}
+            </button>`,
+          })
+        : ""
+    }
     ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
-    ${props.notice
-      ? html`<div class="settings-row model-accounts-notice" role="status">
-          <span class="settings-row__desc">${props.notice}</span>
-        </div>`
-      : ""}
-    ${props.error
-      ? html`<div class="settings-row model-accounts-error" role="alert">
-          <span class="settings-row__desc">${props.error}</span>
-        </div>`
-      : ""}
-    ${props.inventoryError
-      ? html`<div class="settings-row model-accounts-error" role="alert">
-          ${t("profilePage.modelAccounts.inventoryFailed")} ${props.inventoryError}
-        </div>`
-      : ""}
+    ${
+      props.notice
+        ? html`<div class="settings-row model-accounts-notice" role="status">
+            <span class="settings-row__desc">${props.notice}</span>
+          </div>`
+        : ""
+    }
+    ${
+      props.error
+        ? html`<div class="settings-row model-accounts-error" role="alert">
+            <span class="settings-row__desc">${props.error}</span>
+          </div>`
+        : ""
+    }
+    ${
+      props.inventoryError
+        ? html`<div class="settings-row model-accounts-error" role="alert">
+            ${t("profilePage.modelAccounts.inventoryFailed")} ${props.inventoryError}
+          </div>`
+        : ""
+    }
   `;
 }
 
@@ -321,37 +342,41 @@ export function renderModelAccountsSection(
       description: t("profilePage.modelAccounts.personalDescription"),
       control: renderSettingsValue(t("profilePage.modelAccounts.personal")),
     })}
-    ${props
-      ? renderModelAccountRows(props)
-      : renderSettingsRow({
-          title: t("profilePage.modelAccounts.signInUnavailable"),
-          description: t(`profilePage.modelAccounts.unavailable.${context.unavailableReason}`),
-          stacked: true,
-          control: html`
-            <button type="button" class="btn btn--sm" @click=${context.onConnectionSettings}>
-              ${t("profilePage.modelAccounts.connectionSettings")}
-            </button>
-            ${renderLearnMoreLink(
-              "https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts",
-            )}
-          `,
-        })}
+    ${
+      props
+        ? renderModelAccountRows(props)
+        : renderSettingsRow({
+            title: t("profilePage.modelAccounts.signInUnavailable"),
+            description: t(`profilePage.modelAccounts.unavailable.${context.unavailableReason}`),
+            stacked: true,
+            control: html`
+              <button type="button" class="btn btn--sm" @click=${context.onConnectionSettings}>
+                ${t("profilePage.modelAccounts.connectionSettings")}
+              </button>
+              ${renderLearnMoreLink(
+                "https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts",
+              )}
+            `,
+          })
+    }
   `;
   return renderSettingsSection(
     {
       title: t("profilePage.modelAccounts.title"),
       description: t("profilePage.modelAccounts.description"),
       actions: props
-        ? html`${!props.signIn
-              ? html`<button
-                  type="button"
-                  class="btn btn--sm primary profile-auth-add-account"
-                  ?disabled=${props.busy}
-                  @click=${props.onAddAccount}
-                >
-                  ${t("profilePage.modelAccounts.addAccount")}
-                </button>`
-              : ""}<button
+        ? html`${
+              !props.signIn
+                ? html`<button
+                    type="button"
+                    class="btn btn--sm primary profile-auth-add-account"
+                    ?disabled=${props.busy}
+                    @click=${props.onAddAccount}
+                  >
+                    ${t("profilePage.modelAccounts.addAccount")}
+                  </button>`
+                : ""
+            }<button
               type="button"
               class="btn btn--sm profile-auth-accounts-refresh"
               ?disabled=${props.inventoryLoading}

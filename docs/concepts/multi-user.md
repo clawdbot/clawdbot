@@ -105,6 +105,7 @@ The Control UI keeps ownership and presence visually distinct:
 - A solid owner avatar on a session row is permanent for the lifetime of that session and always shows the current owner. It dims slightly while the owner is not connected.
 - When other people or agents have prompted the session, the row avatar becomes a **pair-stack**: the owner stays in front, and either the single other participant peeks out behind, or a **+N** count summarizes several. The chat header shows the owner chip plus a participant facepile of up to four avatars. The owner is excluded from the participant display.
 - Ringed or translucent presence avatars show people who are currently connected or watching; they come from live presence, not ownership, and disappear when those viewers leave. A person already shown by an owner or participant avatar is not repeated in that surface's live viewers. Participants summarized by a **+N** count can still appear individually as live viewers.
+- Under **Group by Person**, the owner avatar in a section header shows a small green dot while that person is connected. It fades once they have been idle for a couple of minutes and disappears when they leave. Your own section never shows one.
 
 When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into the indicator bubble as they type; other typists show a three-dot bubble. Drafts are ephemeral presence: they are never persisted, never enter the session transcript or the model's context, and fade a moment after the typist pauses or sends.
 
@@ -112,7 +113,7 @@ When the loaded session list contains fewer than two distinct owner identities a
 
 ## People cards
 
-Hover, focus, click, or tap a person in the sidebar's **Online** section to open their information card. For a qualified Gateway profile, select **View activity** in the card to open that person's Activity page. Unqualified viewers still have connection details and visible watched sessions, but no profile Activity link.
+Hover, focus, click, or tap a person in the sidebar's **Online** section to open their information card. Under **Group by Person**, the avatar and name in another person's section header open the same card; the chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link. For a qualified Gateway profile, select **View activity** in the card to open that person's Activity page. Unqualified viewers still have connection details and visible watched sessions, but no profile Activity link.
 
 The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity; connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
 

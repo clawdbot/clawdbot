@@ -311,36 +311,40 @@ class SidebarAttention extends OpenClawLightDomElement {
         }}
       >
         <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.inbox}</span>
-        ${count > 0
-          ? html`<span class="sidebar-issues-button__count" aria-hidden="true"
-              >${count > 9 ? "9+" : count}</span
-            >`
-          : nothing}
+        ${
+          count > 0
+            ? html`<span class="sidebar-issues-button__count" aria-hidden="true"
+                >${count > 9 ? "9+" : count}</span
+              >`
+            : nothing
+        }
       </button>
-      ${this.panelOpen && this.panelRenderer && this.mentions
-        ? this.panelRenderer({
-            context: this.context,
-            mentions: this.mentions,
-            entries,
-            onApprovalDecision: (event, approvalId, decision) =>
-              void this.decideApproval(event, approvalId, decision),
-            onClose: (restoreFocus) => this.closePanel(restoreFocus),
-            onDismiss: (dismissal) => this.dismiss(dismissal),
-            onKeydown: this.handlePanelKeydown,
-            onNavigate: (routeId) => {
-              this.closePanel(false);
-              (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
-            },
-            onOpen: (item) => void this.open(item),
-            onScroll: this.syncOverflowCue,
-            onSelectTab: (tab) => this.selectTab(tab),
-            overflowAbove: this.overflowAbove,
-            overflowBelow: this.overflowBelow,
-            panelPosition: this.panelPosition,
-            selectedTab: this.selectedTab,
-            watchUpdateProgress: this.watchUpdateProgress,
-          })
-        : nothing}
+      ${
+        this.panelOpen && this.panelRenderer && this.mentions
+          ? this.panelRenderer({
+              context: this.context,
+              mentions: this.mentions,
+              entries,
+              onApprovalDecision: (event, approvalId, decision) =>
+                void this.decideApproval(event, approvalId, decision),
+              onClose: (restoreFocus) => this.closePanel(restoreFocus),
+              onDismiss: (dismissal) => this.dismiss(dismissal),
+              onKeydown: this.handlePanelKeydown,
+              onNavigate: (routeId) => {
+                this.closePanel(false);
+                (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+              },
+              onOpen: (item) => void this.open(item),
+              onScroll: this.syncOverflowCue,
+              onSelectTab: (tab) => this.selectTab(tab),
+              overflowAbove: this.overflowAbove,
+              overflowBelow: this.overflowBelow,
+              panelPosition: this.panelPosition,
+              selectedTab: this.selectedTab,
+              watchUpdateProgress: this.watchUpdateProgress,
+            })
+          : nothing
+      }
     `;
   }
 }

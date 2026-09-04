@@ -46,22 +46,28 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       ?disabled=${submitting || (params.disabled ?? false)}
       @click=${params.onSelect}
     >
-      ${params.icon
-        ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
-        : nothing}
+      ${
+        params.icon
+          ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
+          : nothing
+      }
       <span class="session-menu__text">${params.label}</span>
-      ${params.facts?.length || params.meter
-        ? html`<span class="new-session-page__menu-meta">
-            ${params.facts?.length
-              ? html`<span class="new-session-page__menu-facts">
-                  ${params.facts.map(
-                    (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
-                  )}
-                </span>`
-              : nothing}
-            ${params.meter ?? nothing}
-          </span>`
-        : nothing}
+      ${
+        params.facts?.length || params.meter
+          ? html`<span class="new-session-page__menu-meta">
+              ${
+                params.facts?.length
+                  ? html`<span class="new-session-page__menu-facts">
+                      ${params.facts.map(
+                        (fact) => html`<span class="new-session-page__menu-fact">${fact}</span>`,
+                      )}
+                    </span>`
+                  : nothing
+              }
+              ${params.meter ?? nothing}
+            </span>`
+          : nothing
+      }
       ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span

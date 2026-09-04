@@ -138,6 +138,60 @@ describe("qa suite runtime flow", () => {
     expect(laterStep).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["pass", undefined],
+    ["fail", new Error("later failure")],
+    ["skip", new QaSuiteScenarioSkipError("later skip")],
+  ] as const)(
+    "keeps the latest structured RTT measurement when the scenario ends in %s",
+    async (expectedStatus, terminalError) => {
+      const firstMeasurement = {
+        finalMatchedReplyRttMs: 100,
+        requestStartedAt: "2026-09-03T00:00:00.000Z",
+        responseObservedAt: "2026-09-03T00:00:00.100Z",
+        source: "first-observation",
+      };
+      const latestMeasurement = {
+        finalMatchedReplyRttMs: 200,
+        requestStartedAt: "2026-09-03T00:00:01.000Z",
+        responseObservedAt: "2026-09-03T00:00:01.200Z",
+        source: "latest-observation",
+      };
+      const result = await runQaSuiteScenarioSteps("RTT retention", [
+        {
+          name: "First measurement",
+          run: async () => ({
+            timing: { wallMs: 10, rttMs: 999 },
+            rttMeasurement: firstMeasurement,
+          }),
+        },
+        {
+          name: "Latest measurement",
+          run: async () => ({
+            timing: { rttMs: 888 },
+            rttMeasurement: latestMeasurement,
+          }),
+        },
+        {
+          name: "Later timing only",
+          run: async () => ({ timing: { rttMs: 777, p50Ms: 50 } }),
+        },
+        {
+          name: "Terminal step",
+          run: async () => {
+            if (terminalError) {
+              throw terminalError;
+            }
+          },
+        },
+      ]);
+
+      expect(result.status).toBe(expectedStatus);
+      expect(result.timing).toEqual({ wallMs: 10, rttMs: 200, p50Ms: 50 });
+      expect(result.rttMeasurement).toEqual(latestMeasurement);
+    },
+  );
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = createQaSuiteRuntimeFlowTestEnv();
     const scenario = {

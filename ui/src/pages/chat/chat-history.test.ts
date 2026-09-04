@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -207,16 +208,13 @@ describe("syncSelectedSessionMessageSubscription", () => {
   it("retries a stale generation's rejected subscription release", async () => {
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
-    let resolveStale: (subscription: typeof stale) => void = () => undefined;
-    const staleSubscription = new Promise<typeof stale>((resolve) => {
-      resolveStale = resolve;
-    });
+    const staleSubscription = createDeferred<typeof stale>();
     const unsubscribeMessages = vi
       .fn()
       .mockRejectedValueOnce(new Error("stale release temporarily failed"))
       .mockResolvedValueOnce(undefined);
     const subscribeMessages = vi.fn(async (key: string) =>
-      key === stale.key ? await staleSubscription : selected,
+      key === stale.key ? await staleSubscription.promise : selected,
     );
     const state = createState({ messages: [] }) as TestState & {
       chatSessionMessageSubscriptionRequestedKey: string | null;
@@ -236,7 +234,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.sessionKey = selected.key;
     await syncSelectedSessionMessageSubscription(state as never);
 
-    resolveStale(stale);
+    staleSubscription.resolve(stale);
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);

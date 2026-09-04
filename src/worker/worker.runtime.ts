@@ -222,6 +222,7 @@ export async function runWorkerDescriptor(
             stateDir,
             runId: descriptor.assignment.runId,
             cwd: workspaceDir,
+            signal: abortController.signal,
           }),
         )
       : undefined;

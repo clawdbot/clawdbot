@@ -2193,7 +2193,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftUpdateTexts(draftStream)).toContain(
-      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; *bold* `code` &amp; done",
     );
   });
 
@@ -2769,6 +2769,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         "Approval required: run checks; approval requested",
         "complete",
       ),
+    ]);
+    expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
+  });
+
+  it("settles failed command attention as recovered after a successful final reply", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", phase: "end", name: "Bash", title: "run checks", exitCode: 1 },
+      ],
+    });
+
+    expect(collectNativeTaskUpdates().filter((task) => task.id === "openclaw_attention")).toEqual([
+      taskUpdate("openclaw_attention", "Bash — exit 1", "error"),
+      taskUpdate("openclaw_attention", "Recovered: Bash — exit 1", "complete"),
     ]);
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
@@ -4353,10 +4368,26 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86\\_64._");
+    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86_64._");
   });
 
-  it("escapes Slack mentions and formatting in commentary without losing outer italics or inline code", async () => {
+  it("renders italic draft commentary with inline code and neutralized mentions", async () => {
+    const { normalizeSlackOutboundText } =
+      await vi.importActual<typeof import("../../format.js")>("../../format.js");
+    const { formatSlackProgressDraftLine } = await import("./dispatch-progress-card.js");
+    normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
+    try {
+      expect(
+        formatSlackProgressDraftLine("_Check *x* with `src/one.ts` for <@U123> & <!channel>_"),
+      ).toBe("_Check x with `src/one.ts` for &lt;@U123&gt; &amp; &lt;!channel&gt;_");
+    } finally {
+      normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
+    }
+  });
+
+  it("escapes Slack mentions and renders commentary without losing outer italics or inline code", async () => {
+    const { normalizeSlackOutboundText } =
+      await vi.importActual<typeof import("../../format.js")>("../../format.js");
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
@@ -4371,20 +4402,25 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
     ];
 
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: {
-          streaming: {
-            mode: "progress",
-            progress: { label: false, commentary: true, toolProgress: false },
-          },
-        },
-      }),
+    await normalizeSlackOutboundTextMock.withImplementation(
+      normalizeSlackOutboundText,
+      async () => {
+        await dispatchPreparedSlackMessage(
+          createPreparedSlackMessage({
+            accountConfig: {
+              streaming: {
+                mode: "progress",
+                progress: { label: false, commentary: true, toolProgress: false },
+              },
+            },
+          }),
+        );
+      },
     );
 
     expectLastDraftUpdateText(
       draftStream,
-      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with \\*urgent\\* \\_context\\_ `src/one.ts`_",
+      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
     );
   });
 

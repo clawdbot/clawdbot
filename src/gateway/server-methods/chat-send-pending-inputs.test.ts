@@ -23,6 +23,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
@@ -51,7 +52,11 @@ const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ordinary browser input admission", () => {
   async function createBrowserFollowupFixture(
-    options: { active?: boolean; preserveContent?: boolean } = {},
+    options: {
+      active?: boolean;
+      preserveContent?: boolean;
+      transientProjectionFailures?: number;
+    } = {},
   ) {
     const active = options.active !== false;
     const storePath = path.join(temporaryDirs.make("openclaw-chat-custody-"), "sessions.json");
@@ -114,10 +119,15 @@ describe("ordinary browser input admission", () => {
     const dispatchRelease = createDeferred();
     const dispatchedRecorder = createDeferred<UserTurnTranscriptRecorder>();
     // Admission, approval, and SQLite remain real; pause only execution after ACK.
+    let dispatchAttempts = 0;
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
       const { replyOptions } = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
       if (replyOptions?.userTurnTranscriptRecorder) {
         dispatchedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
+      }
+      dispatchAttempts += 1;
+      if (dispatchAttempts <= (options.transientProjectionFailures ?? 0)) {
+        throw new SessionTranscriptProjectionUnavailableError(scope.sessionId);
       }
       await dispatchRelease.promise;
       return {};
@@ -311,6 +321,40 @@ describe("ordinary browser input admission", () => {
       await recorder.persistApproved();
       expect(fixture.read()).toHaveLength(1);
       expect(fixture.read(fixture.carolClient)).toEqual([]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("retains pending-input custody while retrying a transient post-ACK projection failure", async () => {
+    const fixture = await createBrowserFollowupFixture({ transientProjectionFailures: 1 });
+    try {
+      const ack = await fixture.send();
+      expect(ack).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.anything(),
+      );
+      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      const reconnect = await fixture.send();
+      expect(reconnect).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
+        undefined,
+        expect.objectContaining({ cached: true }),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
+      });
+      expect(fixture.context.removeChatRun).not.toHaveBeenCalled();
+      expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: fixture.params.idempotencyKey, state: "error" }),
+        expect.anything(),
+      );
     } finally {
       await fixture.cleanup();
     }

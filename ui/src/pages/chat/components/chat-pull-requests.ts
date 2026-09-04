@@ -268,9 +268,11 @@ function renderBranchRow(
       <span class="chat-pr__meta">
         ${renderDiffStats(branch, onOpenSessionDiff)}
         ${rateLimited ? renderRateLimitWarning() : nothing}
-        ${publication
-          ? renderGitHubPublicationAction(publication)
-          : renderCreatePullRequestLink(branch)}
+        ${
+          publication
+            ? renderGitHubPublicationAction(publication)
+            : renderCreatePullRequestLink(branch)
+        }
       </span>
       ${publication ? renderGitHubPublicationDetails(publication) : nothing}
     </article>
@@ -294,20 +296,24 @@ export function renderChatPullRequests(props: {
   const { visible, hiddenCount } = visibleChatPullRequests(props.pullRequests, props.expanded);
   return html`
     <div class="chat-prs" aria-live="polite">
-      ${props.branch
-        ? renderBranchRow(
-            props.branch,
-            props.rateLimited,
-            props.onOpenSessionDiff,
-            props.publication,
-          )
-        : nothing}
-      ${!props.branch && retainedPublication && props.publication
-        ? html` <article class="chat-pr" data-state="publication">
-            <span class="chat-pr__meta">${renderGitHubPublicationAction(props.publication)}</span>
-            ${renderGitHubPublicationDetails(props.publication)}
-          </article>`
-        : nothing}
+      ${
+        props.branch
+          ? renderBranchRow(
+              props.branch,
+              props.rateLimited,
+              props.onOpenSessionDiff,
+              props.publication,
+            )
+          : nothing
+      }
+      ${
+        !props.branch && retainedPublication && props.publication
+          ? html` <article class="chat-pr" data-state="publication">
+              <span class="chat-pr__meta">${renderGitHubPublicationAction(props.publication)}</span>
+              ${renderGitHubPublicationDetails(props.publication)}
+            </article>`
+          : nothing
+      }
       ${visible.map((pullRequest) => {
         const merged = pullRequest.state === "merged";
         return html`
@@ -333,9 +339,11 @@ export function renderChatPullRequests(props: {
             </a>
             <span class="chat-pr__meta">
               ${renderDiffStats(pullRequest)} ${renderChecks(pullRequest)}
-              ${pullRequest.state === "open"
-                ? nothing
-                : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`}
+              ${
+                pullRequest.state === "open"
+                  ? nothing
+                  : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`
+              }
               ${props.rateLimited && !merged ? renderRateLimitWarning() : nothing}
               <button
                 class="chat-pr__dismiss"
@@ -351,13 +359,15 @@ export function renderChatPullRequests(props: {
           </article>
         `;
       })}
-      ${hiddenCount > 0
-        ? html`
-            <button class="chat-prs__more" type="button" @click=${props.onExpand}>
-              ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
-            </button>
-          `
-        : nothing}
+      ${
+        hiddenCount > 0
+          ? html`
+              <button class="chat-prs__more" type="button" @click=${props.onExpand}>
+                ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }

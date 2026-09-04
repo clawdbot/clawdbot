@@ -501,30 +501,36 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
       >
         ${icons.moreHorizontal}
       </button>
-      ${canExportImage
-        ? html`
-            <wa-dropdown-item class="session-menu__item" value="copy">
+      ${
+        canExportImage
+          ? html`
+              <wa-dropdown-item class="session-menu__item" value="copy">
+                <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                  >${icons.copyImage}</span
+                >
+                <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
+              </wa-dropdown-item>
+              <wa-dropdown-item class="session-menu__item" value="download">
+                <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                  >${icons.download}</span
+                >
+                <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
+              </wa-dropdown-item>
+            `
+          : nothing
+      }
+      ${
+        hasRawDetails
+          ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
               <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                >${icons.copyImage}</span
+                >${icons.fileText}</span
               >
-              <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
-            </wa-dropdown-item>
-            <wa-dropdown-item class="session-menu__item" value="download">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                >${icons.download}</span
+              <span class="session-menu__text" data-raw-label
+                >${t("chat.toolCards.showRawDetails")}</span
               >
-              <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
-            </wa-dropdown-item>
-          `
-        : nothing}
-      ${hasRawDetails
-        ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.fileText}</span>
-            <span class="session-menu__text" data-raw-label
-              >${t("chat.toolCards.showRawDetails")}</span
-            >
-          </wa-dropdown-item>`
-        : nothing}
+            </wa-dropdown-item>`
+          : nothing
+      }
     </wa-dropdown>
   `;
 }
