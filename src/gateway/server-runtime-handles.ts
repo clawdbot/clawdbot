@@ -3,6 +3,7 @@
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
+import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import {
   MEDIA_CLEANUP_STOP_TIMEOUT_MS,
   type MediaCleanupStopResult,
@@ -26,7 +27,7 @@ export type GatewayConfigReloaderHandle = {
 
 /** Mutable handles owned by a running gateway server process. */
 export type GatewayServerMutableState = {
-  bonjourStop: (() => Promise<void>) | null;
+  discovery: GatewayDiscovery | null;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   heartbeatRunner: HeartbeatRunner;
@@ -50,7 +51,7 @@ export type GatewayServerMutableState = {
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
 export function createGatewayServerMutableState(): GatewayServerMutableState {
   return {
-    bonjourStop: null as (() => Promise<void>) | null,
+    discovery: null,
     maintenance: null,
     stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
     heartbeatRunner: createNoopHeartbeatRunner(),
