@@ -542,6 +542,55 @@ describe("managed service update handoff single-flight", () => {
     }
   });
 
+  it("admits another update after a transferred no-op leaves the Gateway serving", async () => {
+    vi.restoreAllMocks();
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementation(spawn);
+    const root = await fs.realpath(tempRoots.make("openclaw-handoff-noop-"));
+    const updaterPath = path.join(root, "updater.cjs");
+    await fs.writeFile(
+      updaterPath,
+      `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:"skipped",mode:"npm",reason:"already-current"}));`,
+    );
+    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const started = await startManagedServiceUpdateHandoff({
+          root,
+          restartDrainTimeoutMs: 300_000,
+          parentPid: parent.pid,
+          execPath: process.execPath,
+          argv1: updaterPath,
+          env: { ...process.env, OPENCLAW_STATE_DIR: root },
+          meta: {},
+        });
+        expect(started.status).toBe("started");
+        if (started.status !== "started") {
+          throw new Error("completed no-op retained its owner");
+        }
+        const child = spawnMock.mock.results.at(-1)
+          ?.value as import("node:child_process").ChildProcess;
+        const exited = new Promise<number | null>((resolve) => {
+          child.once("close", resolve);
+        });
+        await expect(
+          transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
+        ).resolves.toBe(true);
+        expect(await exited).toBe(0);
+        expect(parent.exitCode).toBeNull();
+        expect(parent.signalCode).toBeNull();
+      }
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    } finally {
+      parent.stdin?.end();
+    }
+  });
+
   it("waits for the exact helper to release its lease after an immediate control-pipe EPIPE", async () => {
     vi.restoreAllMocks();
     const { spawn } =

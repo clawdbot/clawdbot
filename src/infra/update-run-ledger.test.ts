@@ -297,7 +297,19 @@ describe("update run ledger", () => {
       { booted: true, versionMatch: true },
       options,
     );
-    expect(booted).toMatchObject({
+    expect(booted.confirmedAtMs).toBeNull();
+    const verified = recordUpdateRunVerification(
+      run.runId,
+      {
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+        pluginErrors: [],
+        inferenceProbe: "unavailable",
+      },
+      options,
+    );
+    expect(verified).toMatchObject({
       status: "failed",
       reason: "doctor-failed",
       finishedAtMs: 4_000,
@@ -664,6 +676,9 @@ describe("update run ledger", () => {
           serviceRunning: true,
           versionMatch: true,
           channelsReady: true,
+          settled: true,
+          readyz: true,
+          pluginErrors: [],
         },
       } satisfies Partial<UpdateRunRecord>);
       expect(persisted?.confirmedAtMs).toEqual(expect.any(Number));

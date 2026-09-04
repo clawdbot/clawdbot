@@ -146,14 +146,14 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-function expectLifecycleBoundary(doctorEvent: string): void {
-  const doctorIndex = mocks.events.indexOf(`${doctorEvent}:false`);
-  expect(doctorIndex).toBeGreaterThan(-1);
-  expect(mocks.events).not.toContain(`${doctorEvent}:true`);
+function expectLifecycleBoundary(preLeaseEvent: string): void {
+  const preLeaseIndex = mocks.events.indexOf(`${preLeaseEvent}:false`);
+  expect(preLeaseIndex).toBeGreaterThan(-1);
+  expect(mocks.events).not.toContain(`${preLeaseEvent}:true`);
   const authoritativeReadIndex = mocks.events.findIndex(
-    (event, index) => index > doctorIndex && event === "read-config:true",
+    (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
-  expect(authoritativeReadIndex).toBeGreaterThan(doctorIndex);
+  expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
   for (const event of [
     "persist-channel:true",
     "restore-channels:true",
@@ -183,7 +183,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
-  it("runs resume doctors outside the lease and rereads mutation state after acquisition", async () => {
+  it("resumes committed migrations without repeating doctor and rereads state under the lease", async () => {
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",
       channel: "stable",
@@ -191,9 +191,12 @@ describe("update plugin lifecycle lease boundaries", () => {
       timeoutMs: 1_000,
     });
 
-    expectLifecycleBoundary("fresh-doctor");
+    expectLifecycleBoundary("handoff-records");
+    expect(mocks.events).not.toContain("fresh-doctor:false");
+    expect(mocks.events).not.toContain("fresh-doctor:true");
+    expect(mocks.events).not.toContain("config-snapshot:false");
+    expect(mocks.events).not.toContain("config-snapshot:true");
     expect(mocks.events).toContain("persisted-index:true");
-    expect(mocks.events).toContain("handoff-records:false");
   });
 
   it("runs finalizer doctors outside the lease and rereads mutation state after acquisition", async () => {

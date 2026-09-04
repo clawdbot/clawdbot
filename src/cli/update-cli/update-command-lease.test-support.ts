@@ -12,7 +12,6 @@ export type LeaseScenario = {
   failDoctor?: "pre" | "post";
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
-  doctorWrites?: boolean;
   writerConfig?: OpenClawConfig;
   writerRecords?: Record<string, PluginInstallRecord>;
 };
@@ -106,9 +105,6 @@ export async function runUpdateLeaseChild(): Promise<void> {
           (await readConfigFileSnapshot()).config.update?.channel,
           scenario.preDoctorChannel,
         );
-      }
-      if (phase === "pre" && scenario.doctorWrites) {
-        await publish();
       }
     });
     process.stdout.write("doctor fixture output\n");

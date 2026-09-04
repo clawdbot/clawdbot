@@ -67,7 +67,13 @@ export async function finalizeRestartUpdateRun(
     }
     // The CLI still owns a pending handoff. A boot proves liveness, not that
     // its validation finished; preserve the sentinel's existing retry flow.
-    if (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload)) {
+    const orchestratorOwnsVerification =
+      updateRun.status === "running" &&
+      ["validating", "activating", "restarting", "verifying"].includes(updateRun.phase);
+    if (
+      !orchestratorOwnsVerification &&
+      (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
+    ) {
       updateRun = finishUpdateRun(updateRun.runId, {
         status:
           pendingExpired ||

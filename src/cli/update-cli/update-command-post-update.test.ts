@@ -4,8 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv } from "../../test-utils/env.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -102,6 +108,7 @@ type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   if (stdinIsTTYDescriptor) {
@@ -172,6 +179,8 @@ async function finishSuccessfulPackageSwitch(
     sealed?: boolean;
     updateMode?: UpdateRunResult["mode"];
     stoppedForUpdate?: boolean;
+    stoppedAtMs?: number;
+    run?: FinishUpdateParams["opts"]["run"];
     windowsTaskAutoStartRecovery?: NonNullable<
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
@@ -205,7 +214,7 @@ async function finishSuccessfulPackageSwitch(
     channel: params.updateMode === "git" ? "dev" : "stable",
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
-    opts: { json: params.json },
+    opts: { json: params.json, run: params.run },
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
@@ -213,6 +222,7 @@ async function finishSuccessfulPackageSwitch(
     ...(params.restartEnvironment && {
       preManagedServiceStop: {
         stopped: params.stoppedForUpdate ?? true,
+        stoppedAtMs: params.stoppedAtMs,
         windowsTaskAutoStartRecovery: params.windowsTaskAutoStartRecovery,
         ...(params.sealed && {
           serviceUpdateVerdict: {
@@ -689,6 +699,84 @@ describe("successful update finalization ordering", () => {
       vi.unstubAllEnvs();
       identity.restore();
     });
+
+    it.each([false, true])(
+      "converges plugins while serving and measures only restart windows (changed=%s)",
+      async (changed) => {
+        const serviceEnv = {
+          ...process.env,
+          HOME: identity.home,
+          OPENCLAW_STATE_DIR: identity.home,
+        };
+        const run = {
+          runId: createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId,
+          env: serviceEnv,
+        };
+        let now = 1_000;
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const events: string[] = [];
+        const serviceState = {
+          installed: true,
+          loadState: { status: "loaded" },
+          env: serviceEnv,
+          command: {
+            programArguments: ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"],
+            environment: serviceEnv,
+          },
+        };
+        mocks.readServiceState.mockResolvedValueOnce(serviceState);
+        if (changed) {
+          mocks.readServiceState.mockResolvedValueOnce(serviceState);
+        }
+        const verify: typeof import("./update-command-service.js").maybeRestartService = async (
+          params,
+        ) => {
+          events.push("start");
+          now += events.length === 1 ? 500 : 200;
+          recordUpdateRunVerification(
+            run.runId,
+            {
+              serviceRunning: true,
+              versionMatch: true,
+              settled: true,
+              readyz: true,
+              channelsReady: true,
+              pluginErrors: [],
+            },
+            { env: serviceEnv },
+          );
+          params.onVerified?.(now);
+          return true;
+        };
+        mocks.restartService.mockImplementationOnce(verify);
+        if (changed) {
+          mocks.restartService.mockImplementationOnce(verify);
+        }
+        const plugins = { ...successfulPluginUpdate, changed };
+        mocks.updatePlugins.mockImplementationOnce(async () => {
+          events.push("plugins");
+          now = 11_000;
+          return plugins;
+        });
+        mocks.completePluginUpdate.mockResolvedValueOnce({
+          pluginUpdate: plugins,
+          configSnapshot: validConfigSnapshot,
+        });
+        await finishSuccessfulPackageSwitch({
+          previousRoot: "/tmp/openclaw-update",
+          packageRoot: "/tmp/openclaw-update",
+          restartEnvironment: serviceEnv,
+          sealed: true,
+          stoppedAtMs: 500,
+          run,
+        });
+        expect(events).toEqual(["start", "plugins", ...(changed ? ["start"] : [])]);
+        expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
+          status: "succeeded",
+          downtimeMs: changed ? 1_200 : 1_000,
+        });
+      },
+    );
 
     it.each([
       ["unknown", true],

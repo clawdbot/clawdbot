@@ -907,7 +907,7 @@ describe("scheduleRestartSentinelWake", () => {
   );
 
   it.each([false, true])(
-    "settles an exhausted pending handoff without overwriting CLI completion (%s)",
+    "bounds pending notice retries while preserving CLI run ownership (%s)",
     async (cliFinished) => {
       vi.useFakeTimers();
       const record = createUpdateRun({
@@ -957,8 +957,11 @@ describe("scheduleRestartSentinelWake", () => {
       await vi.advanceTimersByTimeAsync(900);
 
       const result = getUpdateRun(record.runId)!;
-      expect(result.status).toBe(cliFinished ? "succeeded" : "failed");
-      expect(result.reason).toBe(cliFinished ? null : "restart-unhealthy");
+      expect(result.status).toBe(cliFinished ? "succeeded" : "running");
+      expect(result.reason).toBeNull();
+      if (!cliFinished) {
+        expect(result.finishedAtMs).toBeNull();
+      }
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
       );

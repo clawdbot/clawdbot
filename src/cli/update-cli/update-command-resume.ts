@@ -14,17 +14,13 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
-import {
-  completePostCorePluginUpdate,
-  runUpdateFinalizationDoctorInFreshProcess,
-} from "./update-command-fresh-doctor.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   readPostCorePluginInstallRecordsFile,
@@ -92,21 +88,12 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     currentSnapshot: configSnapshot,
     updateStartedAtMs,
   });
-  await createUpdateConfigSnapshot();
-  await runUpdateFinalizationDoctorInFreshProcess({
-    phase: "pre-plugin",
-    root: params.root,
-    yes: params.opts.yes === true,
-    json: params.opts.json === true,
-    timeoutMs: params.timeoutMs,
-  });
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
   const initialPluginUpdate = await withPluginLifecycleLease({}, async () => {
-    // The fresh process owns the updated migration contracts. Repair before
-    // plugin convergence writes config, or newly retired plugin keys can block
-    // the update before doctor gets a chance to migrate them.
+    // The core migration owner committed before activation. This fresh process
+    // reads that generation and only owns plugin convergence.
     configSnapshot = await readConfigFileSnapshot({
       skipPluginValidation: true,
       suppressFutureVersionWarning: true,

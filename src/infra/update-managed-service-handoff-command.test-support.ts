@@ -383,14 +383,6 @@ export function registerManagedLaunchdTeardownTests(
       updaterRan: false,
     },
     {
-      label: "restores an expired handoff after loaded teardown and transient bootstrap EIO",
-      options: {
-        parentExitTimeoutMs: 500,
-        launchdTeardown: { loadedPrints: 2, pendingBootstrapFailures: 2 },
-      },
-      updaterRan: false,
-    },
-    {
       label:
         "retries canonical bootstrap when an operation-in-progress service disappears during restoration",
       options: {

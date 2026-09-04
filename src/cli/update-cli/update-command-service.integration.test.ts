@@ -153,6 +153,10 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
+  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
+}));
+vi.mock("./update-command-inference.js", () => ({
+  runUpdateInferenceProbe: async () => true,
 }));
 vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
   appendServiceLifecycleRepairAudit: vi.fn(),
@@ -451,11 +455,7 @@ describe("preserved update activation with real version guards", () => {
         );
         expect(verification.length).toBe(retried ? 2 : 1);
         expect(verification.every(([args]) => args.requireRunningService === true)).toBe(true);
-        expect(
-          verification.every(
-            ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
-          ),
-        ).toBe(true);
+        expect(verification.every(([args]) => args.expectedBuildId === "new-build")).toBe(true);
         expect(mocks.call).toHaveBeenCalled();
         expect(
           mocks.call.mock.calls.every(

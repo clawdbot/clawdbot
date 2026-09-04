@@ -3,12 +3,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
+  restartCandidate: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
+    async () => true,
+  ),
+  stopCandidate: vi.fn(),
   restart:
     vi.fn<
       typeof import("./update-command-service.js").maybeRestartServiceAfterFailedMutableUpdate
@@ -21,10 +26,40 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  readConfigFileSnapshot: async () => ({
+    valid: true,
+    config: {},
+    sourceConfig: {},
+    parsed: {},
+    warnings: [],
+    issues: [],
+    legacyIssues: [],
+  }),
+}));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: async () => ({
+    installed: true,
+    loadState: { status: "loaded" },
+    env: {},
+    command: { programArguments: ["node", "/repo/dist/entry.js", "gateway"] },
+  }),
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate: mocks.restoreWindowsAutoStart,
+  maybeRestartService: mocks.restartCandidate,
+  maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
+  resolveUpdatedGatewayRestartPort: async () => 19101,
+  revalidateManagedGatewayServiceAfterUpdate: async () => ({
+    kind: "owned",
+    root: "/repo",
+    fingerprint: "fixture",
+    refreshDefinition: false,
+  }),
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
@@ -66,6 +101,11 @@ async function finishFailedUpdate(
     json?: boolean;
     stopped?: boolean;
     run?: FinishUpdateParams["opts"]["run"];
+    originalRoot?: string;
+    previousInstallRoot?: string;
+    packageTransaction?: FinishUpdateParams["packageTransaction"];
+    schemaVersions?: FinishUpdateParams["schemaVersions"];
+    previousVerified?: boolean;
     windowsTaskAutoStartRecovery?: NonNullable<
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
@@ -74,7 +114,11 @@ async function finishFailedUpdate(
   return await finishUpdate({
     result,
     ...(options.failure ? { failure: options.failure } : {}),
-    root: result.root ?? "/repo",
+    root: options.originalRoot ?? result.root ?? "/repo",
+    previousInstallRoot: options.previousInstallRoot,
+    packageTransaction: options.packageTransaction,
+    schemaVersions: options.schemaVersions,
+    previousVerified: options.previousVerified,
     installKindChanged: false,
     configSnapshot: {
       path: "/fixture/openclaw.json",
@@ -104,7 +148,7 @@ async function finishFailedUpdate(
       inspected: true,
       runtimeInspected: true,
       running: true,
-      serviceEnv: {},
+      serviceEnv: options.run?.env ?? {},
       windowsTaskAutoStartRecovery: options.windowsTaskAutoStartRecovery,
     },
     controlPlaneUpdateSentinelMeta: null,
@@ -374,13 +418,10 @@ describe("failed Git update recovery restart", () => {
     },
   );
 
-  it.each([
-    { childExitCode: 79, restoreFails: false },
-    { childExitCode: 80, restoreFails: false },
-    { childExitCode: 80, restoreFails: true },
-  ])(
-    "derives recovery safety from the owner after child exit $childExitCode (autostart failure: $restoreFails)",
-    async ({ childExitCode, restoreFails }) => {
+  it.each([79, 80])(
+    "does not restart again after post-activation convergence exits %s",
+    async (childExitCode) => {
+      mocks.restartCandidate.mockResolvedValueOnce(true);
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
       const detail = "Fresh Doctor could not persist the migrated config.";
       mocks.freshProcess.mockResolvedValueOnce({
@@ -388,9 +429,6 @@ describe("failed Git update recovery restart", () => {
         exitCode: childExitCode,
         error: detail,
       });
-      if (restoreFails) {
-        mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
-      }
       const failure = await finishFailedUpdate(
         { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
         { json: true },
@@ -402,7 +440,8 @@ describe("failed Git update recovery restart", () => {
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
-      expect(mocks.restoreWindowsAutoStart).not.toHaveBeenCalled();
+      expect(mocks.restartCandidate).toHaveBeenCalledOnce();
+      expect(mocks.restoreWindowsAutoStart).toHaveBeenCalledOnce();
       expect(mocks.restart).not.toHaveBeenCalled();
     },
   );
@@ -452,6 +491,69 @@ describe("failed package update recovery safety", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  });
+
+  it("restores the managed install root and keeps its backup until rolled-back is durable", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-managed-rollback-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const schemaVersions = await readUpdateStateSchemaVersions({
+      stateDir: env.OPENCLAW_STATE_DIR,
+      config: {},
+      env,
+    });
+    const originalRoot = "/managed/previous";
+    mocks.stopCandidate.mockResolvedValueOnce({
+      stopped: true,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      serviceEnv: env,
+      serviceUpdateVerdict: {
+        kind: "owned",
+        root: "/managed/candidate",
+        fingerprint: "fixture",
+        refreshDefinition: true,
+      },
+    });
+    mocks.restartCandidate.mockResolvedValueOnce(true);
+    const rollback = vi.fn(async () => ({
+      name: "package rollback",
+      command: "restore",
+      cwd: originalRoot,
+      exitCode: 0,
+      durationMs: 1,
+    }));
+    let cleanupStatus: string | undefined;
+    const complete = vi.fn(async () => {
+      cleanupStatus = getUpdateRun(run.runId, { env })?.status;
+    });
+    const failure = await finishFailedUpdate(
+      {
+        status: "error",
+        mode: "pnpm",
+        root: "/managed/candidate",
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.3" },
+        reason: "version-mismatch",
+        steps: [],
+        durationMs: 1,
+      },
+      {
+        run,
+        originalRoot,
+        previousInstallRoot: "/shell/unrelated",
+        schemaVersions,
+        previousVerified: true,
+        packageTransaction: { backupRoot: "/managed/backup", rollback, complete },
+      },
+    );
+    expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
+    expect(mocks.restartCandidate.mock.lastCall?.[0]).toMatchObject({
+      result: { root: originalRoot, after: { version: "2026.9.1" } },
+    });
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(cleanupStatus).toBe("rolled-back");
   });
 
   it.each([

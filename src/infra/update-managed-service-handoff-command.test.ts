@@ -134,7 +134,7 @@ async function startHandoffAndReadCommand(params: {
 
 describe("managed service update handoff command", () => {
   it.each([
-    { drain: 300_000, expected: 390_000 },
+    { drain: 300_000, expected: 330_000 },
     { drain: Number.MAX_SAFE_INTEGER, expected: 2_147_483_647 },
   ])(
     "serializes a bounded timer-safe restart deadline for drain $drain",

@@ -149,6 +149,9 @@ export function renderUpdateRunReport(
   if (facts.channelsReady !== undefined) {
     verification.push(facts.channelsReady ? "channels ready" : "channels not ready");
   }
+  if (facts.readyz !== undefined) {
+    verification.push(facts.readyz ? "HTTP ready" : "HTTP not ready");
+  }
   if (facts.inferenceProbe) {
     verification.push(`inference ${facts.inferenceProbe}`);
   }

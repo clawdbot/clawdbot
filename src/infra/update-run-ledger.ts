@@ -420,6 +420,10 @@ export function recordUpdateRunVerification(
       if (
         record.verification.serviceRunning &&
         record.verification.versionMatch &&
+        record.verification.settled === true &&
+        record.verification.readyz === true &&
+        record.verification.channelsReady === true &&
+        record.verification.pluginErrors?.length === 0 &&
         record.confirmedAtMs === null
       ) {
         record.confirmedAtMs = Date.now();

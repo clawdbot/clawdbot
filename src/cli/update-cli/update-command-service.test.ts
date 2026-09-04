@@ -9,6 +9,15 @@ const mocks = vi.hoisted(() => ({
   runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
   runRestartScript: vi.fn(async () => undefined),
   waitForGatewayHealthyRestart: vi.fn(),
+  waitForGatewayHttpReadiness: vi.fn(),
+  runUpdateInferenceProbe: vi.fn(),
+}));
+vi.mock("./update-command-inference.js", () => ({
+  runUpdateInferenceProbe: mocks.runUpdateInferenceProbe,
+}));
+vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
+  resolveGatewayRestartProbeContext: async () => ({ config: {}, auth: undefined }),
 }));
 
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
@@ -25,6 +34,7 @@ vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.waitForGatewayHealthyRestart,
+  waitForGatewayHttpReadiness: mocks.waitForGatewayHttpReadiness,
 }));
 
 vi.mock("./restart-helper.js", async (importOriginal) => ({
@@ -47,6 +57,8 @@ describe("maybeRestartService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
+    mocks.runUpdateInferenceProbe.mockResolvedValue(true);
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: {
@@ -130,8 +142,76 @@ describe("maybeRestartService", () => {
     ).resolves.toBe(false);
   });
 
+  it.each([
+    { readyz: 503, inference: true, accepted: false },
+    { readyz: 200, inference: false, accepted: true },
+  ])(
+    "requires readyz=$readyz while inference=$inference remains advisory",
+    async ({ readyz, inference, accepted }) => {
+      mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
+      mocks.runUpdateInferenceProbe.mockResolvedValue(inference);
+      const onVerified = vi.fn();
+      const onVerificationFailure = vi.fn();
+      const actual = await maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode: "git",
+          after: { buildId: "new-build" },
+          steps: [],
+          durationMs: 0,
+        },
+        channel: "dev",
+        opts: { json: true },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/home/operator" },
+        gatewayPort: 18789,
+        restartScriptPath: "/tmp/openclaw-verification.sh",
+        timeoutMs: 1_000,
+        onVerified,
+        onVerificationFailure,
+      });
+      expect(actual).toBe(accepted);
+      expect(onVerified).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(mocks.runUpdateInferenceProbe).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      if (accepted) {
+        expect(onVerificationFailure).not.toHaveBeenCalled();
+      } else {
+        expect(onVerificationFailure).toHaveBeenCalledWith("readyz-unhealthy");
+      }
+    },
+  );
+
+  it("rejects channel failures even when a Git target has no build identity", async () => {
+    mocks.waitForGatewayHealthyRestart.mockResolvedValue({
+      runtime: { status: "running", pid: 8000 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      channelProbeErrors: [{ id: "fixture", error: "channel startup failed" }],
+      waitOutcome: "timeout",
+    });
+    const onVerificationFailure = vi.fn();
+    await expect(
+      maybeRestartService({
+        shouldRestart: true,
+        result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
+        channel: "stable",
+        opts: { json: true },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/home/operator" },
+        gatewayPort: 18789,
+        restartScriptPath: "/tmp/openclaw-verification.sh",
+        timeoutMs: 1_000,
+        onVerificationFailure,
+      }),
+    ).resolves.toBe(false);
+    expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
+    expect(mocks.runUpdateInferenceProbe).not.toHaveBeenCalled();
+  });
+
   it.each(["stable", "beta"] as const)(
-    "does not enforce Git build identity for the %s channel",
+    "enforces the built Git identity for the %s channel",
     async (channel) => {
       const result = {
         status: "ok",
@@ -158,7 +238,7 @@ describe("maybeRestartService", () => {
       ).resolves.toBe(true);
 
       expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-        expect.not.objectContaining({ expectedBuildId: expect.anything() }),
+        expect.objectContaining({ expectedBuildId: "new-build" }),
       );
     },
   );

@@ -43,6 +43,7 @@ import {
   gatewayServiceCommandUsesRoot,
   GatewayServiceUpdateOwnershipError,
   resolveGatewayServiceManagementBlockMessageForUpdate,
+  resolveManagedServiceNodeRunner,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
@@ -69,6 +70,7 @@ export type PreManagedServiceStop = {
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  serviceNodeRunner?: string;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -235,6 +237,7 @@ type WindowsTaskAutoStartRecovery = {
 
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
+  ledgerHandoffOwned?: boolean;
   triageTarget: import("./update-command-triage.js").UpdateTriageTarget;
 };
 
@@ -483,6 +486,9 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
               ?.status === "stopped"
           : process.platform === "linux"),
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv:
+      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
+    serviceNodeRunner: resolveManagedServiceNodeRunner(serviceState.command),
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {

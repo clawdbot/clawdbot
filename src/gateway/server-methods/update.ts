@@ -36,6 +36,8 @@ import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildManagedServiceHandoffUnavailableMessage,
+  cancelManagedServiceUpdateHandoff,
+  transferManagedServiceUpdateHandoff,
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
@@ -80,7 +82,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
 
-const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
@@ -180,7 +181,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "already-running"; command: string; message: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
-    let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let managedHandoffOwner:
+      | { kind: "managed-update-handoff"; handoffId: string; installRoot: string }
+      | undefined;
     let ackDelivered = false;
     let ackQueued = false;
     let acknowledgement: string | undefined;
@@ -390,11 +393,6 @@ export const updateHandlers: GatewayRequestHandlers = {
             const beforeVersion = await readPackageVersion(installRoot);
             const startedAt = Date.now();
             const handoffId = randomUUID();
-            // systemd needs startup grace before the Gateway exits and its state becomes durable.
-            const managedRestartDelayMs =
-              supervisor === "systemd"
-                ? Math.max(restartDelayMs, MANAGED_HANDOFF_RESTART_DELAY_MS)
-                : restartDelayMs;
             sentinelMeta.handoffId = handoffId;
             sentinelMeta.root = resolveUpdateInstallRoot(installRoot);
             // Await delivery under root RPC admission before the helper can park this process.
@@ -419,41 +417,28 @@ export const updateHandlers: GatewayRequestHandlers = {
               root: installRoot,
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
+              restartDelayMs: requestedRestartDelayMs === undefined ? 0 : restartDelayMs,
               ...(handoffChannel ? { channel: handoffChannel } : {}),
               ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
               ...(devTarget ? { devTarget } : {}),
-              restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
               supervisor,
             });
             ownsUpdateOutcome = started.status === "started";
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
-            // The owner pairs helper creation with parent exit before any
-            // persistence can fail. Joiners leave both to the active owner.
+            // Transfer follows sentinel persistence; validation keeps this Gateway serving.
             if (started.status === "started") {
               handoff = {
                 status: "started",
                 ...(started.pid ? { pid: started.pid } : {}),
                 command: started.command,
               };
-              managedHandoffRestart = scheduleGatewaySigusr1Restart({
-                delayMs: managedRestartDelayMs,
-                reason: "update.run",
-                successorOwner: {
-                  kind: "managed-update-handoff",
-                  handoffId: started.handoffId,
-                  installRoot: started.installRoot,
-                },
-                skipDeferral: true,
-                skipCooldown: true,
-                audit: {
-                  actor: actor.actor,
-                  deviceId: actor.deviceId,
-                  clientIp: actor.clientIp,
-                  changedPaths: [],
-                },
-              });
+              managedHandoffOwner = {
+                kind: "managed-update-handoff",
+                handoffId: started.handoffId,
+                installRoot: started.installRoot,
+              };
               recordUpdateRunStep(runId, {
                 step: "managed-service update handoff",
                 status: "completed",
@@ -660,6 +645,25 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
     }
 
+    if (managedHandoffOwner) {
+      try {
+        if (
+          !sentinelPersisted ||
+          !(await transferManagedServiceUpdateHandoff(managedHandoffOwner))
+        ) {
+          throw new Error("managed update ownership transfer failed");
+        }
+      } catch (error) {
+        await cancelManagedServiceUpdateHandoff(managedHandoffOwner);
+        result = { ...result, status: "error", reason: "managed-service-handoff-failed" };
+        handoff = null;
+        outcomeRun = finishUpdateRun(runId, { status: "failed", reason: result.reason });
+        context?.logGateway?.warn(
+          `update.run handoff transfer failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+
     // Publish the outcome before the terminal campaign event prompts clients to
     // read it. Recheck ownership after persistence may have yielded to a replacement.
     if (
@@ -678,8 +682,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Failed installs can leave a broken runtime; restart only after success.
     const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
-      managedHandoffRestart ??
-      (result.status === "ok"
+      result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
             delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
@@ -694,8 +697,8 @@ export const updateHandlers: GatewayRequestHandlers = {
               changedPaths: [],
             },
           })
-        : null);
-    if ((ackDelivered || ackQueued) && result.status !== "ok" && !restart) {
+        : null;
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && handoff?.status !== "started" && !restart) {
       await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(
