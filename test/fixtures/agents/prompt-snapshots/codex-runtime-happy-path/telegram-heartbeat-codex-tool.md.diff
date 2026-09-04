@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=78ad6d2e60db8f4fc89710ff18625237394060dc400ea4da736032b55f9e73b9
-+++ telegram-heartbeat-codex-tool.md	sha256=60365e3498e634e85818453008aedddcca014858054ec9bc63f7b48bbf2af1cd
+--- telegram-direct-codex-message-tool.md	sha256=2efc015a93194852e03cff456f8e06d8dd1ea640b0475952fd65954518b75ffd
++++ telegram-heartbeat-codex-tool.md	sha256=b57970602d53b8afd7a6aa685485be08882f20d3f313b13fb5c68bb579471826
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -30,20 +30,20 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
 @@ -242,2 +239,2 @@
--    "chars": 57336,
--    "roughTokens": 14334
-+    "chars": 58829,
-+    "roughTokens": 14708
+-    "chars": 57391,
+-    "roughTokens": 14348
++    "chars": 58884,
++    "roughTokens": 14721
 @@ -250,2 +247,2 @@
 -    "chars": 27170,
 -    "roughTokens": 6793
 +    "chars": 27512,
 +    "roughTokens": 6878
 @@ -254,2 +251,2 @@
--    "chars": 84508,
--    "roughTokens": 21127
-+    "chars": 86343,
-+    "roughTokens": 21586
+-    "chars": 84563,
+-    "roughTokens": 21141
++    "chars": 86398,
++    "roughTokens": 21600
 @@ -258,2 +255,2 @@
 -    "chars": 863,
 -    "roughTokens": 216

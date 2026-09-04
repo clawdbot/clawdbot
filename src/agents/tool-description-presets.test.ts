@@ -6,6 +6,7 @@ import {
   describeSessionsListTool,
   describeSessionsSearchTool,
   describeSessionsSendTool,
+  describeSessionsSpawnTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
@@ -81,5 +82,16 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("reply may still announce");
     expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
     expect(describeSessionsSendTool()).toContain("neither proves target completion");
+  });
+});
+
+describe("sessions_spawn tool description", () => {
+  it("advertises thinking overrides for visible sessions", () => {
+    const description = describeSessionsSpawnTool();
+
+    expect(description).toContain("`thinking` is supported with `visible=true` for child sessions");
+    expect(description).not.toContain(
+      'omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`',
+    );
   });
 });

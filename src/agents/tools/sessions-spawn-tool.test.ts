@@ -574,7 +574,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
+      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/lightContext or attachment staging.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",
@@ -592,6 +592,9 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
+    expect(schema.properties?.thinking?.description).toContain(
+      "supported with visible=true for subagents",
+    );
     expect(schema.properties?.mode?.description).toContain('accept omitted/default "run"');
     expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.attachments?.description).toContain("accepts only an empty array");
@@ -642,6 +645,7 @@ describe("sessions_spawn tool", () => {
             label: "Issue review",
             group: "P1 issues from beta feedback",
             model: "anthropic/claude-sonnet-4-6",
+            thinking: "HIGH",
             cwd: dir,
             context: "fork",
             visible: true,
@@ -663,6 +667,7 @@ describe("sessions_spawn tool", () => {
         label: "Issue review",
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
@@ -704,6 +709,138 @@ describe("sessions_spawn tool", () => {
           },
         },
       });
+    });
+  });
+
+  it.each([
+    {
+      name: "target-agent configuration over global configuration",
+      requesterThinking: undefined,
+      targetThinking: "off",
+      expected: "off",
+    },
+    {
+      name: "requester-agent configuration over target-agent configuration",
+      requesterThinking: "low",
+      targetThinking: "medium",
+      expected: "low",
+    },
+  ])("preserves native thinking precedence for visible sessions: $name", async (input) => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-thinking-" }, async (dir) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:worker:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            defaults: { subagents: { allowAgents: ["worker"], thinking: "high" } },
+            list: [
+              {
+                id: "main",
+                ...(input.requesterThinking
+                  ? { subagents: { thinking: input.requesterThinking } }
+                  : {}),
+              },
+              {
+                id: "worker",
+                ...(input.targetThinking ? { subagents: { thinking: input.targetThinking } } : {}),
+              },
+            ],
+          },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-thinking-precedence", {
+        task: "inspect",
+        agentId: "worker",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({
+          agentId: "worker",
+          thinkingLevel: input.expected,
+        }),
+      );
+    });
+  });
+
+  it("inherits the caller thinking level for visible sessions", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-caller-thinking-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { thinkingLevel: "off" },
+      );
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-caller-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { subagents: {} }, list: [{ id: "main" }] },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-caller-thinking", {
+        task: "inspect",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ thinkingLevel: "off" }),
+      );
+    });
+  });
+
+  it("prefers the active caller thinking level over the persisted preference", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-active-thinking-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { thinkingLevel: "off" },
+      );
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-active-thinking",
+      }));
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        requesterThinkingLevel: "ultra",
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { subagents: {} }, list: [{ id: "main" }] },
+        },
+        callGateway: callGateway as never,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      await tool.execute("visible-active-thinking", {
+        task: "inspect",
+        visible: true,
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ thinkingLevel: "ultra" }),
+      );
     });
   });
 
@@ -980,7 +1117,7 @@ describe("sessions_spawn tool", () => {
         }),
       ).rejects.toThrow(
         `Parameters require visible=true: ${Object.keys(options).join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
       expect(spawn).not.toHaveBeenCalled();
       expect(other).not.toHaveBeenCalled();
@@ -1195,11 +1332,6 @@ describe("sessions_spawn tool", () => {
 
   it.each([
     [
-      "thinking",
-      { thinking: "high" },
-      "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
-    ],
-    [
       "thread",
       { thread: true },
       "Parameters unavailable with visible=true: thread: visible sessions route to the dashboard, not a channel thread",
@@ -1248,8 +1380,25 @@ describe("sessions_spawn tool", () => {
         visible: true,
       }),
     ).rejects.toThrow(
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     );
+  });
+
+  it("rejects invalid visible thinking before session creation", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: callGateway as never,
+    });
+
+    await expect(
+      tool.execute("visible-invalid-thinking", {
+        task: "inspect",
+        visible: true,
+        thinking: "not-a-thinking-level",
+      }),
+    ).rejects.toThrow(/Invalid thinking level "not-a-thinking-level"\. Use one of:/);
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
