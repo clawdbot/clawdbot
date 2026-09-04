@@ -92,8 +92,17 @@ Optional request headers:
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `x-openclaw-model: <provider/model-or-bare-id>` | Overrides the backend model for the selected agent. Shared-secret bearer callers can use this directly; identity-bearing callers (trusted-proxy, or private no-auth ingress with `x-openclaw-scopes`) need `operator.admin`, otherwise `403 missing scope: operator.admin`. |
 | `x-openclaw-agent-id: <agentId>`                | Compatibility override for agent selection.                                                                                                                                                                                                                                 |
-| `x-openclaw-session-key: <sessionKey>`          | Explicit session routing. Rejected with `400 invalid_request_error` if it uses a reserved internal namespace (`subagent:`, `cron:`, `acp:`).                                                                                                                                |
+| `x-openclaw-session-key: <sessionKey>`          | Explicit session routing. An agent-scoped key (`agent:<agentId>:<rest>`) also names the owner when nothing above it does; see the precedence below. Rejected with `400 invalid_request_error` if it uses a reserved internal namespace (`subagent:`, `cron:`, `acp:`).      |
 | `x-openclaw-message-channel: <channel>`         | Sets the synthetic ingress channel context for channel-aware prompts/policies.                                                                                                                                                                                              |
+
+Agent selection precedence, first match wins:
+
+1. `x-openclaw-agent-id` (or `x-openclaw-agent`).
+2. An agent-specific `model` (`openclaw/<agentId>`, `openclaw:<agentId>`, `agent:<agentId>`).
+3. The configured default agent, for `openclaw` and `openclaw/default`.
+4. An agent-scoped `x-openclaw-session-key` (`agent:<agentId>:<rest>`), when the fleet has no default agent. This is the path for an explicit multi-agent roster (`agents.ownership: "explicit"`, or no entry marked `default: true`): send `model: "openclaw"` plus the agent's own session key and that agent handles the request.
+
+A generic `model` with no header, no session key, and no default agent is rejected with `400 invalid_request_error` (`Multiple agents are configured, but this operation has no explicit owner`). Every selector is checked against the configured roster; an unknown agent id is also a `400`. When a default agent exists, step 3 wins and the session key only routes the session.
 
 `/v1/models` lists top-level agent targets (`openclaw`, `openclaw/default`, `openclaw/<agentId>`), not backend provider models and not sub-agents; sub-agents stay internal execution topology. If you omit `x-openclaw-model`, the selected agent runs with its normal configured model.
 
