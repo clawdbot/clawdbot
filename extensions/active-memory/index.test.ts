@@ -3570,12 +3570,14 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps a timeout partial grounded only by the tool-result callback", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(50);
     registerPluginConfig({ timeoutMs: 100, logging: true });
     const sessionKey = "agent:main:timeout-partial-callback-evidence";
     seedSession(sessionKey, "s-timeout-partial-callback-evidence", 0);
+    const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: {
         sessionFile: string;
@@ -3597,14 +3599,18 @@ describe("active-memory plugin", () => {
         await writeTranscriptJsonl(params.sessionFile, [
           { message: { role: "assistant", content: "User likes ramen with chili oil." } },
         ]);
+        transcriptWritten.resolve();
         return await waitForAbort(params.abortSignal);
       },
     );
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what ramen do i like? callback evidence" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await resultPromise;
 
     expectPrependContextContains(result, "User likes ramen with chili oil.");
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=timeout_partial");
