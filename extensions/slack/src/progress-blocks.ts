@@ -284,9 +284,6 @@ export function buildSlackProgressStreamChunks(params: {
   );
   const headline = params.title?.trim() || params.label?.trim();
   const newest = tasks.at(-1);
-  if (!headline && !newest && attention.length === 0 && !params.summaryRow) {
-    return undefined;
-  }
   const title = compactChunkText(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
@@ -309,6 +306,9 @@ export function buildSlackProgressStreamChunks(params: {
     !tasks.some((task) => task.status === "in_progress" || task.status === "error")
   ) {
     tasks.push({ id: "openclaw_attention", title: "Failed", status: "error" });
+  }
+  if (!headline && tasks.length === 0) {
+    return undefined;
   }
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {

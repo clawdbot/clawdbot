@@ -689,52 +689,50 @@ describe("createMSTeamsReplyDispatcher", () => {
     );
   });
 
-  it("replaces reasoning progress snapshots in progress mode", async () => {
-    vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", {
-      streaming: {
-        mode: "progress",
-        progress: {
-          toolProgress: true,
-          label: "Working",
-        },
-      },
-    });
+  it.each(
+    [undefined, false, true].flatMap((toolProgress) => [
+      { kind: "snapshot", toolProgress, isReasoningSnapshot: true, continuation: "Checking files" },
+      { kind: "delta", toolProgress, isReasoningSnapshot: false, continuation: " files" },
+    ]),
+  )(
+    "keeps $kind reasoning visible with toolProgress=$toolProgress",
+    async ({ toolProgress, isReasoningSnapshot, continuation }) => {
+      vi.useFakeTimers();
+      const dispatcher = createDispatcher("personal", {
+        streaming: { mode: "progress", progress: { toolProgress, label: "Working" } },
+      });
 
-    await dispatcher.replyOptions.onReasoningStream?.({
-      text: "Checking",
-      isReasoningSnapshot: true,
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onReasoningStream?.({
-      text: "Checking files",
-      isReasoningSnapshot: true,
-    });
+      await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking", isReasoningSnapshot });
+      await vi.advanceTimersByTimeAsync(1_500);
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: continuation,
+        isReasoningSnapshot,
+      });
 
-    const stream = getStreamMock();
-    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- Checking files");
-    const updates = stream.update.mock.calls.map((call) => call[0]).join("\n");
-    expect(updates).not.toContain("- Checking\n- Checking files");
-  });
+      const stream = getStreamMock();
+      expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("Checking files"));
+      const latest = String(stream.update.mock.calls.at(-1)?.[0]);
+      expect(latest.match(/Checking/g)).toHaveLength(1);
 
-  it("keeps appending delta reasoning progress in progress mode", async () => {
-    vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", {
-      streaming: {
-        mode: "progress",
-        progress: {
-          toolProgress: true,
-          label: "Working",
-        },
-      },
-    });
+      dispatcher.replyOptions.onReasoningEnd?.();
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: "Next thought",
+        isReasoningSnapshot,
+      });
+      expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("Next thought"));
+      expect(stream.update).toHaveBeenLastCalledWith(expect.not.stringContaining("Checking files"));
 
-    await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onReasoningStream?.({ text: "files" });
-
-    expect(getStreamMock().update).toHaveBeenLastCalledWith("Working\n\n- Checking\n- files");
-  });
+      await dispatcher.delivery.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcher.dispatcherOptions.onSettled?.();
+      const updateCount = stream.update.mock.calls.length;
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: "Late reasoning",
+        isReasoningSnapshot,
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(stream.update).toHaveBeenCalledTimes(updateCount);
+    },
+  );
 
   it("does not suppress default tool progress messages in partial stream mode", () => {
     const dispatcher = createDispatcher("personal", {

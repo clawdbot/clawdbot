@@ -355,6 +355,12 @@ export function createTeamsReplyStreamController(params: {
       await progressDraft.pushToolProgress(line, options);
     },
 
+    async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }): Promise<void> {
+      await progressDraft.pushReasoningProgress(text, options);
+    },
+
+    resetReasoningProgress: () => progressDraft.resetReasoningProgress(),
+
     async pushApprovalEvent(
       payload: Parameters<typeof progressDraft.pushApprovalEvent>[0],
     ): Promise<void> {

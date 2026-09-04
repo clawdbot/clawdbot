@@ -558,22 +558,13 @@ export function createMSTeamsReplyDispatcher(params: {
     ? {
         onReasoningStream: async (payload: PipelinePayload) => {
           const text = typeof payload?.text === "string" ? payload.text : undefined;
-          if (!text) {
-            return false;
-          }
-          if (payload?.isReasoningSnapshot !== true) {
-            await streamController.pushProgressLine(text);
-            return false;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "item",
-              itemId: "reasoning",
-              itemKind: "analysis",
-              title: "Reasoning",
-              progressText: text,
-            }),
-          );
+          await streamController.pushReasoningProgress(text, {
+            snapshot: payload?.isReasoningSnapshot === true,
+          });
+          return false;
+        },
+        onReasoningEnd: () => {
+          streamController.resetReasoningProgress();
           return false;
         },
         onToolStart: async (payload: PipelinePayload) => {

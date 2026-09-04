@@ -299,6 +299,64 @@ describe("native Slack progress stream chunks", () => {
   );
 
   it.each([
+    ["empty", false, "complete"],
+    ["empty", false, "error"],
+    ["approval", false, "complete"],
+    ["approval", false, "error"],
+    ["approval", true, "complete"],
+    ["approval", true, "error"],
+    ["failed", false, "complete"],
+    ["failed", false, "error"],
+  ] as const)(
+    "settles an untitled %s snapshot without losing the turn outcome (quiet=%s, final=%s)",
+    (activity, summaryRow, finalInProgressStatus) => {
+      const lines: ChannelProgressDraftLine[] =
+        activity === "empty"
+          ? []
+          : activity === "approval"
+            ? [
+                {
+                  id: "approval:deploy",
+                  kind: "approval",
+                  label: "Approval",
+                  detail: "Deploy",
+                  status: "requested",
+                  text: "Approval required: Deploy",
+                },
+              ]
+            : [{ ...toolLine("run checks"), status: "exit 1" }];
+      const first = reconcileSlackNativeTaskChunks({
+        previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+        chunks: buildSlackProgressStreamChunks({ lines, summaryRow }),
+      });
+      const final = reconcileSlackNativeTaskChunks({
+        previous: first.snapshot,
+        finalStatus: finalInProgressStatus,
+        chunks: buildSlackProgressStreamChunks({ lines, summaryRow, finalInProgressStatus }),
+      });
+      const tasks = [...final.snapshot.tasks.values()];
+      expect(tasks.filter((task) => task.status === "error")).toHaveLength(
+        finalInProgressStatus === "error" ? 1 : 0,
+      );
+      expect(tasks.every((task) => task.status === "complete" || task.status === "error")).toBe(
+        true,
+      );
+      if (activity === "approval") {
+        expect(final.chunks).toContainEqual(
+          taskUpdate(
+            expect.stringMatching(/^openclaw-attention-/u),
+            "Approval required: Deploy",
+            "complete",
+          ),
+        );
+      }
+      if (finalInProgressStatus === "error" && !summaryRow && activity !== "failed") {
+        expect(final.chunks).toContainEqual(taskUpdate("openclaw_attention", "Failed", "error"));
+      }
+    },
+  );
+
+  it.each([
     [false, "complete"],
     [true, "complete"],
     [false, "error"],
