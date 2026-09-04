@@ -219,6 +219,31 @@ describe("dir.fetch archive extraction", () => {
     );
   });
 
+  it("does not claim channel attachment in the summary text", async () => {
+    // Regression test for #138383: dir_fetch is not in TRUSTED_TOOL_RESULT_MEDIA,
+    // so filterToolResultMediaUrls strips local paths. The summary must not
+    // promise channel attachment.
+    const entries = Array.from({ length: 30 }, (_, i) => `file-${String(i).padStart(3, "0")}.txt`);
+    const tarBuffer = await createTarBuffer({
+      entries,
+      setup: async (sourceDir) => {
+        for (const name of entries) {
+          await fs.writeFile(path.join(sourceDir, name), `content-${name}`);
+        }
+      },
+    });
+    prepareArchive(tarBuffer);
+
+    const result = await executeDirFetch();
+    const summaryText = (result.content as Array<{ text: string }>)[0]!.text;
+
+    // Must NOT claim channel attachment
+    expect(summaryText).not.toMatch(/channel attaches/i);
+    // Must accurately describe what happened
+    expect(summaryText).toMatch(/\d+ of \d+ paths listed in details\.files/);
+    expect(summaryText).toMatch(/ask me to send them to share them/);
+  });
+
   it.each(["SymbolicLink", "Link", "CharacterDevice", "BlockDevice", "FIFO"] as const)(
     "rejects a Fleet-shaped archive containing a %s",
     async (type) => {
