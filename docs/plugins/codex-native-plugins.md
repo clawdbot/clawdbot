@@ -373,7 +373,15 @@ account without requiring a matching plugin package:
 
 `allow_all_plugins: true` reads the installed app snapshot and authenticated
 metadata when a new native Codex thread is established. It admits only
-account-accessible apps. Codex must also confirm each admitted app is enabled
+account-accessible apps. To keep one connected app away from one agent, deny it
+in that agent's tool policy by its tool namespace, for example
+`agents.entries.agent1.tools.deny: ["mcp__codex_apps__gamma_*"]`; the
+app is left out of that agent's thread `apps` patch while other apps and the
+rest of the native surface stay available. The namespace is the one Codex
+shows in the app's tool names (`mcp__codex_apps__<namespace>_<tool>`); a deny
+that matches no connected app, or one used while `codexPlugins` is disabled,
+turns every app off for that turn with an `app_policy_unenforceable`
+diagnostic rather than being ignored. Codex must also confirm each admitted app is enabled
 and callable for that thread. OpenClaw does not install, authenticate, or enable
 apps globally. Existing threads keep their persisted app set; use `/new`,
 `/reset`, or restart the gateway to pick up newly connected or revoked apps.

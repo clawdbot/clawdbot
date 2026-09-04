@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { CODEX_APPS_TOOL_NAME_PREFIX } from "./src/app-server/app-policy-deny.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import {
   sessionBindingIdentity,
@@ -118,6 +119,9 @@ export function createCodexAppServerAgentHarness(
     // Whole-server denies of configured MCP are applied to the Codex `mcp_servers`
     // projection (see harness-mcp-server-denies.ts) instead of isolating native tools.
     conversationToolPolicyMcpServerDenySupport: "configured",
+    // `mcp__codex_apps__<app>_*` denies drop that app from the thread apps patch
+    // (see app-policy-deny.ts) instead of isolating native tools.
+    conversationToolPolicyNativeAppDenyPrefix: CODEX_APPS_TOOL_NAME_PREFIX,
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },

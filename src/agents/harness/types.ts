@@ -402,6 +402,12 @@ type AgentHarnessRunCapability<
    * configured MCP need not isolate the native tool surface.
    */
   conversationToolPolicyMcpServerDenySupport?: "configured";
+  /**
+   * Model-facing name prefix of harness-native app tools (Codex: `mcp__codex_apps__`).
+   * Deny entries shaped `<prefix><literal>*` are enforced by the harness against its
+   * app projection, so they need not isolate the native tool surface.
+   */
+  conversationToolPolicyNativeAppDenyPrefix?: string;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
   resolveSessionRuntimeOwnership?(params: {

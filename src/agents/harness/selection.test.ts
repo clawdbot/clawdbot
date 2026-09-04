@@ -1808,6 +1808,60 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
+  it("keeps native tools for native app denies the harness enforces against its app projection", async () => {
+    const received: Array<{
+      restricted: boolean;
+      deniedApps?: readonly string[];
+    }> = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push({
+        restricted: attempt.pluginHarnessToolPolicyRestricted === true,
+        deniedApps: attempt.pluginHarnessToolPolicyDeniedAppPatterns,
+      });
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        conversationToolPolicySafeDenyTools: ["tts"],
+        conversationToolPolicyNativeAppDenyPrefix: "mcp__codex_apps__",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const policies = [
+      { deny: ["mcp__codex_apps__gamma_*"] },
+      { deny: ["MCP__codex_apps__Gamma_*", "mcp__codex_apps__epsilon_*", "tts"] },
+      { deny: ["mcp__codex_apps__*"] },
+      { deny: ["mcp__codex_apps__gamma_send_item"] },
+      { deny: ["mcp__codex_apps__*_send_*"] },
+      { deny: ["mcp__codex_apps__gamma_*", "exec"] },
+    ];
+    for (const conversationToolPolicy of policies) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy,
+      });
+    }
+
+    expect(received).toEqual([
+      { restricted: false, deniedApps: ["mcp__codex_apps__gamma_*"] },
+      {
+        restricted: false,
+        deniedApps: ["mcp__codex_apps__epsilon_*", "mcp__codex_apps__gamma_*"],
+      },
+      { restricted: false, deniedApps: ["mcp__codex_apps__*"] },
+      { restricted: true, deniedApps: undefined },
+      { restricted: true, deniedApps: undefined },
+      { restricted: true, deniedApps: ["mcp__codex_apps__gamma_*"] },
+    ]);
+  });
+
   it("isolates native tools for configured MCP denies when the harness does not certify them", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
