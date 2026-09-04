@@ -830,3 +830,33 @@ func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
 		t.Fatalf("expected source-owned token to be allowed: %v", err)
 	}
 }
+
+func TestRunDocsI18NKeepsModelSelectionPrivate(t *testing.T) {
+	t.Setenv(envDocsI18nModel, "private-primary")
+	t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
+	for _, mode := range []string{"doc", "segment"} {
+		t.Run(mode, func(t *testing.T) {
+			docsRoot := t.TempDir()
+			writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+			writeFile(t, filepath.Join(docsRoot, ".i18n", "zh-CN.tm.jsonl"), `{"cache_key":"old-cache","translated":"old translation","model":"private-primary","provider":"old-provider"}`)
+			source := filepath.Join(docsRoot, "test.md")
+			writeFile(t, source, "---\ntitle: Gateway\n---\n\n# Gateway\n\nHello world.\n")
+			if err := runDocsI18N(context.Background(), runConfig{docsRoot: docsRoot, sourceLang: "en", targetLang: "zh-CN", mode: mode, parallel: 1}, []string{source}, func(string, string, []GlossaryEntry, string) (docsTranslator, error) {
+				return fakeDocsTranslator{}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{filepath.Join(docsRoot, "zh-CN", "test.md"), filepath.Join(docsRoot, ".i18n", "zh-CN.tm.jsonl")} {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, private := range []string{"private-primary", "private-fallback", "model:", `"model":`, "provider:", `"provider":`} {
+					if strings.Contains(string(data), private) {
+						t.Fatalf("private metadata %q leaked in %s", private, path)
+					}
+				}
+			}
+		})
+	}
+}
