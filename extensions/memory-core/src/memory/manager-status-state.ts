@@ -26,9 +26,11 @@ export function collectMemoryStorageStatus(
 ): NonNullable<MemoryProviderStatus["storage"]> {
   const query = getNodeSqliteKysely<{ memory_embedding_cache: { embedding: string } }>(db)
     .selectFrom("memory_embedding_cache")
-    .select(({ fn, val }) => [
-      fn.countAll<number>().as("entries"),
-      fn.coalesce(fn.sum<number>(fn<number>("octet_length", ["embedding"])), val(0)).as("bytes"),
+    .select((eb) => [
+      eb.fn.countAll<number>().as("entries"),
+      eb.fn
+        .coalesce(eb.fn.sum<number>(eb.fn<number>("octet_length", ["embedding"])), eb.val(0))
+        .as("bytes"),
     ]);
   const cache = executeSqliteQuerySync(db, query).rows[0]!;
   const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
