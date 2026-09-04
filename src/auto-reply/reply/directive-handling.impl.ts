@@ -80,7 +80,6 @@ export async function handleDirectiveOnly(
     resetModelOverride,
     provider,
     model,
-    initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
     currentFastMode,
@@ -445,7 +444,6 @@ export async function handleDirectiveOnly(
     elevatedAllowed;
   let modelSelectionUpdated = false;
   let configuredDefaultUpdate: ReturnType<typeof persistStickyModelSelectionBestEffort> | undefined;
-  const appliedSessionEntry = sessionEntry;
   const touchedSessionFields = resolveDirectiveTouchedSessionFields({
     directives,
     allowPrivilegedPersistence,
@@ -470,7 +468,7 @@ export async function handleDirectiveOnly(
       return rejectModelTransaction(authProfileError);
     }
     const initialSessionEntry = { ...sessionEntry };
-    applySessionDirectiveFields({
+    const directiveFieldsUpdated = applySessionDirectiveFields({
       directives,
       sessionEntry,
       allowPrivilegedPersistence,
@@ -532,11 +530,15 @@ export async function handleDirectiveOnly(
         ...(params.stickyModelSelectionTarget ? { target: params.stickyModelSelectionTarget } : {}),
       });
     }
-    if (modelSelection && modelSelectionUpdated && sessionKey) {
+    // List projections must observe committed settings, not only model selections.
+    const sessionSettingsUpdated = directiveFieldsUpdated || shouldRemapUnsupportedThinkLevel;
+    if (sessionKey && (sessionSettingsUpdated || modelSelectionUpdated)) {
       emitSessionLifecycleEvent({ sessionKey, agentId: activeAgentId, reason: "patch" });
+    }
+    if (modelSelection && modelSelectionUpdated && sessionKey) {
       triggerSessionPatchHook({
         cfg: params.cfg,
-        sessionEntry: appliedSessionEntry,
+        sessionEntry,
         sessionKey,
         patch: {
           key: sessionKey,
@@ -553,19 +555,19 @@ export async function handleDirectiveOnly(
         nextModel: modelSelection.model,
         nextRouteResolution: "resolved",
         nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
-        nextAuthProfileId: appliedSessionEntry.authProfileOverride,
-        nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(appliedSessionEntry),
+        nextAuthProfileId: sessionEntry.authProfileOverride,
+        nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(sessionEntry),
         nextThinking: {
-          level: appliedSessionEntry.thinkingLevel,
+          level: sessionEntry.thinkingLevel,
           catalog: thinkingCatalog,
-          agentRuntime: resolveThinkingRuntime(appliedSessionEntry),
+          agentRuntime: resolveThinkingRuntime(sessionEntry),
         },
       });
     }
   }
   if (modelSelection) {
     const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-    if (nextLabel !== initialModelLabel) {
+    if (nextLabel !== params.initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
         sessionKey,
         contextKey: `model:${nextLabel}`,
@@ -574,7 +576,7 @@ export async function handleDirectiveOnly(
   }
   enqueueModeSwitchEvents({
     enqueueSystemEvent,
-    sessionEntry: appliedSessionEntry,
+    sessionEntry,
     sessionKey,
     elevatedChanged,
     reasoningChanged,
