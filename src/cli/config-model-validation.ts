@@ -425,7 +425,11 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     const targetAgentId =
       ref.agentId ??
       agentScope.tryResolveLegacyCompatibilityAgentId(config) ??
-      agentScope.resolveDefaultAgentId(config);
+      agentScope.tryResolveDefaultAgentId(config) ??
+      agentScope.listAgentIds(config)[0];
+    if (!targetAgentId) {
+      return undefined;
+    }
     const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
     const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedRuntime] = await loadModelModules();

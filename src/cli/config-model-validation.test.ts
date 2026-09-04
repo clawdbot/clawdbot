@@ -1042,4 +1042,24 @@ describe("config model validation", () => {
     }
     expect(resolveModelRef).not.toHaveBeenCalled();
   });
+
+  it("resolves default models when multiple agents exist without explicit default", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "valid/model" } },
+          entries: {
+            first: {},
+            second: {},
+          },
+        },
+      },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+  });
 });
