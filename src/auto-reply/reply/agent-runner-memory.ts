@@ -1272,9 +1272,6 @@ export async function runMemoryFlushIfNeeded(params: {
   const isCli =
     followupUsesCliRuntime(runtimeParams, runtimeId) ||
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  // CLI backends were excluded here because their compaction watermark can
-  // never advance; resolveCliMemoryFlushRearmBucket gives them a working
-  // anchor, so the exclusion is no longer what keeps the dedup honest.
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   if (!canAttemptFlush) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
@@ -1360,7 +1357,16 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
+  // CLI backends were excluded from the flush entirely because their
+  // compaction watermark can never advance, so one flush would lock the
+  // dedup for the rest of the session. Lift the exclusion only where a
+  // transcript-byte anchor is available to replace that watermark; a CLI
+  // session without one keeps the original skip rather than flushing once
+  // and then silently never again.
   const cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
+  if (isCli && cliRearmBucket === undefined) {
+    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+  }
   const cliAlreadyFlushed =
     cliRearmBucket !== undefined && hasAlreadyFlushedForCliRearmBucket(entry, cliRearmBucket);
 

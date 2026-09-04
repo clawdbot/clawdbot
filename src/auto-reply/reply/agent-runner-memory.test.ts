@@ -1654,7 +1654,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ).toBeUndefined();
   });
 
-  it("runs memory flush for CLI providers", async () => {
+  it("skips memory flush for CLI providers with no transcript anchor", async () => {
     const registry = createEmptyPluginRegistry();
     registry.cliBackends.push({
       pluginId: "test-codex-cli",
@@ -1685,10 +1685,11 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    // CLI backends used to be excluded outright. They now attempt the flush;
-    // resolveCliMemoryFlushRearmBucket keeps the dedup honest for them.
-    expect(result.outcome).not.toBe("skipped");
-    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    // The exclusion now lifts only where a transcript-byte anchor can replace
+    // the compaction watermark. This session has no transcript size, so it
+    // keeps the original skip rather than flushing once and locking the dedup.
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("skips memory flush for incognito sessions", async () => {
@@ -1725,7 +1726,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("runs memory flush for compatible CLI session runtime pins", async () => {
+  it("skips memory flush for compatible CLI session runtime pins with no transcript anchor", async () => {
     registerClaudeCliBackend();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1754,8 +1755,8 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(result.outcome).not.toBe("skipped");
-    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -4252,7 +4253,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("keeps ownsNativeCompaction absolute over the SQLite transcript byte guard", async () => {
+  it("keeps ownsNativeCompaction absolute for compaction while the flush runs on the byte guard", async () => {
     registerClaudeCliBackend(true);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -4326,10 +4327,13 @@ describe("runMemoryFlushIfNeeded", () => {
       ...createCompactionLifecycle(createReplyOperation()),
     });
 
-    expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
+    // The transcript size gives this session a re-arm anchor, so the flush now
+    // runs where it previously could not. Compaction ownership is unchanged:
+    // the backend still owns it and OpenClaw still defers.
+    expect(flushResult.outcome).not.toBe("skipped");
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
     expect(preflightEntry).toBe(sessionEntry);
     expect(preflightEntry?.compactionCount).toBe(0);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 

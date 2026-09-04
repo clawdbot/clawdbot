@@ -310,7 +310,9 @@ describe("CLI memory-flush re-arm bucket", () => {
 
   it("keeps the compaction watermark when the byte anchor cannot apply", () => {
     // Not a CLI backend: compactionCount advances there, so it stays authoritative.
-    expect(resolveCliMemoryFlushRearmBucket({ isCli: false, transcriptByteSize: 1_000 })).toBeUndefined();
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: false, transcriptByteSize: 1_000 }),
+    ).toBeUndefined();
     // No transcript size to anchor on.
     expect(resolveCliMemoryFlushRearmBucket({ isCli: true })).toBeUndefined();
     expect(
