@@ -205,7 +205,12 @@ export async function createGatewayKernel(
       await coreRuntime.startEarlyRuntime();
     }
     return await runtime.startupTrace.measure("gateway.request-runtime", () =>
-      prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth }),
+      prepareGatewayKernelRequestRuntime({
+        coreRuntime,
+        log,
+        logHealth,
+        hostLifecycle: opts.hostLifecycle,
+      }),
     );
   } catch (error) {
     try {
