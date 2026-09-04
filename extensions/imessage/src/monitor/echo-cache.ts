@@ -13,6 +13,13 @@ type SentMessageLookup = {
 type SentMessageLookupOptions = {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  /**
+   * When true, a matching messageId alone is not sufficient — the normalized
+   * text must also match the same cached outbound entry. Used by the
+   * reply_to_guid echo probe so a legitimate inline reply that references a
+   * recent outbound GUID is not dropped solely on ID equality.
+   */
+  requireMessageIdTextMatch?: boolean;
 };
 
 export type SentMessageCache = {
@@ -105,6 +112,7 @@ class DefaultSentMessageCache implements SentMessageCache {
         messageId: lookup.messageId,
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
+        requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
       })
     ) {
       return true;
@@ -115,13 +123,31 @@ class DefaultSentMessageCache implements SentMessageCache {
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      if (
+        idTimestamp &&
+        Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS &&
+        !resolvedOptions.requireMessageIdTextMatch
+      ) {
         return true;
       }
       const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
       const textBackedByIdTimestamp = textKey
         ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
         : undefined;
+      // When requireMessageIdTextMatch is set, a matching messageId is only
+      // sufficient when the text was also recorded as part of the same
+      // outbound entry (textBackedByIdCache proves the GUID and text were
+      // sent together). This prevents dropping a legitimate inline reply
+      // that references a recent outbound GUID with different body text.
+      if (
+        resolvedOptions.requireMessageIdTextMatch &&
+        idTimestamp &&
+        Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS &&
+        textKey &&
+        textBackedByIdTimestamp
+      ) {
+        return true;
+      }
       const hasTextOnlyMatch =
         typeof textTimestamp === "number" &&
         (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);

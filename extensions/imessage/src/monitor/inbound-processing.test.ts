@@ -4,6 +4,7 @@ import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
+import { createSentMessageCache } from "./echo-cache.js";
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 type InboundProcessingModule = typeof import("./inbound-processing.js");
@@ -131,14 +132,9 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("drops paired mirror with reply_to_guid matching outbound echo cache guid", async () => {
-    const echoHas = vi.fn(
-      (_scope: string, lookup: { text?: string; messageId?: string }) => {
-        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
-          return true;
-        }
-        return false;
-      },
-    );
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
 
     const decision = await resolveDecision({
       message: {
@@ -149,21 +145,16 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Hello",
       bodyText: "Hello",
-      echoCache: { has: echoHas },
+      echoCache,
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
   });
 
   it("does not drop inline reply with reply_to_guid but different text", async () => {
-    const echoHas = vi.fn(
-      (_scope: string, lookup: { text?: string; messageId?: string }) => {
-        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
-          return true;
-        }
-        return false;
-      },
-    );
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
 
     const decision = await resolveDecision({
       message: {
@@ -174,21 +165,16 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Goodbye",
       bodyText: "Goodbye",
-      echoCache: { has: echoHas },
+      echoCache,
     });
 
     expect(decision.kind).toBe("dispatch");
   });
 
   it("does not drop message with identical text but unrelated reply_to_guid", async () => {
-    const echoHas = vi.fn(
-      (_scope: string, lookup: { text?: string; messageId?: string }) => {
-        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
-          return true;
-        }
-        return false;
-      },
-    );
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
 
     const decision = await resolveDecision({
       message: {
@@ -199,7 +185,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       },
       messageText: "Hello",
       bodyText: "Hello",
-      echoCache: { has: echoHas },
+      echoCache,
     });
 
     expect(decision.kind).toBe("dispatch");
