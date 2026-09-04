@@ -549,27 +549,33 @@ describe("zalouser monitor group mention gating", () => {
     return dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
   }
 
-  it("logs missing mentions once per group with verbose logging disabled", async () => {
+  it("logs missing mentions once with the authored scope after group-name resolution", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
     const runtime = { ...createRuntimeEnv(), log: vi.fn() };
+    const account = createAccount();
+    account.config = {
+      ...account.config,
+      dangerouslyAllowNameMatching: true,
+      groups: { "g-diagnostic": { requireMention: true } },
+    };
+    const config = { channels: { zalouser: { accounts: { default: account.config } } } };
     await processMessageThroughMonitor({
       messages: ["mention-drop-1", "mention-drop-2"].map((msgId) =>
         createGroupMessage({ threadId: "g-diagnostic", msgId }),
       ),
-      account: createAccount(),
-      config: createConfig(),
+      account,
+      config,
       runtime,
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(sendTypingZalouserMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledOnce();
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("zalouser: drop no mention target=g-diagnostic"),
-    );
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("requireMention=false"));
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Alice"));
+    const diagnostics = runtime.log.mock.calls.filter(([line]) => line.includes("drop no mention"));
+    expect(diagnostics).toEqual([
+      [expect.stringContaining('accounts["default"].groups["g-diagnostic"].requireMention=false')],
+    ]);
+    expect(diagnostics[0]?.[0]).not.toContain("Alice");
   });
 
   it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {

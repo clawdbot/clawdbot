@@ -357,7 +357,9 @@ If disabling SIP is not acceptable for your threat model:
     }
     ```
 
-    Replace `123` with the numeric chat ID from `imsg chats --limit 20 --json`. When adding a `groups` map to a setup that had none, `"*": {}` preserves admission to other groups while keeping their default mention requirement. If you already restrict chats with a `groups` map, retain that map and add only the per-chat override. `groupAllowFrom` still controls sender access. For an account override, use `channels.imessage.accounts.<account-id>.groups`, including `accounts.default.groups` when configured; account settings take precedence over the channel-level map.
+    Replace `123` with the numeric chat ID from `imsg chats --limit 20 --json`. Edit the map already supplying that account's group policy: `channels.imessage.groups`, or `channels.imessage.accounts.<account-id>.groups` when it overrides the root map. This also applies to `accounts.default.groups`; merely having an account entry does not mean its own `groups` map is needed. An empty account map inherits the root map only when at most one account is configured.
+
+    Preserve the existing wildcard and every per-group setting, changing only the target chat's `requireMention`. Account maps replace the whole inherited map, so if you intentionally create an account-specific override, first copy the complete inherited map, including all wildcard and per-group policies. When no map previously applied, `"*": {}` preserves admission to other groups while keeping their default mention requirement. Keep a restricted map restricted. `groupAllowFrom` still controls sender access.
 
     A skipped message with no mention produces a warning at the default log level with the chat ID and the `requireMention: false` fix. Repeated warnings for the same chat are suppressed by a bounded in-memory cache; restarting the channel or evicting a cache entry allows the warning again.
 
@@ -825,7 +827,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention gating: explicit patterns or the routed agent's identity name/emoji; set `channels.imessage.groups["<chat_id>"].requireMention: false` to process all messages from allowed senders
+    - mention gating: explicit patterns or the routed agent's identity name/emoji; set `requireMention: false` for the chat in the effective root or account `groups` map to process all messages from allowed senders
 
   </Accordion>
 

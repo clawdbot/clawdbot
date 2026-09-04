@@ -55,6 +55,13 @@ for that channel and reason. The process-local cache retains 512 recently used
 keys; evicted keys can log again. Omit `onceKey` for per-message logging. Keep
 message bodies and sender details out of default-level diagnostics.
 
+For a group-setting hint, use `resolveChannelGroupsConfigPath({ cfg, channel, accountId, groups })`
+from `openclaw/plugin-sdk/channel-policy`. Pass the exact groups map selected by
+the channel owner, without cloning it: `resolveChannelGroups(cfg, channel, accountId)`
+for shared group-policy resolution, or the resolved account's map for a plugin
+with its own inheritance rules. This identifies the authored root or account map
+without replacing inherited wildcard or per-group policies.
+
 For media-only inbound events, keep the message body and command text empty and
 pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
 history line or another text-only carrier must describe those facts, use

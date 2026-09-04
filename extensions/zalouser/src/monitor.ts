@@ -17,6 +17,7 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 // Zalouser plugin module implements monitor behavior.
@@ -225,6 +226,7 @@ async function processMessage(
   message: ZaloInboundMessage,
   account: ResolvedZalouserAccount,
   config: OpenClawConfig,
+  groupsConfigPath: string,
   core: ZalouserCoreRuntime,
   runtime: RuntimeEnv,
   historyState: ZalouserGroupHistoryState,
@@ -551,7 +553,7 @@ async function processMessage(
       reason: "no mention",
       target: chatId,
       onceKey: JSON.stringify([account.accountId, chatId]),
-      hint: `Mention patterns can be derived from the agent identity name. Set channels.zalouser.accounts[${JSON.stringify(account.accountId)}].groups[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
     });
     return;
   }
@@ -801,6 +803,13 @@ export async function monitorZalouserProvider(
   const { config } = options;
   let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
+  // Name resolution below copies the map; retain its authored scope before that projection.
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+    groups: account.config.groups,
+  });
 
   const core = getZalouserRuntime();
   const historyLimit = Math.max(
@@ -915,6 +924,7 @@ export async function monitorZalouserProvider(
         message,
         account,
         config,
+        groupsConfigPath,
         core,
         runtime,
         { historyLimit, groupHistories },

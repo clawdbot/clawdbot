@@ -211,12 +211,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   });
 
   it.each([
-    { reason: "from me", accountGroups: false },
-    { reason: "no mention", accountGroups: false },
-    { reason: "no mention", accountGroups: true },
+    { reason: "from me", groupScope: "none" },
+    { reason: "no mention", groupScope: "none" },
+    { reason: "no mention", groupScope: "account" },
+    { reason: "no mention", groupScope: "root" },
   ])(
-    "logs one diagnostic per chat for $reason drops (account groups: $accountGroups)",
-    async ({ reason, accountGroups }) => {
+    "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",
+    async ({ reason, groupScope }) => {
       vi.useRealTimers();
       installIMessageStateRuntimeForTest();
       const runtime = createRuntime();
@@ -264,10 +265,18 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
               dmPolicy: "open",
               groupPolicy: "allowlist",
               groupAllowFrom: ["+15550001111"],
-              ...(accountGroups
+              ...(groupScope !== "none"
                 ? {
-                    groups: { "*": { requireMention: false } },
-                    accounts: { default: { groups: { "*": { requireMention: true } } } },
+                    groups: {
+                      "*": { requireMention: groupScope === "root" },
+                      "999": { requireMention: false, tools: { deny: ["exec"] } },
+                    },
+                    accounts: {
+                      default:
+                        groupScope === "account"
+                          ? { groups: { "*": { requireMention: true } } }
+                          : {},
+                    },
                   }
                 : {}),
             },
@@ -298,11 +307,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       if (reason === "no mention") {
         expect(diagnostics[0]).toContain('groups["456"].requireMention=false');
         expect(diagnostics[0]).toContain("identity");
-        if (accountGroups) {
-          expect(diagnostics[0]).toContain(
-            'channels.imessage.accounts["default"].groups["456"].requireMention=false',
-          );
-        }
+        const groupsPath =
+          groupScope === "account"
+            ? 'channels.imessage.accounts["default"].groups'
+            : "channels.imessage.groups";
+        expect(diagnostics[0]).toContain(`${groupsPath}["456"].requireMention=false`);
       }
     },
   );

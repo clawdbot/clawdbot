@@ -19,6 +19,10 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
+} from "openclaw/plugin-sdk/channel-policy";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   ensureConfiguredBindingRouteReady,
@@ -278,6 +282,7 @@ const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no menti
 
 function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
+  groupsConfigPath: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
 }): string | null {
@@ -290,7 +295,7 @@ function describeIMessageInboundDropDiagnostic(params: {
       : "unknown";
   const mentionHint =
     params.reason === "no mention"
-      ? ` Mention the agent (default patterns come from its identity name/emoji), or set channels.imessage.accounts[${JSON.stringify(params.accountId)}].groups["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
+      ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
       : "";
   return (
     `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
@@ -356,6 +361,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const accountInfo = resolveIMessageAccount({
     cfg,
     accountId: opts.accountId,
+  });
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg,
+    channel: "imessage",
+    accountId: accountInfo.accountId,
+    groups: resolveChannelGroups(cfg, "imessage", accountInfo.accountId),
   });
   const approvalGatewayRuntime =
     opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
@@ -798,6 +809,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const diagnostic = describeIMessageInboundDropDiagnostic({
         accountId: accountInfo.accountId,
+        groupsConfigPath,
         reason: decision.reason,
         message,
       });
