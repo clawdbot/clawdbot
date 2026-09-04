@@ -329,6 +329,21 @@ describe("CLI memory-flush re-arm bucket", () => {
         2,
       ),
     ).toBe(false);
+    // A failed attempt carries its bucket for attribution but must not
+    // suppress: the retry and exhaustion lifecycle still owns that bucket.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "failed" as const, failureCount: 1, cliRearmBucket: 2 } },
+        2,
+      ),
+    ).toBe(false);
+    // Exhaustion records `succeeded`, which does suppress until the next bucket.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "succeeded" as const, compactionCount: 0, cliRearmBucket: 2 } },
+        2,
+      ),
+    ).toBe(true);
     expect(hasAlreadyFlushedForCliRearmBucket(undefined, 0)).toBe(false);
     expect(hasAlreadyFlushedForCliRearmBucket({}, 0)).toBe(false);
   });

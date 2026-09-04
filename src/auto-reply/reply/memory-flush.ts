@@ -213,12 +213,21 @@ export function resolveCliMemoryFlushRearmBucket(params: {
   return Math.floor(Math.max(0, transcriptByteSize) / rearmBytes);
 }
 
-/** True when this CLI session already flushed for the current byte bucket. */
+/**
+ * True when this CLI session already completed its flush for the current byte
+ * bucket.
+ *
+ * Only a `succeeded` record suppresses. A `failed` record carries the bucket so
+ * the failure can be attributed, but must not suppress: the retry and
+ * exhaustion lifecycle still owns that bucket until it either completes or
+ * gives up, and the exhausted path records `succeeded` when it does.
+ */
 export function hasAlreadyFlushedForCliRearmBucket(
   entry: Pick<SessionEntry, "memoryFlush"> | undefined,
   bucket: number,
 ): boolean {
-  return entry?.memoryFlush?.cliRearmBucket === bucket;
+  const memoryFlush = entry?.memoryFlush;
+  return memoryFlush?.kind === "succeeded" && memoryFlush.cliRearmBucket === bucket;
 }
 
 export function hasAlreadyFlushedForCurrentCompaction(
