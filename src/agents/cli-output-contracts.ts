@@ -134,6 +134,8 @@ export type CliJsonlStreamingParserOptions = {
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  /** Parent initialization fact; its authority owner validates the raw tool list. */
+  onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
 };

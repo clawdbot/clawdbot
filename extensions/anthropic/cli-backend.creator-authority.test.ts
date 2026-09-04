@@ -5,7 +5,7 @@ describe("Claude CLI cron creator authority", () => {
   it("projects native tools into canonical OpenClaw capabilities", () => {
     const project = buildAnthropicCliBackend().projectNativeToolAuthority;
 
-    expect(project?.(undefined)).toEqual([
+    expect(project?.(["Read", "Write", "Edit", "Bash", "WebFetch", "WebSearch"])).toEqual([
       "read",
       "write",
       "edit",

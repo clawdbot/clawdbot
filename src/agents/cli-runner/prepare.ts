@@ -1212,27 +1212,19 @@ export async function prepareCliRunContext(
   const restrictedLoopbackToolsAllow =
     params.cliToolAvailability?.openClaw ??
     (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
-  // Node-native tools cannot authorize Gateway-host jobs. Validate before minting
-  // the grant, then apply the run's web-search restriction to the native projection.
-  let nativeCronCreatorToolAllowlist =
+  // Native settings can remove tools after argv selection. Only a parent runtime
+  // initialization may fill this turn's pending authority; node tools stay local.
+  const projectNativeToolAuthority =
     !skipsTurnPreparation && params.disableTools !== true && !nodeClaudePlacement
-      ? backendResolved.projectNativeToolAuthority?.(params.cliToolAvailability?.native)
+      ? backendResolved.projectNativeToolAuthority
       : undefined;
-  assertNativeCronCreatorCapabilities(nativeCronCreatorToolAllowlist ?? []);
-  if (params.toolOverrides?.webSearch === false) {
-    nativeCronCreatorToolAllowlist = nativeCronCreatorToolAllowlist?.filter(
-      (name) => name !== "web_search",
-    );
-  }
   const mcpGrantContext = mcpContextBase
     ? {
         ...mcpContextBase,
         ...(restrictedLoopbackToolsAllow !== undefined
           ? { toolsAllow: [...restrictedLoopbackToolsAllow] }
           : {}),
-        ...(nativeCronCreatorToolAllowlist?.length
-          ? { nativeCronCreatorToolAllowlist: [...nativeCronCreatorToolAllowlist] }
-          : {}),
+        ...(projectNativeToolAuthority ? { nativeCronCreatorToolAllowlist: null } : {}),
       }
     : undefined;
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
@@ -1289,6 +1281,7 @@ export async function prepareCliRunContext(
       mcpClientGrant && mcpLoopbackRuntime
         ? (() => {
             let activeToken = mcpClientGrant.token;
+            let activeCapture: ReturnType<typeof activateMcpLoopbackClientGrantCapture> = false;
             return {
               transportToken: mcpClientGrant.token,
               adoptProcessToken: (processToken: string) => {
@@ -1322,6 +1315,7 @@ export async function prepareCliRunContext(
                     "CLI MCP client grant is no longer valid for this Gateway runtime",
                   );
                 }
+                activeCapture = activated;
               },
               deactivate: (captureKey: string) => {
                 prepareDeps.deactivateMcpLoopbackClientGrantCapture({
@@ -1330,6 +1324,37 @@ export async function prepareCliRunContext(
                   captureKey,
                 });
               },
+              ...(projectNativeToolAuthority
+                ? {
+                    captureNativeTools: (tools: unknown) => {
+                      params.assertCurrent?.();
+                      params.abortSignal?.throwIfAborted();
+                      if (!activeCapture || !activeCapture.captureNativeToolAuthority(null)) {
+                        throw new Error("Native tool authority capture is no longer active.");
+                      }
+                      if (
+                        !Array.isArray(tools) ||
+                        !tools.every((name): name is string => typeof name === "string")
+                      ) {
+                        throw new Error(
+                          "Native runtime reported an invalid tool list; start a fresh session.",
+                        );
+                      }
+                      const selected = params.cliToolAvailability?.native;
+                      const capabilities = projectNativeToolAuthority(
+                        selected ? tools.filter((name) => selected.includes(name)) : tools,
+                      );
+                      assertNativeCronCreatorCapabilities(capabilities);
+                      const allowed = capabilities.filter(
+                        (name) =>
+                          name !== "web_search" || params.toolOverrides?.webSearch !== false,
+                      );
+                      if (!activeCapture.captureNativeToolAuthority(allowed)) {
+                        throw new Error("Native tool authority capture is no longer active.");
+                      }
+                    },
+                  }
+                : {}),
             };
           })()
         : undefined;

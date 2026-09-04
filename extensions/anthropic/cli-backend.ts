@@ -70,15 +70,13 @@ const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
   websearch: "web_search",
 };
 
-function projectClaudeNativeToolAuthority(
-  nativeTools: readonly string[] | undefined,
-): readonly string[] {
-  const selected = nativeTools && new Set(nativeTools.map((name) => name.trim().toLowerCase()));
-  // Mapping order keeps persisted caps deterministic; undefined selects the default surface.
+function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
+  const selected = new Set(nativeTools.map((name) => name.trim().toLowerCase()));
+  // Mapping order keeps persisted caps deterministic across native initialization events.
   return [
     ...new Set(
       Object.entries(CLAUDE_NATIVE_TOOL_CAPABILITIES)
-        .filter(([name]) => selected === undefined || selected.has(name))
+        .filter(([name]) => selected.has(name))
         .map(([, capability]) => capability),
     ),
   ];

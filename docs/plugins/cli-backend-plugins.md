@@ -245,7 +245,7 @@ only for behavior that really belongs to the backend.
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
 | `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
-| `projectNativeToolAuthority`       | Map the enforced native tool list to canonical capabilities for cron caps   |
+| `projectNativeToolAuthority`       | Map the observed native tool list to canonical capabilities for cron caps   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
@@ -326,13 +326,18 @@ backend without a complete declared enforcement path fails before execution.
 
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its
-sessions keep the creator's native capabilities. The input is the same host
-contract: `toolAvailability.native` (the exact enforced list) or `undefined` for
-the backend's declared default surface. Return only canonical names from the
+sessions keep the creator's native capabilities. For Claude stream-JSON, the
+input is the parent turn's `system/init.tools` list, intersected with
+`toolAvailability.native` when a host selection exists. Managed native settings
+can remove tools after CLI argument selection, so defaults are never inferred.
+Each turn starts with pending authority: MCP discovery remains available, but
+tool calls reject visibly until initialization supplies the list. Warm turns
+cannot borrow a previous turn's snapshot. Return only canonical names from the
 core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `web_search`, `web_fetch`), each derived from a native tool the host enforces
-through this contract. Core validates the result before the loopback grant is
-minted and again at the final creator-cap capture; any other name fails the turn.
+through this contract. Core validates the result before updating the active
+loopback grant and again at final creator-cap capture; any other name fails the
+turn. Updating the snapshot invalidates earlier cached tool projections.
 Project only equivalent capabilities: Claude's `Glob` locates paths and
 `NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
 The native list contains tool names, not permission-rule patterns.

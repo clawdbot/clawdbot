@@ -56,8 +56,8 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
-  /** Canonical authority projected from native tools by the trusted CLI backend owner. */
-  nativeCronCreatorToolAllowlist?: string[];
+  /** Canonical observed native authority; null awaits this turn's initialization. */
+  nativeCronCreatorToolAllowlist?: string[] | null;
   skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into
@@ -280,7 +280,7 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   token: string;
   runtimeOwnerToken: string;
   captureKey: string;
-}): boolean {
+}): false | { captureNativeToolAuthority: (toolNames: readonly string[] | null) => boolean } {
   const captureKey = params.captureKey.trim();
   if (!captureKey) {
     throw new Error("activateMcpLoopbackClientGrantCapture: captureKey is required");
@@ -289,8 +289,48 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
     return false;
   }
-  clientGrantsByToken.set(params.token, { ...grant, activeCaptureKey: captureKey });
-  return true;
+  let activeGrant = {
+    ...grant,
+    activeCaptureKey: captureKey,
+    context: {
+      ...grant.context,
+      ...(grant.context.nativeCronCreatorToolAllowlist !== undefined
+        ? { nativeCronCreatorToolAllowlist: null }
+        : {}),
+    },
+  };
+  clientGrantsByToken.set(params.token, activeGrant);
+  const admission = grant.admittedRunContext;
+  const authority = admission && getAdmittedRunDelegatedAuthority(admission);
+  return {
+    captureNativeToolAuthority: (toolNames) => {
+      // The closure owns this exact activation, including across warm-process turns.
+      // Rebinding, deactivation, or admission closure fences retained observers.
+      if (
+        !authority ||
+        !admission ||
+        clientGrantsByToken.get(params.token) !== activeGrant ||
+        getAdmittedRunDelegatedAuthority(admission) !== authority ||
+        activeGrant.context.nativeCronCreatorToolAllowlist === undefined
+      ) {
+        return false;
+      }
+      activeGrant = {
+        ...activeGrant,
+        context: {
+          ...activeGrant.context,
+          nativeCronCreatorToolAllowlist: toolNames === null ? null : [...toolNames],
+        },
+      };
+      clientGrantsByToken.set(params.token, activeGrant);
+      // Discovery can precede native initialization; discard its earlier cap snapshot.
+      notifyMcpLoopbackClientGrantRevoked({
+        token: params.token,
+        runtimeOwnerToken: params.runtimeOwnerToken,
+      });
+      return true;
+    },
+  };
 }
 
 /** Release only the attempt that still owns this grant's active capture. */
