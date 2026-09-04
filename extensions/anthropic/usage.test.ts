@@ -138,7 +138,9 @@ describe("Anthropic provider usage", () => {
       resolveApiKeyFromConfigAndStore: () => undefined,
       resolveOAuthToken: async () => null,
     });
-    if (!("token" in auth) || !auth.token) throw new Error("expected synthetic admin credential");
+    if (!("token" in auth) || !auth.token) {
+      throw new Error("expected synthetic admin credential");
+    }
     const snapshot = await fetchAnthropicUsage({
       config: {},
       env: {},
