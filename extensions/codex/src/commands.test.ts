@@ -213,14 +213,16 @@ function createResumeControlRequest(
       requestOptions?: CodexControlRequestOptions,
     ) => {
       const value = typeof response === "function" ? await response() : response;
+      const assertCurrent = requestOptions?.assertCurrent ?? (() => undefined);
+      assertCurrent();
       await requestOptions?.beforeRequest?.(
         async <T>() => ({ thread: value.thread }) as T,
         client,
-        { assertCurrent: () => undefined },
+        { assertCurrent },
       );
       await requestOptions?.onResponse?.(value, client, {
         ...auth,
-        assertCurrent: () => undefined,
+        assertCurrent,
       });
       return value;
     },
@@ -1409,7 +1411,68 @@ describe("codex command", () => {
     },
   );
 
-  it("rejects a resume whose adopted binding advances while waiting for the native queue", async () => {
+  it.each([false, true])(
+    "rejects a resume whose host generation advances while waiting for the native queue (binding advances: %s)",
+    async (advanceBinding) => {
+      const context = await createCodexRuntimeContextOverrides();
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionKey: context.sessionKey,
+      };
+      await upsertSessionEntry({
+        storePath: context.sessionTarget.storePath,
+        sessionKey: context.sessionKey,
+        entry: { sessionId: "session-1", previousSessionId: "session-old", updatedAt: Date.now() },
+      });
+      await writeTestBinding(
+        { ...identity, sessionId: "session-old" },
+        { threadId: "thread-existing", cwd: "/repo" },
+      );
+      let releaseQueue!: () => void;
+      const queueBlocked = new Promise<void>((resolve) => {
+        releaseQueue = resolve;
+      });
+      const queue = withCodexAppServerThreadMutation("thread-resumed", () => queueBlocked);
+      const codexControlRequest = createResumeControlRequest(
+        createThreadResumeResponse({ threadId: "thread-resumed" }),
+      );
+      const command = runCommand("resume thread-resumed", { codexControlRequest }, context);
+      try {
+        await vi.waitFor(() =>
+          expect(
+            testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
+          ).toMatchObject({ threadId: "thread-existing" }),
+        );
+        await upsertSessionEntry({
+          storePath: context.sessionTarget.storePath,
+          sessionKey: context.sessionKey,
+          entry: { sessionId: "session-2", previousSessionId: "session-1", updatedAt: Date.now() },
+        });
+        if (advanceBinding) {
+          await expect(
+            testCodexAppServerBindingStore.adoptSessionGeneration(
+              { ...identity, sessionId: "session-2" },
+              "session-1",
+            ),
+          ).resolves.toBe("adopted");
+        }
+      } finally {
+        releaseQueue();
+        await queue;
+      }
+      expect((await command).text).toContain("Codex session generation is no longer current");
+      expect(codexControlRequest).not.toHaveBeenCalled();
+      expect(
+        testCodexAppServerBindingStore.read({
+          ...identity,
+          sessionId: advanceBinding ? "session-2" : "session-1",
+        }),
+      ).toMatchObject({ threadId: "thread-existing" });
+    },
+  );
+
+  it("rejects resumed-thread publication when the verified host generation changes during RPC", async () => {
     const context = await createCodexRuntimeContextOverrides();
     const identity = { kind: "session" as const, agentId: "main", sessionKey: context.sessionKey };
     await upsertSessionEntry({
@@ -1421,40 +1484,21 @@ describe("codex command", () => {
       { ...identity, sessionId: "session-old" },
       { threadId: "thread-existing", cwd: "/repo" },
     );
-    let releaseQueue!: () => void;
-    const queueBlocked = new Promise<void>((resolve) => {
-      releaseQueue = resolve;
-    });
-    const queue = withCodexAppServerThreadMutation("thread-resumed", () => queueBlocked);
-    const codexControlRequest = createResumeControlRequest(
-      createThreadResumeResponse({ threadId: "thread-resumed" }),
-    );
-    const command = runCommand("resume thread-resumed", { codexControlRequest }, context);
-    try {
-      await vi.waitFor(() =>
-        expect(
-          testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
-        ).toMatchObject({ threadId: "thread-existing" }),
-      );
+    const codexControlRequest = createResumeControlRequest(async () => {
       await upsertSessionEntry({
         storePath: context.sessionTarget.storePath,
         sessionKey: context.sessionKey,
         entry: { sessionId: "session-2", previousSessionId: "session-1", updatedAt: Date.now() },
       });
-      await expect(
-        testCodexAppServerBindingStore.adoptSessionGeneration(
-          { ...identity, sessionId: "session-2" },
-          "session-1",
-        ),
-      ).resolves.toBe("adopted");
-    } finally {
-      releaseQueue();
-      await queue;
-    }
-    expect((await command).text).toContain("Codex session generation is no longer current");
-    expect(codexControlRequest).not.toHaveBeenCalled();
+      return createThreadResumeResponse({ threadId: "thread-resumed" });
+    });
+
+    const result = await runCommand("resume thread-resumed", { codexControlRequest }, context);
+
+    expect(result.text).toContain("Codex session generation is no longer current");
+    expect(codexControlRequest).toHaveBeenCalledOnce();
     expect(
-      testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-2" }),
+      testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
     ).toMatchObject({ threadId: "thread-existing" });
   });
 
@@ -1803,20 +1847,18 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createSandboxedContext("goal", sessionFile), {
         deps: createDeps({
-          codexControlRequest: vi.fn(
-            async (): Promise<JsonValue> => ({
-              goal: {
-                threadId: "thread-status",
-                objective: "Inspect status",
-                status: "active",
-                tokenBudget: null,
-                tokensUsed: 0,
-                timeUsedSeconds: 0,
-                createdAt: 1,
-                updatedAt: 1,
-              },
-            }),
-          ),
+          codexControlRequest: vi.fn(async (): Promise<JsonValue> => ({
+            goal: {
+              threadId: "thread-status",
+              objective: "Inspect status",
+              status: "active",
+              tokenBudget: null,
+              tokensUsed: 0,
+              timeUsedSeconds: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          })),
         }),
       }),
     ).resolves.toEqual({

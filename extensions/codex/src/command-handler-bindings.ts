@@ -339,11 +339,15 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
+  let assertHostGeneration: (() => void) | undefined;
   const reclaimed = await reclaimCurrentCodexSessionGeneration({
     bindingStore: deps.bindingStore,
     identity,
     config: ctx.config,
     storePath: ctx.sessionTarget?.storePath,
+    onHostGenerationVerified: (assertCurrent) => {
+      assertHostGeneration = assertCurrent;
+    },
   });
   if (!reclaimed) {
     throw createCodexSessionGenerationSupersededError(identity.sessionId);
@@ -354,8 +358,10 @@ export async function resumeThread(
     threadId: normalizedThreadId,
     run: async () =>
       await deps.bindingStore.withLease(identity, async () => {
-        // Adoption precedes native ownership checks; queue waits must not admit a later generation.
+        // The host can rotate while its binding remains one generation behind.
+        // Keep both fences after native queue and binding lease waits.
         const generation = await deps.bindingStore.prepareSessionGenerationReclaim(identity);
+        assertHostGeneration?.();
         if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }
@@ -483,6 +489,7 @@ export async function resumeThread(
             authProfileId: currentBinding?.authProfileId,
             sessionKey: ctx.sessionKey,
             sessionId: ctx.sessionId,
+            assertCurrent: assertHostGeneration,
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
                 method: "thread/read",

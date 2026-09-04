@@ -378,6 +378,7 @@ export function scopeCodexRunBindingStore(params: {
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   assertCurrent?: () => void;
+  onHostGenerationVerified?: (assertCurrent: () => void) => void;
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
@@ -419,6 +420,7 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
       throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
     }
   };
+  params.onHostGenerationVerified?.(assertCurrent);
   if (previousSessionId === plan.expectedPreviousSessionId) {
     const adopted = await params.bindingStore.adoptSessionGeneration(
       params.identity,
