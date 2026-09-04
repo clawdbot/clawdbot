@@ -49,6 +49,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   createGatewayByteStream,
+  createImmutableFileValidators,
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
@@ -1927,10 +1928,10 @@ export async function handleManagedOutgoingMediaHttpRequest(
   }
 
   let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-  if (
+  const isPlayback =
     requestUrl.searchParams.get("playback") === "1" &&
-    (mediaKind === "audio" || mediaKind === "video")
-  ) {
+    (mediaKind === "audio" || mediaKind === "video");
+  if (isPlayback) {
     const playback = await resolvePlaybackTranscode({
       sourcePath: opened.realPath,
       sourceStat: opened.stat,
@@ -1965,9 +1966,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader(
     "cache-control",
-    hasValidMediaTicket
-      ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-      : "private, max-age=31536000, immutable",
+    isPlayback
+      ? "private, no-cache"
+      : hasValidMediaTicket
+        ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+        : "private, max-age=31536000, immutable",
   );
   res.setHeader(
     "content-disposition",
@@ -1975,6 +1978,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
   );
   const byteResponse = resolveByteResponse({
     file: opened.stat,
+    // Playback can replace a failed rendition with a successful one at the same URL.
+    validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
     method: req.method,
     request: req,
   });
