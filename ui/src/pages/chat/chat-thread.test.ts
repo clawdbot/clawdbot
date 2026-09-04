@@ -4532,6 +4532,38 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
+    const viewId = "cv_url_match";
+    const result = toolResultMessage(
+      "call-url-match",
+      "show_widget",
+      canvasToolOutput(viewId, "URL match", 320),
+      1_001,
+    );
+    const gatewayCopy = {
+      type: "canvas",
+      preview: {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      },
+    };
+    const groups = messageGroups({
+      messages: [
+        userMessage("Show the App", 1_000),
+        result,
+        assistantMessage([{ type: "text", text: "The App is ready." }, gatewayCopy], 1_002),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksAcross(group))).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 2)).content).toStrictEqual([
+      { type: "text", text: "The App is ready." },
+    ]);
+  });
+
   it("keeps an App preview row stable when live state becomes persisted history", () => {
     const paneId = "canvas-live-to-history";
     const liveGroups = messageGroups({

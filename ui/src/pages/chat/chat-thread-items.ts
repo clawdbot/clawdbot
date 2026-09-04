@@ -135,13 +135,17 @@ export function canvasPreviewBaseIdentity(
   source: ChatMessagePreview,
 ): string | null {
   const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-  const previewId = canvasPreviewArtifactIdentity(source.preview);
+  const previewId = canvasPreviewArtifactIdentities(source.preview)[0];
   return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
 }
 
-export function canvasPreviewArtifactIdentity(preview: unknown): string | null {
+export function canvasPreviewArtifactIdentities(preview: unknown): string[] {
   const record = asRecord(preview);
-  return normalizeOptionalString(record?.viewId) ?? normalizeOptionalString(record?.url) ?? null;
+  const viewId = normalizeOptionalString(record?.viewId);
+  const url = normalizeOptionalString(record?.url);
+  return [viewId ? `viewId:${viewId}` : null, url ? `url:${url}` : null].filter(
+    (identity): identity is string => identity !== null,
+  );
 }
 
 export function isProjectedCanvasAssistantMessage(message: unknown): boolean {

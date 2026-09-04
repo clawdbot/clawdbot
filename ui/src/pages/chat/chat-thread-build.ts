@@ -39,7 +39,7 @@ import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageItems,
-  canvasPreviewArtifactIdentity,
+  canvasPreviewArtifactIdentities,
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
@@ -116,10 +116,10 @@ function canvasAssistantItemKey(
 
 function stripPendingCanvasCopies(
   message: unknown,
-  pendingPreviewIds: ReadonlySet<string>,
+  pendingPreviewIdentities: ReadonlySet<string>,
 ): unknown {
   const record = asRecord(message);
-  if (!record || !Array.isArray(record.content) || pendingPreviewIds.size === 0) {
+  if (!record || !Array.isArray(record.content) || pendingPreviewIdentities.size === 0) {
     return message;
   }
   let changed = false;
@@ -128,8 +128,10 @@ function stripPendingCanvasCopies(
     if (entry?.type !== "canvas") {
       return true;
     }
-    const previewId = canvasPreviewArtifactIdentity(entry.preview);
-    if (!previewId || !pendingPreviewIds.has(previewId)) {
+    const matchesPending = canvasPreviewArtifactIdentities(entry.preview).some((identity) =>
+      pendingPreviewIdentities.has(identity),
+    );
+    if (!matchesPending) {
       return true;
     }
     changed = true;
@@ -161,7 +163,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
-  const pendingPersistedCanvasPreviewIds = new Set<string>();
+  const pendingPersistedCanvasPreviewIdentities = new Set<string>();
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
@@ -198,12 +200,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const role = normalizeRoleForGrouping(normalized.role);
-    if (role === "assistant" && pendingPersistedCanvasPreviewIds.size > 0) {
+    if (role === "assistant" && pendingPersistedCanvasPreviewIdentities.size > 0) {
       // Gateway history also embeds pending Canvas previews in the next visible
       // assistant message for clients that cannot render tool-result rows. The
       // Control UI already lifted those rows above, so keep only that causal copy.
-      const deduplicated = stripPendingCanvasCopies(msg, pendingPersistedCanvasPreviewIds);
-      pendingPersistedCanvasPreviewIds.clear();
+      const deduplicated = stripPendingCanvasCopies(msg, pendingPersistedCanvasPreviewIdentities);
+      pendingPersistedCanvasPreviewIdentities.clear();
       if (deduplicated !== msg) {
         msg = deduplicated;
         displayItem = { ...item, message: msg };
@@ -230,9 +232,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       persistedCanvasSource != null &&
       (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
     if (persistedCanvasSource && renderPersistedPreview) {
-      const previewId = canvasPreviewArtifactIdentity(persistedCanvasSource.preview);
-      if (previewId) {
-        pendingPersistedCanvasPreviewIds.add(previewId);
+      for (const identity of canvasPreviewArtifactIdentities(persistedCanvasSource.preview)) {
+        pendingPersistedCanvasPreviewIdentities.add(identity);
       }
       items.push({
         kind: "message",
