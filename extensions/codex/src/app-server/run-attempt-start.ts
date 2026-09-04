@@ -76,7 +76,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
     startupAuthRequirement,
-    abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -156,6 +155,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    // Capture native authority only after this exact client's managed-policy
+    // preflight succeeds; startup retries may have replaced the initial client.
+    await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
       ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
@@ -254,9 +256,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep(
       "codex-start-failure-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
-    );
-    await runCleanupStep("codex-start-failure-abort-listener", () =>
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
     throw error instanceof CodexThreadPolicyHandoffError
       ? error

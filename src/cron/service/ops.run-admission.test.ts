@@ -660,7 +660,7 @@ describe("cron service run admission", () => {
     expect(completedJob?.state.lastRunStatus).toBe("skipped");
   });
 
-  it("drops stale invalid-run notifications when the row changes before commit", async () => {
+  it("commits invalid-run state before notifying a subscriber that edits the job", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:06.200Z");
     const job = createDueIsolatedJob({
@@ -672,8 +672,9 @@ describe("cron service run admission", () => {
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const sendCronFailureAlert = vi.fn(async () => {});
-    const editedName = "edited before invalid-run commit";
+    const editedName = "edited after invalid-run commit";
     let edited = false;
+    let persistedStatusAtEvent: string | undefined;
     const state = createAdmissionTestState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -688,6 +689,9 @@ describe("cron service run admission", () => {
           return;
         }
         edited = true;
+        persistedStatusAtEvent = cronStoreModule
+          .loadCronJobsStoreSync(store.storePath)
+          .jobs.find((entry) => entry.id === job.id)?.state.lastRunStatus;
         openOpenClawStateDatabase()
           .db.prepare(
             "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.name', ?), updated_at = updated_at + 1 WHERE store_key = ? AND job_id = ?",
@@ -702,10 +706,11 @@ describe("cron service run admission", () => {
       reason: "invalid-spec",
     });
 
+    expect(persistedStatusAtEvent).toBe("skipped");
     const persisted = (await loadCronStore(store.storePath)).jobs[0];
     expect(persisted?.name).toBe(editedName);
-    expect(persisted?.state.lastRunStatus).toBeUndefined();
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    expect(persisted?.state.lastRunStatus).toBe("skipped");
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
   });
 
   it("keeps a same-millisecond replacement reservation when stale cleanup runs", async () => {

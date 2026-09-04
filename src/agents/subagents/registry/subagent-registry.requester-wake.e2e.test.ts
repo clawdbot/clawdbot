@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
+import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
@@ -298,6 +310,143 @@ describe("requester settle wake product flow", () => {
       },
     });
   };
+
+  it.each(
+    ["alpha", "beta"].flatMap((firstCompleted) =>
+      ["same", "distinct", "mixed-unbound", "yielded"].map((mode) => ({
+        firstCompleted,
+        binding: mode === "yielded" ? "same" : mode,
+        yieldedParent: mode === "yielded" ? "alpha" : undefined,
+      })),
+    ),
+  )(
+    "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent)",
+    async ({ firstCompleted, binding, yieldedParent }) => {
+      vi.setSystemTime(100_000);
+      const context = {} as GatewayRequestContext;
+      context.resolveGatewayContext = () => context;
+      const otherContext = {} as GatewayRequestContext;
+      otherContext.resolveGatewayContext = () => otherContext;
+      registry.initSubagentRegistry();
+      const activate = () => {
+        // Standalone registration can be wholly unbound, but cannot mix ambient
+        // routing with a captured owner. Restored rows have a separate activation gate.
+        if (binding !== "mixed-unbound") {
+          registry.activateSubagentRegistry(() => context);
+        }
+      };
+      activate();
+      const children = ["alpha", "beta"].map((name) => ({
+        name,
+        runId: `run-${name}`,
+        childSessionKey: `agent:main:subagent:${name}`,
+      }));
+      const resolvers: Array<GatewayRequestContext["resolveGatewayContext"]> = [];
+      for (const child of children) {
+        const requesterTurnRunId = `requester-${child.name}`;
+        const admission = prepareSystemAgentRunAdmission(
+          {},
+          requesterTurnRunId,
+          "main",
+          "requester-wake-test",
+        );
+        try {
+          const admitted = await admission.admit("embedded");
+          bindGatewayContextResolver(
+            admitted,
+            binding !== "same" && child.name === "beta"
+              ? binding === "distinct"
+                ? otherContext.resolveGatewayContext
+                : undefined
+              : context.resolveGatewayContext,
+          );
+          await withGatewayToolCallerIdentity(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: admitted,
+              agentId: "main",
+              sessionKey: MAIN_REQUESTER_SESSION_KEY,
+            }),
+            () => {
+              const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+              resolvers.push(gatewayContextResolver);
+              registry.registerSubagentRun(
+                createSubagentRunParams({
+                  ...child,
+                  requesterTurnRunId,
+                  requesterAgentId: "main",
+                  expectsCompletionMessage: true,
+                  gatewayContextResolver,
+                }),
+              );
+            },
+          );
+          if (child.name === yieldedParent) {
+            await createSessionsYieldTool({
+              sessionId: "sess-main",
+              claimYield: () =>
+                registry.markRequesterTurnYielded({
+                  requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+                  requesterAgentId: "main",
+                  requesterTurnRunId,
+                }) > 0,
+              onYield: () => {},
+            }).execute(`yield-${child.name}`, {});
+          }
+          registry.settleRequesterAfterSessionSpawns({
+            requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+            requesterAgentId: "main",
+            requesterTurnRunId,
+            requesterYielded: child.name === yieldedParent,
+            acceptedSessionSpawns: [child],
+          });
+        } finally {
+          admission.close();
+        }
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(resolvers[0]).not.toBe(resolvers[1]);
+      expect(resolvers[0]?.()).toBe(context);
+      expect(resolvers[1]?.()).toBe(
+        binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
+      );
+      const completionOrder = firstCompleted === "alpha" ? children : children.toReversed();
+      const first = completionOrder[0]!;
+      const second = completionOrder[1]!;
+      emitCompleted(first.runId, first.childSessionKey, `${first.name} complete`);
+      if (first.name === yieldedParent) {
+        // Yielded completion stays owned by its frozen wake until every child settles.
+        await vi.waitFor(() =>
+          expect(registry.getSubagentRunByRunId(first.runId)).toMatchObject({
+            execution: { status: "terminal" },
+            cleanupCompletedAt: expect.any(Number),
+            requesterSettleWake: { rearmGeneration: 1 },
+          }),
+        );
+      } else {
+        await waitForDeliveredCleanup(first.runId, { allowPendingRequesterSettleWake: true });
+      }
+      expect(getRequesterWakeCalls()).toHaveLength(0);
+      activate();
+      activate();
+      children.forEach((child, index) => {
+        const row = registry.getSubagentRunByRunId(child.runId)!;
+        expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        expect(row.requesterTurnRunId).toBeUndefined();
+      });
+      emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
+      await waitForDeliveredCleanup(second.runId, { allowPendingRequesterSettleWake: true });
+      activate();
+      await registry.testing.sweepOnceForTests();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(getRequesterWakeCalls()).toHaveLength(binding === "same" ? 1 : 0);
+      for (const child of children) {
+        expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+          delivery: { status: "delivered" },
+          requesterSettleWake: undefined,
+        });
+      }
+    },
+  );
 
   it.each([
     { name: "delivers the visible requester final", rejectRequesterWake: false },

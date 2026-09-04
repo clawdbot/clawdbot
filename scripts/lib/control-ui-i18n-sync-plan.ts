@@ -16,8 +16,6 @@ export type GlossaryEntry = {
 
 export type TranslationMemoryEntry = {
   cache_key: string;
-  model: string;
-  provider: string;
   segment_id: string;
   // Aliases share their primary segment's source hash and translated text.
   segment_ids?: string[];
@@ -34,8 +32,6 @@ export type LocaleMeta = {
   fallbackKeys: string[];
   generatedAt: string;
   locale: string;
-  model: string;
-  provider: string;
   sourceHash: string;
   totalKeys: number;
   translatedKeys: number;
@@ -63,21 +59,6 @@ export function flattenTranslations(
     flattenTranslations(nested, fullKey, out);
   }
   return out;
-}
-
-export function resolveLocaleMetaProvenance(options: {
-  didTranslate: boolean;
-  model: string;
-  previousMeta: LocaleMeta | null;
-  provider: string;
-}): { model: string; provider: string } {
-  if (options.didTranslate) {
-    return { model: options.model, provider: options.provider };
-  }
-  return {
-    model: options.previousMeta?.model ?? options.model,
-    provider: options.previousMeta?.provider ?? options.provider,
-  };
 }
 
 export function createControlUiLocaleSyncPlan(input: {
@@ -114,6 +95,10 @@ export function createControlUiLocaleSyncPlan(input: {
   for (const [key, text] of input.sourceFlat.entries()) {
     const textHash = input.hashText(text);
     const segmentCacheKey = input.cacheKeyFor(key, textHash);
+    if (input.force && input.allowTranslate) {
+      pending.push({ cacheKey: segmentCacheKey, key, text, textHash });
+      continue;
+    }
     const exactSegment = translationMemoryBySegment.get(key);
     const cached =
       translationMemory.get(segmentCacheKey) ??
@@ -161,8 +146,6 @@ export function createControlUiLocaleSyncPlan(input: {
       batch: readonly TranslationBatchItem[],
       translated: ReadonlyMap<string, string>,
       metadata: {
-        model: string;
-        provider: string;
         sourceLocale: string;
         updatedAt: () => string;
       },
@@ -175,8 +158,6 @@ export function createControlUiLocaleSyncPlan(input: {
         nextFlat.set(item.key, value);
         translationMemory.set(item.cacheKey, {
           cache_key: item.cacheKey,
-          model: metadata.model,
-          provider: metadata.provider,
           segment_id: item.key,
           source_path: `ui/src/i18n/locales/${input.entry.fileName}`,
           src_lang: metadata.sourceLocale,
@@ -192,8 +173,6 @@ export function createControlUiLocaleSyncPlan(input: {
       defaultGlossary: readonly GlossaryEntry[];
       generatedAt: string;
       glossary: readonly GlossaryEntry[];
-      model: string;
-      provider: string;
       workflow: number;
     }) {
       for (const item of pending) {
@@ -221,8 +200,6 @@ export function createControlUiLocaleSyncPlan(input: {
         !previousMeta ||
         previousMeta.locale !== input.entry.locale ||
         previousMeta.sourceHash !== input.sourceHash ||
-        previousMeta.provider !== options.provider ||
-        previousMeta.model !== options.model ||
         previousMeta.totalKeys !== input.sourceFlat.size ||
         previousMeta.translatedKeys !== translatedKeys ||
         previousMeta.workflow !== options.workflow ||
@@ -231,8 +208,6 @@ export function createControlUiLocaleSyncPlan(input: {
         fallbackKeys: sortedFallbackKeys,
         generatedAt: semanticMetaChanged ? options.generatedAt : previousMeta.generatedAt,
         locale: input.entry.locale,
-        model: options.model,
-        provider: options.provider,
         sourceHash: input.sourceHash,
         totalKeys: input.sourceFlat.size,
         translatedKeys,
@@ -250,6 +225,7 @@ export function createControlUiLocaleSyncPlan(input: {
           input.sourceFlat,
           nextFlat,
           input.hashText,
+          input.cacheKeyFor,
         ),
       };
     },
@@ -265,6 +241,7 @@ function renderTranslationMemory(
   sourceFlat: ReadonlyMap<string, string>,
   translatedFlat: ReadonlyMap<string, string>,
   hashText: (text: string) => string,
+  cacheKeyFor: (key: string, textHash: string) => string,
 ): string {
   const bySegment = new Map(
     [...entries.values()].flatMap((entry) =>
@@ -299,8 +276,19 @@ function renderTranslationMemory(
     if (!source) {
       continue;
     }
-    const { segment_ids: _aliases, ...record } = source;
-    canonical.set(groupKey, { ...record, segment_id: key, text, text_hash: textHash });
+    // Project only public fields, including for reused legacy records. Cache
+    // keys must not fingerprint private model configuration either.
+    canonical.set(groupKey, {
+      cache_key: cacheKeyFor(key, textHash),
+      segment_id: key,
+      source_path: source.source_path,
+      src_lang: source.src_lang,
+      text,
+      text_hash: textHash,
+      tgt_lang: source.tgt_lang,
+      translated,
+      updated_at: source.updated_at,
+    });
   }
 
   const ordered = [...canonical.values()].toSorted((left, right) =>

@@ -1,10 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
-import { codeModeRetentionEntrypoint } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
+import {
+  codeModeDescriptionRetentionEntrypoint,
+  codeModeRetentionEntrypoint,
+} from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { cliRecoveryEntrypoints } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
+import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
@@ -19,12 +23,14 @@ export const vitestWorkerBuildEntries = {
   ...Object.fromEntries(
     [
       codeModeRetentionEntrypoint,
+      codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),
       sessionListCacheRetentionEntrypoint,
+      sessionChildCacheRetentionEntrypoint,
       nodeHostConfigRuntimeEntrypoint,
       channelIngressGatewayRestartEntrypoint,
       persistenceRuntimeEntrypoint,

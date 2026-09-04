@@ -405,6 +405,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
+    "config/sessions/session-model-context.worker":
+      "src/config/sessions/session-model-context.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     ...runtimeProcessBuildEntries,

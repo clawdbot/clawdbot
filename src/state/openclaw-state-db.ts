@@ -638,10 +638,10 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     if (!unpublished) {
       throw error;
     }
-    const cleanup = stateDbCache.closeOpenClawStateDatabaseHandle(unpublished);
-    if (cleanup.caught) {
+    const errors = stateDbCache.closeOpenClawStateDatabaseHandle(unpublished);
+    if (errors.length > 0) {
       throw createSqliteLifecycleAggregateError(
-        [error, ...cleanup.errors],
+        [error, ...errors],
         `Fresh OpenClaw state database open failed releasing access and closing its unpublished handle for ${pathname}.`,
         error,
       );

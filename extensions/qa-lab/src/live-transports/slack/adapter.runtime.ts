@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { acquireDebugProxyCaptureStore } from "openclaw/plugin-sdk/proxy-capture";
+import {
+  createDebugProxyCaptureReader,
+  type DebugProxyCaptureReader,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
@@ -127,7 +130,7 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
-  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
+  let captureReader: DebugProxyCaptureReader | undefined;
   const captureSessionId = `qa-slack-${randomUUID()}`;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
@@ -236,18 +239,18 @@ export async function createSlackQaTransportAdapter(
     driverBotUserId: driverIdentity.userId,
     driverClient,
     getMessageWriteCursor: () =>
-      captureStoreLease
+      captureReader
         ? getSlackQaMessageWriteCursor({
             sessionId: captureSessionId,
-            store: captureStoreLease.store,
+            store: captureReader,
           })
         : 0,
     readMessageWrites: async (afterRequestEventId) =>
-      captureStoreLease
+      captureReader
         ? await readSlackQaMessageWrites({
             afterRequestEventId,
             sessionId: captureSessionId,
-            store: captureStoreLease.store,
+            store: captureReader,
           })
         : [],
     sutAppToken: runtimeEnv.sutAppToken,
@@ -312,7 +315,7 @@ export async function createSlackQaTransportAdapter(
       OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
     }),
     prepareFlow: async (input) => {
-      captureStoreLease ??= acquireDebugProxyCaptureStore({
+      captureReader ??= createDebugProxyCaptureReader({
         env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
       });
       return await scenarioEnvironment.prepareFlow(input);
@@ -336,15 +339,10 @@ export async function createSlackQaTransportAdapter(
       pollingAbort.abort();
     },
     async cleanupAfterGatewayStop() {
-      // Credential release must still run when capture or heartbeat shutdown reports an error.
       try {
-        captureStoreLease?.release();
+        await heartbeat.stop();
       } finally {
-        try {
-          await heartbeat.stop();
-        } finally {
-          await lease.release();
-        }
+        await lease.release();
       }
     },
   };

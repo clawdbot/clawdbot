@@ -31,6 +31,7 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { providerReplayContextMatches } from "./provider-replay-context.js";
 import {
@@ -149,6 +150,53 @@ function normalizeResponsesReplayItemId(
 
 export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+}
+
+function orderResponsesAsyncToolResults(source: Context["messages"]): Context["messages"] {
+  const turnKey = (message: AssistantMessage) => {
+    // Early fragments keep this identity when the provider ID arrives at completion.
+    const id = message.turnId || message.responseId;
+    return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
+  };
+  const lastAssistant = new Map<string, number>();
+  for (const [index, message] of source.entries()) {
+    if (message.role === "assistant") {
+      const key = turnKey(message);
+      if (key) {
+        lastAssistant.set(key, index);
+      }
+    }
+  }
+  const owners = new Map<string, string>();
+  const pending = new Map<number, Context["messages"]>();
+  const ordered: Context["messages"] = [];
+  for (const [index, message] of source.entries()) {
+    if (message.role === "assistant") {
+      const key = turnKey(message);
+      if (key) {
+        for (const block of message.content) {
+          if (block.type === "toolCall" && block.async) {
+            owners.set(block.id, key);
+          }
+        }
+      }
+    }
+    const owner = message.role === "toolResult" ? owners.get(message.toolCallId) : undefined;
+    const lastIndex = owner ? lastAssistant.get(owner) : undefined;
+    if (lastIndex !== undefined && lastIndex > index) {
+      const results = pending.get(lastIndex) ?? [];
+      results.push(message);
+      pending.set(lastIndex, results);
+    } else {
+      ordered.push(message);
+    }
+    const results = pending.get(index);
+    if (results) {
+      ordered.push(...results);
+      pending.delete(index);
+    }
+  }
+  return ordered;
 }
 
 function parseOpenAIResponsesTextSignature(
@@ -292,7 +340,11 @@ function convertResponsesMessagesWithStyle(
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
           preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
         });
-  const transformedMessages = transformMessages(replayPlan.messages);
+  // Results are durable when jobs finish, but Responses continuation must replay
+  // every output fragment before adding results to that response's input suffix.
+  const transformedMessages = orderResponsesAsyncToolResults(
+    transformMessages(replayPlan.messages),
+  );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -343,6 +395,7 @@ function convertResponsesMessagesWithStyle(
     }
   }
   let msgIndex = 0;
+  const appendAssistant = createResponsesInputReplay(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
@@ -461,6 +514,7 @@ function convertResponsesMessagesWithStyle(
             ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: block.name,
+            ...(block.async ? { async: true } : {}),
             arguments: providerStyle
               ? JSON.stringify(block.arguments)
               : typeof block.arguments === "string"
@@ -470,9 +524,8 @@ function convertResponsesMessagesWithStyle(
           previousReplayItemWasReasoning = false;
         }
       }
-      if (output.length > 0) {
-        messages.push(...output);
-      } else if (providerStyle) {
+      appendAssistant(messages, output, msg);
+      if (output.length === 0 && providerStyle) {
         continue;
       }
     } else if (msg.role === "toolResult") {

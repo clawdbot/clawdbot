@@ -301,6 +301,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const harness = createAppServerHarness(async (method) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }

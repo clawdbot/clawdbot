@@ -124,7 +124,7 @@ type WatchNodeSession = {
   connId: string;
   invalidatedReason?: string;
   lastSeenAtMs: number;
-  expiresTimer: ReturnType<typeof setTimeout>;
+  expiresTimer?: ReturnType<typeof setTimeout>;
   queue: QueuedNodeEvent[];
   queuedBytes: number;
   waiter?: {
@@ -926,7 +926,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           nodeId: derivedDeviceId,
           connId,
           lastSeenAtMs: now(),
-          expiresTimer: setTimeout(() => undefined, SESSION_IDLE_MS),
           queue: [],
           queuedBytes: 0,
         };

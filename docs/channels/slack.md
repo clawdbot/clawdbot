@@ -1585,7 +1585,7 @@ In `progress` mode, Slack's native agent card is the default: the whole turn is 
 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation. Set `style: "card"` explicitly to retain a card while hiding tool progress.
 
 For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
@@ -1607,7 +1607,7 @@ For streamed preambles, Slack waits for the first complete preamble before creat
 }
 ```
 
-Slack still uses normal final delivery when the reply cannot safely replace the draft, including media, errors, oversized text, split block payloads, custom outbound identity, or an edit failure.
+Compact progress always uses normal final delivery, including for media and errors. Other draft modes use normal delivery when the reply cannot safely replace the draft, including oversized text, split block payloads, custom outbound identity, or an edit failure.
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
@@ -1617,8 +1617,8 @@ Both surfaces link the session with **Open in OpenClaw**, but only when that lin
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
-- Native streamed final answers wait for Slack's acknowledgement before delivery is marked successful. A later progress-card finalization failure does not discard an already acknowledged answer.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+- Native streamed replies wait for Slack's acknowledgement before delivery is marked successful. Each complete reply block flushes separately, including short blocks; routine progress updates still coalesce. A later progress-card finalization failure does not discard an already acknowledged reply.
+- Definite recipient or scope rejections fall back to normal delivery for buffered text. Ambiguous streaming failures (such as a lost response) report failure without replaying the unacknowledged text, because Slack may already have accepted it. Later payloads use normal delivery.
 
 Use draft preview instead of Slack native text streaming:
 

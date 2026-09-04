@@ -42,16 +42,16 @@ export function buildPlatformRuntimeLogHints(params: {
 
 export function buildPlatformServiceStartHints(params: {
   platform?: NodeJS.Platform;
-  installCommand: string;
+  installHint: string;
   startCommand: string;
   launchAgentPlistPath: string;
   systemdServiceName: string;
   windowsTaskName: string;
 }): string[] {
   const platform = params.platform ?? process.platform;
-  const base = [params.installCommand, params.startCommand];
-  // Native service-manager commands are supplemental hints; the OpenClaw
-  // commands stay first because they know the generated profile/env paths.
+  const base = [params.installHint, params.startCommand];
+  // Install guidance and the OpenClaw start command stay first; native manager
+  // commands are supplemental because they do not resolve profile/env paths.
   switch (platform) {
     case "darwin":
       return [...base, `launchctl bootstrap gui/$UID ${params.launchAgentPlistPath}`];

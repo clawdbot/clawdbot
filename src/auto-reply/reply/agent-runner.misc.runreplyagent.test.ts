@@ -445,11 +445,8 @@ afterEach(() => {
 });
 
 describe("runReplyAgent pending operator input", () => {
-  it("claims a direct CLI answer before active-run queueing", async () => {
-    const gatewayCall = vi.fn(async (_method, _opts, params) => ({
-      status: "answered",
-      answers: (params as { answers: { answers: Record<string, string[]> } }).answers,
-    }));
+  it("refuses an unbound question without falling through to active-run queueing", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "answered" }));
     const reservation = registerPendingAgentQuestion({
       questionId: "ask_direct_cli_answer",
       sessionKey: "main",
@@ -480,21 +477,16 @@ describe("runReplyAgent pending operator input", () => {
     });
 
     try {
-      await expect(testRun.run()).resolves.toBeUndefined();
-      expect(gatewayCall).toHaveBeenCalledWith(
-        "question.resolve",
-        {},
-        {
-          id: "ask_direct_cli_answer",
-          answers: { answers: { color: ["Green"] } },
-          resolvedBy: "plain-text",
-        },
-      );
+      await expect(testRun.run()).resolves.toEqual({
+        text: expect.stringContaining("pending question has no prepared creator authority"),
+        isError: true,
+      });
+      expect(gatewayCall).not.toHaveBeenCalled();
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(runCliAgentMock).not.toHaveBeenCalled();
       expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
       expect(replyOperationRunState).toEqual({
-        admission: { status: "accepted", mode: "steer" },
+        admission: { status: "skipped", reason: "question-response-refused" },
       });
     } finally {
       reservation.dispose();
@@ -1947,20 +1939,6 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
-        executionTrace: {
-          winnerProvider: "claude-cli",
-          winnerModel: "opus-4.5",
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "opus-4.5",
-              result: "error",
-              reason: "before_agent_run blocked the run",
-            },
-          ],
-          fallbackUsed: false,
-          runner: "cli",
-        },
       },
     });
 
@@ -1988,6 +1966,20 @@ describe("runReplyAgent claude-cli routing", () => {
         agentMeta: {
           provider: "claude-cli",
           model: "opus-4.5",
+        },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
         },
       },
     });
@@ -2032,7 +2024,10 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
-    expect(texts).toContain("fallbackUsed=no");
+    expect(texts).toContain("Summary: fallback=no attempts=1");
+    expect(texts).not.toContain("winner=");
+    expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
+    expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
 
