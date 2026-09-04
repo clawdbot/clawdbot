@@ -53,7 +53,7 @@ export function createUpdateProgress(
   const refresh = () => {
     const record = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
     if (!record) {
-      return;
+      return undefined;
     }
     currentPhase = record.phase;
     // A child process can cross several phases between reads. Replay the recorded
