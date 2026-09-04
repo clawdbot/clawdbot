@@ -315,23 +315,29 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
-  const forceExitAfterStabilityBundle = async (reason: string) => {
+  const forceExitAfterStabilityBundle = async (reason: string, exitCode = 1) => {
     void hostLifecycle?.retire();
     try {
       writeStabilityBundle(reason);
-    } finally {
-      const owner = getManagedUpdateOwner();
-      if (owner) {
-        forceActiveRestartExit?.();
-      }
-      const restoration = await cancelManagedUpdateHandoffBeforeRecovery(owner);
-      if (restoration) {
-        params.completeBoot?.({ outcome: "forced_stop", reason });
-        if (restoration === "restart-after-exit") {
-          await exitProcessAfterLogFlush(1, owner, "restore");
-        } else {
-          exitProcess(1);
-        }
+    } catch (error) {
+      gatewayLog.warn(`failed to write shutdown stability bundle: ${formatErrorMessage(error)}`);
+    }
+    const owner = getManagedUpdateOwner();
+    if (owner) {
+      forceActiveRestartExit?.();
+    }
+    const restoration = await cancelManagedUpdateHandoffBeforeRecovery(owner);
+    if (exitCode === 0) {
+      params.completeBoot?.({ outcome: "planned_restart", reason });
+      await exitProcessAfterLogFlush(0, undefined, "update");
+      return;
+    }
+    if (restoration) {
+      params.completeBoot?.({ outcome: "forced_stop", reason });
+      if (restoration === "restart-after-exit") {
+        await exitProcessAfterLogFlush(1, owner, "restore");
+      } else {
+        exitProcess(1);
       }
     }
   };
@@ -605,8 +611,10 @@ export async function runGatewayLoop(params: {
   };
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {
-    const { action, restartIntent } = acceptedRequest;
+    const { action, restartIntent, restartReason } = acceptedRequest;
     const isRestart = action === "restart";
+    const isAutomaticRecoveryRestart =
+      isRestart && restartReason === "cron.isolated_agent_setup_timeout";
     if (isRestart) {
       activeRestartRequest = acceptedRequest;
     }
@@ -620,6 +628,7 @@ export async function runGatewayLoop(params: {
         gatewayLog.error("shutdown timed out; exiting without full cleanup");
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+          isAutomaticRecoveryRestart ? 0 : 1,
         );
       }, forceExitMs);
       if (params.ownsProcessLifecycle === true) {
@@ -928,7 +937,14 @@ export async function runGatewayLoop(params: {
     // detached finalizers can drain before the signal tears down the gateway.
     markRestartDraining();
     shuttingDown = true;
-    gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
+    const audit = restartIntent?.audit;
+    gatewayLog.info(
+      `received ${signal}; ${isRestart ? "restarting" : "shutting down"}` +
+        (isRestart
+          ? ` reason=${restartReason ?? signal} actor=${audit?.actor ?? "unknown"}` +
+            ` jobId=${audit?.jobId ?? "none"} jobName=${audit?.jobName ?? "none"}`
+          : ""),
+    );
     if (isRestart) {
       startGatewayRestartTrace("restart.signal.received", [
         ["signal", signal],

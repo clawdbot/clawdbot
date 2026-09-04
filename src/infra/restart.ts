@@ -17,7 +17,11 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
-import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
+import {
+  type GatewayRestartIntent,
+  normalizeRestartIntentReason,
+  type RestartAuditInfo,
+} from "./restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -45,6 +49,7 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartAudit: RestartAuditInfo | undefined;
 let pendingRestartSuccessorOwner: GatewayRestartIntent["successorOwner"];
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
 let pendingRestartSessionKey: string | undefined;
@@ -68,6 +73,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  pendingRestartAudit = undefined;
   pendingRestartSuccessorOwner = undefined;
   pendingRestartEmitHooks = undefined;
   pendingRestartSessionKey = undefined;
@@ -154,13 +160,6 @@ export function resetGatewayRestartStateForInProcessRestart(): void {
     });
 }
 
-type RestartAuditInfo = {
-  actor?: string;
-  deviceId?: string;
-  clientIp?: string;
-  changedPaths?: string[];
-};
-
 function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
   if (!Array.isArray(paths) || paths.length === 0) {
     return null;
@@ -179,11 +178,16 @@ function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
   const clientIp =
     typeof audit?.clientIp === "string" && audit.clientIp.trim() ? audit.clientIp.trim() : null;
   const changed = summarizeChangedPaths(audit?.changedPaths);
+  const jobId = typeof audit?.jobId === "string" && audit.jobId.trim() ? audit.jobId.trim() : null;
+  const jobName =
+    typeof audit?.jobName === "string" && audit.jobName.trim() ? audit.jobName.trim() : null;
   const fields = [
     actor && `actor=${actor}`,
     deviceId && `device=${deviceId}`,
     clientIp && `ip=${clientIp}`,
     changed && `changedPaths=${changed}`,
+    jobId && `jobId=${jobId}`,
+    jobName && `jobName=${JSON.stringify(jobName.slice(0, 120))}`,
   ].filter(Boolean);
   return fields.length > 0 ? fields.join(" ") : "actor=<unknown>";
 }
@@ -556,14 +560,19 @@ async function emitPreparedGatewayRestartUnderAdmission(
     : undefined;
   const resolvedReason = preferredReason ?? reasonOverride;
   const successorOwner = pendingRestartSuccessorOwner ?? intent?.successorOwner;
+  const audit = intent?.audit ?? pendingRestartAudit;
   const resolvedIntent =
-    preferredReason || successorOwner
+    preferredReason || successorOwner || audit
       ? {
           ...intent,
           ...(resolvedReason ? { reason: resolvedReason } : {}),
           ...(successorOwner ? { successorOwner } : {}),
+          ...(audit ? { audit } : {}),
         }
       : intent;
+  restartLog.warn(
+    `emitting gateway restart reason=${resolvedReason ?? "unspecified"} ${formatRestartAudit(audit)}`,
+  );
   const emitResult = emitOwner?.emitRestart
     ? emitOwner.emitRestart(resolvedReason, resolvedIntent)
     : requestGatewayRestartWithSignalAdmission(resolvedReason, resolvedIntent);
@@ -1021,6 +1030,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   let nextPendingEmitHooks = opts?.emitHooks;
   let nextPendingSessionKey = opts?.sessionKey;
   let nextPendingReason = reason;
+  let nextPendingAudit = opts?.audit;
   let nextPendingSuccessorOwner = opts?.successorOwner;
 
   if (hasUnconsumedRestartSignal()) {
@@ -1064,6 +1074,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       );
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
+      pendingRestartAudit = opts?.audit;
       pendingRestartSuccessorOwner = opts?.successorOwner ?? pendingRestartSuccessorOwner;
       if (!preservePendingHooks) {
         pendingRestartEmitHooks = opts?.emitHooks;
@@ -1083,6 +1094,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     if (shouldPullEarlier) {
       if (shouldPreferRestartReason(pendingRestartReason, reason)) {
         nextPendingReason = pendingRestartReason;
+        nextPendingAudit = pendingRestartAudit;
       }
       nextPendingSuccessorOwner ??= pendingRestartSuccessorOwner;
       if (
@@ -1096,6 +1108,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartTimer = null;
         pendingRestartDueAt = requestedDueAt;
         pendingRestartReason = nextPendingReason;
+        pendingRestartAudit = nextPendingAudit;
         pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
         pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
         armPendingRestartTimer(requestedDueAt, nowMs);
@@ -1118,6 +1131,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       const restartReasonPromoted = shouldPreferRestartReason(reason, pendingRestartReason);
       if (restartReasonPromoted) {
         pendingRestartReason = reason;
+        pendingRestartAudit = opts?.audit;
       }
       pendingRestartSuccessorOwner = opts?.successorOwner ?? pendingRestartSuccessorOwner;
       pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
@@ -1152,6 +1166,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = nextPendingReason;
+  pendingRestartAudit = nextPendingAudit;
   pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
   pendingRestartEmitHooks = nextPendingEmitHooks;
   pendingRestartSessionKey = nextPendingSessionKey;

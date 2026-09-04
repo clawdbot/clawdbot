@@ -3,7 +3,13 @@ import {
   type GatewayActiveWorkBlocker,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
+import {
+  writeGatewayRestartRequestEvidenceSync,
+  type GatewayRestartRequestEvidence,
+} from "./restart-request-evidence.js";
+import type { RestartAuditInfo } from "./restart-intent.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import { getSchedulerPressureSnapshot } from "./scheduler-pressure.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
@@ -105,13 +111,29 @@ export function scheduleSafeGatewayRestart(
     skipDeferral?: boolean;
     preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
+    audit?: RestartAuditInfo;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const evidence: GatewayRestartRequestEvidence = {
+    reason: opts.reason,
+    ...(opts.audit ? { audit: opts.audit } : {}),
+    preflight: {
+      counts: preflight.counts,
+      blockers: preflight.blockers.slice(0, 12).map(({ kind, count, message }) => ({
+        kind,
+        count,
+        message: message.slice(0, 240),
+      })),
+    },
+    schedulerPressure: getSchedulerPressureSnapshot(),
+  };
+  writeGatewayRestartRequestEvidenceSync({ evidence });
   const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(opts.audit ? { audit: opts.audit } : {}),
     ...(opts.preservePendingEmitHooks === true || skipDeferral
       ? { preservePendingEmitHooksOnDeferralBypass: true }
       : {}),

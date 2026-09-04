@@ -28,10 +28,20 @@ type GatewayRestartIntentPayload = {
   waitMs?: number;
 };
 
+export type RestartAuditInfo = {
+  actor?: string;
+  deviceId?: string;
+  clientIp?: string;
+  changedPaths?: string[];
+  jobId?: string;
+  jobName?: string;
+};
+
 export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  audit?: RestartAuditInfo;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";

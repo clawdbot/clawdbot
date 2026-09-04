@@ -10,6 +10,20 @@ import {
 } from "./restart-coordinator.js";
 
 const scheduleGatewaySigusr1Restart = vi.hoisted(() => vi.fn());
+const writeGatewayRestartRequestEvidenceSync = vi.hoisted(() => vi.fn());
+
+vi.mock("./restart-request-evidence.js", () => ({
+  writeGatewayRestartRequestEvidenceSync: (params: unknown) =>
+    writeGatewayRestartRequestEvidenceSync(params),
+}));
+
+vi.mock("./scheduler-pressure.js", () => ({
+  getSchedulerPressureSnapshot: () => ({
+    pressured: true,
+    eventLoopDelayP99Ms: 750,
+    pressureUntil: 121_000,
+  }),
+}));
 
 vi.mock("./restart.js", () => ({
   scheduleGatewaySigusr1Restart: (opts: unknown) => scheduleGatewaySigusr1Restart(opts),
@@ -17,6 +31,7 @@ vi.mock("./restart.js", () => ({
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
+  writeGatewayRestartRequestEvidenceSync.mockReset().mockReturnValue(true);
   scheduleGatewaySigusr1Restart.mockReset().mockReturnValue({
     ok: true,
     pid: 123,
@@ -210,6 +225,53 @@ describe("safe gateway restart coordinator", () => {
     expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "test.safe",
+    });
+  });
+
+  it("records restart evidence and forwards audit metadata", () => {
+    const audit = {
+      actor: "cron",
+      jobId: "job-123",
+      jobName: "Hourly backup",
+    };
+
+    scheduleSafeGatewayRestart({
+      reason: "cron.isolated_agent_setup_timeout",
+      audit,
+      inspect: {
+        getQueueSize: () => 1,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getCronRuns: () => 1,
+        getBackgroundExecSessions: () => 0,
+        getRootRequests: () => 0,
+        getActiveTasks: () => 0,
+        getTaskBlockers: () => [],
+      },
+    });
+
+    expect(writeGatewayRestartRequestEvidenceSync).toHaveBeenCalledWith({
+      evidence: {
+        reason: "cron.isolated_agent_setup_timeout",
+        audit,
+        preflight: {
+          counts: expect.objectContaining({ queueSize: 1, cronRuns: 1, totalActive: 2 }),
+          blockers: expect.arrayContaining([
+            expect.objectContaining({ kind: "queue", count: 1 }),
+            expect.objectContaining({ kind: "cron-run", count: 1 }),
+          ]),
+        },
+        schedulerPressure: {
+          pressured: true,
+          eventLoopDelayP99Ms: 750,
+          pressureUntil: 121_000,
+        },
+      },
+    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+      audit,
+      delayMs: 0,
+      reason: "cron.isolated_agent_setup_timeout",
     });
   });
 
