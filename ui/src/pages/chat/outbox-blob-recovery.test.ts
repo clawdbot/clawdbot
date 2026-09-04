@@ -104,6 +104,20 @@ afterEach(() => {
 });
 
 describe("Blob-preserving metadata migration", () => {
+  it("stores attachment payloads when randomUUID is unavailable", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: <T extends Exclude<BufferSource, ArrayBuffer>>(array: T): T => {
+        new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
+        return array;
+      },
+    });
+
+    const host = hostFor();
+    const item = await prepare(host, "insecure-http");
+
+    await expectBytes(host, item);
+  });
+
   it("does not settle payload preparation under a pending connected recovery owner", async () => {
     const host = hostFor();
     const original = await prepare(host, "pending-owner");

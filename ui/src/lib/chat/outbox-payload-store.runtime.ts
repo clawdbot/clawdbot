@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { generateUUID } from "../uuid.ts";
 import type { ChatQueueItem, DurableComposerDraftAttachment } from "./chat-types.ts";
 import {
   openControlUiDatabase,
@@ -78,7 +79,7 @@ export async function writeOutboxPayload(
       owner.gatewayOwner,
       owner.recoveryScope,
       owner.queueId,
-      crypto.randomUUID(),
+      generateUUID(),
     ]);
     store.add({ key, owner, bytes, attachments } satisfies StoredPayload);
     await completed;
@@ -194,7 +195,7 @@ export function outboxPayloadTab(): Promise<string> {
           .catch(reject);
       });
     const previous = storage.getItem(TAB_STORAGE_KEY);
-    const id = previous && (await claim(previous)) ? previous : crypto.randomUUID();
+    const id = previous && (await claim(previous)) ? previous : generateUUID();
     if (id !== previous && !(await claim(id))) {
       throw new Error("Outbox ownership unavailable");
     }
