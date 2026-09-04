@@ -2,14 +2,19 @@ import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-a
 import { formatErrorMessage } from "../../infra/errors.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
-export function recordMessageToolOnlyRunOutcome(
+export function recordAgentTurnExecutionOutcome(
   params: AgentTurnParams,
   result: AgentTurnExecutionResult | undefined,
 ): void {
+  const executionStatus = resolveAgentTurnExecutionStatus(result?.outcome);
+  if (executionStatus !== "cancelled") {
+    params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
+  }
   const sourceReplyDeliveryMode =
     params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
   if (sourceReplyDeliveryMode !== "message_tool_only") {
@@ -26,22 +31,16 @@ export function recordMessageToolOnlyRunOutcome(
   const outcome = result?.outcome;
   const resolved =
     outcome?.kind === "settled" || outcome?.kind === "rejected" ? outcome.resolved : undefined;
-  const provider = resolved?.provider ?? params.followupRun.run.provider;
-  const model = resolved?.model ?? params.followupRun.run.model;
   const runStatus: "completed" | "errored" | "aborted" =
-    outcome?.kind === "aborted"
-      ? "aborted"
-      : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
-        ? "errored"
-        : "completed";
+    executionStatus === "ok" ? "completed" : executionStatus === "failed" ? "errored" : "aborted";
   const toolDelivered =
     outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
   const values = {
     runId: result?.runId ?? params.opts?.runId ?? "unknown",
     sessionKey,
     agentId: params.followupRun.run.agentId,
-    provider,
-    model,
+    provider: resolved?.provider ?? params.followupRun.run.provider,
+    model: resolved?.model ?? params.followupRun.run.model,
     outcome: toolDelivered ? ("tool_delivered" as const) : ("mute" as const),
     runStatus,
     occurredAt: Date.now(),

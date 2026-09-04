@@ -21,6 +21,7 @@ import {
 import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
+  normalizeManagedSessionListQuery,
   requestSessionList,
   requestSessionListParams,
 } from "./session-requests.ts";
@@ -62,11 +63,9 @@ export type SessionRefreshOutcome =
   | { status: "refreshed" | "stale" }
   | { status: "failed"; error: string };
 
-type ManagedSessionListQuery = Readonly<Record<string, unknown>> & { readonly limit: number };
-
 type ManagedSessionList = {
   key: string;
-  query: ManagedSessionListQuery;
+  query: ReturnType<typeof normalizeManagedSessionListQuery>;
   scope: SessionListScope;
   retainedLimit: number;
   connectionEpoch: number | null;
@@ -76,15 +75,6 @@ type ManagedSessionList = {
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
 };
-
-function normalizeManagedSessionListQuery(options: SessionListOptions): ManagedSessionListQuery {
-  const { offset: _offset, append: _append, ...queryOptions } = options;
-  const limit =
-    typeof options.limit === "number" && options.limit > 0
-      ? Math.floor(options.limit)
-      : DEFAULT_SESSION_LIST_QUERY.limit;
-  return Object.freeze({ ...buildSessionListParams({ ...queryOptions, limit }), limit });
-}
 
 function managedSessionListAgentId(entry: ManagedSessionList): string | undefined {
   return typeof entry.query.agentId === "string" ? entry.query.agentId : undefined;
@@ -205,7 +195,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       snapshot: { result: null, agentId: null, loading: false, error: null },
       listeners: new Set(),
       coordinator: createSessionEventRefreshCoordinator({
-        active: pageActive,
+        active: false,
         refresh: () => refreshManagedList(entry, { append: false, invalidated: true }),
       }),
       pending: null,
@@ -553,7 +543,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     pageActive = !markDirty && document.visibilityState !== "hidden";
     eventRefreshCoordinator.setActive(pageActive, markDirty || inFlight !== null);
     for (const entry of managedLists.values()) {
-      entry.coordinator.setActive(pageActive, markDirty || entry.pending !== null);
+      if (entry.listeners.size > 0) {
+        entry.coordinator.setActive(pageActive, markDirty || entry.pending !== null);
+      }
     }
   };
 
@@ -600,11 +592,15 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
       const entry = managedList(scope);
       entry.listeners.add(listener);
+      entry.coordinator.setActive(pageActive);
       return () => {
         entry.listeners.delete(listener);
         if (entry.listeners.size > 0 || managedLists.get(entry.key) !== entry) {
           return;
         }
+        // Keep invalidation dormant until observed again, without runnable queued work.
+        entry.coordinator.setActive(false, entry.queued !== null);
+        entry.queued = null;
         const release = () => {
           if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
             entry.coordinator.dispose();

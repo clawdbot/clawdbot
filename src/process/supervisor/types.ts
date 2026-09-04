@@ -66,6 +66,13 @@ export type SpawnSecretInput = {
   createData: () => Buffer;
 };
 
+export type ProcessAdapterConstruction = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+  /** Publish resource cleanup before readiness or private-input delivery can fail. */
+  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;

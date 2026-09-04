@@ -84,9 +84,7 @@ function expectServiceContexts(
   config: Parameters<typeof startPluginServices>[0]["config"],
 ) {
   expect(contexts).not.toHaveLength(0);
-  contexts.forEach((ctx) => {
-    expectServiceContext(ctx, config);
-  });
+  contexts.forEach((ctx) => expectServiceContext(ctx, config));
 }
 
 function expectServiceLifecycleState(params: {
@@ -906,7 +904,9 @@ describe("startPluginServices", () => {
     });
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
     expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
     emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "synthetic" });
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", phase: "received", method: "health" });
     emitTrustedDiagnosticEvent({
       type: "gateway.event_loop.sample",
       intervalMs: 1_000,
@@ -917,6 +917,7 @@ describe("startPluginServices", () => {
     await handle.stop();
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
     expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

@@ -106,7 +106,7 @@ suite.define(() => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
-      expect(await betaPane.locator(".side-panel").count()).toBe(0);
+      expect(await betaPane.locator('[data-region-header="side"]').isVisible()).toBe(false);
       expect(await betaPane.locator("openclaw-board-view").count()).toBe(0);
       await betaPane.getByRole("button", { name: "Side panel", exact: true }).click();
       await betaPane.locator('[data-board-tab-id="beta-main"]').waitFor();

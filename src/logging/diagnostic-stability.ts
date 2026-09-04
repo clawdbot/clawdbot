@@ -248,8 +248,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "gateway.rpc":
     case "gateway.event_loop.sample":
-      // Completed measurement windows are consumed by metrics exporters only.
+      // High-volume measurements are exporter-only and excluded by the subscription.
       break;
     case "model.usage":
       record.channel = event.channel;
@@ -864,7 +865,7 @@ export function startDiagnosticStabilityRecorder(): void {
       }
       appendRecord(sanitizeDiagnosticEvent(event));
     },
-    { exclude: ["log.record", "telemetry.exporter", "gateway.event_loop.sample"] },
+    { exclude: ["log.record", "telemetry.exporter", "gateway.rpc", "gateway.event_loop.sample"] },
   );
 }
 

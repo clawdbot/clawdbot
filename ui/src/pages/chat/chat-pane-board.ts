@@ -38,6 +38,8 @@ import {
   fitSidebarLayout,
   isSidebarSlotVisible,
   openSlot,
+  promoteSidebarPanel,
+  sidebarMainPanel,
   resizeSidebarPanel,
   setSidebarExpanded,
   sidebarDock,
@@ -183,7 +185,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.dashboardExpandedRouteKey = "";
     } else if (board.hasBoard && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
       this.dashboardExpandedRouteKey = sessionKey;
-      this.showDashboard(this.dashboardExpanded);
+      const savedLayout = this.context.theme.settings.sidebarSessionLayouts?.[sessionKey];
+      if (this.dashboardExpanded || !savedLayout) {
+        this.showDashboard(this.dashboardExpanded);
+      }
     }
     if (sessionKey && board.provider.hasLoadedSnapshot) {
       const previous = this.observedBoardPresence.get(sessionKey);
@@ -355,7 +360,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!state) {
       return;
     }
-    const layout = setSidebarExpanded(openSlot(state.sidebarLayout, "dashboard"), expanded);
+    let layout = openSlot(state.sidebarLayout, "dashboard");
+    if (expanded) {
+      const dashboard = layout.columns[0]?.panels.find((panel) => panel.slot === "dashboard");
+      if (dashboard) {
+        layout = promoteSidebarPanel(layout, dashboard.id);
+      }
+    } else if (sidebarMainPanel(layout)?.slot === "dashboard") {
+      layout = openSlot(layout, "conversation");
+    }
+    layout = setSidebarExpanded(layout, expanded);
     this.commitSidebarLayout(layout);
     this.persistBoardSessionView({ face: "dashboard" });
   }

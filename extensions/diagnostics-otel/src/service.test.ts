@@ -108,6 +108,7 @@ const unhandledRejectionHandlerState = vi.hoisted(() => {
 });
 
 vi.mock("@opentelemetry/api", async (importOriginal) => ({
+  createNoopMeter: (await importOriginal<typeof import("@opentelemetry/api")>()).createNoopMeter,
   ROOT_CONTEXT: (await importOriginal<typeof import("@opentelemetry/api")>()).ROOT_CONTEXT,
   context: {
     active: () => ({}),
@@ -1794,16 +1795,12 @@ describe("diagnostics-otel service", () => {
       { transport: "otlp-http-protobuf", status: "started" },
       { transport: "stdout", status: "started" },
     ]);
-    expect(
-      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
-    ).not.toHaveBeenCalled();
+    expect(telemetryState.counters.has("openclaw.telemetry.exporter.events")).toBe(false);
 
     await service.stop?.(ctx);
     await waitForDiagnosticEventsDrained();
     expect(events.map((event) => event.status)).toEqual(["started", "dropped"]);
-    expect(
-      telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
-    ).not.toHaveBeenCalled();
+    expect(telemetryState.counters.has("openclaw.telemetry.exporter.events")).toBe(false);
     unsubscribe();
   });
 
@@ -4764,7 +4761,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("exports model failover spans", async () => {
-    await startServiceFixture(["traces"]);
+    await startServiceFixture(["traces", "metrics"]);
 
     await emitTrustedEventAndFlush("model.failover", {
       sessionId: "session-1",

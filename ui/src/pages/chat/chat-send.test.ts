@@ -262,7 +262,7 @@ let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQ
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").removeDeliveredQueuedChatSendForRun;
-let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
+let removeQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
 let subscribeChatOutboxProjection: typeof import("./chat-queue.ts").subscribeChatOutboxProjection;
 let syncVisibleChatQueueProjection: typeof import("./chat-queue.ts").syncVisibleChatQueueProjection;
@@ -296,7 +296,7 @@ async function loadChatHelpers(): Promise<void> {
     removeDeliveredQueuedChatSendForRun,
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
-    removeVisibleOrScopedQueuedMessageWithoutReleasing,
+    removeQueuedMessageWithoutReleasing,
     readChatQueueForScope,
     subscribeChatOutboxProjection,
     syncVisibleChatQueueProjection,
@@ -3013,46 +3013,73 @@ describe("handleSendChat", () => {
     expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
   });
 
-  it.each([false, true])(
-    "preserves reader ownership across pending delivery with steer=%s",
-    async (steer) => {
+  it.each([
+    { message: "send while reading", delivery: "message" },
+    { message: "steer while reading", delivery: "steer" },
+    { message: "/help", delivery: "local" },
+    { message: "/steer send while reading", delivery: "local" },
+    { message: "/redirect send while reading", delivery: "local" },
+    { message: "/approve approval-123 allow-once", delivery: "approval" },
+  ])(
+    "preserves reader ownership across pending delivery of $message",
+    async ({ message, delivery }) => {
       const settings = createDeferred<boolean>();
       const ack = createDeferred<{ status: string; runId: string }>();
+      const command = createDeferred<Awaited<ReturnType<ExecuteSlashCommand>>>();
+      if (delivery === "local") {
+        executeSlashCommandMock.mockImplementationOnce(() => command.promise);
+      }
       const container = document.createElement("div");
       Object.defineProperties(container, {
         scrollHeight: { value: 2000 },
         clientHeight: { value: 400 },
       });
-      container.scrollTop = 1600;
-      const scrollToEnd = vi.fn(() => true);
+      container.scrollTop = 1200;
+      const scrollToEnd = vi.fn(() => {
+        container.scrollTop = 1600;
+        return true;
+      });
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
         callback(0);
         return 1;
       });
       const host = makeChatHost({
         requestHandlers: { "chat.send": () => ack.promise },
-        chatMessage: "send while reading",
-        chatRunId: steer ? "active-run" : null,
+        chatMessage: message,
+        chatRunId: delivery === "steer" || delivery === "approval" ? "active-run" : null,
         chatHasAutoScrolled: true,
+        chatFollowLocked: true,
+        chatUserNearBottom: false,
         chatScrollElement: () => container,
         chatScrollToEnd: scrollToEnd,
-        pendingSettingsPatches: { "agent:main": settings.promise },
+        pendingSettingsPatches:
+          delivery === "message" || delivery === "steer"
+            ? { "agent:main": settings.promise }
+            : undefined,
         settings: { chatFollowUpMode: "steer" },
       });
       const send = handleSendChat(host);
-      await Promise.resolve();
-      expect(scrollToEnd).toHaveBeenCalledWith({ source: "manual", behavior: "auto" });
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      await waitForFast(() => expect(container.scrollTop).toBe(1600));
+      if (delivery !== "approval") {
+        expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      }
       container.scrollTop = 1200;
       handleChatScrollTakeover(host);
       expect(host.chatFollowLocked).toBe(true);
       scrollToEnd.mockClear();
 
-      settings.resolve(true);
-      await waitForFast(() =>
-        expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
-      );
-      ack.resolve({ status: "started", runId: "accepted-run" });
+      if (delivery === "local") {
+        await waitForFast(() => expect(executeSlashCommandMock).toHaveBeenCalledOnce());
+        command.resolve({ content: "Command completed." });
+      } else {
+        if (delivery !== "approval") {
+          settings.resolve(true);
+        }
+        await waitForFast(() =>
+          expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
+        );
+        ack.resolve({ status: "started", runId: "accepted-run" });
+      }
       await send;
       await Promise.resolve();
 
@@ -6631,9 +6658,7 @@ describe("handleSendChat", () => {
     const admission = captureChatOutboxAdmission(host, queuedSessionKey);
     expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
 
-    expect(
-      removeVisibleOrScopedQueuedMessageWithoutReleasing(host, item.id, queuedSessionKey),
-    ).toMatchObject({ id: item.id });
+    expect(removeQueuedMessageWithoutReleasing(host, item.id)).toMatchObject({ id: item.id });
 
     expect(readChatQueueForScope(host, queuedSessionKey)).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
@@ -10293,7 +10318,7 @@ describe("handleSendChat", () => {
           limit: 800,
         }),
       );
-      const scrollGeneration = host.chatScrollGeneration;
+      const afterCommit = vi.spyOn(host.renderLifecycle, "afterCommit");
 
       if (change === "route") {
         host.sessionKey = "agent:main:replacement";
@@ -10308,7 +10333,7 @@ describe("handleSendChat", () => {
 
       expect(host.lastError).toBe("Replacement session error");
       expect(host.chatError).toBe("Replacement session error");
-      expect(host.chatScrollGeneration).toBe(scrollGeneration);
+      expect(afterCommit).not.toHaveBeenCalled();
     },
   );
 

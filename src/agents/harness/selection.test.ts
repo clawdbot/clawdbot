@@ -114,10 +114,6 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 const privateHarnessParamCases = [
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
-  {
-    field: "codeModeRecovery",
-    value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
-  },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
 ] as const;
@@ -1547,15 +1543,9 @@ describe("runAgentHarnessAttempt", () => {
     );
 
     const params = createAttemptParams();
-    params.codeModeRecovery = {
-      kind: "resume",
-      blockedActionKeys: new Set(),
-      mutationAttempt: "available",
-    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
-    expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toEqual(
       expect.objectContaining({
@@ -1566,7 +1556,6 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
-    expect(classifyCall?.[1]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");

@@ -4,6 +4,7 @@ import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -968,7 +969,7 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("reopens after the shared state DB cache closes its handle", async () => {
+  it("keeps retained stores writable after the shared database owner closes its handle", async () => {
     await withPluginStateTestState(async () => {
       const store = createPluginStateKeyedStore("discord", {
         namespace: "cache-switch",
@@ -976,17 +977,18 @@ describe("plugin state keyed store", () => {
       });
       await store.register("k", { ok: true });
 
-      const secondary = await createOpenClawTestState({
-        label: "plugin-state-cache-secondary",
-        applyEnv: false,
+      const syncStore = createPluginStateSyncKeyedStore("discord", {
+        namespace: "cache-switch",
+        maxEntries: 10,
       });
-      try {
-        openOpenClawStateDatabase({ env: secondary.env });
-        testState?.applyEnv();
-        await expect(store.lookup("k")).resolves.toEqual({ ok: true });
-      } finally {
-        await secondary.cleanup();
-      }
+      const databasePath = resolveOpenClawStateSqlitePath();
+      expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+      await store.register("k", { version: 2 });
+      expect(syncStore.lookup("k")).toEqual({ version: 2 });
+
+      expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+      syncStore.register("k", { version: 3 });
+      await expect(store.lookup("k")).resolves.toEqual({ version: 3 });
     });
   });
 

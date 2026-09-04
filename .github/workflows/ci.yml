@@ -131,6 +131,7 @@ jobs:
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
+      changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       check_additional_matrix: ${{ steps.manifest.outputs.check_additional_matrix }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
@@ -764,12 +765,11 @@ jobs:
 
 
           if __name__ == "__main__":
+              exit_code = 0
               try:
                   main()
-              except FetchTimeout:
-                  raise SystemExit(124)
-              except GitFailure as error:
-                  raise SystemExit(error.code)
+              except (FetchTimeout, GitFailure) as error:
+                  exit_code = 124 if isinstance(error, FetchTimeout) else error.code
               except Exception as error:
                   name, diagnostic = "unknown", "unavailable"
                   try:
@@ -783,7 +783,9 @@ jobs:
                       print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
                   except BaseException:
                       pass
-                  raise SystemExit(125)
+                  exit_code = 125
+              # Exit outside the handler: Python 3.9 can loop while chaining cyclic contexts.
+              raise SystemExit(exit_code)
           PYTHON
 
       - name: Resolve checkout SHA
@@ -1302,6 +1304,21 @@ jobs:
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
+          // Plain PR leaves share the local consumer selector. Empty means the
+          // existing full owners stay scheduled, including unsupported targets.
+          let changedCoreTestPaths;
+          if (eventName === "pull_request" && runNodeFull && !frozenTarget && changedPaths &&
+            existsSync("scripts/changed-lanes.mts") &&
+            [
+              ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
+              ["scripts/run-additional-boundary-checks.mts", "--core-test-boundary-owner=test-types"],
+            ].every(([file, capability]) => existsSync(file) && readFileSync(file, "utf8").includes(capability))) {
+            const lanes = await import("./scripts/changed-lanes.mts");
+            if (typeof lanes.getChangedCoreTestPaths === "function") {
+              changedCoreTestPaths = lanes.getChangedCoreTestPaths(lanes.detectChangedLanes(changedPaths));
+            }
+          }
+
           const runNodeFastPluginContracts =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
           const runNodeFastCiRouting =
@@ -1662,6 +1679,7 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
+            changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
             run_check_additional: runNodeFull,
             check_additional_matrix: createMatrix(runNodeFull ? additionalChecks : []),
             run_check_docs: docsChanged && eventName !== "push",
@@ -3510,6 +3528,7 @@ jobs:
           HOSTED_RUNNER_STRIPES: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') && 'true' || 'false' }}
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
           OPENCLAW_LOCAL_CHECK: "0"
+          CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -3715,7 +3734,12 @@ jobs:
               # this row owns the fifth before extensions/scripts/root. Targets
               # without stripe support keep the whole lane here.
               root_covered=false
-              if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
+              if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+                # This owner validates the complete boundary once, then checks
+                # every compiler-resolved consumer (or all graphs on ambiguity).
+                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
+                pnpm tsgo:extensions:test
+              elif [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
                 # Core stripes retain their safeguards; only the existing tail
                 # inherits this step's OPENCLAW_LOCAL_CHECK=0.
@@ -3851,7 +3875,7 @@ jobs:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
     # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
     # Preserve two compiler children and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
@@ -4002,6 +4026,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
@@ -4040,6 +4065,9 @@ jobs:
                 boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)
                 if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then
                   boundary_runner=(node scripts/run-additional-boundary-checks.mjs)
+                fi
+                if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+                  boundary_runner+=(--core-test-boundary-owner=test-types)
                 fi
                 "${boundary_runner[@]}"
                 ;;
@@ -5489,7 +5517,7 @@ jobs:
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}|${{ needs.preflight.outputs.run_checks_node_core_nondist }}
             check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
             check-additional-shard=${{ needs.check-additional-shard.result }}|${{ needs.preflight.outputs.run_check_additional }}
             check-docs=${{ needs.check-docs.result }}|${{ needs.preflight.outputs.run_check_docs }}
             skills-python=${{ needs.skills-python.result }}|${{ needs.preflight.outputs.run_skills_python_job }}

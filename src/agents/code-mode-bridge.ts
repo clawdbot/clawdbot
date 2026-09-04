@@ -15,19 +15,11 @@ import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-run
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
-import {
-  consumeToolEffectReceipt,
-  registerToolEffectReceipt,
-  type ToolEffectReceipt,
-} from "./tool-effect-receipt.js";
 import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchToolContext } from "./tool-search-types.js";
+import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 const loadSwarmHandlers = createLazyRuntimeNamedExport(
@@ -177,6 +169,26 @@ export function codeModeReplayIdForToolCall(
   return `cm_replay_${digest}`;
 }
 
+export function isCodeModeSwarmAvailable(
+  ctx: ToolSearchToolContext,
+  catalog: readonly Pick<ToolSearchCatalogEntry, "source" | "name">[] | undefined,
+): boolean {
+  // Detached runs retain denied schemas; only an executable spawn capability
+  // may advertise Swarm declarations or install its guest globals.
+  return (
+    resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled &&
+    (!ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) &&
+    catalog?.some((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn") ===
+      true &&
+    ctx.catalogRef?.current?.entries.some(
+      (entry) => entry.name === "sessions_spawn" && isCollectorSpawnTool(entry.tool),
+    ) === true &&
+    !ctx.catalogRef.current.entries.some(
+      (entry) => entry.source === "client" && entry.name === "sessions_spawn",
+    )
+  );
+}
+
 function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   if (!resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled) {
     throw new ToolInputError("code mode swarm globals are disabled.");
@@ -203,7 +215,6 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   const catalogProjection = params.catalogProjection;
-  let effectReceipt: ToolEffectReceipt | undefined;
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
@@ -279,7 +290,6 @@ export async function runBridgeRequest(params: {
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
-        effectReceipt = consumeToolEffectReceipt(called.result);
         value =
           isRecord(called.result) && "details" in called.result
             ? called.result.details
@@ -330,7 +340,6 @@ export async function runBridgeRequest(params: {
               signal: params.signal,
               onUpdate: params.onUpdate,
             });
-            effectReceipt = consumeToolEffectReceipt(called.result);
             if (request.catalogId) {
               const guestResult = consumeMcpCodeModeGuestResult(called.result);
               if (guestResult === undefined) {
@@ -345,7 +354,6 @@ export async function runBridgeRequest(params: {
               : called.result;
           },
         );
-        effectReceipt ??= consumeToolEffectReceipt(value);
         break;
       }
       case "agentSpawn":
@@ -402,24 +410,16 @@ export async function runBridgeRequest(params: {
         "Search results exceed the output budget. Narrow the query or lower the limit.",
       );
     }
-    const settled: SettledBridgeRequest = { id: params.request.id, ok: true, value };
-    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
+    return { id: params.request.id, ok: true, value };
   } catch (error) {
     const boundedError = boundCodeModeError(
       redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
       params.maxOutputBytes,
     );
-    const settled: SettledBridgeRequest = {
+    return {
       id: params.request.id,
       ok: false,
       error: boundedError,
     };
-    const trustedNoStart = consumeTrustedToolNoStartError(error);
-    if (trustedNoStart) {
-      registerTrustedToolNoStartError(settled);
-    }
-    effectReceipt =
-      consumeToolEffectReceipt(error) ?? (trustedNoStart ? { state: "not_started" } : undefined);
-    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
   }
 }

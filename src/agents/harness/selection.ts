@@ -704,7 +704,6 @@ function withoutPluginHarnessPrivateState(
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
-    codeModeRecovery: _codeModeRecovery,
     compactionCountOwner: _compactionCountOwner,
     onContextAccountingEvent: _onContextAccountingEvent,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
