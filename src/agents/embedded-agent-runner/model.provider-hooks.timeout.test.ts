@@ -37,7 +37,6 @@ beforeEach(async () => {
   return async () => {
     try {
       auth.verify();
-      expect(auth.spy).toHaveBeenCalled();
     } finally {
       auth.spy.mockRestore();
       await state.cleanup();

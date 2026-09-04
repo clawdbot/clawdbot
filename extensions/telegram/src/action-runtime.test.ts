@@ -623,7 +623,9 @@ describe("handleTelegramAction", () => {
       added?: string;
     };
     expect(parsed.ok).toBe(false);
-    expect(parsed.warning).toBe("Reaction unavailable: ✅ This chat allows: 👍 🔥.");
+    expect(parsed.warning).toBe(
+      "Reaction unavailable: ✅ This chat allows: 👍 🔥; numeric custom IDs 5231419410191111111.",
+    );
     expect(parsed.warning).not.toContain("disallow list");
     expect(parsed.added).toBe("✅");
   });
@@ -631,7 +633,10 @@ describe("handleTelegramAction", () => {
   it("bounds allowed-reaction guidance when Telegram rejects a reaction", async () => {
     reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
     getTelegramAllowedReactions.mockResolvedValueOnce(
-      Array.from({ length: 25 }, () => ({ type: "emoji" as const, emoji: "👍" as const })),
+      Array.from({ length: 25 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
     );
 
     const details = resultDetails(
@@ -643,8 +648,70 @@ describe("handleTelegramAction", () => {
       reason: "REACTION_INVALID",
       hint: expect.stringContaining("This chat allows:"),
     });
-    expect(String(details.hint).match(/👍/gu)).toHaveLength(20);
+    expect(String(details.hint)).toContain("numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("20");
     expect(details.hint).not.toContain("disallow list");
+  });
+
+  it("keeps standard reactions ahead of custom IDs within the hint bound", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      ...Array.from({ length: 20 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
+      { type: "emoji" as const, emoji: "👍" as const },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details).toMatchObject({
+      ok: false,
+      reason: "REACTION_INVALID",
+      hint: expect.stringContaining("This chat allows:"),
+    });
+    expect(String(details.hint)).toContain("This chat allows: 👍; numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("19");
+  });
+
+  it("surfaces custom-only alternatives after a rejected reaction", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: numeric custom IDs 5231419410191111111.",
+    );
+  });
+
+  it("offers standard alternatives when Telegram reports an unrestricted chat", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: ❤ 👍 👎 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡.",
+    );
+  });
+
+  it("does not describe a failed allowed-reaction lookup as unrestricted", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockRejectedValueOnce(new Error("getChat failed"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe("This reaction is unavailable.");
   });
 
   it("lists permitted standard and custom reactions with an optional limit", async () => {

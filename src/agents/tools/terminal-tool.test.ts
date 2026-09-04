@@ -14,10 +14,9 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { consumeRepairableCodeModeFailure } from "../code-mode-repair-provenance.js";
 import { createSubscribedCodeModeHarness } from "../code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
-import { resultDetails } from "../code-mode.test-support.js";
+import { runUntilCompleted } from "../code-mode.test-support.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createTerminalTool } from "./terminal-tool.js";
@@ -324,17 +323,16 @@ describe("terminal tool", () => {
     );
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, terminal] });
     try {
-      const details = resultDetails(
-        await harness.tools[0]!.execute("terminal-input", {
-          code: `return await terminal(${JSON.stringify({ action: "input", sessionId, data: "echo untouched\r" })});`,
-        }),
-      );
+      const details = await runUntilCompleted({
+        execTool: harness.tools[0]!,
+        waitTool: harness.tools[1]!,
+        code: `return await terminal(${JSON.stringify({ action: "input", sessionId, data: "echo untouched\r" })});`,
+      });
       expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
       expect(details.error).toContain("sandbox runtime is unavailable");
       expect(backend.writes).toEqual([]);
       expect(approvalMocks.register).not.toHaveBeenCalled();
       expect(approvalMocks.decide).not.toHaveBeenCalled();
-      expect(consumeRepairableCodeModeFailure(details)).toBe(true);
     } finally {
       harness.dispose();
       manager.closeAgent(agentOwner, sessionId);

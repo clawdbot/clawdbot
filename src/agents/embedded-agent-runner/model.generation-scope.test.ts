@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,7 +33,10 @@ afterEach(async () => {
   }
 });
 
-async function resolveGeneration(generation: ReturnType<typeof createModelGenerationFixture>) {
+async function resolveGeneration(
+  generation: ReturnType<typeof createModelGenerationFixture>,
+  authProfileId?: string,
+) {
   const { preparedModelRuntime } = generation;
   const stores = preparedModelRuntime.createStores();
   return await resolveModelAsync(
@@ -45,6 +50,7 @@ async function resolveGeneration(generation: ReturnType<typeof createModelGenera
       preparedModelRuntime,
       skipAgentDiscovery: true,
       workspaceDir: preparedModelRuntime.workspaceDir,
+      authProfileId,
     },
   );
 }
@@ -57,6 +63,41 @@ describe("model runtime generation scope", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it("passes the selected personal auth mode into dynamic model discovery", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "personal",
+    });
+    const owner = ensureProfileForEmail("alice@example.test");
+    const { authProfileId } = connectUserModelAccount({
+      ownerProfileId: owner.id,
+      credential: {
+        type: "oauth",
+        provider: generation.provider,
+        access: "synthetic-personal-access",
+        refresh: "synthetic-personal-refresh",
+        expires: Date.now() + 600_000,
+      },
+      assertCurrent() {},
+    });
+
+    const result = await resolveGeneration(generation, authProfileId);
+
+    expect(result.model?.provider).toBe(generation.provider);
+    const [context] =
+      vi.mocked(generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel!).mock
+        .lastCall ?? [];
+    expect({
+      authProfileId: context?.authProfileId,
+      authProfileMode: context?.authProfileMode,
+    }).toEqual({
+      authProfileId,
+      authProfileMode: "oauth",
+    });
   });
 
   it.each([

@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
@@ -22,6 +23,7 @@ import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 /** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -84,7 +86,7 @@ export type NpmGlobalPrefixLayout = {
   binDir: string;
 };
 
-type NpmLifecyclePolicy = "unflagged" | "allow-scripts";
+type NpmLifecyclePolicy = "unflagged" | "allow-scripts-advisory" | "allow-scripts";
 
 type SupportedNpmLifecyclePolicy = NpmLifecyclePolicy;
 
@@ -98,9 +100,11 @@ function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
   if (!parsed) {
     return null;
   }
-  return parsed.major >= 12 || (parsed.major === 11 && parsed.minor >= 16)
+  return parsed.major >= 12
     ? "allow-scripts"
-    : "unflagged";
+    : parsed.major === 11 && parsed.minor >= 16
+      ? "allow-scripts-advisory"
+      : "unflagged";
 }
 
 /** Resolves the owning npm policy once, before any update mutation. */
@@ -111,7 +115,7 @@ export function resolveNpmLifecyclePolicyGate(
     return { policy: null, error: null };
   }
   const policy = installTarget.npmOwner?.lifecyclePolicy ?? null;
-  if (policy === "unflagged" || policy === "allow-scripts") {
+  if (policy === "unflagged" || policy === "allow-scripts-advisory" || policy === "allow-scripts") {
     return { policy, error: null };
   }
   return {
@@ -190,7 +194,11 @@ function isRelativePackageInstallPath(value: string): boolean {
   return /^(?:\.{1,2})(?:[\\/]|$)/u.test(value);
 }
 
-function resolveNpmInstallScriptsAllowFlag(spec: string, installCwd?: string | null): string {
+function resolveNpmInstallScriptsAllowFlag(
+  spec: string,
+  installCwd: string | null | undefined,
+  policy: SupportedNpmLifecyclePolicy,
+): string {
   const normalized = normalizePackageTarget(spec);
   const unaliased = stripPrimaryPackageAlias(normalized);
   let identity =
@@ -201,10 +209,42 @@ function resolveNpmInstallScriptsAllowFlag(spec: string, installCwd?: string | n
     path.isAbsolute(unaliased)
       ? unaliased
       : PRIMARY_PACKAGE_NAME;
-  identity = resolveNpmAliasPackageName(identity) ?? identity;
-  if (installCwd && path.isAbsolute(identity)) {
-    // npm resolves relative allow-scripts identities against its cwd. Relativize
-    // first so commas in ancestor directories do not split the policy value.
+  const alias = resolveNpmAliasPackageName(identity);
+  identity = alias ?? identity;
+  const filePrefix = /^file:/iu.test(identity) ? "file:" : "";
+  const archivePath = identity.slice(filePrefix.length);
+  const gitShorthand =
+    !/^~[\\/]/u.test(identity) && /^[^./@\s:#][^/\s:@#]*\/[^/\s:@#]+(?:#[\s\S]*)?$/u.test(identity);
+  const localArchive =
+    !alias &&
+    !gitShorthand &&
+    /\.(?:tgz|tar\.gz|tar)$/iu.test(archivePath) &&
+    (filePrefix || path.isAbsolute(archivePath) || !/^[a-z][a-z0-9+.-]*:/iu.test(archivePath));
+  let absoluteArchive = "";
+  if (localArchive) {
+    const npmPath = process.platform === "win32" ? archivePath.replaceAll("\\", "/") : archivePath;
+    // Escape raw paths before URL normalization so literal %, #, and ? retain their identity.
+    let fileUrl = `file:${encodeURI(npmPath).replace(/[?#]/gu, encodeURIComponent)}`;
+    fileUrl = fileUrl
+      .replace(/^file:\/\/(?=[^/])/u, "file:/")
+      .replace(/^file:\/{1,3}(?=\.\.?(?:\/|$))/u, "file:");
+    const specPath = decodeURIComponent(new URL(fileUrl).pathname);
+    let resolvedPath = decodeURIComponent(
+      new URL(fileUrl, `${pathToFileURL(path.resolve(installCwd || process.cwd())).href}/`)
+        .pathname,
+    );
+    if (process.platform === "win32") {
+      resolvedPath = resolvedPath.replace(/^\/+([a-z]:\/)/iu, "$1");
+    }
+    absoluteArchive = /^\/~(?:\/|$)/u.test(specPath)
+      ? path.resolve(os.homedir(), specPath.slice(3))
+      : path.resolve(installCwd || process.cwd(), resolvedPath);
+  }
+  // Tarballs match the absolute npm resolved identity; directory links accept relative paths.
+  // Keep the npm 11 comma-path identity: its advisory/strict decision stays npm-owned.
+  if (absoluteArchive && (policy !== "allow-scripts-advisory" || !absoluteArchive.includes(","))) {
+    identity = `${filePrefix}${absoluteArchive}`;
+  } else if (installCwd && path.isAbsolute(identity)) {
     const relativeIdentity = path.relative(installCwd, identity) || ".";
     identity =
       path.isAbsolute(relativeIdentity) ||
@@ -216,7 +256,7 @@ function resolveNpmInstallScriptsAllowFlag(spec: string, installCwd?: string | n
   }
   if (identity.includes(",")) {
     throw new Error(
-      "npm cannot allow lifecycle scripts for an install target containing a comma; rename the package or source path",
+      "npm cannot allow lifecycle scripts for this install target; use a package URL or local path without commas",
     );
   }
   return `--allow-scripts=${identity || PRIMARY_PACKAGE_NAME}`;
@@ -311,6 +351,27 @@ export async function collectInstalledGlobalPackageErrors(params: {
     );
   }
   return errors;
+}
+
+// Call only before potentially state-mutating work. Package file validity
+// cannot undo lifecycle state changes or a rejected Doctor result.
+export async function verifyPackageUpdateRecovery(
+  root: string | null | undefined,
+): Promise<UpdateRecovery> {
+  const version = root ? await readPackageVersion(root).catch(() => null) : null;
+  if (
+    root &&
+    version &&
+    (
+      await collectInstalledGlobalPackageErrors({
+        packageRoot: root,
+        expectedVersion: version,
+      }).catch(() => ["verification failed"])
+    ).length === 0
+  ) {
+    return { serviceRestartSafe: true, version };
+  }
+  return { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 }
 
 async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
@@ -1306,8 +1367,8 @@ export function globalInstallArgs(
     resolved.command,
     "i",
     "-g",
-    ...(npmLifecyclePolicy === "allow-scripts"
-      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+    ...(npmLifecyclePolicy !== "unflagged"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd, npmLifecyclePolicy)]
       : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
@@ -1338,8 +1399,8 @@ export function globalInstallFallbackArgs(
     resolved.command,
     "i",
     "-g",
-    ...(npmLifecyclePolicy === "allow-scripts"
-      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+    ...(npmLifecyclePolicy !== "unflagged"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd, npmLifecyclePolicy)]
       : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,

@@ -22,23 +22,13 @@ import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
-/** Maintains existing SQLite stores and returns their physical owners for startup reconciliation. */
-export async function runSessionStartupMigration(params: {
+export function assertSessionStoreMigrationComplete(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  log: SessionStartupMigrationLogger;
-  deps?: {
-    migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
-    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-  };
-}): Promise<OpenClawAgentDatabaseOptions[]> {
+  targets?: readonly { storePath: string }[];
+}): void {
   const env = params.env ?? process.env;
-  const resolveTargets =
-    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
-  let targets = resolveTargets(params.cfg, { env });
-  // Stable installations may still have file-backed history. Only Doctor imports it;
-  // do not serve an empty SQLite history or rewrite those files during startup.
+  const targets = params.targets ?? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
   const legacyStore = [
     path.join(resolveStateDir(env), "sessions", "sessions.json"),
     ...targets.map((target) => target.storePath),
@@ -48,6 +38,27 @@ export async function runSessionStartupMigration(params: {
       `Legacy session store requires migration: ${legacyStore}. Run "${formatCliCommand("openclaw doctor --fix", env)}" against the same state/config before starting OpenClaw.`,
     );
   }
+}
+
+/** Maintains existing stores, optionally handing each live database to its runtime owner. */
+export async function runSessionStartupMigration(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: SessionStartupMigrationLogger;
+  handoffDatabase?: (database: OpenClawAgentDatabaseOptions) => Promise<void>;
+  deps?: {
+    migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
+    migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
+    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
+  };
+}): Promise<void> {
+  const env = params.env ?? process.env;
+  const resolveTargets =
+    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
+  let targets = resolveTargets(params.cfg, { env });
+  // Stable installations may still have file-backed history. Only Doctor imports it;
+  // do not serve an empty SQLite history or rewrite those files during startup.
+  assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
   const migrateLegacyMain =
     params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
   const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "automatic" });
@@ -66,7 +77,7 @@ export async function runSessionStartupMigration(params: {
     targets = resolveTargets(params.cfg, { env });
   }
 
-  const databases = new Map<string, OpenClawAgentDatabaseOptions>();
+  const databases = new Set<string>();
   const migrateWorktreeSessions =
     params.deps?.migrateManagedWorktreeCanonicalWorkspaces ??
     migrateManagedWorktreeCanonicalWorkspaces;
@@ -80,31 +91,40 @@ export async function runSessionStartupMigration(params: {
     if (databases.has(databasePath) || !fs.existsSync(databasePath)) {
       continue;
     }
-    databases.set(databasePath, options);
+    databases.add(databasePath);
     const alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+    let handedOff = false;
     try {
-      if (
-        !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
-        !isCanonicalSqliteSessionMainKeyCurrent(options, params.cfg.session?.mainKey)
-      ) {
-        const database = openOpenClawAgentDatabase(options);
-        setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
+      try {
+        if (
+          !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
+          !isCanonicalSqliteSessionMainKeyCurrent(options, params.cfg.session?.mainKey)
+        ) {
+          const database = openOpenClawAgentDatabase(options);
+          setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
+        }
+        // Workspace metadata participates in claim matching. Preserve it during a
+        // partial move so the next attempt can finish removing the source claim.
+        if (!result.armed || result.complete) {
+          migratedWorktreeSessions += await migrateWorktreeSessions({
+            ...target,
+            cfg: params.cfg,
+            env,
+          });
+        }
+      } catch (error) {
+        params.log.warn(
+          `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
+        );
       }
-      // Workspace metadata participates in claim matching. Preserve it during a
-      // partial move so the next attempt can finish removing the source claim.
-      if (!result.armed || result.complete) {
-        migratedWorktreeSessions += await migrateWorktreeSessions({
-          ...target,
-          cfg: params.cfg,
-          env,
-        });
+      if (params.handoffDatabase) {
+        // Runtime readiness failures must propagate; only successful handoff
+        // transfers the cold connection beyond this maintenance operation.
+        await params.handoffDatabase(options);
+        handedOff = true;
       }
-    } catch (error) {
-      params.log.warn(
-        `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
-      );
     } finally {
-      if (!alreadyOpen && isOpenClawAgentDatabaseOpen(databasePath)) {
+      if (!alreadyOpen && !handedOff && isOpenClawAgentDatabaseOpen(databasePath)) {
         closeOpenClawAgentDatabaseByPath(databasePath);
       }
     }
@@ -114,5 +134,4 @@ export async function runSessionStartupMigration(params: {
       `session: recorded canonical workspaces for ${migratedWorktreeSessions} managed-worktree session(s)`,
     );
   }
-  return [...databases.values()];
 }

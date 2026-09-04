@@ -1,4 +1,4 @@
-import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
+import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
@@ -39,11 +39,13 @@ type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
-  hasBoard: boolean;
-  chat: TemplateResult;
+  desktopFocusHref: string;
+  onDesktopFocusTargetChange: (
+    target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
+  ) => void;
+  dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
-  detailOpen: boolean;
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -57,6 +59,8 @@ type SidebarPanelDefinitionParams = {
   connected: boolean;
   pendingQuestion: string | null;
   onClearCompanion: () => void;
+  onRefreshTasks: () => void;
+  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -64,9 +68,10 @@ type SidebarPanelDefinitionParams = {
 };
 
 type SidebarPanelTextKey =
-  | "boardChat"
   | "browser"
+  | "conversation"
   | "companion"
+  | "dashboard"
   | "desktop"
   | "discussion"
   | "files"
@@ -76,8 +81,9 @@ type SidebarPanelTextKey =
 
 const SIDEBAR_PANEL_LOADING_VARIANTS = {
   browser: "browser",
-  chat: "chat",
+  conversation: "chat",
   companion: "chat",
+  dashboard: "review",
   desktop: "desktop",
   detail: "review",
   discussion: "discussion",
@@ -96,9 +102,6 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
-  const desktopFocusHref = state
-    ? buildControlUiFocusPath({ kind: "desktop", session: state.sessionKey }, state.basePath)
-    : null;
   const definePanel = (
     slot: SidebarSlotId,
     textKey: SidebarPanelTextKey,
@@ -171,6 +174,7 @@ export function sidebarPanelDefinitions(
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
           .requestedSource=${params?.desktopSource ?? null}
           .sessionKey=${state.sessionKey}
+          .onFocusTargetChange=${params?.onDesktopFocusTargetChange}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
@@ -185,16 +189,17 @@ export function sidebarPanelDefinitions(
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
   const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
+  // The region owns mounting and visibility. Hidden Review tabs must keep the
+  // same cached diff loader so their live content and selection survive.
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen && !detailLoading
-      ? resolveSessionDiffSidebarContent(state)
-      : null);
+    (state && !detailLoading ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
       : (params?.workspace ?? null);
   return [
+    definePanel("conversation", "conversation", icons.messageSquare, nothing, { available: false }),
     definePanel(
       "detail",
       "review",
@@ -213,50 +218,50 @@ export function sidebarPanelDefinitions(
     definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
-    definePanel(
-      "companion",
-      "companion",
-      icons.bot,
-      companion,
-      params
+    definePanel("companion", "companion", icons.messageSquarePlus, companion, {
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat),
+      ...(params
         ? {
-            headerAction: html`<wa-dropdown
-              class="chat-session-rail__menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                if (event.detail.item.value === "clear") {
-                  params.onClearCompanion();
-                }
-              }}
-            >
+            headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
-                slot="trigger"
-                class="rail-header__action"
+                class="rail-header__action chat-session-rail__clear"
                 type="button"
-                aria-label=${t("chat.rail.moreActions")}
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                ${icons.moreHorizontal}
-              </button>
-              <wa-dropdown-item
-                value="clear"
+                aria-label=${t("chat.rail.clear")}
                 ?disabled=${!params.connected || params.pendingQuestion !== null}
+                @click=${params.onClearCompanion}
               >
-                ${t("chat.rail.clear")}
-              </wa-dropdown-item>
-            </wa-dropdown>`,
+                ${icons.trash}
+              </button>
+            </openclaw-tooltip>`,
           }
+        : {}),
+    }),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
+      headerAction: params
+        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+            <button
+              class="rail-header__action chat-tasks-rail__refresh"
+              type="button"
+              aria-label=${t("chat.backgroundTasks.refresh")}
+              ?disabled=${!params.connected || params.tasksLoading}
+              @click=${params.onRefreshTasks}
+            >
+              ${
+                params.tasksLoading
+                  ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+                  : icons.refresh
+              }
+            </button>
+          </openclaw-tooltip>`
         : undefined,
-    ),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    }),
     definePanel("desktop", "desktop", icons.monitor, desktop, {
       available: desktopAvailable,
-      ...(desktopFocusHref
+      ...(params?.desktopFocusHref
         ? {
             headerAction: html`<a
               class="rail-header__action"
-              href=${desktopFocusHref}
+              href=${params.desktopFocusHref}
               target="_blank"
               rel="noopener"
               aria-label=${t("desktop.openWindow")}
@@ -282,8 +287,8 @@ export function sidebarPanelDefinitions(
           }
         : {}),
     }),
-    definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
-      available: params?.hasBoard === true,
+    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
+      available: params?.dashboard !== nothing,
     }),
   ];
 }

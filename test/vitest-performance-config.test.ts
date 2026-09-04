@@ -115,6 +115,7 @@ describe("filesystem module cache ownership", () => {
     checkout: string,
     args: string[] = [],
     env: NodeJS.ProcessEnv = {},
+    expectedStatus = 0,
   ) => {
     const result = spawnSync(
       process.execPath,
@@ -132,7 +133,10 @@ describe("filesystem module cache ownership", () => {
         timeout: 15_000,
       },
     );
-    expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(
+      expectedStatus,
+    );
+    return result;
   };
 
   it("preserves another checkout's cache when shared dependencies change", () => {
@@ -210,12 +214,19 @@ describe("filesystem module cache ownership", () => {
         path.join(project, "subject.js"),
         path.join(project, "configured-subject.js"),
       );
+      fs.copyFileSync(path.join(project, "subject.js"), path.join(project, "body-subject.js"));
       fs.writeFileSync(
         path.join(project, "fixture.test.js"),
-        `import { readFileSync } from "node:fs";
+        `import { appendFileSync, readFileSync } from "node:fs";
 import { version } from "fixture-subject";
-test("executes the current dependency generation", () => {
+const events = ${JSON.stringify(path.join(project, "events.txt"))};
+appendFileSync(events, "collect:" + version + "\\n");
+beforeAll(() => appendFileSync(events, "beforeAll\\n"));
+test("executes the current dependency generation", async () => {
+  appendFileSync(events, "body\\n");
   expect(version).toBe(readFileSync(${JSON.stringify(generation)}, "utf8"));
+  const { version: bodyVersion } = await import("./body-subject.js");
+  expect(bodyVersion).toBe(readFileSync(${JSON.stringify(generation)}, "utf8"));
 });
 `,
       );
@@ -244,11 +255,13 @@ export default {
       plugins: [{
         name: "fixture-external-plugin",
         transform(code, id) {
-          if (id !== path.join(root, name, subjectFile).replaceAll("\\\\", "/")) return;
+          const isSubject = id === path.join(root, name, subjectFile).replaceAll("\\\\", "/");
+          if (!isSubject && id !== path.join(root, name, "body-subject.js").replaceAll("\\\\", "/")) return;
           // External plugin generations are outside the config/source graph;
           // the paired lock change must invalidate their old transform output.
           const version = readFileSync(${JSON.stringify(generation)}, "utf8");
-          appendFileSync(path.join(root, name, "transforms.txt"), version + "\\n");
+          const log = isSubject ? "transforms.txt" : "body-transforms.txt";
+          appendFileSync(path.join(root, name, log), version + "\\n");
           return { code: code.replace("__DEPENDENCY_VERSION__", version), map: null };
         },
       }],
@@ -268,21 +281,26 @@ export default {
       OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
       OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: cacheConfig.experimental?.fsModuleCachePath,
     };
-    const check = (projects: string[], expected: [number, number]) => {
-      run(
-        root,
-        root,
-        projects.flatMap((name) => ["--project", name]),
-        env,
-      );
+    const check = (projects: string[], expected: [number, number], args: string[] = []) => {
+      run(root, root, [...projects.flatMap((name) => ["--project", name]), ...args], env);
       const counts = ["A", "B"].map(
         (name) =>
           fs.readFileSync(path.join(root, name, "transforms.txt"), "utf8").split("\n").length - 1,
       );
       expect(counts, `subject transforms after selecting ${projects.join("+")}`).toEqual(expected);
     };
+    check(["A", "B"], [1, 1], ["--testNamePattern=(?!)"]);
+    for (const name of ["A", "B"]) {
+      expect(fs.readFileSync(path.join(root, name, "events.txt"), "utf8")).toBe("collect:1.0.0\n");
+      expect(fs.existsSync(path.join(root, name, "body-transforms.txt"))).toBe(false);
+    }
     check(["A", "B"], [1, 1]);
-    check(["A", "B"], [1, 1]);
+    for (const name of ["A", "B"]) {
+      expect(fs.readFileSync(path.join(root, name, "events.txt"), "utf8")).toBe(
+        "collect:1.0.0\ncollect:1.0.0\nbeforeAll\nbody\n",
+      );
+      expect(fs.readFileSync(path.join(root, name, "body-transforms.txt"), "utf8")).toBe("1.0.0\n");
+    }
     transitionLock("2.0.0");
     check(["A"], [2, 1]);
     check(["A"], [2, 1]);
@@ -303,5 +321,14 @@ export default {
     );
     check(["A", "B"], [4, 3]);
     check(["A", "B"], [4, 3]);
+
+    fs.appendFileSync(
+      path.join(root, "A", "configured-subject.js"),
+      '\nthrow new Error("fixture collection import failure");\n',
+    );
+    const failedCollection = run(root, root, ["--project", "A", "--testNamePattern=(?!)"], env, 1);
+    expect(`${failedCollection.stdout}\n${failedCollection.stderr}`).toContain(
+      "fixture collection import failure",
+    );
   });
 });

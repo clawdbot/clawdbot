@@ -40,11 +40,6 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   return (await statusUsageModuleLoader.load()).resolveStatusUsageSummary(params);
 }
 
-/** Exposes provider-usage formatting for callers that requested usage. */
-export async function loadStatusProviderUsageModule() {
-  return (await statusUsageModuleLoader.load()).loadStatusProviderUsageModule();
-}
-
 /** Calls gateway health and lets errors propagate to deep status callers. */
 export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;

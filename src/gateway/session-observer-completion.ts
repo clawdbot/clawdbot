@@ -15,7 +15,6 @@ export function createSessionObserverCompletion(params: {
   getConfig: SessionObserverDeps["getConfig"];
   prepareModel: PrepareModel;
   completeModel: CompleteModel;
-  now: () => number;
   setTimeoutFn: typeof setTimeout;
   clearTimeoutFn: typeof clearTimeout;
   isCurrent: (state: SessionObserverState) => boolean;
@@ -30,12 +29,11 @@ export function createSessionObserverCompletion(params: {
       agentId: state.agentId,
       modelRef,
       useUtilityModel: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
     }));
     let failed = true;
     try {
       const prepared = await preparedPromise;
-      failed = "error" in prepared;
+      failed = false;
       return prepared;
     } finally {
       // Pending and successful preparation remain shared; settled failures do not.
@@ -62,45 +60,23 @@ export function createSessionObserverCompletion(params: {
         if (!params.isCurrent(state) || controller.signal.aborted) {
           throw new Error("session observer state is no longer active");
         }
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
           const result = await params.completeModel({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg: params.getConfig(),
-            context: {
-              systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildSessionObserverPrompt(state, notes),
-                  timestamp: params.now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: Math.min(
-                SESSION_OBSERVER_MODEL_MAX_TOKENS,
-                Math.floor(prepared.model.maxTokens),
-              ),
+            ...prepared,
+            config: params.getConfig(),
+            systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
+            prompt: buildSessionObserverPrompt(state, notes),
+            timeoutMs: MODEL_TIMEOUT_MS,
+            abortSignal: controller.signal,
+            streamParams: {
+              maxTokens: SESSION_OBSERVER_MODEL_MAX_TOKENS,
               temperature: 0.2,
-              signal: controller.signal,
             },
           });
-          if (result.stopReason === "error") {
-            throw new Error(result.errorMessage?.trim() || "session observer completion failed");
-          }
-          const text = result.content
-            .filter((block): block is { type: "text"; text: string } => block.type === "text")
-            .map((block) => block.text)
-            .join("")
-            .trim();
-          const parsed = normalizeSessionObserverModelOutput(text);
+          const parsed = normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }

@@ -18,9 +18,11 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
-const CODEX_VERSION = "0.151.0";
+// Frozen candidate deliberately differs from the trusted checkout pin.
+const CODEX_VERSION = "0.152.1";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
+  "/tmp/openclaw-candidate-codex-package.json",
   "/tmp/openclaw-codex-agent.err",
   "/tmp/openclaw-codex-agent.json",
   "/tmp/openclaw-codex-agent-after-uninstall.err",
@@ -565,6 +567,9 @@ function currentCodexPlatformTarget() {
 }
 
 function createCodexInstallFixture(root: string) {
+  writeJson("/tmp/openclaw-candidate-codex-package.json", {
+    dependencies: { "@openai/codex": CODEX_VERSION },
+  });
   const stateDir = path.join(root, "state");
   const npmRoot = path.join(stateDir, "npm");
   const installPath = path.join(npmRoot, "projects", "codex", "node_modules", "@openclaw", "codex");
@@ -642,28 +647,47 @@ function createCodexInstallFixture(root: string) {
 }
 
 describe("Codex install helpers", () => {
+  const missingRegistration =
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.';
+  const inactiveOwner =
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex). Run "openclaw doctor --fix". Owner plugin "codex" is not activatable (disabled in config). Repair the plugin or select a model that does not require this runtime, restart the Gateway, then retry.';
   it.each([
-    { status: 1, missingRegistration: true, accepted: true },
-    { status: 0, missingRegistration: true, accepted: false },
-    { status: 1, missingRegistration: false, accepted: false },
-  ])("validates the post-uninstall agent failure: %j", (testCase) => {
-    const message = testCase.missingRegistration
-      ? 'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.'
-      : "Provider request failed";
-    writeJson("/tmp/openclaw-codex-agent-after-uninstall.json", {
-      ok: false,
-      error: { type: "cli_error", message },
-    });
-    writeFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", message);
+    ["missing registration", 1, missingRegistration, true],
+    ["inactive owner", 1, inactiveOwner, true],
+    ["successful command", 0, inactiveOwner, false],
+    ["unrelated provider failure", 1, "Provider request failed", false],
+    [
+      "degraded owner",
+      1,
+      inactiveOwner.replace("owner-plugin-not-activatable", "owner-plugin-degraded"),
+      false,
+    ],
+    [
+      "unverified owner",
+      1,
+      inactiveOwner.replace("owner-plugin-not-activatable", "owner-plugin-unverified"),
+      false,
+    ],
+    ["wrong owner", 1, inactiveOwner.replace("ownerPluginId=codex", "ownerPluginId=other"), false],
+    ["wrong runtime", 1, inactiveOwner.replace('runtime "codex"', 'runtime "other"'), false],
+  ] as const)(
+    "validates the post-uninstall agent failure: %s",
+    (_label, status, message, accepted) => {
+      writeJson("/tmp/openclaw-codex-agent-after-uninstall.json", {
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+      writeFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", message);
 
-    const result = spawnSync(
-      process.execPath,
-      [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-agent-error", String(testCase.status)],
-      { encoding: "utf8" },
-    );
+      const result = spawnSync(
+        process.execPath,
+        [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-agent-error", String(status)],
+        { encoding: "utf8" },
+      );
 
-    expect(result.status === 0, result.stderr).toBe(testCase.accepted);
-  });
+      expect(result.status === 0, result.stderr).toBe(accepted);
+    },
+  );
 
   it("configures the canonical OpenAI model for the Codex runtime by default", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-configure-");
@@ -817,6 +841,42 @@ describe("Codex install helpers", () => {
     expect(result.stdout).toContain(`[codex-release] cliVersion=${CODEX_VERSION}`);
     expect(result.stdout).toContain(
       `[codex-release] platformAlias=${currentCodexPlatformTarget().alias}`,
+    );
+  });
+
+  it.each([
+    ["on-demand", runCodexOnDemandAssertions],
+    ["npm-live", runCodexNpmPluginLiveDependencyAssertions],
+  ] as const)("rejects %s plugin pins that differ from the candidate", (_lane, runAssertions) => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-candidate-pin-");
+    const fixture = createCodexInstallFixture(root);
+    const pluginPackage = JSON.parse(readFileSync(fixture.pluginPackageJson, "utf8"));
+    pluginPackage.dependencies["@openai/codex"] = "0.153.0";
+    writeJson(fixture.pluginPackageJson, pluginPackage);
+
+    const result = runAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `@openclaw/codex must depend on @openai/codex ${CODEX_VERSION}; found 0.153.0`,
+    );
+  });
+
+  it.each([undefined, "^0.152.1", "latest"])("rejects a non-exact candidate pin %s", (pin) => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-candidate-invalid-pin-");
+    const fixture = createCodexInstallFixture(root);
+    writeJson("/tmp/openclaw-candidate-codex-package.json", {
+      dependencies: { "@openai/codex": pin },
+    });
+    const pluginPackage = JSON.parse(readFileSync(fixture.pluginPackageJson, "utf8"));
+    pluginPackage.dependencies["@openai/codex"] = pin;
+    writeJson(fixture.pluginPackageJson, pluginPackage);
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `@openclaw/codex must depend on @openai/codex ${String(pin)}; found ${String(pin)}`,
     );
   });
 

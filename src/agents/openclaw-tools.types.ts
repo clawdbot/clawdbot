@@ -16,6 +16,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
+import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 export type OpenClawToolsOptions = {
   sandboxBrowserBridgeUrl?: string;
@@ -153,6 +154,13 @@ export type OpenClawToolsOptions = {
   spawnWorkspaceDir?: string;
   /** Current runtime directory used as the default project for follow-up suggestions. */
   cwd?: string;
+  /**
+   * How this run shows a blocking question tool's prompt. Harnesses that run tools
+   * through the embedded tool lifecycle reserve the prompt themselves and leave this
+   * unset; harnesses that dispatch tools directly pass it so the question still
+   * reaches the person being asked.
+   */
+  questionPrompt?: QuestionPromptDelivery;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */

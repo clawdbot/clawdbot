@@ -56,7 +56,11 @@ export async function setupWizardShellCompletion(params: {
       await params.prompter.note(
         t("wizard.completion.profileNotWritable", {
           profile: writeError.path ?? resolveCompletionProfilePath(completionStatus.shell),
-          command: `${cliName} completion --install`,
+          shell: completionStatus.shell,
+          command: formatCompletionReloadCommand(
+            completionStatus.shell,
+            completionStatus.cachePath,
+          ),
         }),
         t("wizard.completion.title"),
       );

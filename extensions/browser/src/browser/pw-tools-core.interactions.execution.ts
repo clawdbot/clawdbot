@@ -175,6 +175,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         width: action.width,
         height: action.height,
+        signal,
       });
       break;
     case "wait":

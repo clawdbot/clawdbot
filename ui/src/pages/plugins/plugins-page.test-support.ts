@@ -314,6 +314,18 @@ export async function mountPage(
   return { page, provider };
 }
 
+export async function mountClawHubSearchPage(client: GatewayBrowserClient) {
+  const harness = createGateway(client);
+  return mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(
+      harness.gateway,
+      createResult(),
+      createPluginsRouteLocation("/settings/plugins/discover"),
+    ),
+  );
+}
+
 export function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;

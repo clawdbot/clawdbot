@@ -7,7 +7,13 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
+import {
+  findStaleOpenClawUpdateLaunchdJobs,
+  isLaunchAgentEnabled,
+  isLaunchAgentLoaded,
+  launchAgentPlistExists,
+  resolveLaunchAgentLabel,
+} from "../daemon/launchd.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
@@ -49,6 +55,29 @@ export async function noteMacLaunchAgentOverrides() {
   if (warning) {
     note(warning, "Gateway (macOS)");
   }
+}
+
+/** Diagnose persistent disablement without taking activation authority from update or Doctor. */
+export async function noteMacDisabledGatewayLaunchAgent(env: NodeJS.ProcessEnv = process.env) {
+  if (
+    process.platform !== "darwin" ||
+    !(await launchAgentPlistExists(env)) ||
+    (await isLaunchAgentLoaded({ env })) ||
+    (await isLaunchAgentEnabled({ env }))
+  ) {
+    return;
+  }
+  const label = resolveLaunchAgentLabel(env);
+  const labelEnv = env.OPENCLAW_LAUNCHD_LABEL?.trim() ? `OPENCLAW_LAUNCHD_LABEL=${label} ` : "";
+  note(
+    [
+      `Gateway LaunchAgent ${label} is installed but unloaded and disabled in launchd.`,
+      "A terminated update helper can leave it disabled across logins. Doctor does not automatically re-enable it.",
+      `After verifying the installation is safe to run, use ${labelEnv}${formatCliCommand("openclaw gateway start", env)} to re-enable and start it. Keep the same state/config overrides.`,
+      `If an update was interrupted or installation safety is uncertain, run ${formatCliCommand("openclaw update", env)} or ${formatCliCommand("openclaw doctor", env)} and ${formatCliCommand("openclaw triage", env)} before starting it.`,
+    ].join("\n"),
+    "Gateway (macOS)",
+  );
 }
 
 /** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */

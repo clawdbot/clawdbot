@@ -2185,88 +2185,105 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it("blocks a view-capped operator from mutating another operator's response session", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
-      async () => {
-        const port = await getGatewayTestPort();
-        const { startGatewayServer } = await import("./server.js");
-        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-        const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
-        testState.gatewayAuth = trustedProxyAuth;
-        try {
-          await writeGatewayConfig({
-            gateway: {
-              auth: trustedProxyAuth,
-              trustedProxies: ["127.0.0.1"],
-              roles: {
-                default: "guest",
-                definitions: {
-                  guest: {
-                    agents: "*",
-                    scopes: ["operator.write"],
-                    sessions: { others: "view" },
+  it.each(["trusted-proxy", "token"] as const)(
+    "preserves %s authority when mutating another operator response session",
+    async (authMethod) => {
+      const sharedSecretOwner = authMethod === "token";
+      await withEnvAsync(
+        { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+        async () => {
+          const port = await getGatewayTestPort();
+          const { startGatewayServer } = await import("./server.js");
+          let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+          const previousGatewayAuth = testState.gatewayAuth;
+          const trustedProxyAuth = {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          };
+          const requestAuth = sharedSecretOwner
+            ? { mode: "token" as const, token: "owner-secret" }
+            : trustedProxyAuth;
+          testState.gatewayAuth = requestAuth;
+          try {
+            await writeGatewayConfig({
+              gateway: {
+                auth: requestAuth,
+                trustedProxies: ["127.0.0.1"],
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      agents: sharedSecretOwner ? [] : "*",
+                      scopes: ["operator.write"],
+                      sessions: { others: "view" },
+                    },
                   },
                 },
               },
-            },
-          });
-          resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openResponsesEnabled: true,
-          });
+            });
+            resetConfigRuntimeState();
+            server = await startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: requestAuth,
+              controlUiEnabled: false,
+              openResponsesEnabled: true,
+            });
 
-          const owner = ensureProfileForEmail("response-owner@example.test");
-          const sessionKey = "agent:main:foreign-openresponses-http";
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId: "foreign-openresponses-http",
-              updatedAt: 1,
-              visibility: "shared",
-              createdVia: "operator",
-              createdActor: { type: "human", source: "profile", id: owner.id },
-            },
-          );
+            const owner = ensureProfileForEmail("response-owner@example.test");
+            const sessionKey = "agent:main:foreign-openresponses-http";
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: "foreign-openresponses-http",
+                updatedAt: 1,
+                visibility: "shared",
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: owner.id },
+              },
+            );
 
-          agentCommandMock.mockClear();
-          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-          const response = await postResponses(
-            port,
-            { model: "openclaw", input: "mutate foreign response session" },
-            {
-              "x-forwarded-for": "198.51.100.42",
-              "x-forwarded-proto": "https",
-              "x-forwarded-user": "guest@example.test",
-              "x-openclaw-session-key": sessionKey,
-            },
-          );
+            agentCommandMock.mockClear();
+            agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+            const response = await postResponses(
+              port,
+              { model: "openclaw", input: "mutate foreign response session" },
+              {
+                ...(sharedSecretOwner
+                  ? { authorization: "Bearer owner-secret" }
+                  : {
+                      "x-forwarded-for": "198.51.100.42",
+                      "x-forwarded-proto": "https",
+                      "x-forwarded-user": "guest@example.test",
+                    }),
+                "x-openclaw-session-key": sessionKey,
+              },
+            );
 
-          expect(response.status).toBe(403);
-          expect(await response.json()).toMatchObject({
-            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
-          });
-          expect(agentCommandMock).not.toHaveBeenCalled();
-        } finally {
-          await server?.close({ reason: "openresponses operator role session sharing test done" });
-          testState.gatewayAuth = previousGatewayAuth;
-          await writeGatewayConfig({});
-          resetConfigRuntimeState();
-        }
-      },
-    );
-  });
+            expect(response.status).toBe(sharedSecretOwner ? 200 : 403);
+            if (sharedSecretOwner) {
+              expect(agentCommandMock).toHaveBeenCalledOnce();
+            } else {
+              expect(await response.json()).toMatchObject({
+                error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+              });
+              expect(agentCommandMock).not.toHaveBeenCalled();
+            }
+          } finally {
+            await server?.close({
+              reason: "openresponses operator role session sharing test done",
+            });
+            testState.gatewayAuth = previousGatewayAuth;
+            await writeGatewayConfig({});
+            resetConfigRuntimeState();
+          }
+        },
+      );
+    },
+  );
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(

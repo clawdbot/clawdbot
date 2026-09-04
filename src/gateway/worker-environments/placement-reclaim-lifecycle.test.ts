@@ -210,7 +210,9 @@ describe("placement reclaim with provider-owned node teardown", () => {
           throw error;
         }
       });
-      const coordinated = coordinateWorkerPlacementDispatch(harness.service);
+      const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+        run(),
+      );
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
       vi.useFakeTimers();

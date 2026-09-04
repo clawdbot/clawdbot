@@ -36,6 +36,7 @@ type OpenClawReleaseClawHubPlanArgs = {
 };
 
 type OpenClawReleaseClawHubPlan = {
+  warnings: string[];
   bootstrapWorkflowSha: string;
   clawHubWorkflowRef: string;
   releasePublishBranch: string;
@@ -59,6 +60,7 @@ type OpenClawReleaseClawHubRuntimeStateArgs = {
   waitForClawHub: boolean;
   forceSkipClawHub: boolean;
   normalRunId?: string;
+  normalPublicationStaged?: boolean;
   bootstrapRunId?: string;
   bootstrapCompleted: boolean;
 };
@@ -202,7 +204,9 @@ export function buildOpenClawReleaseClawHubRuntimeState(
     args.bootstrapCompleted &&
     (normalRunId === undefined || args.waitForClawHub);
   const shouldSkipClawHubPackages =
-    args.forceSkipClawHub || !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
+    args.forceSkipClawHub ||
+    (normalRunId !== undefined && args.normalPublicationStaged === true) ||
+    !(shouldIncludeNormalRun || shouldVerifyClawHubPackages);
 
   const verifierArgs = shouldSkipClawHubPackages ? ["--skip-clawhub"] : [];
   if (shouldIncludeNormalRun) {
@@ -213,14 +217,20 @@ export function buildOpenClawReleaseClawHubRuntimeState(
   }
 
   let normalProofLine = "- plugin ClawHub publish: no normal OIDC candidates";
-  if (normalRunId !== undefined && args.waitForClawHub) {
+  if (normalRunId !== undefined && args.forceSkipClawHub) {
+    normalProofLine = `- plugin ClawHub publish: not verified after a required ClawHub failure: ${runUrl(repository, normalRunId)}`;
+  } else if (normalRunId !== undefined && args.normalPublicationStaged === true) {
+    normalProofLine = `- plugin ClawHub submission: ${runUrl(repository, normalRunId)}; public artifact verification follows successful release-parent completion`;
+  } else if (normalRunId !== undefined && args.waitForClawHub) {
     normalProofLine = `- plugin ClawHub publish: ${runUrl(repository, normalRunId)}`;
   } else if (normalRunId !== undefined) {
     normalProofLine = `- plugin ClawHub publish: dispatched separately, not awaited by this proof: ${runUrl(repository, normalRunId)}`;
   }
 
   let bootstrapProofLine = "- plugin ClawHub bootstrap: not needed";
-  if (bootstrapRunId !== undefined && (args.bootstrapCompleted || args.waitForClawHub)) {
+  if (bootstrapRunId !== undefined && args.forceSkipClawHub) {
+    bootstrapProofLine = `- plugin ClawHub bootstrap: not verified after a required ClawHub failure: ${runUrl(repository, bootstrapRunId)}`;
+  } else if (bootstrapRunId !== undefined && (args.bootstrapCompleted || args.waitForClawHub)) {
     bootstrapProofLine = `- plugin ClawHub bootstrap: ${runUrl(repository, bootstrapRunId)}`;
   } else if (bootstrapRunId !== undefined) {
     bootstrapProofLine = `- plugin ClawHub bootstrap: dispatched separately, not awaited by this proof: ${runUrl(repository, bootstrapRunId)}`;
@@ -367,6 +377,7 @@ export async function buildOpenClawReleaseClawHubPlan(
   assertNoPackageOverlap(normalPackages, bootstrapPackages);
 
   return {
+    warnings: plan.warnings,
     bootstrapWorkflowSha,
     clawHubWorkflowRef: bootstrapWorkflowRef,
     releasePublishBranch,

@@ -421,8 +421,9 @@ selected for that workspace. Startup tasks run sequentially; a failed task is
 logged and does not prevent later tasks.
 
 This executes instructions through an agent run, not as a shell script and not
-as a bootstrap file injection. It uses a temporary `agent:<id>:boot` session and
-preserves the prior session mapping. Normal final-response delivery is disabled;
+as a bootstrap file injection. Each run uses a fresh temporary
+`agent:<id>:boot:<run-id>` session, cleaned up after success or failure. Existing
+sessions and their history are preserved. Normal final-response delivery is disabled;
 if the instructions need to notify someone, they must specify a channel and
 target for the message tool. Missing or empty files are skipped.
 

@@ -11,6 +11,7 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
@@ -567,7 +568,7 @@ export async function recoverInterruptedSubagentRow(
               inputProvenance: {
                 kind: "inter_session",
                 sourceSessionKey: params.entry.requesterSessionKey,
-                sourceChannel: "internal",
+                sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
                 sourceTool: "subagent_interrupted_resume",
               },
               sessionEffects: "internal",

@@ -34,18 +34,16 @@ it.each(["config.changed", "chat.metadata.changed"])(
   async (event) => {
     const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
     let ready = false;
-    const request = vi.fn(
-      async (): Promise<ChatMetadataResult> => ({
-        commands: [],
-        models: [
-          {
-            ...model,
-            available: ready,
-            ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
-          },
-        ],
-      }),
-    );
+    const request = vi.fn(async (): Promise<ChatMetadataResult> => ({
+      commands: [],
+      models: [
+        {
+          ...model,
+          available: ready,
+          ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
+        },
+      ],
+    }));
     const client = { request } as unknown as GatewayBrowserClient;
     const state = {
       client,
@@ -123,8 +121,14 @@ it("invalidates chat metadata on config changes and same-client disconnects", ()
     phase: "connected",
     sessionKey: "agent:main:main",
   } as ApplicationGatewaySnapshot;
+  const connectionBootstrap = {
+    reset: vi.fn(),
+    run: (_key: string, task: () => Promise<unknown>) => task(),
+    synchronize: vi.fn(),
+  };
   const context = {
     gateway: { snapshot: connected },
+    connectionBootstrap,
     runtimeConfig: {
       state: { configFormDirty: false, configSnapshot: null },
       ensureLoaded: vi.fn(async () => null),

@@ -37,7 +37,6 @@ const config = {
             command: "node",
             args: ["scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
             requestTimeoutMs: timeoutSeconds * 1000,
-            turnCompletionIdleTimeoutMs: timeoutSeconds * 1000,
           },
         },
       },

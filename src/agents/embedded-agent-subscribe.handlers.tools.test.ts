@@ -1506,7 +1506,7 @@ describe("handleToolExecutionEnd MCP connect action tracking", () => {
 });
 
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
-  it("records accepted sessions_spawn identifiers", async () => {
+  it("records accepted sessions_spawn completion ownership", async () => {
     const { ctx } = createTestContext();
 
     await endTool(ctx, {
@@ -1518,6 +1518,7 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
           status: "accepted",
           runId: " run-child ",
           childSessionKey: " agent:claude:subagent:child ",
+          expectsCompletionMessage: true,
         },
       },
     });
@@ -1526,6 +1527,7 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
       {
         runId: "run-child",
         childSessionKey: "agent:claude:subagent:child",
+        expectsCompletionMessage: true,
       },
     ]);
     expect(ctx.state.replayState).toEqual({
@@ -2742,7 +2744,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed (exit 1)");
+    expect(payloads[0]?.text).toBe("⚠️ Exec failed (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -3077,7 +3079,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
+    expect(payloads[0]?.text).toBe("⚠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
@@ -3375,31 +3377,27 @@ describe("handleToolExecutionEnd derived tool events", () => {
       args: { command: "yes" },
     });
 
-    updateTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-large-update",
-      partialResult: {
-        details: {
-          status: "running",
-          aggregated: largeOutput,
-        },
-      },
-    });
-    updateTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-large-update",
-      partialResult: {
-        details: {
-          status: "running",
-          aggregated: `${largeOutput}again`,
-        },
-      },
-    });
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (const elapsed of [0, 249, 250]) {
+        clock.mockReturnValue(1_000 + elapsed);
+        updateTool(ctx, {
+          toolName: "exec",
+          toolCallId: "tool-exec-large-update",
+          partialResult: {
+            details: { status: "running", aggregated: `${largeOutput}${elapsed}` },
+          },
+        });
+      }
+    } finally {
+      clock.mockRestore();
+      resetAgentEventsForTest();
+    }
 
     const updateEvents = events.filter(
       (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
     );
-    expect(updateEvents).toHaveLength(1);
+    expect(updateEvents).toHaveLength(2);
     const partialResult = updateEvents[0]?.data?.partialResult as
       | { details?: { aggregated?: string } }
       | undefined;
@@ -3409,12 +3407,16 @@ describe("handleToolExecutionEnd derived tool events", () => {
     const commandOutputCalls = onAgentEvent.mock.calls
       .map((call) => call[0])
       .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
-    expect(commandOutputCalls).toHaveLength(1);
+    expect(commandOutputCalls).toHaveLength(2);
     const output = (commandOutputCalls[0] as { data?: { output?: string } }).data?.output;
     expect(output).toContain("...(live output truncated)...");
     expect(output?.length).toBeLessThan(largeOutput.length);
 
-    resetAgentEventsForTest();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "tool" && event.data.phase === "update"),
+    ).toHaveLength(3);
   });
 
   it("caps exec final output before result and command output events", async () => {

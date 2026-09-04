@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
@@ -318,11 +319,21 @@ export function registerClientVoiceConsultRun(params: {
       params.runId,
     );
   }
-  voiceSessionByRunId.set(params.runId, {
-    agentId: params.agentId,
-    voiceSessionId: params.voiceSessionId,
-    sessionKey: params.sessionKey,
-  });
+  if (
+    previousBinding?.agentId !== params.agentId ||
+    previousBinding.voiceSessionId !== params.voiceSessionId ||
+    previousBinding.sessionKey !== params.sessionKey
+  ) {
+    // Replays keep the operational claim; a reassignment must never revive it.
+    voiceSessionByRunId.set(
+      params.runId,
+      Object.freeze({
+        agentId: params.agentId,
+        voiceSessionId: params.voiceSessionId,
+        sessionKey: params.sessionKey,
+      }),
+    );
+  }
   // Bound to a call that already closed: re-arm the point-in-time summary owner so
   // the run completion becomes a retry point without coupling it to transcript work.
   if (recordClosed && params.config) {
@@ -508,7 +519,7 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      await appendTranscriptMessage(
+      const appended = await appendTranscriptMessage(
         { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
@@ -522,6 +533,13 @@ function appendVoiceTranscript(params: {
           now: timestamp,
         },
       );
+      // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
+      if (appended.appended) {
+        await publishTranscriptUpdate(
+          { ...sessionTarget, sessionId: sessionEntry.sessionId },
+          { message: appended.message, messageId: appended.messageId },
+        );
+      }
       runOpenClawAgentWriteTransaction(
         (database) => {
           const current = readRecordInTransaction(database, normalized.voiceSessionId);

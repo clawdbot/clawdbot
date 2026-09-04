@@ -1,6 +1,7 @@
 // Wizard session tests cover session creation and state transitions.
 
 import { describe, expect, test, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
@@ -273,6 +274,76 @@ describe("WizardSession", () => {
     expect(session.signal.aborted).toBe(true);
   });
 
+  test.each(["before prompting", "while pending"])(
+    "retires a manual prompt aborted %s without cancelling the wizard",
+    async (when) => {
+      const controller = new AbortController();
+      const reason = new Error("browser callback completed");
+      const rejected = vi.fn();
+      if (when === "before prompting") {
+        controller.abort(reason);
+      }
+      const session = new WizardSession(async (prompter) => {
+        await prompter
+          .text({ message: "Paste callback", signal: controller.signal })
+          .catch(rejected);
+        await prompter.note("Connected");
+      });
+      try {
+        let retiredStep: WizardStep | undefined;
+        if (when === "while pending") {
+          retiredStep = (await session.next()).step;
+          expect(retiredStep?.message).toBe("Paste callback");
+          controller.abort(reason);
+        }
+        const next = await session.next();
+        expect(next.step).toMatchObject({ type: "note", message: "Connected" });
+        expect(rejected).toHaveBeenCalledWith(reason);
+        expect(session.signal.aborted).toBe(false);
+        if (retiredStep) {
+          await expect(session.answer(retiredStep.id, "late-code")).rejects.toThrow(
+            "no pending step",
+          );
+        }
+        if (!next.step) {
+          throw new Error("expected the connected note");
+        }
+        await session.answer(next.step.id, undefined);
+        await session.whenSettled();
+        expect((await session.next()).status).toBe("done");
+      } finally {
+        session.cancel();
+        await session.whenSettled();
+      }
+    },
+  );
+
+  test.each(["done", "error"])(
+    "retires unanswered prompts when the runner is %s",
+    async (status) => {
+      const finish = createDeferredCore();
+      const promptFinished = createDeferredCore<unknown>();
+      const session = new WizardSession(async (prompter) => {
+        void prompter
+          .text({ message: "Optional manual callback" })
+          .then(() => promptFinished.resolve("answered"), promptFinished.resolve);
+        await finish.promise;
+        if (status === "error") {
+          throw new Error("provider exchange failed");
+        }
+      });
+      const step = (await session.next()).step;
+      if (!step) {
+        throw new Error("expected pending manual callback");
+      }
+      finish.resolve();
+      await session.whenSettled();
+      expect(await session.next()).toMatchObject({ done: true, status });
+      await expect(session.answer(step.id, "late-code")).rejects.toThrow("no pending step");
+      await expect(promptFinished.promise).resolves.toMatchObject({ name: "WizardCancelledError" });
+    },
+  );
+
   test("refuses cancellation after the durable commit point", async () => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -312,21 +383,30 @@ describe("WizardSession", () => {
     }
   });
 
-  test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    const session = new WizardSession(async () => {
-      await gate;
-    });
+  test.each(["return", "commit"])(
+    "a cancelled runner stays cancelled on late %s",
+    async (action) => {
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let committed = false;
+      const session = new WizardSession(async (_prompter, _signal, owner) => {
+        await gate;
+        if (action === "commit") {
+          owner.lockCancellation();
+          committed = true;
+        }
+      });
 
-    session.cancel();
-    finish();
-    await Promise.resolve();
+      session.cancel();
+      finish();
+      await session.whenSettled();
 
-    expect((await session.next()).status).toBe("cancelled");
-  });
+      expect((await session.next()).status).toBe("cancelled");
+      expect(committed).toBe(false);
+    },
+  );
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {
     const session = new WizardSession(async (prompter) => {

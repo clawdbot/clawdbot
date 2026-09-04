@@ -13,6 +13,7 @@ import {
 import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { listTasksForRelatedSessionKey } from "../../tasks/task-registry-query.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
   deliveryContextFromSession,
@@ -21,6 +22,7 @@ import {
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
 import type { AcpSessionManagerDeps } from "./manager.types.js";
+import { resolveAcpSessionTarget } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
@@ -28,6 +30,8 @@ const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
 
 /** Context needed to mirror a child ACP turn into the requester task registry. */
 type BackgroundTaskContext = {
+  agentId: string;
+  requesterAgentId: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
@@ -113,23 +117,56 @@ export function resolveBackgroundTaskContext(params: {
   deps: AcpSessionManagerDeps;
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   requestId: string;
   text: string;
 }): BackgroundTaskContext | null {
   const childEntry = params.deps.loadSessionEntry({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   })?.entry;
   const requesterSessionKey =
     normalizeText(childEntry?.spawnedBy) ?? normalizeText(childEntry?.parentSessionKey);
   if (!requesterSessionKey) {
     return null;
   }
-  const parentEntry = params.deps.loadSessionEntry({
+  const requesterOwners = new Set(
+    listTasksForRelatedSessionKey(params.sessionKey)
+      .filter(
+        (task) =>
+          task.runtime === "acp" &&
+          task.childSessionKey === params.sessionKey &&
+          task.agentId === params.agentId &&
+          (task.requesterSessionKey === requesterSessionKey ||
+            task.ownerKey === requesterSessionKey),
+      )
+      .flatMap((task) => (task.requesterAgentId ? [task.requesterAgentId] : [])),
+  );
+  // Spawn stamps the requesting agent at creation, before the first dispatched
+  // turn can reach task registration. This selects parent context, not authority.
+  if (
+    childEntry?.createdVia === "spawn" &&
+    childEntry.createdActor?.type === "agent" &&
+    childEntry.createdActor.id
+  ) {
+    requesterOwners.add(childEntry.createdActor.id);
+  }
+  if (requesterOwners.size > 1) {
+    throw new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      "ACP requester ownership is ambiguous; repair the child task relationship before retrying.",
+    );
+  }
+  const parentTarget = resolveAcpSessionTarget({
     cfg: params.cfg,
     sessionKey: requesterSessionKey,
-  })?.entry;
+    agentId: requesterOwners.values().next().value,
+  });
+  const parentEntry = params.deps.loadSessionEntry({ cfg: params.cfg, ...parentTarget })?.entry;
   return {
+    agentId: params.agentId,
+    requesterAgentId: parentTarget.agentId,
     requesterSessionKey,
     requesterOrigin:
       deliveryContextFromSession(parentEntry) ?? deliveryContextFromSession(childEntry),
@@ -150,6 +187,8 @@ export function createBackgroundTaskRecord(
       runtime: "acp",
       sourceId: context.runId,
       ownerKey: context.requesterSessionKey,
+      agentId: context.agentId,
+      requesterAgentId: context.requesterAgentId,
       scopeKind: "session",
       requesterOrigin: context.requesterOrigin,
       childSessionKey: context.childSessionKey,

@@ -1,5 +1,5 @@
-// CDP navigation receipts and session configuration survive an allowed document
-// change. Page data, execution contexts, and actions still require that document.
+// CDP navigation/request-continuation receipts and session configuration survive
+// allowed document changes. Page data, execution contexts, and actions do not.
 // These are exact protocol methods, never a caller-supplied access override.
 export const TAB_SCOPED_COMMANDS = new Set([
   "Page.navigate",
@@ -7,6 +7,13 @@ export const TAB_SCOPED_COMMANDS = new Set([
   "Page.navigateToHistoryEntry",
   "Page.enable",
   "Page.setLifecycleEventsEnabled",
+  "Fetch.enable",
+  "Fetch.disable",
+  "Fetch.continueRequest",
+  "Fetch.continueResponse",
+  "Fetch.continueWithAuth",
+  "Fetch.failRequest",
+  "Fetch.fulfillRequest",
   "Network.enable",
   "Network.setAttachDebugStack",
   "Runtime.enable",

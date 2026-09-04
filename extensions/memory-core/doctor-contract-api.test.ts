@@ -1049,6 +1049,60 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${eventPath}.migrated.2`)).resolves.toBeUndefined();
   });
 
+  it("resumes a partially committed host event import before archiving the source", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const events = Array.from({ length: 1_002 }, (_, index) => ({
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: `resume-${index}`,
+      resultCount: 0,
+      results: [],
+    }));
+    const raw = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    await fs.writeFile(eventPath, raw);
+    await context()
+      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
+      .clear();
+    const db = new DatabaseSync(path.join(rootDir, "state", "state", "openclaw.sqlite"));
+    try {
+      db.exec(`CREATE TRIGGER fail_host_import BEFORE INSERT ON plugin_state_entries
+        WHEN NEW.namespace = 'memory-host.events' AND json_extract(NEW.value_json, '$.event.query') = 'resume-750'
+        BEGIN SELECT RAISE(ABORT, 'injected host import failure'); END`);
+      await expect(hostEventsMigration().migrateLegacyState(migrationParams())).rejects.toThrow(
+        "Failed to register plugin state entry",
+      );
+      const partial = await readMemoryHostEventRecords({ workspaceDir, env });
+      expect(partial).toHaveLength(750);
+      expect(partial).toMatchObject(events.slice(0, 750));
+      await expect(fs.readFile(eventPath, "utf8")).resolves.toBe(raw);
+      await expect(fs.access(`${eventPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        context()
+          .openPluginStateKeyedStore({
+            namespace: "memory-host.event-migration-checkpoints",
+            maxEntries: 10_000,
+            overflowPolicy: "reject-new",
+          })
+          .entries(),
+      ).resolves.toEqual([]);
+    } finally {
+      db.exec("DROP TRIGGER IF EXISTS fail_host_import");
+      db.close();
+    }
+    resetPluginStateStoreForTests();
+    const result = await hostEventsMigration().migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    const recovered = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(recovered).toHaveLength(events.length);
+    expect(recovered).toMatchObject(events);
+    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await expect(hostEventsMigration().migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(await readMemoryHostEventRecords({ workspaceDir, env })).toEqual(recovered);
+  });
+
   it("leaves legacy host events in place when plugin-wide SQLite capacity is exhausted", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     await fs.writeFile(

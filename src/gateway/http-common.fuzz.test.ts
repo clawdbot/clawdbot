@@ -119,7 +119,7 @@ describe("fuzz: setDefaultSecurityHeaders", () => {
     }
   });
 
-  it("sets Strict-Transport-Security iff opts.strictTransportSecurity is a non-empty string", () => {
+  it("normalizes Strict-Transport-Security and omits blank values", () => {
     const rng = makeRng(0xb0b);
     for (let i = 0; i < ITERATIONS; i += 1) {
       const { res, setHeader } = makeMockHttpResponse();
@@ -128,9 +128,9 @@ describe("fuzz: setDefaultSecurityHeaders", () => {
       const stsCalls = setHeader.mock.calls.filter(
         (call) => call[0] === "Strict-Transport-Security",
       );
-      if (value.length > 0) {
+      if (value.trim().length > 0) {
         expect(stsCalls).toHaveLength(1);
-        expect(stsCalls[0]?.[1]).toBe(value);
+        expect(stsCalls[0]?.[1]).toBe(value.trim());
       } else {
         expect(stsCalls).toHaveLength(0);
       }

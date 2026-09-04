@@ -6,6 +6,10 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
+  NODE_CLAUDE_SKILLS_CAPABILITY,
+  NODE_CLAUDE_SKILLS_MESSAGE_BYTES,
+} from "../infra/node-claude-skill-protocol.js";
+import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
@@ -26,6 +30,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
@@ -364,6 +369,7 @@ export async function prepareNodeHostRuntime(params?: {
       ...new Set([
         "system",
         "mcp",
+        ...(claudePath ? [NODE_CLAUDE_SKILLS_CAPABILITY] : []),
         ...(installedAppsSharingEnabled ? ["device"] : []),
         ...pluginManifest.caps.filter(
           (cap) => params?.ephemeral !== true || (cap !== "computer" && cap !== "screen"),
@@ -462,7 +468,7 @@ export async function prepareNodeHostRuntime(params?: {
       if (workerSupervisor && !preparedContainerInitialized) {
         initializeWorkerSupervisor();
       }
-      const skillBins = new SkillBinsCache(client, pathEnv);
+      let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -528,7 +534,11 @@ export async function prepareNodeHostRuntime(params?: {
           if (closing || generation !== connectionGeneration) {
             return;
           }
-          const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
+          const claudeSkills =
+            frame.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND &&
+            requestsClaudeNodeSkillRuntime(frame.paramsJSON);
+          const duplexCommand =
+            duplexEnabled && (claudeSkills || isRegisteredNodeHostCommandDuplex(frame.command));
           const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
           // Every command must remain cancellable after dispatch; only duplex
@@ -569,6 +579,7 @@ export async function prepareNodeHostRuntime(params?: {
           const framedIo =
             input && progress
               ? createNodeDuplexEndpoint({
+                  ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
                   sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
                   onError: (error) => {
                     active.framedFailure = error;
@@ -660,6 +671,8 @@ export async function prepareNodeHostRuntime(params?: {
         },
         cancelAll() {
           connectionGeneration += 1;
+          // Retired refreshes may still finish; their cache must never serve the next connection.
+          skillBins = new SkillBinsCache(client, pathEnv);
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }

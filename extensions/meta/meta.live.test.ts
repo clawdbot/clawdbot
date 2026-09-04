@@ -7,8 +7,12 @@ import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
-const STANDARD_LIVE_MODEL_IDS = ["muse-spark-1.1", "muse-spark-1.2"] as const;
-const CONTRIBUTOR_LIVE_MODEL_ID = "muse-spark-1.2-contributor";
+const STANDARD_LIVE_MODEL_IDS = ["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"] as const;
+const STANDARD_CAP_LIVE_MODEL_IDS = ["muse-spark-1.3", "muse-spark-1.2"] as const;
+const CONTRIBUTOR_LIVE_MODEL_IDS = [
+  "muse-spark-1.3-contributor",
+  "muse-spark-1.2-contributor",
+] as const;
 // Validated 96x96 PNG: white background with a 20x72 green vertical center bar.
 const GREEN_VERTICAL_CENTER_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAABlBMVEUAsUD///8TauZEAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAQklEQVRo3u3ZMQEAAAjDsOHfNAY44SI1EAFNHRcAAABYAzIEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwHymoEAACXNba4HmGuMYsrAAAAAElFTkSuQmCC";
@@ -246,9 +250,13 @@ describeLive("meta plugin live", () => {
     120_000,
   );
 
-  it("uses the 131072 catalog output cap for muse-spark-1.2 when maxTokens is zero", async () => {
-    await expectLiveCatalogCapCompletion("muse-spark-1.2");
-  }, 120_000);
+  it.each(STANDARD_CAP_LIVE_MODEL_IDS)(
+    "uses the 131072 catalog output cap for %s when maxTokens is zero",
+    async (modelId) => {
+      await expectLiveCatalogCapCompletion(modelId);
+    },
+    120_000,
+  );
 
   it.each(STANDARD_LIVE_MODEL_IDS)(
     "accepts image input for %s",
@@ -260,20 +268,34 @@ describeLive("meta plugin live", () => {
 });
 
 describeContributorLive("meta contributor plugin live", () => {
-  it("lists the contributor model via the /models endpoint", async () => {
+  it("lists the contributor models via the /models endpoint", async () => {
     const ids = await fetchLiveModelIds();
-    expect(ids).toContain(CONTRIBUTOR_LIVE_MODEL_ID);
+    for (const modelId of CONTRIBUTOR_LIVE_MODEL_IDS) {
+      expect(ids).toContain(modelId);
+    }
   }, 30_000);
 
-  it("completes a contributor Responses API turn with high reasoning effort", async () => {
-    await expectLiveTextCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
-  }, 120_000);
+  it.each(CONTRIBUTOR_LIVE_MODEL_IDS)(
+    "completes a %s Responses API turn with high reasoning effort",
+    async (modelId) => {
+      await expectLiveTextCompletion(modelId);
+    },
+    120_000,
+  );
 
-  it("uses the 131072 catalog output cap for contributor when maxTokens is zero", async () => {
-    await expectLiveCatalogCapCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
-  }, 120_000);
+  it.each(CONTRIBUTOR_LIVE_MODEL_IDS)(
+    "uses the 131072 catalog output cap for %s when maxTokens is zero",
+    async (modelId) => {
+      await expectLiveCatalogCapCompletion(modelId);
+    },
+    120_000,
+  );
 
-  it("accepts image input for the contributor model", async () => {
-    await expectLiveImageCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
-  }, 120_000);
+  it.each(CONTRIBUTOR_LIVE_MODEL_IDS)(
+    "accepts image input for %s",
+    async (modelId) => {
+      await expectLiveImageCompletion(modelId);
+    },
+    120_000,
+  );
 });

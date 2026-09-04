@@ -47,7 +47,7 @@ export type ManagedRun = {
   /** The root result may settle before its independently owned descendants exit. */
   waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
-  /** Stop delivering output callbacks before owner teardown kills the child. */
+  /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
 };
 
@@ -66,10 +66,19 @@ export type SpawnSecretInput = {
   createData: () => Buffer;
 };
 
+export type ProcessAdapterConstruction = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+  /** Publish resource cleanup before readiness or private-input delivery can fail. */
+  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
+  /** Both output subscriptions observe bytes separately from decoded text. */
+  supportsRawOutput: boolean;
   onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
@@ -79,6 +88,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
 };
 
 type SpawnBaseInput = {
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
+  assertCurrent?: () => void;
   runId?: string;
   sessionId: string;
   backendId: string;
@@ -104,6 +115,8 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a distinct invocation name while executing argv[0]. */
+  argv0?: string;
   /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;
@@ -116,7 +129,7 @@ type SpawnChildInput = SpawnBaseInput & {
 
 type SpawnPtyInput = SpawnBaseInput & {
   mode: "pty";
-  ptyCommand: string;
+  argv: string[];
 };
 
 type SpawnAnchoredShellInput = SpawnBaseInput & {

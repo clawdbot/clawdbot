@@ -216,7 +216,12 @@ export async function deliverAgentHarnessQuestionPrompt(
   signal?.throwIfAborted();
   const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
   if (params.onBlockReply) {
-    await params.onBlockReply(payload, signal ? { abortSignal: signal } : undefined);
+    // The agent cannot finish until this prompt is answered. Give channel delivery
+    // an independent stable intent so it does not wait behind the blocked stream.
+    await params.onBlockReply(payload, {
+      ...(signal ? { abortSignal: signal } : {}),
+      deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
+    });
     return;
   }
   signal?.throwIfAborted();

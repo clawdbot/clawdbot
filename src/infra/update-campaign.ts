@@ -72,7 +72,20 @@ export class UpdateCampaignController {
     return this.campaign;
   }
 
+  reconcileTarget(target: UpdateCampaignTarget): boolean {
+    if (this.campaign?.state === "applying") {
+      return false;
+    }
+    if (this.target && !sameTarget(this.target, target)) {
+      this.clear();
+    }
+    return true;
+  }
+
   announce(announcement: UpdateCampaignAnnouncement): void {
+    if (!this.reconcileTarget(announcement.target)) {
+      return;
+    }
     if (this.target && this.campaign && sameTarget(this.target, announcement.target)) {
       this.announcement = announcement;
       this.reconcile();

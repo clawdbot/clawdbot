@@ -50,6 +50,7 @@ describe("Gateway GitHub publication", () => {
 
     const first = await coordinator.requestForSession(request);
     expect(first).toEqual({
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       requestId: expect.any(String),
       status: "published",
       url: "https://github.com/openclaw/openclaw/pull/125200",
@@ -748,11 +749,12 @@ describe("Gateway GitHub publication", () => {
       }),
     ).resolves.toEqual({
       requestId: expect.any(String),
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       status: "failed",
       code: "workspace_changed",
       message: "GitHub publication failed.",
       nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
     });
     expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
@@ -872,6 +874,7 @@ describe("Gateway GitHub publication", () => {
       await resumed.resumeSessionRequests();
 
       expect(resumed.read(requestId)).toEqual({
+        publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
         requestId,
         status: "published",
         url: "https://github.com/openclaw/openclaw/pull/125200",
