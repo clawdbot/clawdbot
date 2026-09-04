@@ -71,6 +71,7 @@ describe("type suppression inventory", () => {
         .filter((finding) => finding.kind === "expect-error")
         .map((finding) => `${finding.file}:${finding.line}:${finding.excerpt}`),
     ).toEqual([
+      "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:22:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
       "src/infra/kysely-sync.types.test.ts:49:@ts-expect-error Kysely checks selected column string literals.",
       "src/infra/kysely-sync.types.test.ts:52:@ts-expect-error Kysely checks table string literals.",
       "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",

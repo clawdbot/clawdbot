@@ -139,6 +139,9 @@ command handling is enabled for the surface.
   first owner; Control UI pairing has an explicit owner checkbox. Authorized
   non-owners receive a refusal with the exact configuration command for their
   sender ID when using an owner-only command such as `/restart` or `/update`.
+  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
+  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`;
+  Doctor rewrites recognized channel entries and reports their list positions.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their

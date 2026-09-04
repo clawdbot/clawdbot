@@ -7,3 +7,8 @@ typealias SkillMissing = OpenClawKit.SkillMissing
 typealias SkillInstallOption = OpenClawKit.SkillInstallOption
 typealias SkillInstallResult = OpenClawKit.SkillInstallResult
 typealias SkillUpdateResult = OpenClawKit.SkillUpdateResult
+
+struct GatewaySkillCatalog: Sendable {
+    let skills: [SkillStatus]
+    let source: GatewayConnection.ServerLease
+}

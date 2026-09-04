@@ -2378,7 +2378,6 @@ describe("CLI attempt execution", () => {
       });
       const sessionEntry: SessionEntry = {
         sessionId,
-        sessionFile: internalSessionFile,
         updatedAt: Date.now(),
       };
 
@@ -2429,10 +2428,8 @@ describe("CLI attempt execution", () => {
 
   it("persists CLI replies into the session transcript", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript";
-    const sessionFile = path.join(tmpDir, "session-cli-transcript.jsonl");
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-transcript",
-      sessionFile,
       updatedAt: 1,
       status: "running",
       startedAt: 2,
@@ -2568,8 +2565,7 @@ describe("CLI attempt execution", () => {
 
   it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
     const sessionKey = "agent:main:direct:cli-recorder-owned-user";
-    const sessionFile = path.join(tmpDir, "session-cli-recorder-owned-user.jsonl");
-    const sessionEntry = makeSessionEntry("session-cli-recorder-owned-user", { sessionFile });
+    const sessionEntry = makeSessionEntry("session-cli-recorder-owned-user");
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
     await appendTranscriptMessage(
@@ -2721,8 +2717,7 @@ describe("CLI attempt execution", () => {
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";
-    const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
-    const sessionEntry = makeSessionEntry("session-acp-media-only", { sessionFile });
+    const sessionEntry = makeSessionEntry("session-acp-media-only");
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
 
@@ -2771,10 +2766,8 @@ describe("CLI attempt execution", () => {
 
   it("does not append a CLI transcript after the session is deleted", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-deleted";
-    const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");
     const staleEntry: SessionEntry = {
       sessionId: "session-cli-stale",
-      sessionFile: staleSessionFile,
       updatedAt: 1,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: staleEntry };
@@ -2794,7 +2787,9 @@ describe("CLI attempt execution", () => {
     });
 
     expect(result).toEqual({ kind: "session-rebound", sessionEntry: undefined });
-    await expect(fs.stat(staleSessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      await loadTranscriptEvents({ agentId: "main", sessionId: staleEntry.sessionId, storePath }),
+    ).toEqual([]);
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).toBeUndefined();
   });
@@ -3535,7 +3530,10 @@ describe("CLI attempt execution", () => {
 
   it("routes canonical OpenAI models through the configured embedded Codex runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-codex-cli";
-    const sessionEntry = makeSessionEntry("openclaw-session-canonical-codex-cli");
+    const sessionEntry = {
+      ...makeSessionEntry("openclaw-session-canonical-codex-cli"),
+      toolOverrides: { webSearch: false },
+    };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -3583,6 +3581,7 @@ describe("CLI attempt execution", () => {
         chat: { id: "chat-embedded" },
       },
       senderId: "sender-embedded",
+      toolOverrides: { webSearch: false },
     });
   });
 

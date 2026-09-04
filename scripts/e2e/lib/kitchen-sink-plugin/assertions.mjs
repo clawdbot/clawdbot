@@ -332,7 +332,7 @@ const requiredFullDiagnosticCanaries = new Set([
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
-  'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+  'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
   "session scheduler job registration requires unique id, sessionKey, and kind",
 ]);
@@ -351,7 +351,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
-    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
     "model catalog provider registration missing provider",

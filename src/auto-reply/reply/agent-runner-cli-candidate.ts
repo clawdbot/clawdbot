@@ -36,7 +36,6 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
@@ -138,7 +137,7 @@ export async function runCliFallbackCandidate(
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnSettlement(
       {
@@ -424,10 +423,7 @@ export async function runCliFallbackCandidate(
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
-            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-              turn.followupRun,
-              toolAuthorityRoute,
-            ),
+            toolAuthorityFingerprint,
             abortSignal: params.runAbortSignal,
             // Native input is already host-authored. Keep its stable delivery
             // context out of the model-output normalization wrapper.

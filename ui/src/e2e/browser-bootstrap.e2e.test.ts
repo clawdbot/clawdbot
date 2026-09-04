@@ -29,83 +29,92 @@ suite.define(() => {
           releaseHandoff = resolve;
         });
 
-        // Exercise secure-origin browser behavior while serving only this test's local bundle.
-        await page.route(`${origin}/**`, async (route) => {
-          const requested = new URL(route.request().url());
-          const upstream = new URL(
-            `${requested.pathname}${requested.search}`,
-            suite.server.baseUrl,
-          );
-          const response = await route.fetch({ url: upstream.href });
-          await route.fulfill({ response });
-        });
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          deviceToken,
-          heldMethods: ["connect"],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                { type: "text", text: "Your browser is connected. This is synthetic proof data." },
-              ],
-            },
-          ],
-        });
-        await page.route(`${origin}/.well-known/openclaw/browser-bootstrap`, async (route) => {
-          helperCalls += 1;
-          expect(route.request().method()).toBe("GET");
-          expect(route.request().headers().authorization).toBeUndefined();
-          await handoffReady;
-          await route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            headers: { "Cache-Control": "no-store" },
-            body: JSON.stringify({ bootstrapToken, bootstrapProfile: "owner" }),
+        try {
+          // Exercise secure-origin browser behavior while serving only this test's local bundle.
+          await page.route(`${origin}/**`, async (route) => {
+            const requested = new URL(route.request().url());
+            const upstream = new URL(
+              `${requested.pathname}${requested.search}`,
+              suite.server.baseUrl,
+            );
+            const response = await route.fetch({ url: upstream.href });
+            await route.fulfill({ response });
           });
-        });
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            deviceToken,
+            heldMethods: ["connect"],
+            historyMessages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: "Your browser is connected. This is synthetic proof data.",
+                  },
+                ],
+              },
+            ],
+          });
+          await page.route(`${origin}/.well-known/openclaw/browser-bootstrap`, async (route) => {
+            helperCalls += 1;
+            expect(route.request().method()).toBe("GET");
+            expect(route.request().headers().authorization).toBeUndefined();
+            await handoffReady;
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              headers: { "Cache-Control": "no-store" },
+              body: JSON.stringify({ bootstrapToken, bootstrapProfile: "owner" }),
+            });
+          });
 
-        await page.goto(deepLink);
-        const initialConnect = await gateway.waitForRequest("connect");
-        expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
-        expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
-        await gateway.rejectDeferred("connect", {
-          code: "INVALID_REQUEST",
-          message: "The Gateway needs a matching token or password.",
-          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-        });
-        await page.getByText("Auth required", { exact: true }).waitFor();
-        await expect.poll(() => helperCalls).toBe(1);
-        await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
+          await page.goto(deepLink);
+          const initialConnect = await gateway.waitForRequest("connect");
+          expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
+          expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
+          await gateway.rejectDeferred("connect", {
+            code: "INVALID_REQUEST",
+            message: "The Gateway needs a matching token or password.",
+            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+          });
+          await page.getByText("Auth required", { exact: true }).waitFor();
+          await expect.poll(() => helperCalls).toBe(1);
+          await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
 
-        await gateway.deferNext("connect");
-        releaseHandoff();
-        const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
-        expect(recoveredConnect.params).toMatchObject({
-          auth: { bootstrapToken },
-          device: { id: expect.any(String), signature: expect.any(String) },
-        });
-        await gateway.resolveDeferred("connect");
-        await waitForControlUiGatewayReady(page);
-        await page
-          .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
-          .waitFor();
-        expect(page.url()).toBe(deepLink);
-        await page.screenshot({ path: path.join(artifactDir, "2-connected.png") });
+          await gateway.deferNext("connect");
+          releaseHandoff();
+          const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
+          expect(recoveredConnect.params).toMatchObject({
+            auth: { bootstrapToken },
+            device: { id: expect.any(String), signature: expect.any(String) },
+          });
+          await gateway.resolveDeferred("connect");
+          await waitForControlUiGatewayReady(page);
+          await page
+            .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
+            .waitFor();
+          expect(page.url()).toBe(deepLink);
+          await page.screenshot({ path: path.join(artifactDir, "2-connected.png") });
 
-        await page.reload();
-        const reloadConnect = await gateway.waitForRequest("connect");
-        expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
-        expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
-        await gateway.resolveDeferred("connect");
-        await waitForControlUiGatewayReady(page);
-        await page
-          .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
-          .waitFor();
-        expect(helperCalls).toBe(1);
-        expect(page.url()).toBe(deepLink);
-        await page.screenshot({ path: path.join(artifactDir, "3-reloaded.png") });
-        return page.video();
+          await page.reload();
+          const reloadConnect = await gateway.waitForRequest("connect");
+          expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
+          expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
+          await gateway.resolveDeferred("connect");
+          await waitForControlUiGatewayReady(page);
+          await page
+            .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
+            .waitFor();
+          expect(helperCalls).toBe(1);
+          expect(page.url()).toBe(deepLink);
+          await page.screenshot({ path: path.join(artifactDir, "3-reloaded.png") });
+          return page.video();
+        } finally {
+          // Context closure disposes fetched bodies; finish these page-owned routes first.
+          releaseHandoff();
+          await page.unrouteAll({ behavior: "wait" });
+        }
       },
     );
     await video?.saveAs(path.join(artifactDir, "browser-bootstrap.webm"));
