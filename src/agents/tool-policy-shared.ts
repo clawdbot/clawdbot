@@ -64,11 +64,17 @@ export function isToolExecutionAllowed(allowNames: readonly string[], toolName: 
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
 }
 
-export function normalizeToolPolicyName(name: string) {
+function readToolNameAlias(normalizedName: string): string | undefined {
+  return Object.hasOwn(TOOL_NAME_ALIASES, normalizedName)
+    ? TOOL_NAME_ALIASES[normalizedName]
+    : undefined;
+}
+
+export function normalizeToolPolicyName(name: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   // Tool names come from config and model tool calls, so inherited keys such as
   // "constructor" or "__proto__" must not read through to Object.prototype.
-  return Object.hasOwn(TOOL_NAME_ALIASES, normalized) ? TOOL_NAME_ALIASES[normalized] : normalized;
+  return readToolNameAlias(normalized) ?? normalized;
 }
 
 /** Checks whether an in-progress prefix can still resolve to an allowed tool or alias. */
@@ -84,9 +90,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
   const allowed = new Set<string>();
   for (const toolName of allowedToolNames) {
     const foldedToolName = normalizeLowercaseStringOrEmpty(toolName);
-    const normalizedToolName = Object.hasOwn(TOOL_NAME_ALIASES, foldedToolName)
-      ? TOOL_NAME_ALIASES[foldedToolName]
-      : foldedToolName;
+    const normalizedToolName = readToolNameAlias(foldedToolName) ?? foldedToolName;
     if (normalizedToolName) {
       allowed.add(normalizedToolName);
     }
@@ -101,9 +105,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  const resolvedPrefix = Object.hasOwn(TOOL_NAME_ALIASES, normalizedPrefix)
-    ? TOOL_NAME_ALIASES[normalizedPrefix]
-    : normalizedPrefix;
+  const resolvedPrefix = readToolNameAlias(normalizedPrefix) ?? normalizedPrefix;
   if (resolvedPrefix !== normalizedPrefix) {
     for (const toolName of allowed) {
       if (toolName.startsWith(resolvedPrefix)) {
