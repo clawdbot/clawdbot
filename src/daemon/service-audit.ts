@@ -201,6 +201,8 @@ async function auditSystemdUnit(
 
   // The manager owns merged drop-ins and dependency links. Fall back wholesale
   // to the base unit only when its bounded effective-state query fails.
+  // `systemctl show` still exits 0 for masked and not-found units, with empty
+  // After/Wants and RestartUSec=100ms defaults. Those are not loaded settings.
   const manager = await execSystemctlUser(
     env,
     [
@@ -208,11 +210,15 @@ async function auditSystemdUnit(
       `${resolveSystemdServiceName(env)}.service`,
       "--no-page",
       "--property",
-      "After,Wants,RestartUSec,KillMode",
+      "After,Wants,RestartUSec,KillMode,LoadState",
     ],
     timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
   );
   const entries = manager.code === 0 ? parseKeyValueOutput(manager.stdout, "=") : undefined;
+  const loadState = normalizeLowercaseStringOrEmpty(entries?.loadstate);
+  if (loadState && loadState !== "loaded") {
+    return;
+  }
   const parsed = entries
     ? {
         after: new Set(entries.after?.split(/\s+/).filter(Boolean)),

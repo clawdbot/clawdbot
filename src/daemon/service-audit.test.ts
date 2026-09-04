@@ -616,6 +616,7 @@ describe("auditGatewayServiceConfig", () => {
         "RestartUSec=5s",
         "After=network-online.target",
         "Wants=network-online.target",
+        "LoadState=loaded",
       ],
       code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
       expected: true,
@@ -633,6 +634,7 @@ describe("auditGatewayServiceConfig", () => {
         "KillMode=control-group",
         "RestartUSec=5s",
         "After=network-online.target",
+        "LoadState=loaded",
       ],
       code: SERVICE_AUDIT_CODES.systemdRestartSec,
       expected: false,
@@ -645,6 +647,7 @@ describe("auditGatewayServiceConfig", () => {
         "After=basic.target network-online.target",
         "KillMode=control-group",
         "Wants=network-online.target",
+        "LoadState=loaded",
       ],
       code: SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
       expected: false,
@@ -662,6 +665,7 @@ describe("auditGatewayServiceConfig", () => {
         "RestartUSec=5s",
         "Wants=basic.target",
         "KillMode=control-group",
+        "LoadState=loaded",
       ],
       code: SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
       expected: true,
@@ -691,13 +695,87 @@ describe("auditGatewayServiceConfig", () => {
       expect(hasIssue(audit, code)).toBe(expected);
       expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
         env,
-        ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode"],
+        ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode,LoadState"],
         321,
       );
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    {
+      name: "masked",
+      // systemd 259: `systemctl --user show` exits 0 for a /dev/null mask with
+      // empty After/Wants and RestartUSec=100ms. Those defaults are not the
+      // unit's configured settings.
+      manager: [
+        "Wants=",
+        "After=",
+        "LoadState=masked",
+        'LoadError=org.freedesktop.systemd1.UnitMasked "Unit openclaw-audit.service is masked."',
+        "RestartUSec=100ms",
+        "KillMode=control-group",
+      ],
+    },
+    {
+      name: "not-found",
+      manager: [
+        "Wants=",
+        "After=",
+        "LoadState=not-found",
+        'LoadError=org.freedesktop.systemd1.NoSuchUnit "Unit openclaw-audit.service not found."',
+        "RestartUSec=100ms",
+        "KillMode=control-group",
+      ],
+    },
+  ])(
+    "does not recommend systemd content repairs when manager LoadState is $name",
+    async ({ manager }) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-unloaded-"));
+      try {
+        const unitName = "openclaw-audit.service";
+        const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
+        await writeSystemdUnitForAudit(
+          home,
+          // Keep the on-disk unit incomplete so a file fallback would still
+          // emit content repairs. Masked/not-found manager defaults must not.
+          ["KillMode=control-group"],
+          unitName,
+        );
+        execSystemctlUser.mockResolvedValueOnce({
+          stdout: manager.join("\n"),
+          stderr: "",
+          code: 0,
+        });
+
+        const audit = await auditGatewayServiceConfig({
+          env,
+          platform: "linux",
+          timeoutMs: 321,
+          command: {
+            programArguments: ["/usr/bin/node", "gateway"],
+            environment: { PATH: "/usr/bin:/bin" },
+          },
+        });
+
+        expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
+        expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
+          env,
+          [
+            "show",
+            unitName,
+            "--no-page",
+            "--property",
+            "After,Wants,RestartUSec,KillMode,LoadState",
+          ],
+          321,
+        );
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["process", "none"])(
     `warns when KillMode is %s in explicit unit file`,
