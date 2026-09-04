@@ -69,6 +69,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Bot Loop Cooldown Seconds",
     help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
   },
+  "botLoopProtection.maxConversationBotEvents": {
+    label: "Slack Bot Conversation Burst Limit",
+    help: "Opt-in bot-authored message limit (1-500) for one Slack conversation over 10 minutes. Trips only when 2+ peer bots are each actively posting.",
+  },
   relay: {
     label: "Slack Relay Mode",
     help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',

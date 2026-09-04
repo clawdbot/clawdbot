@@ -841,6 +841,40 @@ describe("preflightDiscordMessage", () => {
     expect(await runBotMessage("m-loop-default-2")).toBeNull();
   });
 
+  it("does not count a replayed Discord message twice in the conversation burst", async () => {
+    const channelId = "channel-bot-loop-replay";
+    const guildId = "guild-bot-loop-replay";
+    const discordConfig = {
+      allowBots: true,
+      botLoopProtection: {
+        enabled: true,
+        maxEventsPerWindow: 10,
+        maxConversationBotEvents: 4,
+        cooldownSeconds: 60,
+      },
+    } as DiscordConfig;
+    const runBotMessage = async (id: string, senderId: string) =>
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: createDiscordMessage({
+          id,
+          channelId,
+          content: "relay <@openclaw-bot>",
+          mentionedUsers: [{ id: "openclaw-bot" }],
+          author: { id: senderId, bot: true, username: "Relay" },
+        }),
+        discordConfig,
+      });
+
+    expect(await runBotMessage("m-loop-replay-a1", "relay-bot-a")).not.toBeNull();
+    expect(await runBotMessage("m-loop-replay-a1", "relay-bot-a")).not.toBeNull();
+    expect(await runBotMessage("m-loop-replay-a2", "relay-bot-a")).not.toBeNull();
+    expect(await runBotMessage("m-loop-replay-b1", "relay-bot-b")).not.toBeNull();
+    expect(await runBotMessage("m-loop-replay-b2", "relay-bot-b")).not.toBeNull();
+    expect(await runBotMessage("m-loop-replay-b3", "relay-bot-b")).toBeNull();
+  });
+
   it("does not count bot messages that earlier preflight gates drop (#58789)", async () => {
     const channelId = "channel-bot-loop-dropped";
     const guildId = "guild-bot-loop-dropped";

@@ -963,6 +963,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults.botLoopProtection.maxEventsPerWindow": "Default Bot Loop Events per Window",
   "channels.defaults.botLoopProtection.windowSeconds": "Default Bot Loop Window Seconds",
   "channels.defaults.botLoopProtection.cooldownSeconds": "Default Bot Loop Cooldown Seconds",
+  "channels.defaults.botLoopProtection.maxConversationBotEvents":
+    "Default Bot Conversation Burst Limit",
   "channels.mattermost": "Mattermost",
   "channels.modelByChannel": "Channel Model Overrides",
   "channels.googlechat.botLoopProtection": "Google Chat Bot Loop Protection",

@@ -40,6 +40,10 @@ export const matrixChannelConfigUiHints = {
     label: "Matrix Bot Loop Cooldown Seconds",
     help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
   },
+  "botLoopProtection.maxConversationBotEvents": {
+    label: "Matrix Bot Conversation Burst Limit",
+    help: "Opt-in bot-authored message limit (1-500) for one room over 10 minutes. Trips only when 2+ peer bots are each actively posting.",
+  },
   dangerouslyAllowNameMatching: {
     label: "Matrix Display Name Matching",
     help: "Compatibility opt-in for resolving Matrix display names and joined room names in allowlists. Prefer full @user:server IDs and room IDs or aliases because names are mutable.",

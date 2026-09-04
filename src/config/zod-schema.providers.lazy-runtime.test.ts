@@ -58,4 +58,22 @@ describe("ChannelsSchema bundled runtime loading", () => {
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
   });
+
+  it("bounds the opt-in conversation burst budget", async () => {
+    const runtime = await importFreshModule<typeof import("./zod-schema.channels-config.js")>(
+      import.meta.url,
+      "./zod-schema.channels-config.js?scope=channels-burst-limit",
+    );
+
+    expect(() =>
+      runtime.ChannelsSchema.parse({
+        defaults: { botLoopProtection: { maxConversationBotEvents: 501 } },
+      }),
+    ).toThrow();
+    expect(
+      runtime.ChannelsSchema.parse({
+        defaults: { botLoopProtection: { maxConversationBotEvents: 500 } },
+      })?.defaults?.botLoopProtection?.maxConversationBotEvents,
+    ).toBe(500);
+  });
 });

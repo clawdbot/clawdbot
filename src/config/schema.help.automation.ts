@@ -338,6 +338,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
   "channels.defaults.botLoopProtection.cooldownSeconds":
     "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
+  "channels.defaults.botLoopProtection.maxConversationBotEvents":
+    "Optional bot-authored event limit (1-500) for one conversation over 10 minutes. Trips only when at least two peer bots besides the receiving bot are each actively posting. Unset disables the conversation-wide budget.",
   "agents.defaults.heartbeat.directPolicy":
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.entries.*.heartbeat.directPolicy":

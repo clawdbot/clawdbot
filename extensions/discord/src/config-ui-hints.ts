@@ -298,6 +298,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Bot Loop Cooldown Seconds",
     help: "Seconds to suppress a Discord bot pair after it exceeds the loop budget. Default: 60.",
   },
+  "botLoopProtection.maxConversationBotEvents": {
+    label: "Discord Bot Conversation Burst Limit",
+    help: "Opt-in bot-authored message limit (1-500) for one Discord channel over 10 minutes. Trips only when 2+ peer bots are each actively posting.",
+  },
   mentionAliases: {
     label: "Discord Mention Aliases",
     help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",

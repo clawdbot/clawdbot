@@ -227,6 +227,57 @@ describe("channel turn finalize", () => {
     resetLogger();
   });
 
+  it("drops a multi-party bot burst that stays under every pair budget", async () => {
+    const onDispatchSkipped = vi.fn();
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    }));
+    const runTurn = (senderId: string, nowMs: number) =>
+      runPreparedChannelTurn({
+        channel: "test",
+        routeSessionKey: "agent:main:test:burst",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: createRecordInboundSession(),
+        runDispatch,
+        runDispatchLifecycle: {
+          turnAdoptionLifecycle: undefined,
+          onDispatchSkipped,
+        },
+        messageId: `msg-${senderId}-${nowMs}`,
+        botLoopProtection: {
+          scopeId: "burst-loop-test",
+          conversationId: "burst-room",
+          senderId,
+          receiverId: "self",
+          // Pair budget stays permissive so only the conversation burst trips.
+          config: {
+            maxEventsPerWindow: 100,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+            maxConversationBotEvents: 2,
+          },
+          defaultEnabled: true,
+          nowMs,
+        },
+      });
+
+    // Two peer senders alternate; the burst trips once both are actively
+    // posting (2+ events each in the window) and the total exceeds the limit.
+    for (let index = 0; index < 3; index += 1) {
+      const turn = await runTurn(`bot-${index % 2}`, 1_000 + index * 1_000);
+      expect(turn.dispatched).toBe(true);
+    }
+    const tripped = await runTurn("bot-1", 5_000);
+    expect(tripped).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+    });
+    expect(onDispatchSkipped).toHaveBeenCalledWith("botLoopProtection");
+    expect(runDispatch).toHaveBeenCalledTimes(3);
+  });
+
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
