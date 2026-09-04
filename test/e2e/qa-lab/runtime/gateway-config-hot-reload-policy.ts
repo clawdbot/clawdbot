@@ -250,7 +250,9 @@ export async function proveHotReloadPolicy({
         "Rejected managed-hook import retained A and its gate; valid session:patch recorder replacement A→B ran exactly once, entry/global disable suppressed handlers, and re-enable restored B",
       );
     } finally {
-      await patch({ hooks: { internal: initial.hooks?.internal ?? null } }, ["hooks.internal"]);
+      await patch({ hooks: { internal: initial.hooks?.internal ?? null } }, [
+        "hooks.internal.load.extraDirs",
+      ]);
     }
   });
 
@@ -463,7 +465,15 @@ export async function proveHotReloadChannelPolicy({
         "The same running QA channel rejected→executed→rejected the real /config command after shared-policy refresh; the manually stopped account stayed stopped",
       );
     } finally {
-      await patchChannels({ commands: initial.commands ?? null }, ["commands"]);
+      await patchChannels(
+        {
+          commands: {
+            config: initial.commands?.config ?? null,
+            ownerAllowFrom: initial.commands?.ownerAllowFrom ?? null,
+          },
+        },
+        ["commands.ownerAllowFrom"],
+      );
     }
   });
 
@@ -510,7 +520,7 @@ export async function proveHotReloadChannelPolicy({
           channels: { [channel]: { groupPolicy: "open", groupAllowFrom: null } },
           accessGroups: initial.accessGroups ?? null,
         },
-        ["accessGroups"],
+        ["channels.qa-channel.groupAllowFrom", "accessGroups.hot-reload-policy.members.qa-channel"],
       );
     }
   });
@@ -626,7 +636,8 @@ export async function proveHotReloadChannelPolicy({
         );
       } finally {
         await patch({ approvals: { [kind]: initial.approvals?.[kind] ?? null } }, [
-          `approvals.${kind}`,
+          `approvals.${kind}.agentFilter`,
+          `approvals.${kind}.targets`,
         ]);
       }
     });

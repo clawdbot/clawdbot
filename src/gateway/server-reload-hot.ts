@@ -1,12 +1,12 @@
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
-import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provider-auth.js";
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
 } from "../agents/prepared-model-runtime.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -14,10 +14,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import {
-  shouldRefreshContextWindowCache,
-  shouldRewarmProviderAuthState,
-} from "./config-reload-recovery.js";
+import { shouldRefreshContextWindowCache } from "./config-reload-recovery.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -104,9 +101,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const isCurrent = () => !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
+    const candidateEnv = publication?.runtimeEnv ?? process.env;
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
 
+    // Revalidate auth on demand, as startup does. A broad sweep prepares plugin
+    // auth in this thread before its worker starts and can starve config RPCs.
     resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
@@ -124,7 +124,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await import("../hooks/loader.js")
           ).prepareInternalHooks(
             nextConfig,
-            resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig)),
+            tryResolveConfiguredAgentWorkspaceDir(nextConfig, candidateEnv) ??
+              resolveDefaultAgentWorkspaceDir(candidateEnv),
           )
         : undefined;
     assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
@@ -178,7 +179,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     let preparedModelRuntimeReplacementGateId: PreparedModelRuntimeReplacementGateId | undefined;
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
-    const candidateEnv = publication?.runtimeEnv ?? process.env;
     // Use one candidate env snapshot before publication and through later channel starts.
     const shouldSkipChannelRestart =
       isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_CHANNELS) ||
@@ -608,15 +608,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       } catch (err) {
         scheduleRecoveryRestart("context window cache reload", err);
       }
-    }
-    if (shouldRewarmProviderAuthState(plan)) {
-      void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
-        isCancelled: () => !isCurrent(),
-      }).catch((err: unknown) => {
-        if (isCurrent()) {
-          params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
-        }
-      });
     }
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);

@@ -95,29 +95,24 @@ import {
 } from "../secrets/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { isRecord } from "../utils.js";
-import { diffConfigPaths } from "./config-diff.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
-import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
+import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplicationStatus } from "./config-reload-status.types.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
-import {
-  GatewayConfigReloadSupersededError,
-  GatewayHotReloadCancelledError,
-} from "./server-reload-contracts.js";
-import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import {
-  abortPendingChannelReloads,
-  createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
-  startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
-} from "./server-reload-handlers.js";
+import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
+import { abortPendingChannelReloads } from "./server-reload-generation.js";
+import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
+import { startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl } from "./server-reload-managed.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
@@ -314,7 +309,6 @@ const hoisted = vi.hoisted(() => ({
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
-  warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
@@ -441,16 +435,6 @@ vi.mock("../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: () => {
     hoisted.reloadEvents.push("clear-provider-auth");
     hoisted.clearCurrentProviderAuthState();
-  },
-  warmCurrentProviderAuthStateOffMainThread: async (
-    cfg: OpenClawConfig,
-    options?: { isCancelled?: () => boolean },
-  ) => {
-    hoisted.reloadEvents.push("warm-provider-auth");
-    if (options?.isCancelled?.()) {
-      return;
-    }
-    await hoisted.warmCurrentProviderAuthStateOffMainThread(cfg);
   },
 }));
 
@@ -979,7 +963,6 @@ afterEach(() => {
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
-  hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
   hoisted.buildGatewayCronService.mockClear();
@@ -1738,7 +1721,7 @@ describe("managed reload transaction ownership", () => {
   );
 });
 
-describe("provider auth hot reload path ownership", () => {
+describe("prepared provider auth reload invalidation", () => {
   it.each([
     "auth",
     "auth.profiles.openai.provider",
@@ -1794,8 +1777,8 @@ describe("provider auth hot reload path ownership", () => {
     "agents.entries.main.agentDir",
     "agents.entries.main.subagents",
     "agents.entries.main.subagents.model.primary",
-  ])("rewarm remains required for auth-relevant config path %s", (changedPath) => {
-    expect(shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
+  ])("invalidates prepared auth for config path %s", (changedPath) => {
+    expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
       true,
     );
   });
@@ -1833,21 +1816,21 @@ describe("provider auth hot reload path ownership", () => {
     "channels.discord.accounts.bot",
     "gateway.port",
     "cron.schedules.daily",
-  ])("skips provider auth scans for unrelated config path %s", (changedPath) => {
-    expect(shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
+  ])("can retain prepared auth for unrelated config path %s", (changedPath) => {
+    expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
       false,
     );
   });
 
-  it("rewarm remains required when plugins reload without a config path", () => {
+  it("invalidates prepared auth when plugins reload without a config path", () => {
     expect(
-      shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [], reloadPlugins: true })),
+      doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [], reloadPlugins: true })),
     ).toBe(true);
   });
 
   it("retains auth-relevant changes mixed with unrelated config paths", () => {
     expect(
-      shouldRewarmProviderAuthState(
+      doesReloadAffectProviderAuth(
         createHotTailPlan({
           changedPaths: ["logging.level", "agents.defaults.workspace"],
         }),
@@ -2500,7 +2483,7 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
+  it("clears provider auth before reload and after plugin replacement", async () => {
     const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
       hoisted.reloadEvents.push("prepare-plugins");
       await params.commitRuntime();
@@ -2526,7 +2509,6 @@ describe("gateway hot reload model state", () => {
       "clear-provider-auth",
       "refresh-prepared-model-runtime",
       "refresh-context-window",
-      "warm-provider-auth",
     ]);
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
     expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
@@ -2537,7 +2519,6 @@ describe("gateway hot reload model state", () => {
       allowGatewaySubagentBinding: true,
       catalogMode: "static",
     });
-    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
@@ -2565,138 +2546,97 @@ describe("gateway hot reload model state", () => {
     expect(logReload.warn).toHaveBeenCalledWith(
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
     );
-    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
-  });
-
-  it("skips provider-auth rewarm for unrelated agent heartbeat hot reloads", async () => {
-    const { applyHotReload } = createReloadHandlersForTest();
-    const nextConfig = {
-      agents: { defaults: { heartbeat: { target: "telegram" } } },
-    } as OpenClawConfig;
-
-    await applyHotReload(
-      createHotTailPlan({
-        changedPaths: ["agents.defaults.heartbeat.target"],
-        hotReasons: ["agents.defaults.heartbeat.target"],
-        restartHeartbeat: true,
-        reconcileSystemJobs: true,
-      }),
-      nextConfig,
-    );
-
-    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
-  });
-
-  it("keeps unrelated heartbeat reloads lazy and authenticates the next user lookup once", async () => {
-    const { applyHotReload } = createReloadHandlersForTest();
-    const nextConfig = {
-      agents: { defaults: { heartbeat: { target: "telegram" } } },
-    } satisfies OpenClawConfig;
-    const readProfiles = vi.fn(() => ({
-      "openai:fixture": {
-        type: "api_key" as const,
-        provider: "openai",
-        key: "provider-auth-test-fixture",
-      },
-    }));
-    publishProviderAuthWarmSnapshot({
-      agents: [
-        {
-          agentId: "main",
-          configFingerprint: "previous-config-fingerprint",
-          providers: [["openai", false]],
-        },
-      ],
-    });
-    hoisted.clearCurrentProviderAuthState.mockImplementationOnce(clearWarmedProviderAuthState);
-
-    try {
-      await applyHotReload(
-        createHotTailPlan({
-          changedPaths: ["agents.defaults.heartbeat.target"],
-          hotReasons: ["agents.defaults.heartbeat.target"],
-          restartHeartbeat: true,
-          reconcileSystemJobs: true,
-        }),
-        nextConfig,
-      );
-
-      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
-      expect(getCurrentProviderAuthStates()).toBeNull();
-      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
-
-      const { hasAuthForModelProvider } = await vi.importActual<
-        typeof import("../agents/model-provider-auth.js")
-      >("../agents/model-provider-auth.js");
-      await expect(
-        hasAuthForModelProvider({
-          provider: "openai",
-          cfg: nextConfig,
-          agentDir: "/virtual/provider-auth-agent",
-          workspaceDir: "/virtual/provider-auth-workspace",
-          env: {},
-          allowPluginSyntheticAuth: false,
-          discoverExternalCliAuth: false,
-          store: {
-            version: 1,
-            get profiles() {
-              return readProfiles();
-            },
-          },
-        }),
-      ).resolves.toBe(true);
-      expect(readProfiles).toHaveBeenCalledOnce();
-      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
-    } finally {
-      clearWarmedProviderAuthState();
-    }
-  });
-
-  it("keeps provider-auth rewarm for model-provider hot reloads", async () => {
-    const { applyHotReload } = createReloadHandlersForTest();
-    const nextConfig = {
-      models: { providers: { openai: { api: "openai" } } },
-    } as unknown as OpenClawConfig;
-
-    await applyHotReload(
-      createHotTailPlan({
-        changedPaths: ["models.providers.openai.api"],
-        hotReasons: ["models.providers.openai.api"],
-        restartHeartbeat: true,
-        reconcileSystemJobs: true,
-      }),
-      nextConfig,
-    );
-
-    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
   it.each([
-    "auth.profiles.openai.provider",
-    "env.vars.OPENAI_API_KEY",
-    "agents.list",
-    "agents.defaults.imageModel.primary",
-    "agents.defaults.heartbeat.model",
-    "agents.entries.main.heartbeat.model",
-    "agents.defaults.compaction.model",
-    "agents.defaults.compaction.provider",
-    "agents.defaults.compaction.memoryFlush.model",
-    "agents.entries.main.default",
-    "agents.entries.main.runtime.id",
-  ])("runs provider-auth rewarm for previously missed auth owner %s", async (changedPath) => {
-    const { applyHotReload } = createReloadHandlersForTest();
-    const nextConfig = {} satisfies OpenClawConfig;
+    {
+      name: "heartbeat",
+      changedPath: "agents.defaults.heartbeat.target",
+      nextConfig: { agents: { defaults: { heartbeat: { target: "telegram" } } } },
+    },
+    {
+      name: "auth",
+      changedPath: "auth.order.openai",
+      nextConfig: { auth: { order: { openai: ["openai:fixture"] } } },
+    },
+    {
+      name: "model provider",
+      changedPath: "models.providers.openai",
+      nextConfig: {
+        models: {
+          providers: {
+            openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [] },
+          },
+        },
+      },
+    },
+    {
+      name: "agent roster",
+      changedPath: "agents.entries.worker",
+      nextConfig: {
+        agents: { entries: { main: {}, worker: { workspace: "/virtual/worker-workspace" } } },
+      },
+    },
+  ] satisfies Array<{ name: string; changedPath: string; nextConfig: OpenClawConfig }>)(
+    "keeps $name reloads lazy and authenticates the next user lookup once",
+    async ({ changedPath, nextConfig }) => {
+      const { applyHotReload } = createReloadHandlersForTest();
+      const readProfiles = vi.fn(() => ({
+        "openai:fixture": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "provider-auth-test-fixture",
+        },
+      }));
+      publishProviderAuthWarmSnapshot({
+        agents: [
+          {
+            agentId: "main",
+            configFingerprint: "previous-config-fingerprint",
+            providers: [["openai", false]],
+          },
+        ],
+      });
+      hoisted.clearCurrentProviderAuthState.mockImplementationOnce(clearWarmedProviderAuthState);
 
-    await applyHotReload(
-      createHotTailPlan({
-        changedPaths: [changedPath],
-        hotReasons: [changedPath],
-      }),
-      nextConfig,
-    );
+      try {
+        await applyHotReload(
+          createHotTailPlan({
+            changedPaths: [changedPath],
+            hotReasons: [changedPath],
+          }),
+          nextConfig,
+        );
 
-    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
-  });
+        expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
+        expect(getCurrentProviderAuthStates()).toBeNull();
+
+        const { hasAuthForModelProvider } = await vi.importActual<
+          typeof import("../agents/model-provider-auth.js")
+        >("../agents/model-provider-auth.js");
+        await expect(
+          hasAuthForModelProvider({
+            provider: "openai",
+            cfg: nextConfig,
+            agentDir: "/virtual/provider-auth-agent",
+            workspaceDir: "/virtual/provider-auth-workspace",
+            env: {},
+            allowPluginSyntheticAuth: false,
+            discoverExternalCliAuth: false,
+            store: {
+              version: 1,
+              get profiles() {
+                return readProfiles();
+              },
+            },
+          }),
+        ).resolves.toBe(true);
+        expect(readProfiles).toHaveBeenCalledOnce();
+      } finally {
+        clearWarmedProviderAuthState();
+      }
+    },
+  );
 
   it("refreshes context metadata when the default workspace changes", async () => {
     const { applyHotReload, setState } = createReloadHandlersForTest(
@@ -2990,7 +2930,6 @@ describe("gateway hot reload superseded tail recovery", () => {
       expect(logReload.warn).toHaveBeenCalledWith(
         expect.stringContaining("recovery deferred to the newer config"),
       );
-      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
       const configC = { logging: { level: "debug" as const } } satisfies OpenClawConfig;
       pendingConfig = configC;
@@ -3001,7 +2940,6 @@ describe("gateway hot reload superseded tail recovery", () => {
       });
 
       expect(handlers.setState).toHaveBeenCalledTimes(2);
-      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(0);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
     },
   );
@@ -3077,6 +3015,70 @@ describe("gateway hot reload superseded tail recovery", () => {
 });
 
 describe("gateway hot reload commit policy", () => {
+  it("reloads configured workspace hooks when expanding to an explicit multi-agent roster", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-hook-roster-reload-");
+    const beforeWorkspace = path.join(root, "before");
+    const afterWorkspace = path.join(root, "after");
+    for (const [workspace, message] of [
+      [beforeWorkspace, "before roster expansion"],
+      [afterWorkspace, "after roster expansion"],
+    ] as const) {
+      const hookDir = path.join(workspace, "hooks", "roster-workspace");
+      fs.mkdirSync(hookDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: roster-workspace",
+          "description: Configured workspace hook fixture",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(hookDir, "handler.js"),
+        `export default async function(event) { event.messages.push(${JSON.stringify(message)}); }\n`,
+      );
+    }
+    const beforeConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: beforeWorkspace }, entries: { main: {} } },
+      hooks: { internal: { enabled: true, entries: { "roster-workspace": { enabled: true } } } },
+    };
+    const afterConfig: OpenClawConfig = {
+      ...beforeConfig,
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: afterWorkspace },
+        entries: { main: {}, worker: {} },
+      },
+    };
+    const { prepareInternalHooks } = await import("../hooks/loader.js");
+    const { createInternalHookEvent, triggerInternalHook } =
+      await import("../hooks/internal-hooks.js");
+    const { applyHotReload } = createReloadHandlersForTest();
+    let previousConfig: OpenClawConfig = {};
+    try {
+      for (const [config, message] of [
+        [beforeConfig, "before roster expansion"],
+        [afterConfig, "after roster expansion"],
+      ] as const) {
+        await applyHotReload(
+          buildGatewayReloadPlan(
+            diffGatewayReloadPaths(previousConfig, config, listConfigReloadRefinementPrefixes()),
+            { previousConfig, candidateConfig: config },
+          ),
+          config,
+        );
+        const event = createInternalHookEvent("command", "new", "agent:main:main");
+        await triggerInternalHook(event);
+        expect(event.messages).toEqual([message]);
+        previousConfig = config;
+      }
+    } finally {
+      (await prepareInternalHooks({}, afterWorkspace)).commit();
+    }
+  });
+
   it("preserves SIGUSR1 policy when hook preparation rejects the config", async () => {
     setGatewaySigusr1RestartPolicy({ allowExternal: false });
     const { applyHotReload } = createReloadHandlersForTest();
@@ -7191,7 +7193,9 @@ describe("deferred channel reload abort generation", () => {
         );
       await vi.advanceTimersByTimeAsync(500);
 
-      expect(await oldReload).toBeInstanceOf(GatewayHotReloadCancelledError);
+      const oldError = await oldReload;
+      expect(oldError).toBeInstanceOf(Error);
+      expect(oldError).toHaveProperty("name", "GatewayHotReloadCancelledError");
       expect(await nextReload).toBeNull();
       expect(oldChannels.stop).not.toHaveBeenCalled();
       expect(oldChannels.start).not.toHaveBeenCalled();
@@ -7222,8 +7226,8 @@ describe("deferred channel reload abort generation", () => {
 
     try {
       const reloadPromise = applyHotReload(abortChannelReloadPlan, {});
-      const reloadRejected = expect(reloadPromise).rejects.toBeInstanceOf(
-        GatewayHotReloadCancelledError,
+      const reloadRejected = expect(reloadPromise).rejects.toThrow(
+        "config hot reload cancelled by config supersession or in-process restart",
       );
       await vi.advanceTimersByTimeAsync(10); // enter wait loop (before 500ms sleep)
 
@@ -7358,8 +7362,8 @@ describe("deferred channel reload abort generation", () => {
         );
         const cancellation =
           committed || cancellationKind === "lifecycle"
-            ? GatewayHotReloadCancelledError
-            : GatewayConfigReloadSupersededError;
+            ? "GatewayHotReloadCancelledError"
+            : "GatewayConfigReloadSupersededError";
         const reloadError = reloadPromise.then(
           () => null,
           (error: unknown) => error,
@@ -7381,7 +7385,8 @@ describe("deferred channel reload abort generation", () => {
           expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).not.toHaveBeenCalled();
           return;
         }
-        expect(error).toBeInstanceOf(cancellation);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toHaveProperty("name", cancellation);
 
         expect(channels.stop).not.toHaveBeenCalled();
         expect(channels.start).not.toHaveBeenCalled();

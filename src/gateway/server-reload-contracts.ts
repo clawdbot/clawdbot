@@ -74,7 +74,7 @@ export type AcceptedRestartTargetOwnership = {
   reject: () => void;
 };
 
-export class GatewayHotReloadCancelledError extends Error {
+class GatewayHotReloadCancelledError extends Error {
   constructor() {
     super("config hot reload cancelled by config supersession or in-process restart");
     this.name = "GatewayHotReloadCancelledError";

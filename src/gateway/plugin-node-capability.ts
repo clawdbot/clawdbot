@@ -7,10 +7,13 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  invalidateGatewayPolicyClient,
+  type GatewayPolicyClient,
+} from "./server/ws-policy-close.js";
 
 /** Path marker used to scope plugin-hosted node URLs with one-time capabilities. */
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
@@ -58,7 +61,7 @@ export function indexPluginNodeCapabilitySurfaces(
 
 /** Reconnect changed nodes so the handshake owns newly scoped URLs and capabilities. */
 export function reconcileClientPluginNodeCapabilities(
-  client: GatewayWsClient,
+  client: PluginNodeCapabilityClient & GatewayPolicyClient & { connect: ConnectParams },
   surfaces: Record<string, PluginNodeCapabilitySurface>,
   close?: () => void,
 ): boolean {

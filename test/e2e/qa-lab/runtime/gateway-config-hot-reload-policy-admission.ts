@@ -172,7 +172,11 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
               },
             },
           },
-          ["security.installPolicy"],
+          [
+            "security.installPolicy.targets",
+            "security.installPolicy.exec.args",
+            "security.installPolicy.exec.trustedDirs",
+          ],
         );
         const invoke = () =>
           gateway.runCli(["skills", "install", source, "--agent", "qa", "--as", slug]);
@@ -364,8 +368,15 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
           },
         },
       },
-      restore: { auth: initial.auth ?? null },
-      replacePaths: ["auth.order", "auth.profiles"],
+      restore: {
+        auth: {
+          order: {
+            [profileConfig.provider]: initial.auth?.order?.[profileConfig.provider] ?? null,
+          },
+          profiles: { [profileId]: { displayName: profileConfig.displayName ?? null } },
+        },
+      },
+      replacePaths: [`auth.order.${profileConfig.provider}`],
       readConsumer: readAuthProjection,
       expectedConsumer: { displayName: "Synthetic reload admission", profileOrder: [profileId] },
       consumerObservation:
@@ -375,7 +386,7 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
       family: "broadcast",
       change: { broadcast: { strategy: "sequential", "qa-unused-target": ["qa"] } },
       restore: { broadcast: initial.broadcast ?? null },
-      replacePaths: ["broadcast"],
+      replacePaths: ["broadcast.qa-unused-target"],
     },
     {
       family: "cloudWorkers.projectProfiles",
@@ -418,7 +429,11 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
         "Built skills install invoked the configured local policy and blocked→installed→blocked a synthetic skill; disabling the policy or excluding skills bypassed it and installed successfully",
       change: { security: { installPolicy: { enabled: false, targets: ["skill"] } } },
       restore: { security: { installPolicy: initial.security?.installPolicy ?? null } },
-      replacePaths: ["security.installPolicy"],
+      replacePaths: [
+        "security.installPolicy.targets",
+        "security.installPolicy.exec.args",
+        "security.installPolicy.exec.trustedDirs",
+      ],
     },
     {
       family: "diagnostics.flags/cacheTrace.enabled",

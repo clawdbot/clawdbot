@@ -10,7 +10,7 @@ import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { isNoopGatewayReloadPlan } from "./config-reload-plan.js";
-import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
+import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
@@ -49,7 +49,7 @@ import {
 } from "./server-shared-auth-generation.js";
 
 function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): boolean {
-  return isNoopGatewayReloadPlan(plan) && !shouldRewarmProviderAuthState(plan);
+  return isNoopGatewayReloadPlan(plan) && !doesReloadAffectProviderAuth(plan);
 }
 
 export function startManagedGatewayConfigReloader(

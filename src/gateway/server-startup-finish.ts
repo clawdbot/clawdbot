@@ -359,7 +359,7 @@ export async function finishGatewayStartup(params: {
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
 
-  const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+  const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
   const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
     assertGatewayRuntimeSecurityConfig({
       cfg,
