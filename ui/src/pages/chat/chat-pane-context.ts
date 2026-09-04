@@ -434,14 +434,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
-        state.sidebarLayout = normalizeSidebarLayout(persistedLayout);
+        state.sidebarLayout = this.restorePaneSidebarLayout(
+          normalizeSidebarLayout(persistedLayout),
+        );
       } else if (clientChanged) {
         state.sidebarLayout = { columns: [] };
       } else if (state.sidebarLayout.columns.length > 0) {
         state.updateSidebarLayout(state.sidebarLayout);
-      }
-      if (this.compact && clientChanged) {
-        state.sidebarLayout = { ...state.sidebarLayout, open: false };
       }
       state.sidebarFocusPanelId =
         sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
