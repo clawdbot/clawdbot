@@ -1,6 +1,6 @@
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { describe, expect, it, vi } from "vitest";
-import { createClaudeAgentSdkUserInputAuthorizer } from "./agent-sdk-user-input.js";
+import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 function createContext(
   requestUserInput: CliBackendExecuteContext["requestUserInput"],
@@ -51,8 +51,8 @@ const input = {
   ],
 };
 
-describe("Claude Agent SDK user input adapter", () => {
-  it("maps Claude questions and answers while deduplicating the SDK callbacks", async () => {
+describe("Claude CLI user input adapter", () => {
+  it("maps Claude questions and answers while deduplicating the CLI callbacks", async () => {
     const requestUserInput = vi.fn(async () => ({
       status: "answered" as const,
       answers: {
@@ -60,7 +60,7 @@ describe("Claude Agent SDK user input adapter", () => {
         question_2: ["Unit tests", "UI proof"],
       },
     }));
-    const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+    const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
     const signal = new AbortController().signal;
 
     const first = authorizer.authorize({ input, signal, toolUseId: "claude-question-1" });
@@ -111,7 +111,7 @@ describe("Claude Agent SDK user input adapter", () => {
   });
 
   it("returns actionable denial guidance when the operator skips", async () => {
-    const authorizer = createClaudeAgentSdkUserInputAuthorizer(
+    const authorizer = createClaudeCliUserInputAuthorizer(
       createContext(
         vi.fn(async () => ({
           status: "cancelled" as const,
@@ -133,7 +133,7 @@ describe("Claude Agent SDK user input adapter", () => {
       status: "answered" as const,
       answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
     }));
-    const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+    const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
     const signal = new AbortController().signal;
     const rejected = {
       behavior: "deny",
@@ -239,7 +239,7 @@ describe("Claude Agent SDK user input adapter", () => {
     "reports the failed constraint for %s without echoing payload text",
     async (_case, malformedInput, expectedDetail) => {
       const requestUserInput = vi.fn();
-      const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+      const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
 
       const result = await authorizer.authorize({
         input: malformedInput as Record<string, unknown>,

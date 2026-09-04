@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
@@ -10,17 +9,21 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export type ClaudeAgentSdkSecretInput = { fd: 3; createData: () => Buffer };
+type ClaudeCliSpawnOptions = Pick<CliBackendExecuteContext, "command" | "args" | "cwd" | "env"> & {
+  signal?: AbortSignal;
+};
+
+export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
 
 const STDERR_CAPTURE_CHARS = 8_192;
 const STDERR_PREVIEW_CHARS = 2_000;
 const STDERR_DRAIN_GRACE_MS = 200;
 
-function spawnClaudeAgentSdkProcess(
-  options: SpawnOptions,
-  secretInput: ClaudeAgentSdkSecretInput | undefined,
+function spawnClaudeCliProcess(
+  options: ClaudeCliSpawnOptions,
+  secretInput: ClaudeCliSecretInput | undefined,
   observeStderr: (child: ChildProcessWithoutNullStreams) => void,
-): SpawnedProcess {
+): ChildProcessWithoutNullStreams {
   const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
   using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
   const child = spawn(options.command, options.args, {
@@ -31,8 +34,7 @@ function spawnClaudeAgentSdkProcess(
     stdio,
     windowsHide: true,
   }) as ChildProcessWithoutNullStreams; // SAFETY: stdio[0..2] are pipes.
-  // The SDK only drains stderr for its built-in spawner; unread custom pipes
-  // fill at 64 KiB and deadlock credential-backed Claude processes.
+  // Drain independently of stdout: a full diagnostic pipe must never stall a turn.
   observeStderr(child);
   const killChild = child.kill.bind(child);
   child.kill = (signal?: NodeJS.Signals | number) => {
@@ -51,22 +53,22 @@ function spawnClaudeAgentSdkProcess(
   return child;
 }
 
-/** Owns one process's stderr; the SDK does not tag stderr with turn identities. */
-export function createClaudeAgentSdkProcessOwner(
+/** Owns process-wide diagnostics and the credentials needed to redact warm turns. */
+export function createClaudeCliProcessOwner(
   currentContext: () => CliBackendExecuteContext | undefined,
-  secretInput?: ClaudeAgentSdkSecretInput,
+  secretInput?: ClaudeCliSecretInput,
 ) {
   const assertCurrent = () => {
     const context = currentContext();
     if (!context) {
-      throw new Error("Claude Agent SDK run is no longer active.");
+      throw new Error("Claude CLI run is no longer active.");
     }
     context.assertCurrent?.();
   };
   assertCurrent();
   // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.
   const credential = secretInput?.createData();
-  let environment: SpawnOptions["env"] = {};
+  let environment: ClaudeCliSpawnOptions["env"] = {};
   let child: ChildProcessWithoutNullStreams | undefined;
   let drained: Promise<void> | undefined;
   let disposed = false;
@@ -109,17 +111,17 @@ export function createClaudeAgentSdkProcessOwner(
       environment = {};
       tail = "";
     },
-    spawn: (options: SpawnOptions) => {
+    spawn: (options: ClaudeCliSpawnOptions) => {
       assertCurrent();
       environment = options.env;
-      return spawnClaudeAgentSdkProcess(options, secretInput, observeStderr);
+      return spawnClaudeCliProcess(options, secretInput, observeStderr);
     },
     async withDiagnostics(error: unknown): Promise<unknown> {
       const context = currentContext();
       if (disposed || !context || context.abortSignal?.aborted) {
         return error;
       }
-      // Custom SDK spawners report exit before stderr EOF. Descendants may keep the pipe open.
+      // Process exit can precede stderr EOF. Descendants may keep the pipe open.
       if (child && (child.exitCode !== null || child.signalCode !== null)) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {

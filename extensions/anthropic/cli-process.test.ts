@@ -8,9 +8,9 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ClaudeAgentSdkSecretInput } from "./agent-sdk-process.js";
-import { executeClaudeAgentSdk } from "./agent-sdk.runtime.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import type { ClaudeCliSecretInput } from "./cli-process.js";
+import { executeClaudeCli } from "./cli.runtime.js";
 
 const roots: string[] = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
@@ -68,8 +68,8 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
   const command = path.join(root, "claude.mjs");
   await writeFile(command, source);
   return {
-    command,
-    args: [],
+    command: process.execPath,
+    args: [command],
     cwd: root,
     env: { PATH: process.env.PATH ?? "", HOME: root, CLAUDE_CONFIG_DIR: root },
     prompt: "Synthetic subprocess diagnostic probe.",
@@ -85,8 +85,8 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
 
 async function collect(
   context: CliBackendExecuteContext,
-  secretInput?: Parameters<typeof executeClaudeAgentSdk>[1],
-  execute = executeClaudeAgentSdk,
+  secretInput?: Parameters<typeof executeClaudeCli>[1],
+  execute = executeClaudeCli,
 ) {
   const events: Record<string, unknown>[] = [];
   for await (const event of execute(context, secretInput)) {
@@ -114,7 +114,7 @@ function attachLiveSession(context: CliBackendExecuteContext) {
   return () => current;
 }
 
-describe("Claude subprocess diagnostics through the real Agent SDK", () => {
+describe("Claude subprocess diagnostics through the direct CLI transport", () => {
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
     const context = await contextForChild(`
@@ -178,8 +178,11 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
     expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
   });
 
-  it("reports failure while a descendant still holds stderr open", async () => {
-    const context = await contextForChild(`
+  // POSIX process groups survive root exit; Windows cannot enumerate a spontaneously exited root.
+  it.skipIf(process.platform === "win32")(
+    "reports failure and reaps a descendant that inherited stderr",
+    async () => {
+      const context = await contextForChild(`
       import { spawn } from "node:child_process";
       import { writeFileSync, writeSync } from "node:fs";
       const descendant = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"],
@@ -188,18 +191,28 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       writeSync(2, "PermissionError: parent exited\\n");
       process.exit(1);
     `);
-    try {
-      const error = await collect(context).catch((failure: unknown) => failure);
-      expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: parent exited");
-      const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
-      expect(() => process.kill(pid, 0)).not.toThrow();
-    } finally {
-      const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
       try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-    }
-  });
+        const error = await collect(context).catch((failure: unknown) => failure);
+        expect(formatErrorMessageForDisplay(error)).toContain("PermissionError: parent exited");
+        const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
+        await expect
+          .poll(() => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch {
+              return true;
+            }
+          })
+          .toBe(true);
+      } finally {
+        const pid = Number(await readFile(path.join(context.cwd, "descendant.pid"), "utf8"));
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    },
+  );
 
   it.each(["success", "success with stderr"])("keeps %s quiet", async (prompt) => {
     const context = await contextForChild(PROTOCOL_CHILD);
@@ -246,10 +259,10 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
           executionMode: "agent",
           authCredential: { type: "token", token: credential },
         } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
-          | (CliBackendPreparedExecution & { secretInput?: ClaudeAgentSdkSecretInput })
+          | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
           | undefined;
         if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
-          throw new Error("Expected a managed Claude SDK execution.");
+          throw new Error("Expected a managed Claude CLI execution.");
         }
         return {
           ...prepared,

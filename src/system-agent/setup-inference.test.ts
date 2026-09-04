@@ -1428,13 +1428,13 @@ describe("detectSetupInference", () => {
     expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
 
-  it("preserves Agent SDK runtime guidance for an available Claude CLI", async () => {
+  it("preserves runtime guidance for an available Claude CLI", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
         kind: "claude-cli",
         modelRef: "claude-cli/claude-opus-5",
         label: "Claude Code",
-        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
+        detail: "logged in; OpenClaw uses the installed Claude Code executable directly.",
         credentials: true,
       },
     ]);
@@ -1448,7 +1448,7 @@ describe("detectSetupInference", () => {
       {
         brandId: "claude",
         credentials: true,
-        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
+        detail: "logged in; OpenClaw uses the installed Claude Code executable directly.",
         kind: "claude-cli",
         label: "Claude Code",
         modelRef: "claude-cli/claude-opus-5",

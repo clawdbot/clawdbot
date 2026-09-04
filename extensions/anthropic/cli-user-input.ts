@@ -1,18 +1,18 @@
-import type { PermissionResult as ClaudeAgentSdkPermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CliBackendExecuteContext,
+  CliBackendToolPermissionResult,
   CliBackendUserInputQuestion,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function createClaudeAgentSdkUserInputAuthorizer(context: CliBackendExecuteContext) {
-  const requests = new Map<string, Promise<ClaudeAgentSdkPermissionResult>>();
+export function createClaudeCliUserInputAuthorizer(context: CliBackendExecuteContext) {
+  const requests = new Map<string, Promise<CliBackendToolPermissionResult>>();
   return {
     authorize(params: {
       input: Record<string, unknown>;
       signal: AbortSignal;
       toolUseId?: string;
-    }): Promise<ClaudeAgentSdkPermissionResult> {
+    }): Promise<CliBackendToolPermissionResult> {
       const existing = params.toolUseId ? requests.get(params.toolUseId) : undefined;
       if (existing) {
         return existing;
@@ -33,7 +33,7 @@ async function runClaudeUserInput(
     signal: AbortSignal;
     toolUseId?: string;
   },
-): Promise<ClaudeAgentSdkPermissionResult> {
+): Promise<CliBackendToolPermissionResult> {
   const parsed = readClaudeUserInputQuestions(params.input);
   if (!parsed.ok) {
     return {

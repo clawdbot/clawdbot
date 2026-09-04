@@ -224,7 +224,7 @@ backend intentionally needs its own watchdog policy.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
-its Agent SDK contract does not treat non-expiration failures as proof that the
+its native session contract does not treat non-expiration failures as proof that the
 conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks

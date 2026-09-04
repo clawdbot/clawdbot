@@ -284,9 +284,9 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 </Warning>
 
-For OpenClaw-managed Claude sessions, the Claude Agent SDK always uses its
+For OpenClaw-managed Claude sessions, OpenClaw launches Claude Code in its
 `default` permission mode. OpenClaw's effective exec policy remains
-authoritative through its native tool approval callback, including YOLO and
+authoritative through native tool hooks and permission requests, including YOLO and
 restrictive policies, even if raw Claude backend args request
 `bypassPermissions`.
 
