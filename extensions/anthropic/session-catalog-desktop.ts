@@ -141,9 +141,19 @@ async function readDesktopMetadata(
   customGroups: Map<string, string>;
   active: Map<string, DesktopSessionMetadata>;
   archived: Set<string>;
+  skippedFiles: number;
+  racedFiles: number;
+  readFailed: boolean;
 }> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
+  const skippedFilesBefore = budget?.skippedFiles ?? 0;
+  const racedFilesBefore = budget?.racedFiles ?? 0;
+  let readFailed = false;
+  const markIoFailure = () => {
+    readFailed = true;
+    onIoFailure?.();
+  };
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
   for (const accountDir of (await childDirectories(desktopSessionsDir(homeDir))).toSorted()) {
     for (const workspaceDir of (await childDirectories(accountDir)).toSorted()) {
@@ -158,13 +168,15 @@ async function readDesktopMetadata(
           continue;
         }
         const filePath = path.join(workspaceDir, name);
-        const reservedBytes = budget ? await reserveCatalogJsonFile(filePath, budget) : undefined;
+        const reservedBytes = budget
+          ? await reserveCatalogJsonFile(filePath, budget, markIoFailure)
+          : undefined;
         if (budget && reservedBytes === undefined) {
           continue;
         }
         const raw = await readJsonFile(filePath, {
           budget,
-          onIoFailure,
+          onIoFailure: markIoFailure,
           ...(reservedBytes !== undefined ? { reservedBytes } : {}),
         });
         if (!isRecord(raw)) {
@@ -188,7 +200,15 @@ async function readDesktopMetadata(
       }
     }
   }
-  return { available: true, active, archived, customGroups };
+  return {
+    available: true,
+    active,
+    archived,
+    customGroups,
+    skippedFiles: (budget?.skippedFiles ?? 0) - skippedFilesBefore,
+    racedFiles: (budget?.racedFiles ?? 0) - racedFilesBefore,
+    readFailed,
+  };
 }
 
 export type DesktopOverlay = Awaited<ReturnType<typeof readDesktopMetadata>>;
@@ -204,7 +224,24 @@ export const emptyDesktopOverlay: DesktopOverlay = {
   active: new Map(),
   archived: new Set(),
   customGroups: new Map(),
+  skippedFiles: 0,
+  racedFiles: 0,
+  readFailed: false,
 };
+
+function replayDesktopReadStatus(
+  overlay: DesktopOverlay,
+  budget?: CatalogJsonReadBudget,
+  onIoFailure?: () => void,
+): void {
+  if (budget) {
+    budget.skippedFiles += overlay.skippedFiles;
+    budget.racedFiles += overlay.racedFiles;
+  }
+  if (overlay.readFailed) {
+    onIoFailure?.();
+  }
+}
 
 export async function readDesktopOverlay(
   homeDir: string,
@@ -215,7 +252,9 @@ export async function readDesktopOverlay(
   const entry = desktopOverlays.get(homeDir);
   if (entry?.refreshing) {
     if (!forceRefresh) {
-      return entry.overlay;
+      const overlay = await entry.overlay;
+      replayDesktopReadStatus(overlay, budget, onIoFailure);
+      return overlay;
     }
     await entry.overlay;
     return readDesktopOverlay(homeDir, forceRefresh, budget, onIoFailure);
@@ -230,7 +269,9 @@ export async function readDesktopOverlay(
     !(dirty instanceof Set && dirty.size > 0)
   ) {
     setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
-    return entry.overlay;
+    const overlay = await entry.overlay;
+    replayDesktopReadStatus(overlay, budget, onIoFailure);
+    return overlay;
   }
   const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
   const current: DesktopOverlayCacheEntry = {

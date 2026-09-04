@@ -2741,6 +2741,13 @@ describe("Claude session catalog", () => {
         message: expect.stringContaining("1 file"),
       },
     });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("1 file"),
+      },
+    });
 
     await writeDesktopMetadata(home, "recovered", {
       cliSessionId: "desktop-recovered-session",
@@ -2939,6 +2946,44 @@ describe("Claude session catalog", () => {
       },
     });
     expect(readCalls).toBe(1);
+  });
+
+  it("reports a partial catalog when a Desktop metadata file disappears during admission", async () => {
+    const home = await createHome();
+    const desktopDir = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code-sessions",
+      "account",
+      "workspace",
+    );
+    const filePath = path.join(desktopDir, "local_admission-race.json");
+    await fs.mkdir(desktopDir, { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ cliSessionId: "desktop-admission-race", sessionId: "local-race" }),
+    );
+
+    const stat = fs.stat.bind(fs);
+    let failAdmission = true;
+    vi.spyOn(fs, "stat").mockImplementation(async (target) => {
+      if (target === filePath && failAdmission) {
+        failAdmission = false;
+        throw new Error("simulated Desktop metadata admission race");
+      }
+      return await stat(target);
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("could not be read"),
+      },
+    });
+    expect(failAdmission).toBe(false);
   });
 
   it("preserves catalog JSON across short descriptor reads", async () => {
