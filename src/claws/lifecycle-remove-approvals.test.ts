@@ -17,6 +17,7 @@ import {
   claimClawAgentConfigRemoval,
   digestClawAgentRemovalSurface,
 } from "./lifecycle-config-removal.js";
+import { clawRemoveFixtures } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -247,5 +248,30 @@ describe("Claw exec approvals removal", () => {
     ).rejects.toThrow("claw commit failed");
 
     expect(readAgentDeletionJournal("worker") === undefined).toBe(!seedJournal);
+  });
+
+  it("rejects apply when a hook mapping starts referencing the agent after planning", async () => {
+    const current = await clawRemoveFixtures(tempDirs).addFixture();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    // The removal surface digest covers hook references too, so a mapping added after planning
+    // must be caught here, before applyClawRemovePlan writes any config.
+    const driftedConfig: OpenClawConfig = {
+      ...current.getConfig(),
+      hooks: { mappings: [{ id: "h", agentId: "worker", action: "agent" }] },
+    };
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        env: current.env,
+        config: driftedConfig,
+        consentPlanIntegrity: plan.planIntegrity,
+        commitConfig: async (transform) => {
+          transform(driftedConfig);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "remove_changed" });
   });
 });

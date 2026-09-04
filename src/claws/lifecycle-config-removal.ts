@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+import { pruneAgentConfig } from "../commands/agents.config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -58,6 +59,9 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
     agentToAgentAllow: (config.tools?.agentToAgent?.allow ?? []).filter(
       (entry) => entry === normalizedId,
     ),
+    // Bindings and allow are two of the kinds pruneAgentConfig deletes; digest every recorded
+    // reference so one added between plan and apply trips agent_modified instead of being pruned.
+    removedReferences: pruneAgentConfig(config, agentId).removedReferences,
   };
   return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
 }

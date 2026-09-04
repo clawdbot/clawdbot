@@ -30,6 +30,7 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
+  planClawAgentReferenceRemoval,
   planClawWorkspaceRemoval,
   planClawHistoricalAgentState,
   readAttachedCronJobs,
@@ -212,12 +213,20 @@ export async function buildClawRemovePlan(
         message: `Cron job ${JSON.stringify(job.id)} still references agent ${JSON.stringify(record.install.agentId)}; reassign or remove it first.`,
       });
     }
+    const referencePlan = planClawAgentReferenceRemoval({
+      agentId: record.install.agentId,
+      pruned: effects.pruned,
+      adopted: retainHistoricalAgentState,
+      modified: record.agentState === "modified",
+    });
+    const [referenceBlocker] = referencePlan.blockers;
+    blockers.push(...referencePlan.blockers);
     actions.push({
       kind: "agent",
       id: record.install.agentId,
       action: "remove",
       target: `agents.entries[${JSON.stringify(record.install.agentId)}]`,
-      blocked: record.agentState === "modified",
+      blocked: record.agentState === "modified" || referenceBlocker !== undefined,
       details: {
         expectedState: record.agentState,
         configDigest: record.install.agentConfigDigest,
@@ -227,28 +236,13 @@ export async function buildClawRemovePlan(
         ),
         ownedPaths: record.install.agentOwnedPaths,
       },
-      ...(record.agentState === "modified" ? { reason: "Agent config digest changed." } : {}),
+      ...(record.agentState === "modified"
+        ? { reason: "Agent config digest changed." }
+        : referenceBlocker
+          ? { reason: referenceBlocker.message }
+          : {}),
     });
-    if (effects.pruned.removedBindings > 0) {
-      actions.push({
-        kind: "configBinding",
-        id: record.install.agentId,
-        action: "remove",
-        target: `bindings[agentId=${record.install.agentId}]`,
-        blocked: record.agentState === "modified",
-        details: { count: effects.pruned.removedBindings },
-      });
-    }
-    if (effects.pruned.removedAllow > 0) {
-      actions.push({
-        kind: "agentAllow",
-        id: record.install.agentId,
-        action: "remove",
-        target: `tools.agentToAgent.allow[${record.install.agentId}]`,
-        blocked: record.agentState === "modified",
-        details: { count: effects.pruned.removedAllow },
-      });
-    }
+    actions.push(...referencePlan.actions);
     if (effects.workspace) {
       actions.push({
         kind: "workspace",

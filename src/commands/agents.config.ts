@@ -204,9 +204,11 @@ export function pruneAgentConfig(
   removedBindings: number;
   removedAllow: number;
   clearedOwnerRefs: string[];
+  removedReferences: string[];
 } {
   const id = normalizeAgentId(agentId);
   const clearedOwnerRefs: string[] = [];
+  const removedReferences: string[] = [];
   const targetsDeletedAgent = (candidate: string) => {
     const normalized = normalizeAgentIdStrict(candidate);
     return normalized.ok && normalized.value === id;
@@ -220,12 +222,25 @@ export function pruneAgentConfig(
     const { agentId: _agentId, ...rest } = value;
     return Object.keys(rest).length > 0 ? (rest as T) : undefined;
   };
-  const agents = listAgentEntries(cfg);
-  const pruneAllowAgents = (allowAgents: string[] | undefined) =>
-    allowAgents?.filter((entry) => {
-      const trimmed = entry.trim();
-      return !trimmed || !targetsDeletedAgent(trimmed);
+  // Shared by every reference-array prune site below: drop matching entries and record their
+  // config path (with original index) so adopted-agent removal can name every path it touches.
+  const pruneReferences = <T>(
+    items: T[] | undefined,
+    pathPrefix: string,
+    isReference: (item: T) => boolean,
+  ) =>
+    items?.filter((item, index) => {
+      if (!isReference(item)) {
+        return true;
+      }
+      removedReferences.push(`${pathPrefix}[${index}]`);
+      return false;
     });
+  const matchesAllowAgentsEntry = (candidate: string) => {
+    const trimmed = candidate.trim();
+    return trimmed !== "" && targetsDeletedAgent(trimmed);
+  };
+  const agents = listAgentEntries(cfg);
   const nextAgentsList = [];
   for (const entry of agents) {
     if (normalizeAgentId(entry.id) === id) {
@@ -237,7 +252,11 @@ export function pruneAgentConfig(
             ...entry,
             subagents: {
               ...entry.subagents,
-              allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
+              allowAgents: pruneReferences(
+                entry.subagents.allowAgents,
+                `agents.entries.${entry.id}.subagents.allowAgents`,
+                matchesAllowAgentsEntry,
+              ),
             },
           }
         : entry,
@@ -246,17 +265,24 @@ export function pruneAgentConfig(
   const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 
   const bindings = cfg.bindings ?? [];
-  const filteredBindings = bindings.filter((binding) => normalizeAgentId(binding.agentId) !== id);
+  const filteredBindings =
+    pruneReferences(bindings, "bindings", (binding) => normalizeAgentId(binding.agentId) === id) ??
+    [];
 
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
-  const filteredAllow = allow.filter((entry) => entry !== id);
+  const filteredAllow =
+    pruneReferences(allow, "tools.agentToAgent.allow", (entry) => entry === id) ?? [];
 
   const prunedDefaults = cfg.agents?.defaults?.subagents?.allowAgents
     ? {
         ...cfg.agents.defaults,
         subagents: {
           ...cfg.agents.defaults.subagents,
-          allowAgents: pruneAllowAgents(cfg.agents.defaults.subagents.allowAgents),
+          allowAgents: pruneReferences(
+            cfg.agents.defaults.subagents.allowAgents,
+            "agents.defaults.subagents.allowAgents",
+            matchesAllowAgentsEntry,
+          ),
         },
       }
     : cfg.agents?.defaults;
@@ -285,16 +311,22 @@ export function pruneAgentConfig(
     ? Object.fromEntries(
         Object.entries(cfg.broadcast).map(([peerId, value]) => [
           peerId,
-          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+          Array.isArray(value)
+            ? pruneReferences(value, `broadcast.${peerId}`, targetsDeletedAgent)
+            : value,
         ]),
       )
     : undefined;
   const nextHooks = cfg.hooks
     ? {
         ...cfg.hooks,
-        allowedAgentIds: cfg.hooks.allowedAgentIds?.filter((entry) => !targetsDeletedAgent(entry)),
-        mappings: cfg.hooks.mappings?.filter(
-          (mapping) => !mapping.agentId || !targetsDeletedAgent(mapping.agentId),
+        allowedAgentIds: pruneReferences(
+          cfg.hooks.allowedAgentIds,
+          "hooks.allowedAgentIds",
+          targetsDeletedAgent,
+        ),
+        mappings: pruneReferences(cfg.hooks.mappings, "hooks.mappings", (mapping) =>
+          mapping.agentId ? targetsDeletedAgent(mapping.agentId) : false,
         ),
       }
     : undefined;
@@ -340,10 +372,16 @@ export function pruneAgentConfig(
       ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, workspacePinnedConfig)
       : workspacePinnedConfig;
 
+  // Owner refs are cleared above, not filtered; fold them in so removedReferences is the complete
+  // sorted list of everything this prune deleted for the agent (callers digest and block on it).
+  removedReferences.push(...clearedOwnerRefs);
+  removedReferences.sort();
+
   return {
     config: transitionPinnedConfig,
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
     clearedOwnerRefs,
+    removedReferences,
   };
 }

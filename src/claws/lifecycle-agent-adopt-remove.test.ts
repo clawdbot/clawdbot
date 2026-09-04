@@ -169,4 +169,65 @@ describe("Claw remove after configured-agent adoption", () => {
     expect(purgeSessions).not.toHaveBeenCalled();
     expect(trashPath).not.toHaveBeenCalled();
   });
+
+  it("blocks removal of an adopted agent still referenced by operator-owned config", async () => {
+    const current = await adoptedAgentFixture();
+    const agent = current.getConfig().agents?.entries?.worker;
+    if (!agent) {
+      throw new Error("fixture agent missing");
+    }
+    const referencedConfig: OpenClawConfig = {
+      agents: { entries: { worker: agent } },
+      bindings: [{ agentId: "worker", match: { channel: "telegram" } }],
+      tools: { agentToAgent: { allow: ["worker"] } },
+      hooks: { mappings: [{ id: "h", agentId: "worker", action: "agent" }] },
+    };
+    current.setConfig(referencedConfig);
+
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const blocker = plan.blockers.find((entry) => entry.code === "adopted_agent_referenced");
+    expect(blocker?.message).toContain("bindings[0]");
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "agent", blocked: true }),
+        expect.objectContaining({ kind: "configBinding", action: "retain", blocked: true }),
+        expect.objectContaining({ kind: "agentAllow", action: "retain", blocked: true }),
+      ]),
+    );
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        env: current.env,
+        config: current.getConfig(),
+        consentPlanIntegrity: plan.planIntegrity,
+        commitConfig: async (transform) => {
+          current.setConfig(transform(current.getConfig()));
+        },
+      }),
+    ).rejects.toMatchObject({ code: "remove_blocked" });
+    expect(current.getConfig()).toEqual(referencedConfig);
+
+    // Once the operator clears the references the same agent removes cleanly.
+    current.setConfig({ agents: { entries: { worker: agent } } });
+    const clearedPlan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    expect(clearedPlan.blockers).toEqual([]);
+    const result = await applyClawRemovePlan(clearedPlan, {
+      env: current.env,
+      config: current.getConfig(),
+      consentPlanIntegrity: clearedPlan.planIntegrity,
+      commitConfig: async (transform) => {
+        current.setConfig(transform(current.getConfig()));
+      },
+      purgeSessions: vi.fn(),
+      trashPath: vi.fn(async () => true),
+    });
+    expect(result.status).toBe("complete");
+    expect(current.getConfig().agents?.entries?.worker).toBeUndefined();
+  });
 });

@@ -301,7 +301,7 @@ describe("Claw status and remove", () => {
 
   it("previews all canonical agent config deletion effects", async () => {
     const current = await addFixture();
-    const config: OpenClawConfig = {
+    let config: OpenClawConfig = {
       ...current.getConfig(),
       bindings: [{ match: { channel: "telegram", accountId: "*" }, agentId: "worker" }],
       tools: { agentToAgent: { allow: ["worker"] } },
@@ -312,14 +312,38 @@ describe("Claw status and remove", () => {
     expect(plan.actions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "agent", target: 'agents.entries["worker"]' }),
-        expect.objectContaining({ kind: "configBinding", target: "bindings[agentId=worker]" }),
-        expect.objectContaining({ kind: "agentAllow", target: "tools.agentToAgent.allow[worker]" }),
+        expect.objectContaining({
+          kind: "configBinding",
+          action: "remove",
+          blocked: false,
+          target: "bindings[agentId=worker]",
+        }),
+        expect.objectContaining({
+          kind: "agentAllow",
+          action: "remove",
+          blocked: false,
+          target: "tools.agentToAgent.allow[worker]",
+        }),
         expect.objectContaining({ kind: "workspace", action: "trash" }),
         expect.objectContaining({ kind: "agentState", action: "trash" }),
         expect.objectContaining({ kind: "sessionIndex", action: "delete" }),
         expect.objectContaining({ kind: "sessionTranscripts", action: "trash" }),
       ]),
     );
+
+    // Sibling guard: a Claw-created agent's bindings/allow entries are Claw-owned, so removal
+    // still prunes and completes even though adopted removal now blocks on the same reference kinds.
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+    expect(result.status).toBe("complete");
+    expect(config.bindings).toBeUndefined();
+    expect(config.tools?.agentToAgent?.allow).toBeUndefined();
   });
 
   it("rejects consent when a binding changes without changing the binding count", async () => {
