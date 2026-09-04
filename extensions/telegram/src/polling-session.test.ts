@@ -2404,6 +2404,48 @@ describe("TelegramPollingSession", () => {
 
       expect(worker.workerStop).not.toHaveBeenCalled();
       expectLogExcludes(log, "Polling stall detected");
+      expectLogExcludes(log, "isolated polling worker poll-start");
+    } finally {
+      watchdogHarness.restore();
+      abort.abort();
+      await runPromise;
+    }
+  });
+
+  it("does not log isolated polling worker poll-start on the normal logger", async () => {
+    const abort = new AbortController();
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    // Same routing as monitorTelegramProvider: [telegram][diag] is info, else error.
+    const log = (line: string) => {
+      if (line.includes("[telegram][diag]")) {
+        runtimeLog(line);
+        return;
+      }
+      runtimeError(line);
+    };
+    const worker = createListeningIngressWorker();
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const { runPromise } = startIsolatedIngressSession({
+      abort,
+      handleUpdate: async () => undefined,
+      log,
+      stallThresholdMs: 30_000,
+      createWorker: worker.createWorker,
+      drainIntervalMs: 500,
+    });
+
+    try {
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      worker.emit({ type: "poll-start", offset: 7, startedAt: 0 });
+      expectLogExcludes(runtimeLog, "isolated polling worker poll-start");
+      expectLogExcludes(runtimeError, "isolated polling worker poll-start");
+
+      watchdogHarness.setNow(31_000);
+      watchdog?.();
+      await waitForTelegramTestState(() =>
+        expectLogIncludes(runtimeError, "Polling stall detected"),
+      );
     } finally {
       watchdogHarness.restore();
       abort.abort();
