@@ -1119,7 +1119,12 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
-      start: async ({ processStartedAt, startupStartedAt, requestHotReloadRecovery } = {}) => {
+      start: async ({
+        processStartedAt,
+        startupStartedAt,
+        requestHotReloadRecovery,
+        hostLifecycle,
+      } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -1129,6 +1134,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           tailscale: tailscaleOverride,
           ...(processStartedAt !== undefined ? { processStartedAt } : {}),
           startupStartedAt,
+          hostLifecycle,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }

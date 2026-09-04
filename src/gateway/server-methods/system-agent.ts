@@ -455,10 +455,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        // The gateway surface must never install/restart its own daemon; the
-        // engine's setup path honors this via surface: "gateway".
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
+          deps: { gatewayHostLifecycle: context.hostLifecycle },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),

@@ -1,6 +1,7 @@
 // Ci Node Test Plan tests cover ci node test plan script behavior.
 import { existsSync, globSync, readdirSync } from "node:fs";
 import { isAbsolute, join, matchesGlob, relative, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createChangedExtensionFallbackShards,
@@ -430,7 +431,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
     );
     expect(autoReplyGroups).toHaveLength(1);
-    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+    const autoReplyShard = expectDefined(
+      defaultShards.find((shard) => shard.shardName === "auto-reply-reply-commands-3"),
+      "auto-reply command shard",
+    );
+    expect(autoReplyGroups[0]?.includePatterns).toEqual(autoReplyShard.includePatterns);
     expect(autoReplyGroups[0]?.env).toBeUndefined();
 
     expect(groups.find((group) => group.shard_name === "cache-warm:ui-package")).toEqual({
