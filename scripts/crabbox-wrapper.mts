@@ -488,6 +488,33 @@ function probeCrabboxMetadata(command: string, commandArgs: string[]) {
   return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
 }
 
+function supportsPreparedTestboxArtifacts() {
+  const metadata = checkedOutput(binary, ["providers", "describe", "blacksmith-testbox", "--json"]);
+  if (metadata.status !== 0) {
+    return false;
+  }
+  try {
+    const description: unknown = JSON.parse(metadata.stdout);
+    if (
+      !isRecord(description) ||
+      description.schemaVersion !== 2 ||
+      !isRecord(description.provider) ||
+      description.provider.canonical !== "blacksmith-testbox" ||
+      !isRecord(description.capabilities)
+    ) {
+      return false;
+    }
+    const features = description.capabilities.features;
+    return (
+      Array.isArray(features) &&
+      features.every((feature) => typeof feature === "string") &&
+      features.includes("prepared-artifact-workspace")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function parseCrabboxVersion(value: string) {
   const match = value.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
   if (!match) {
@@ -3655,8 +3682,9 @@ function applyRunTransforms(
     provider: string;
   },
 ) {
+  const testboxWorkspace = canonicalProviderName(options.provider) === "blacksmith-testbox";
   const sourceBootstrap = options.capsule
-    ? remoteSourceBootstrap(options.capsule, options.changedGateAlias)
+    ? remoteSourceBootstrap(options.capsule, options.changedGateAlias, testboxWorkspace)
     : "";
   const markedArgs = injectRemoteChangedGateEnvironment(initialInvocation, initialFacts);
   const localArgs =
@@ -3863,22 +3891,6 @@ if (canonicalProvider === "blacksmith-testbox") {
     process.exit(2);
   }
 
-  if (normalizedArgs[0] === "run") {
-    // Native full sync relies on receiver-side dir-merge rules. Apple openrsync
-    // drops them and deletes ignored runtime data before our source receiver runs.
-    const rsyncBinary = resolvePathBinary("rsync", process.env, process.platform) ?? "rsync";
-    const rsync = checkedOutput(rsyncBinary, ["--version"]);
-    const gnuRsync = /^rsync\s+version\s+\d+\.\d+\.\d+\s+protocol version\s+\d+\b/u.test(
-      rsync.stdout,
-    );
-    if (rsync.status !== 0 || !gnuRsync) {
-      console.error(
-        "[crabbox] Testbox sync requires GNU rsync on PATH; Apple openrsync can delete ignored runtime directories, including hydrated dependencies. Select GNU rsync on PATH and rerun. No Testbox was acquired or synced.",
-      );
-      process.exit(2);
-    }
-  }
-
   if (isWindowsRemoteTarget(normalizedArgs)) {
     console.error(
       [
@@ -3896,6 +3908,16 @@ if (canonicalProvider === "blacksmith-testbox") {
         `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
         "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
       ].join("\n"),
+    );
+    process.exit(2);
+  }
+  const artifactRun =
+    normalizedArgs[0] === "run" &&
+    (hasOption(normalizedArgs, "--artifact-glob") ||
+      hasOption(normalizedArgs, "--require-artifact"));
+  if (artifactRun && !supportsPreparedTestboxArtifacts()) {
+    console.error(
+      "[crabbox] Testbox artifact collection requires Crabbox's prepared-artifact-workspace capability. Update Crabbox and retry; refusing to collect from the disposable sync checkout.",
     );
     process.exit(2);
   }

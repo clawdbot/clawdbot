@@ -61,6 +61,7 @@ const fakeRunValueOptionHelp = [
   "label string",
   "market string",
   "provider string",
+  "require-artifact value",
   "script string",
   "target string",
   "ttl duration",
@@ -91,13 +92,6 @@ function makeFakeCrabbox(helpText: string): string {
 function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
-  writeNodeCommand(
-    path.join(binDir, "rsync"),
-    `const fs = require("node:fs");
-if (process.env.OPENCLAW_FAKE_RSYNC_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_RSYNC_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.stdout.write(process.env.OPENCLAW_FAKE_RSYNC_VERSION ?? "rsync  version 3.5.0  protocol version 32\\n");
-process.exit(Number(process.env.OPENCLAW_FAKE_RSYNC_STATUS || "0"));`,
-  );
   const stampClaimScript = [
     "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
     "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
@@ -125,6 +119,10 @@ async function main() {
     const topFiles = [...new Set(candidates)].filter((file) => !excluded.has(file) && fs.existsSync(path.dirname(file)) && (() => { try { return !fs.lstatSync(file).isDirectory(); } catch { return false; } })()).map((file) => ({ path: file }));
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
+  }
+  if (args[0] === "providers" && args[1] === "describe") {
+    process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_DESCRIPTION ?? JSON.stringify({ schemaVersion: 2, provider: { canonical: "blacksmith-testbox" }, capabilities: { features: ["prepared-artifact-workspace"] } }));
+    process.exit(Number(process.env.OPENCLAW_FAKE_CRABBOX_DESCRIPTION_STATUS || "0"));
   }
   if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.37.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
@@ -1644,62 +1642,127 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
-  it.each([
-    ["blacksmith-testbox", "openrsync: protocol version 29\nrsync version 2.6.9 compatible\n", "0"],
-    ["blacksmith", "openrsync: protocol version 29\nrsync version 2.6.9 compatible\n", "0"],
-    ["blacksmith-testbox", "", "0"],
-    ["blacksmith-testbox", "rsync  version 3.5.0  protocol version 32\n", "7"],
-  ])(
-    "rejects unusable Testbox rsync before sync or lease work: %s %j %s",
-    (provider, version, status) => {
-      const log = makeInvocationLog();
-      const result = runDefaultWrapper(["run", "--provider", provider, "--", "echo", "ok"], {
-        env: {
-          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log,
-          OPENCLAW_FAKE_RSYNC_VERSION: version,
-          OPENCLAW_FAKE_RSYNC_STATUS: status,
-        },
-      });
-      expect(result.status, result.stderr).toBe(2);
-      expect(result.stderr).toContain("Testbox sync requires GNU rsync on PATH");
-      expect(result.stderr).not.toContain("syncing from temporary full checkout");
-      expect(
-        readInvocations(log).filter(
-          ([name]) => name === "sync-plan" || name === "run" || name === "warmup",
-        ),
-      ).toEqual([]);
+  it.skipIf(process.platform === "win32").each(["missing", "overlapping"])(
+    "rejects a %s Testbox workspace binding before running the payload",
+    (binding) => {
+      const { remoteCommand } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--",
+        "echo",
+        "payload-ran",
+      ]);
+      const cwd = realpathSync(invocationLogTempDirs.make("openclaw-unprepared-testbox-"));
+      if (binding === "overlapping") {
+        mkdirSync(path.join(cwd, ".git"));
+        symlinkSync(cwd, path.join(cwd, ".git", "crabbox-artifact-root"), "dir");
+      }
+      const result = spawnSync("bash", ["-c", remoteCommand], { cwd, encoding: "utf8" });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(
+        binding === "missing"
+          ? "missing prepared Testbox execution workspace"
+          : "workspaces overlap",
+      );
+      expect(result.stdout).not.toContain("payload-ran");
+      expect(readdirSync(cwd)).toEqual(binding === "missing" ? [] : [".git"]);
     },
   );
 
   it.each([
-    ["run", "--provider", "blacksmith-testbox", "--help"],
-    ["warmup", "--provider", "blacksmith-testbox"],
-    ["status", "--provider", "blacksmith-testbox"],
-    ["stop", "--provider", "blacksmith-testbox"],
-    ["run", "--provider", "aws", "--", "echo", "ok"],
-  ])("does not probe rsync without native Testbox sync: %j", (...args) => {
-    const log = makeInvocationLog();
-    const result = runDefaultWrapper(args, {
-      env: { OPENCLAW_FAKE_RSYNC_VERSION: "openrsync\n", OPENCLAW_FAKE_RSYNC_LOG: log },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(log)).toBe(false);
-  });
+    [
+      "--artifact-glob",
+      '{"schemaVersion":2,"provider":{"canonical":"blacksmith-testbox"},"capabilities":{"features":["run-artifacts"]}}',
+      "0",
+    ],
+    [
+      "--require-artifact",
+      '{"schemaVersion":2,"provider":{"canonical":"blacksmith-testbox"},"capabilities":{"features":[]}}',
+      "0",
+    ],
+    ["--artifact-glob", "not-json", "0"],
+    [
+      "--artifact-glob",
+      '{"schemaVersion":2,"provider":{"canonical":"aws"},"capabilities":{"features":["prepared-artifact-workspace"]}}',
+      "0",
+    ],
+    ["--artifact-glob", "{}", "7"],
+  ])(
+    "requires prepared artifact-workspace support before Testbox sync: %s %s",
+    (flag, description, status) => {
+      const log = makeInvocationLog();
+      writeFileSync(log, "");
+      const result = runDefaultWrapper(
+        [
+          "run",
+          "--provider",
+          "blacksmith-testbox",
+          flag,
+          "reports/result.json",
+          "--",
+          "echo",
+          "ok",
+        ],
+        {
+          env: {
+            OPENCLAW_FAKE_CRABBOX_DESCRIPTION: description,
+            OPENCLAW_FAKE_CRABBOX_DESCRIPTION_STATUS: status,
+            OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stderr).toContain("prepared-artifact-workspace");
+      expect(result.stderr).not.toContain("syncing from temporary full checkout");
+      expect(readInvocations(log).some(([name]) => name === "run" || name === "sync-plan")).toBe(
+        false,
+      );
+    },
+  );
 
-  it.each(["2.6.9", "3.5.0"])("accepts GNU rsync %s for Testbox sync", (version) => {
+  it("accepts advertised prepared artifact-workspace support", () => {
     const log = makeInvocationLog();
     const result = runDefaultWrapper(
-      ["run", "--provider", "blacksmith-testbox", "--", "echo", "ok"],
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--require-artifact",
+        "reports/result.json",
+        "--",
+        "echo",
+        "ok",
+      ],
       {
-        env: {
-          OPENCLAW_FAKE_RSYNC_VERSION: `rsync  version ${version}  protocol version 29\n`,
-          OPENCLAW_FAKE_RSYNC_LOG: log,
-        },
+        env: { OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log },
       },
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(readInvocations(log)).toEqual([["--version"]]);
+    expect(readInvocations(log)).toContainEqual([
+      "providers",
+      "describe",
+      "blacksmith-testbox",
+      "--json",
+    ]);
   });
+
+  it.each([
+    ["run", "--provider", "blacksmith-testbox", "--", "echo", "--artifact-glob"],
+    ["run", "--provider", "blacksmith-testbox", "--label", "--artifact-glob", "--", "echo", "ok"],
+    ["run", "--provider", "aws", "--artifact-glob", "reports/result.json", "--", "echo", "ok"],
+  ])(
+    "does not require prepared artifact-workspace support outside Testbox artifact options: %j",
+    (...args) => {
+      const log = makeInvocationLog();
+      writeFileSync(log, "");
+      const result = runDefaultWrapper(args, {
+        env: { OPENCLAW_FAKE_CRABBOX_DESCRIPTION: "{}", OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readInvocations(log).some(([name]) => name === "providers")).toBe(false);
+    },
+  );
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
@@ -3956,11 +4019,21 @@ describe("scripts/crabbox-wrapper", () => {
         } else {
           mkdirSync(receiver);
         }
+        const transport =
+          provider === "blacksmith-testbox" ? path.join(root, `${name}-transport`) : receiver;
+        if (transport !== receiver) {
+          mkdirSync(path.join(transport, ".git"), { recursive: true });
+          symlinkSync(
+            realpathSync(receiver),
+            path.join(transport, ".git", "crabbox-artifact-root"),
+            "dir",
+          );
+        }
         if (bundle) {
-          writeFileSync(path.join(receiver, ".openclaw-crabbox-changed-gate.bundle"), bundle);
+          writeFileSync(path.join(transport, ".openclaw-crabbox-changed-gate.bundle"), bundle);
         }
         const result = runCommand("bash", ["-c", remoteCommand], {
-          cwd: receiver,
+          cwd: transport,
           encoding: "utf8",
           timeout: 10_000,
           env: {
@@ -3974,6 +4047,12 @@ describe("scripts/crabbox-wrapper", () => {
           },
         });
         expect(result.error, failureDetail(result)).toBeUndefined();
+        if (transport !== receiver && result.status === 0) {
+          expect(readlinkSync(path.join(transport, ".git", "crabbox-artifact-root"))).toBe(
+            realpathSync(receiver),
+          );
+          expect(existsSync(path.join(transport, "owner.txt"))).toBe(false);
+        }
         return { receiver, result };
       };
       const empty = runSender();
