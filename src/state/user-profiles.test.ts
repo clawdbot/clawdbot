@@ -200,6 +200,27 @@ describe("user profiles", () => {
     ).toEqual([{ provider: "github", subject: "login:ada", profile_id: first.id }]);
   });
 
+  it("keeps Tailscale and GitHub display names valid at the UTF-16 limit", () => {
+    const options = stateOptions();
+    const prefix = "x".repeat(255);
+    const tailscale = ensureProfileForTailscaleIdentity(
+      { login: "tailscale-proof@github", name: `${prefix}🤖` },
+      options,
+    );
+    const github = syncTailscaleGitHubProfile(
+      {
+        accountId: 42,
+        canonicalLogin: "github-proof",
+        login: "github-proof",
+        githubName: `${prefix}🤖`,
+      },
+      options,
+    );
+
+    expect(tailscale.displayName).toBe(prefix);
+    expect(github.displayName).toBe(prefix);
+  });
+
   it("publishes a normalized provider subject without repeating an unchanged identity", () => {
     const options = stateOptions();
     const identity = { login: "ada@github" };
