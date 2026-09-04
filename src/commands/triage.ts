@@ -19,6 +19,7 @@ import {
 } from "../infra/installation-target-context.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
+import type { UpdateRepairValidation } from "../infra/update-repair-agent.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
@@ -396,7 +397,7 @@ export async function triageCommand(
         runtime.log(`Starting repair turn ${event.turn} with ${event.provider}/${event.model}.`);
       }
     },
-    validate: async (signal) => {
+    validate: async (signal): Promise<UpdateRepairValidation> => {
       try {
         const [{ resolveGatewayInstallEntrypoint }, { runUtf8CommandWithTimeout }] =
           await Promise.all([

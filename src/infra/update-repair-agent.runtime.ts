@@ -1,4 +1,3 @@
-/** Heavy repair runtime kept behind the shared loop's lazy boundary. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import {
@@ -93,8 +92,7 @@ function repairRunConfig(
       },
     ]),
   );
-  const tools = {
-    ...base.tools,
+  const repairTools = {
     profile: "coding" as const,
     allow: allowedTools,
     deny: [],
@@ -104,14 +102,6 @@ function repairRunConfig(
   };
   return {
     ...base,
-    ...(route.authProfileId
-      ? {
-          auth: {
-            ...base.auth,
-            order: { ...base.auth?.order, [route.provider]: [route.authProfileId] },
-          },
-        }
-      : {}),
     agents: {
       ...base.agents,
       defaults: {
@@ -128,18 +118,13 @@ function repairRunConfig(
             models: { ...entry.models, ...nativeModels },
             tools: {
               ...entry.tools,
-              profile: "coding",
-              allow: allowedTools,
-              deny: [],
-              byProvider: {},
-              exec: localExec,
-              fs: { workspaceOnly: false },
+              ...repairTools,
             },
           },
         ]),
       ),
     },
-    tools,
+    tools: { ...base.tools, ...repairTools },
   };
 }
 

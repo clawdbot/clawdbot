@@ -1,4 +1,3 @@
-/** Selects the operator-owned, local embedded route for an unattended repair. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +11,6 @@ import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availa
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -22,10 +20,8 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "../system-agent/inference-route.js";
-import {
-  cleanupSetupInferenceTempDir,
-  runSetupInferenceTest,
-} from "../system-agent/setup-inference-persist.js";
+import { cleanupSetupInferenceTempDir } from "../system-agent/setup-inference-persist.js";
+import { runSetupInferenceTest } from "../system-agent/setup-inference-test.js";
 
 export type UpdateRepairInferenceResult =
   | {
@@ -51,6 +47,7 @@ export async function selectUpdateRepairInference(params: {
   try {
     signal.throwIfAborted();
     const owner = resolveAmbientOwnerAgentId(params.config);
+    const configuredEntries = listAgentEntries(params.config);
     const catalog = loadManifestModelCatalog({ config: params.config });
     const accept = async (route: SystemAgentConfiguredRoute): Promise<boolean> => {
       signal.throwIfAborted();
@@ -88,7 +85,7 @@ export async function selectUpdateRepairInference(params: {
           modelId: route.model,
           api: configuredModel?.api ?? model?.api,
           baseUrl: params.config.models?.providers?.[route.provider]?.baseUrl ?? model?.baseUrl,
-          lockedProfileId: route.authProfileId,
+          pinnedProfileId: route.authProfileId,
         }).availability === true;
       signal.throwIfAborted();
       eligibility.set(route, accepted);
@@ -100,10 +97,12 @@ export async function selectUpdateRepairInference(params: {
       deps: { readConfig: async () => params.config },
       routePolicy: {
         expand: async (base) => {
+          // Execution aliases identify the runner, not the configured model provider.
+          const primaryProvider = base.modelLabel.slice(0, base.modelLabel.indexOf("/"));
           const candidates = resolveModelCandidateChain({
             cfg: params.config,
             agentId: base.agentId,
-            provider: base.provider,
+            provider: primaryProvider,
             model: base.model,
             requestedRouteResolution: "resolved",
           });
@@ -111,12 +110,11 @@ export async function selectUpdateRepairInference(params: {
           for (const candidate of candidates) {
             signal.throwIfAborted();
             const primaryProfile =
-              candidate.provider === base.provider && candidate.model === base.model
+              candidate.provider === primaryProvider && candidate.model === base.model
                 ? base.authProfileId
                 : undefined;
-            const modelRef = `${candidate.provider}/${candidate.model}${primaryProfile ? `@${primaryProfile}` : ""}`;
-            const modelKey = splitTrailingAuthProfile(modelRef).model;
-            const configuredEntries = listAgentEntries(params.config);
+            const modelKey = `${candidate.provider}/${candidate.model}`;
+            const modelRef = `${modelKey}${primaryProfile ? `@${primaryProfile}` : ""}`;
             const entries = (
               configuredEntries.length ? configuredEntries : [{ id: base.agentId }]
             ).map((entry) =>

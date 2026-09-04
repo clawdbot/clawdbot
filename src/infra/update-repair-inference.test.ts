@@ -25,8 +25,8 @@ vi.mock("../agents/model-auth-availability.js", () => ({
 vi.mock("../agents/model-auth.js", () => ({ hasAvailableAuthForProvider: vi.fn() }));
 vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: mocks.catalog }));
 vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
+vi.mock("../system-agent/setup-inference-test.js", () => ({ runSetupInferenceTest: mocks.probe }));
 vi.mock("../system-agent/setup-inference-persist.js", () => ({
-  runSetupInferenceTest: mocks.probe,
   cleanupSetupInferenceTempDir: async ({ tempDir }: { tempDir: string }) => {
     const fs = await import("node:fs/promises");
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -104,6 +104,10 @@ describe("update repair inference", () => {
     expect(mocks.probe.mock.calls[0]?.[0].plan).toMatchObject({
       authProfileId: "owner-profile",
       agentDir: "/isolated/owner",
+    });
+    expect(mocks.hasAuth.mock.calls[0]?.[0]).toMatchObject({
+      modelId: "primary",
+      pinnedProfileId: "owner-profile",
     });
     expect(result).toMatchObject({
       ok: true,

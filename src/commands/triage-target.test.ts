@@ -24,6 +24,7 @@ import {
   resolveInstallationTarget,
   withInstallationTarget,
 } from "../infra/installation-target-context.js";
+import { runUpdateRepairTurn } from "../infra/update-repair-agent.runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as agentExec from "./agent-exec.js";
@@ -87,6 +88,49 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("embedded repair installation target", () => {
+  it("preserves the owner's configured auth rotation in its temporary repair config", async () => {
+    await withOpenClawTestState({ layout: "split" }, async (state) => {
+      const config: OpenClawConfig = {
+        auth: { order: { fixture: ["preferred", "backup"] } },
+        agents: {
+          defaults: { systemAgent: { agentId: "diagnostic" } },
+          entries: { diagnostic: { model: "fixture/repair@preferred" } },
+        },
+      };
+      mocks.agentCommand.mockImplementation(async () => {
+        const runConfig = getRuntimeConfig();
+        expect(runConfig.auth).toEqual(config.auth);
+        expect(runConfig.agents?.entries?.diagnostic?.model).toBe("fixture/repair@preferred");
+        return { payloads: [{ text: "Fixture completed." }], meta: { durationMs: 1 } };
+      });
+      const result = await runUpdateRepairTurn({
+        target: {
+          stateDir: state.stateDir,
+          configPath: state.configPath,
+          workspaceDir: state.workspaceDir,
+          installRoot: state.workspaceDir,
+        },
+        route: {
+          runner: "embedded",
+          provider: "fixture",
+          model: "repair",
+          modelLabel: "fixture/repair",
+          authProfileId: "preferred",
+          agentId: "diagnostic",
+          agentDir: state.statePath("agents", "diagnostic", "agent"),
+          runConfig: config,
+        },
+        modelFallbacks: ["fixture/fallback"],
+        prompt: "Check the installation.",
+        timeoutMs: 30_000,
+        maxToolCalls: 1,
+        signal: new AbortController().signal,
+      });
+      expect(result.envelope.error).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+      expect(mocks.agentCommand).toHaveBeenCalledOnce();
+    });
+  });
   it.each([
     { name: "sandbox all", agent: { sandbox: { mode: "all" as const } } },
     { name: "sandbox non-main", agent: { sandbox: { mode: "non-main" as const } } },

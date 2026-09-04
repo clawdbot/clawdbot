@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRepairParams, UpdateRepairValidation } from "./update-repair-agent.js";
-import { prepareUnattendedUpdateRepair, runUpdateRepairLoop } from "./update-repair-agent.js";
+import type { UpdateRepairValidation } from "./update-repair-agent.js";
+import { runUpdateRepairLoop } from "./update-repair-agent.js";
+
+type UpdateRepairParams = Parameters<typeof runUpdateRepairLoop>[0];
 
 const runtime = vi.hoisted(() => ({
   withUpdateRepairEnvironment: vi.fn((_target, run) => run()),
@@ -246,6 +248,15 @@ describe("runUpdateRepairLoop", () => {
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 
+  it("redacts a credential before clipping a long unstructured repair summary", async () => {
+    const secret = "sk-test-" + "x".repeat(80);
+    runtime.runUpdateRepairTurn.mockResolvedValueOnce(
+      turnResult(`token=${secret} ${"diagnostic ".repeat(90)}`),
+    );
+    const result = await runUpdateRepairLoop(params());
+    expect(result.attempts[0]?.summary).not.toContain("x".repeat(20));
+  });
+
   it("rejects a closed owner and a concurrent repair before either can execute", async () => {
     let release!: (value: UpdateRepairValidation) => void;
     const first = runUpdateRepairLoop(
@@ -266,12 +277,6 @@ describe("runUpdateRepairLoop", () => {
     expect((await runUpdateRepairLoop({ ...params(), isCurrent: () => false })).status).toBe(
       "aborted",
     );
-    expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
-  });
-
-  it("prepares the same unattended module without spawning a coding CLI", async () => {
-    const result = await prepareUnattendedUpdateRepair(params(vi.fn().mockResolvedValue(healthy)));
-    expect(result.status).toBe("repaired");
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 });

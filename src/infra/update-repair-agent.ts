@@ -1,12 +1,8 @@
-/**
- * Bounded repair slot, not an update orchestrator. No snapshots or rollback here:
- * the caller owns candidate re-staging, activation, services, and undo decisions.
- */
 import { z } from "zod";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export type UpdateRepairTarget = {
   stateDir: string;
@@ -25,19 +21,19 @@ type RepairAttempt = {
   validation: UpdateRepairValidation;
   summary: string;
 };
-export type UpdateRepairResult = {
+type UpdateRepairResult = {
   status: "repaired" | "improved" | "unrepaired" | "unavailable" | "aborted";
   attempts: RepairAttempt[];
   finalValidation: UpdateRepairValidation;
   reason?: string;
 };
-export type UpdateRepairEvent =
+type UpdateRepairEvent =
   | { type: "route-selected"; model: string; provider: string }
   | { type: "turn-started"; turn: number; model: string; provider: string }
   | ({ type: "turn-finished" } & RepairAttempt)
   | { type: "validation"; turn: number; validation: UpdateRepairValidation }
   | { type: "stopped"; status: UpdateRepairResult["status"]; reason?: string };
-export type UpdateRepairParams = {
+type UpdateRepairParams = {
   target: UpdateRepairTarget;
   context: TriageUpdateFailure & {
     phase: "validating" | "verifying";
@@ -113,7 +109,7 @@ function repairPrompt(params: UpdateRepairParams, validation: UpdateRepairValida
 
 function repairSummary(text: string, params: UpdateRepairParams): string {
   const lastLine = text.trim().split(/\r?\n/u).at(-1) ?? "";
-  let summary = text.trim().slice(-1024) || "The agent returned no repair result.";
+  let summary = text.trim() || "The agent returned no repair result.";
   if (lastLine.startsWith("REPAIR_RESULT:")) {
     try {
       const parsed = resultLineSchema.safeParse(
@@ -126,11 +122,12 @@ function repairSummary(text: string, params: UpdateRepairParams): string {
       // Missing/garbled declarations are not fixed; only the oracle proves success.
     }
   }
-  return redactSupportString(
+  const redacted = redactSupportString(
     summary,
     { env: process.env, stateDir: params.target.stateDir },
-    { maxLength: 1024 },
+    { maxLength: Number.MAX_SAFE_INTEGER },
   );
+  return truncateUtf8Suffix(redacted, 1024);
 }
 
 /** Bound caller-owned read-only diagnostics outside temporary process paths. Late answers are ignored. */
@@ -166,6 +163,7 @@ async function validateRepair(
 // overlapping repair slot rather than let one installation inherit another's env.
 let repairActive = false;
 
+/** The caller retains activation, service lifecycle, snapshots, and rollback ownership. */
 export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<UpdateRepairResult> {
   const attempts: RepairAttempt[] = [];
   let finalValidation: UpdateRepairValidation = {
@@ -315,11 +313,4 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     clearTimeout(timer);
     repairActive = false;
   }
-}
-
-/** Unattended updater entry; shares execution and results with interactive triage. */
-export async function prepareUnattendedUpdateRepair(
-  params: UpdateRepairParams,
-): Promise<UpdateRepairResult> {
-  return runUpdateRepairLoop(params);
 }
