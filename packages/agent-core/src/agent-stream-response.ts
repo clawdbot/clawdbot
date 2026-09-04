@@ -71,21 +71,39 @@ function appendTextDeltaToAssistantMessage(
 function resolveAssistantTextDeltaUpdate(
   event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>,
   currentMessage: AssistantMessage,
+  emittedTextByContentIndex: Map<number, string>,
 ): {
   message: AssistantMessage;
   event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>;
 } | null {
   if ("partial" in event && event.partial) {
+    // Direct-mode events carry an authoritative partial; producer already normalized.
+    if (event.delta) {
+      const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
+      const growth = normalizeOpenAICompletionsTextDelta(emittedText, event.delta);
+      if (growth) {
+        emittedTextByContentIndex.set(event.contentIndex, emittedText + growth);
+      }
+    }
     return { message: event.partial, event };
   }
   const currentContent = currentMessage.content[event.contentIndex];
-  const previousText = currentContent?.type === "text" ? currentContent.text : "";
-  // Transport-agnostic guard for bare text_delta cumulative replays (e.g. deepseek).
-  const normalizedDelta = normalizeOpenAICompletionsTextDelta(previousText, event.delta);
+  const messageText = currentContent?.type === "text" ? currentContent.text : "";
+  // Normalize against text already emitted on this index. text_start's mutable
+  // `partial` can already include later deltas, so messageText alone false-drops
+  // the confirming replay that SSE/HTTP sinks still need to observe.
+  const emittedText = emittedTextByContentIndex.get(event.contentIndex) ?? "";
+  const normalizedDelta = normalizeOpenAICompletionsTextDelta(emittedText, event.delta);
   if (!normalizedDelta) {
     return null;
   }
+  const nextEmitted = emittedText + normalizedDelta;
+  emittedTextByContentIndex.set(event.contentIndex, nextEmitted);
   const nextEvent = normalizedDelta === event.delta ? event : { ...event, delta: normalizedDelta };
+  // Skip re-append when text_start partial already landed this prefix on the message.
+  if (messageText.startsWith(nextEmitted) && messageText.length >= nextEmitted.length) {
+    return { message: currentMessage, event: nextEvent };
+  }
   return {
     message: appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, normalizedDelta),
     event: nextEvent,
@@ -95,12 +113,16 @@ function resolveAssistantTextDeltaUpdate(
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
   currentMessage: AssistantMessage,
+  emittedTextByContentIndex: Map<number, string>,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
     return event.partial;
   }
   if (event.type === "text_delta") {
-    return resolveAssistantTextDeltaUpdate(event, currentMessage)?.message ?? currentMessage;
+    return (
+      resolveAssistantTextDeltaUpdate(event, currentMessage, emittedTextByContentIndex)?.message ??
+      currentMessage
+    );
   }
   return currentMessage;
 }
@@ -256,6 +278,7 @@ export async function streamAgentResponse(
     let partialIndex: number | undefined;
     let committedContentCount = 0;
     let streamedTurnId: string | undefined;
+    const emittedTextByContentIndex = new Map<number, string>();
 
     // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
     const remainingFragment = (message: AssistantMessage) =>
@@ -301,7 +324,11 @@ export async function streamAgentResponse(
 
         case "text_delta":
           if (partialMessage) {
-            const resolved = resolveAssistantTextDeltaUpdate(event, partialMessage);
+            const resolved = resolveAssistantTextDeltaUpdate(
+              event,
+              partialMessage,
+              emittedTextByContentIndex,
+            );
             if (!resolved) {
               break;
             }
@@ -332,7 +359,11 @@ export async function streamAgentResponse(
         case "toolcall_delta":
         case "toolcall_end":
           if (partialMessage) {
-            const message = resolveAssistantMessageUpdate(event, partialMessage);
+            const message = resolveAssistantMessageUpdate(
+              event,
+              partialMessage,
+              emittedTextByContentIndex,
+            );
             partialMessage = message;
             if (event.contentIndex < committedContentCount) {
               break;

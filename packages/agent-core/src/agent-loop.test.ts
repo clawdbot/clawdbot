@@ -603,11 +603,81 @@ describe("agentLoop streaming updates", () => {
     ]);
   });
 
+  it("still emits confirming text_delta when text_start partial already carried the prefix", async () => {
+    // Mimics mutable partial snapshots: text_start's shared `partial` already
+    // contains later stream text before text_delta is processed.
+    const streamFn: StreamFn = async () => {
+      const stream = createAssistantMessageEventStream();
+      const startMessage: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      const polluted: AssistantMessage = {
+        ...startMessage,
+        content: [{ type: "text", text: "FANOUT_ALPHA first second" }],
+      };
+      const finalMessage = polluted;
+
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: startMessage });
+        stream.push({ type: "text_start", contentIndex: 0, partial: polluted });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "FANOUT_ALPHA " });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "first second" });
+        stream.push({
+          type: "text_end",
+          contentIndex: 0,
+          content: "FANOUT_ALPHA first second",
+          partial: finalMessage,
+        });
+        stream.push({ type: "done", reason: "stop", message: finalMessage });
+      });
+
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      undefined,
+      streamFn,
+    );
+    const events = await collectEvents(stream);
+    const deltaUpdates = events.filter(
+      (event): event is Extract<AgentEvent, { type: "message_update" }> =>
+        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
+    );
+    expect(
+      deltaUpdates.map((event) =>
+        event.assistantMessageEvent.type === "text_delta" ? event.assistantMessageEvent.delta : "",
+      ),
+    ).toEqual(["FANOUT_ALPHA ", "first second"]);
+    expect(deltaUpdates.at(-1)?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "FANOUT_ALPHA first second" }],
+    });
+  });
+
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
-    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
-      content: [{ type: "text", text: "should not run" }],
-      details: {},
-    }));
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "should not run" }],
+        details: {},
+      }),
+    );
     const contexts: Context[] = [];
     let streamCalls = 0;
     const streamFn: StreamFn = async (_model, context) => {
@@ -751,10 +821,12 @@ describe("runAgentLoop deferred tool hydration", () => {
   }
 
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
-    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
-      content: [{ type: "text", text: "hidden ok" }],
-      details: { ok: true },
-    }));
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "hidden ok" }],
+        details: { ok: true },
+      }),
+    );
     const hiddenTool: AgentTool = {
       name: "hidden_search",
       label: "hidden_search",
@@ -869,10 +941,12 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("rejects deferred tools whose names differ from the requested call", async () => {
-    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
-      content: [{ type: "text", text: "wrong tool ran" }],
-      details: { ok: true },
-    }));
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "wrong tool ran" }],
+        details: { ok: true },
+      }),
+    );
     const mismatchedTool: AgentTool = {
       name: "other_deferred",
       label: "other_deferred",
