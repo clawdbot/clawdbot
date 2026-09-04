@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -9,10 +10,13 @@ import type {
   SessionPlacementRecovery,
   SessionPlacementTarget,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { showToast } from "../lib/toast.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import {
   isStaleChunkImportError,
+  reloadControlUiDocument,
   retryStaleChunkReloadWhenReachable,
 } from "./stale-chunk-reload.ts";
 
@@ -32,6 +36,7 @@ export type ApplicationPlacementStartupStatus = {
   readonly startedAt: number;
   readonly error?: string;
   readonly retryable?: boolean;
+  readonly discardAndReload?: () => void;
   readonly initialTurn?: ChatQueueItem;
   readonly action?: "retry" | "check-delivery";
 };
@@ -91,7 +96,8 @@ export function createApplicationPlacementStartup(
   loadRuntime: PlacementStartupRuntimeLoader = () =>
     import("./session-placement-startup.runtime.ts"),
 ): ApplicationPlacementStartup {
-  const preRuntimeEntries = new Map<string, () => PlacementStartupInput | undefined>();
+  type PendingInput = { input: PlacementStartupInput; persisted: boolean };
+  const preRuntimeEntries = new Map<string, () => PendingInput | undefined>();
   const { gateway } = dependencies;
   let disposed = false;
   let runtime: ApplicationPlacementStartupRuntime | undefined;
@@ -111,8 +117,44 @@ export function createApplicationPlacementStartup(
     const { client, phase } = gateway.snapshot;
     return phase === "connected" && client?.recoveryScopeReady ? client : null;
   };
+  const pendingInputs = () =>
+    [...preRuntimeEntries.values()]
+      .map((readInput) => readInput())
+      .filter((entry) => entry !== undefined);
+  const canReload = () => pendingInputs().every((entry) => entry.persisted);
+  const captureDiscardAndReload = () => {
+    const pending = pendingInputs();
+    const first = pending[0];
+    if (!first) {
+      return undefined;
+    }
+    const loading = runtimeLoad;
+    const current = capturePlacementStartupConnection(gateway, first.input.recovery);
+    return () => {
+      const remaining = pendingInputs();
+      // A retained button cannot authorize discarding a newer start or another credential owner's input.
+      if (
+        disposed ||
+        runtimeLoad !== loading ||
+        !current() ||
+        pending.length !== remaining.length ||
+        pending.some((entry, index) => entry !== remaining[index])
+      ) {
+        return;
+      }
+      reloadControlUiDocument();
+    };
+  };
+  const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
+    showToast({
+      message: t("newSession.placementReloadBlocked"),
+      actionLabel: t("newSession.discardUnsavedAndReload"),
+      onAction: captureDiscardAndReload(),
+    }),
+  );
 
-  const resumeRecovery = (input?: PlacementStartupInput, retry = false) => {
+  const resumeRecovery = (pending?: PendingInput, retry = false) => {
+    const input = pending?.input;
     if (disposed) {
       return;
     }
@@ -131,7 +173,7 @@ export function createApplicationPlacementStartup(
       const sessionKey = input.recovery.sessionKey;
       preRuntimeEntries.delete(sessionKey);
       const current = capturePlacementStartupConnection(gateway, input.recovery);
-      preRuntimeEntries.set(sessionKey, () => (current() ? input : undefined));
+      preRuntimeEntries.set(sessionKey, () => (current() ? pending : undefined));
       // Each start adds at most one entry, so one oldest-entry deletion maintains the bound.
       if (preRuntimeEntries.size > 32) {
         preRuntimeEntries.delete(preRuntimeEntries.keys().next().value!);
@@ -143,10 +185,10 @@ export function createApplicationPlacementStartup(
       if (client) {
         // An explicit Start may never have dispatched; hand it off before reconciliation.
         for (const [sessionKey, readInput] of preRuntimeEntries) {
-          const pending = readInput();
+          const retainedInput = readInput()?.input;
           preRuntimeEntries.delete(sessionKey);
-          if (pending) {
-            runtime.start(pending);
+          if (retainedInput) {
+            runtime.start(retainedInput);
           }
         }
       }
@@ -210,20 +252,23 @@ export function createApplicationPlacementStartup(
 
   return {
     get(sessionKey) {
-      const input = preRuntimeEntries.get(sessionKey)?.();
+      const input = preRuntimeEntries.get(sessionKey)?.()?.input;
       const pending = input
         ? { targetKind: input.recovery.target.kind, startedAt: input.createdAt }
         : pendingStoredRecovery?.read(sessionKey);
       if (!pending) {
         return runtime?.get(sessionKey) ?? null;
       }
+      const error = runtimeLoad?.error;
+      const reloadBlocked = isStaleChunkImportError(error) && !canReload();
       return readyClient()
         ? {
             sessionKey,
             ...pending,
-            phase: runtimeLoad?.error ? "failed" : "pending",
-            error: runtimeLoad?.error?.message,
-            retryable: Boolean(runtimeLoad?.error),
+            phase: error ? "failed" : "pending",
+            error: reloadBlocked ? t("newSession.placementReloadBlocked") : error?.message,
+            retryable: Boolean(error) && !reloadBlocked,
+            ...(reloadBlocked ? { discardAndReload: captureDiscardAndReload() } : {}),
           }
         : null;
     },
@@ -234,7 +279,8 @@ export function createApplicationPlacementStartup(
         pendingStoredRecovery?.read(sessionKey),
       );
     },
-    start: resumeRecovery,
+    // New Session confirms its initial save before handing a persistent start to this owner.
+    start: (input) => resumeRecovery({ input, persisted: input.persistRecovery }),
     pause(sessionKey, error, recoveryAccess) {
       const client = readyClient();
       if (disposed || !client) {
@@ -244,7 +290,7 @@ export function createApplicationPlacementStartup(
         runtime.pause(sessionKey, error, recoveryAccess);
         return;
       }
-      const pending = preRuntimeEntries.get(sessionKey)?.();
+      const pending = preRuntimeEntries.get(sessionKey)?.()?.input;
       const recovery =
         pending?.recovery ??
         recoveryAccess.readSessionPlacementRecovery(
@@ -256,29 +302,34 @@ export function createApplicationPlacementStartup(
         return;
       }
       // Retire executable recovery before the lazy runtime can dispatch it or a reload can restore it.
+      const { recovery: paused, persisted } = recoveryAccess.pauseSessionPlacementRecovery(
+        recovery,
+        error,
+        pending?.persistRecovery ?? true,
+      );
       resumeRecovery({
-        recovery: recoveryAccess.pauseSessionPlacementRecovery(
-          recovery,
-          error,
-          pending?.persistRecovery ?? true,
-        ),
-        persistRecovery: pending?.persistRecovery ?? true,
-        recovering: true,
-        createdAt: pending?.createdAt ?? Date.now(),
+        input: {
+          recovery: paused,
+          persistRecovery: pending?.persistRecovery ?? true,
+          recovering: true,
+          createdAt: pending?.createdAt ?? Date.now(),
+        },
+        persisted,
       });
     },
     retry(sessionKey) {
-      const input = preRuntimeEntries.get(sessionKey)?.();
-      if (input) {
-        return resumeRecovery(input);
-      }
-      const stored = pendingStoredRecovery;
-      if (stored?.read(sessionKey)) {
+      const pending = preRuntimeEntries.get(sessionKey)?.();
+      if (pending || pendingStoredRecovery?.read(sessionKey)) {
         const loading = runtimeLoad;
         const error = loading?.error;
         if (isStaleChunkImportError(error)) {
-          // A failed hashed import stays cached. Reload only while the saved
-          // owner remains current, and never discard another memory-only start.
+          // Explicit starts also need fresh document imports after a cached failure.
+          // Capture their saved key through the same restored-recovery owner.
+          resumeRecovery();
+          const stored = pendingStoredRecovery;
+          if (!stored?.read(sessionKey)) {
+            return;
+          }
           void retryStaleChunkReloadWhenReachable({
             canReload: () => {
               // Reset can retire the row while the document probe is pending.
@@ -288,15 +339,13 @@ export function createApplicationPlacementStartup(
                 runtimeLoad === loading &&
                 pendingStoredRecovery === stored &&
                 Boolean(stored.read(sessionKey)) &&
-                [...preRuntimeEntries.values()].every(
-                  (readInput) => readInput()?.persistRecovery !== false,
-                )
+                canReload()
               );
             },
           });
           return;
         }
-        return resumeRecovery(undefined, true);
+        return resumeRecovery(pending, true);
       }
       runtime?.retry(sessionKey);
     },
@@ -307,6 +356,7 @@ export function createApplicationPlacementStartup(
     },
     dispose() {
       stopGateway?.();
+      stopReloadGuard();
       disposed = true;
       runtime?.dispose();
       runtime = undefined;
