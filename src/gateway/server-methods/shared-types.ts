@@ -400,6 +400,7 @@ export type GatewayRequestContext = GatewayKernelContext &
     localEmbedded?: true;
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
+    hostLifecycle?: import("../server-public.js").GatewayHostLifecycle;
   };
 
 /** Full dispatch context for raw request frames before params are normalized. */
