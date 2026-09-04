@@ -302,7 +302,8 @@ const enSettings = {
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       collapseTaskProgress: "Collapse task progress by default",
-      collapseTaskProgressHint: "Keep active task progress collapsed until you open it.",
+      collapseTaskProgressHint:
+        "Keep task progress collapsed while work is active, then expand it when the response finishes.",
     },
     sidebarPrefs: {
       title: "Sidebar",

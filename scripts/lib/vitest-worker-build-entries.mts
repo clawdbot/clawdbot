@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
-import { codeModeRetentionEntrypoint } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
+import {
+  codeModeDescriptionRetentionEntrypoint,
+  codeModeRetentionEntrypoint,
+} from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { cliRecoveryEntrypoints } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
@@ -20,6 +23,7 @@ export const vitestWorkerBuildEntries = {
   ...Object.fromEntries(
     [
       codeModeRetentionEntrypoint,
+      codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
