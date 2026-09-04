@@ -106,10 +106,15 @@ export function createQaGatewayChildLogCollector() {
     const redactionSafeRecent = recent.slice(firstSafeOffset);
     const start = retainedStart + firstSafeOffset;
     const offset = Math.min(redactionSafeRecent.length, Math.max(0, mark - start));
+    const lineBoundaryOffset =
+      offset === 0 || redactionSafeRecent[offset - 1] === "\n"
+        ? offset
+        : (() => {
+            const newline = redactionSafeRecent.indexOf("\n", offset);
+            return newline < 0 ? redactionSafeRecent.length : newline + 1;
+          })();
     return {
-      all: redactionSafeRecent,
-      prefix: redactionSafeRecent.slice(0, offset),
-      text: redactionSafeRecent.slice(offset),
+      text: redactionSafeRecent.slice(lineBoundaryOffset),
       wasTruncated: mark < start,
     };
   };
@@ -134,23 +139,9 @@ export function createQaGatewayChildLogCollector() {
     },
     readRedactedSince(mark: number) {
       const read = resolveRedactedRead(mark);
-      const redactedRecent = redactQaGatewayDebugText(read.all);
-      const redactedPrefix = redactQaGatewayDebugText(read.prefix);
-      if (redactedRecent.startsWith(redactedPrefix)) {
-        return withTruncationMarker(redactedRecent.slice(redactedPrefix.length), read.wasTruncated);
-      }
-
-      // A redaction crossed the cursor. Drop only the affected line, then require
-      // the retained suffix to redact independently before exposing later logs.
-      let newline = read.text.indexOf("\n");
-      while (newline >= 0) {
-        const redactedSuffix = redactQaGatewayDebugText(read.text.slice(newline + 1));
-        if (redactedRecent.endsWith(redactedSuffix)) {
-          return withTruncationMarker(redactedSuffix, read.wasTruncated);
-        }
-        newline = read.text.indexOf("\n", newline + 1);
-      }
-      return withTruncationMarker("", read.wasTruncated);
+      // Redaction can change string length. Expose only a complete suffix so a
+      // raw cursor can never reconstruct a command or credential across lines.
+      return withTruncationMarker(redactQaGatewayDebugText(read.text), read.wasTruncated);
     },
     text() {
       return `${end > recent.length ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();

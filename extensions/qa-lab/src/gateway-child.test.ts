@@ -1317,7 +1317,7 @@ describe("buildQaRuntimeEnv", () => {
     const bearerMark = bearerLogs.markLogs();
     bearerOutput.push("stdout", Buffer.from("fixture-secret-value\nfresh line\n"));
 
-    expect(bearerLogs.readLogsSince(bearerMark)).toBe("<redacted>\nfresh line\n");
+    expect(bearerLogs.readLogsSince(bearerMark)).toBe("fresh line\n");
 
     const telegramOutput = createQaGatewayChildLogCollector();
     const telegramLogs = createQaGatewayChildLogAccess(telegramOutput);
@@ -1339,6 +1339,16 @@ describe("buildQaRuntimeEnv", () => {
     const freshTruncatedLogs = truncatedLogs.readLogsSince(0);
     expect(freshTruncatedLogs).toBe("[qa-lab] older gateway logs truncated\nfresh line\n");
     expect(freshTruncatedLogs).not.toContain("s".repeat(100));
+  });
+
+  it("does not reconstruct workflow commands split by a monotonic log cursor", () => {
+    const output = createQaGatewayChildLogCollector();
+    const logs = createQaGatewayChildLogAccess(output);
+    output.push("stdout", Buffer.from("::error"));
+    const mark = logs.markLogs();
+    output.push("stdout", Buffer.from("::warning::credential\nfresh line\n"));
+
+    expect(logs.readLogsSince(mark)).toBe("fresh line\n");
   });
 
   it("decodes interleaved stdout and stderr independently", () => {
