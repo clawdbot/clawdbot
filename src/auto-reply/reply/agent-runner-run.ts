@@ -45,8 +45,6 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
-import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
@@ -123,6 +121,9 @@ export async function runReplyAgent(
       }
     : opts;
   const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
+  followupRun.replyOperationRunStates = replyOperationRunState
+    ? [replyOperationRunState]
+    : undefined;
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -624,13 +625,8 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
-    recordReplyOperationAgentTurn(
-      replyOperationRunState,
-      isReplyOperationSuperseded(replyOperation)
-        ? "superseded"
-        : replyOperation.result?.kind === "aborted"
-          ? "cancelled"
-          : "failed",
+    replyRunState.recordReplyOperationAgentTurn(
+      followupRun.replyOperationRunStates,
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {
