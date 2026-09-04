@@ -131,12 +131,24 @@ export function createResponsesSteering(params: {
         return false;
       }
       const steer = isRecord(event.steer) ? event.steer : undefined;
-      if (
-        !responseId ||
-        steer?.previous_response_id !== responseId ||
-        typeof steer.id !== "string" ||
-        !steer.id.trim()
-      ) {
+      if (!responseId || steer?.previous_response_id !== responseId) {
+        throw new Error("Responses steering acknowledgement has an unexpected identity");
+      }
+      if (event.type === "response.steer.failed" && steer.id === undefined) {
+        // Rejection before ID allocation returns the original input instead.
+        // Match it before consuming a submission; a different steer may still be pending.
+        const index = pending.findIndex(
+          (submission) => stableStringify(submission.input) === stableStringify(steer.input),
+        );
+        const submission = pending[index];
+        if (!submission) {
+          throw new Error("Responses steering acknowledgement has no pending submission");
+        }
+        pending.splice(index, 1);
+        submission.resolve(false);
+        return true;
+      }
+      if (typeof steer.id !== "string" || !steer.id.trim()) {
         throw new Error("Responses steering acknowledgement has an unexpected identity");
       }
       if (event.type === "response.steer.pending") {

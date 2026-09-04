@@ -175,7 +175,19 @@ export async function streamAgentResponse(
     }
     await emit(event);
   };
-  const enqueueTools = (message: AssistantMessage, calls: AgentToolCall[]) => {
+  const enqueueTools = (message: AssistantMessage) => {
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      return;
+    }
+    const calls = message.content.filter(
+      (item): item is AgentToolCall =>
+        item.type === "toolCall" &&
+        !executedIds.has(item.id) &&
+        (message.stopReason === "toolUse" || item.async === true),
+    );
+    if (calls.length === 0) {
+      return;
+    }
     for (const call of calls) {
       executedIds.add(call.id);
     }
@@ -318,7 +330,7 @@ export async function streamAgentResponse(
               // may keep sampling, but every executed call has a durable owner.
               await commitFragment(prefix);
               committedContentCount = event.contentIndex + 1;
-              enqueueTools(prefix, [event.toolCall]);
+              enqueueTools(prefix);
             }
           }
           break;
@@ -350,17 +362,8 @@ export async function streamAgentResponse(
         ),
       );
       await commitFragment(finalMessage);
-      if (
-        executedIds.size > 0 &&
-        result.stopReason !== "error" &&
-        result.stopReason !== "aborted"
-      ) {
-        const remaining = finalMessage.content.filter(
-          (item): item is AgentToolCall => item.type === "toolCall" && !executedIds.has(item.id),
-        );
-        if (remaining.length > 0) {
-          enqueueTools(finalMessage, remaining);
-        }
+      if (executedIds.size > 0) {
+        enqueueTools(finalMessage);
       }
       await executions;
       if (executionFailure) {

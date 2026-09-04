@@ -567,7 +567,7 @@ describe("Responses WebSocket steering handoff", () => {
     expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
   });
 
-  it("returns required synchronous tool input on the same connection without repeating accepted user input", async () => {
+  it("returns required tool input with current settings without repeating accepted steering", async () => {
     const harness = start();
     const control = await harness.control;
     const admission = control.steer([{ ...update, timestamp: 1 }]);
@@ -598,12 +598,17 @@ describe("Responses WebSocket steering handoff", () => {
       call_id: "call_1",
       output: "lookup result",
     };
-    const second = createStream([initialUser, toolCall, toolResult, update]);
+    const settings = {
+      instructions: "Summarize the lookup result",
+      tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
+    };
+    const second = createStream([initialUser, toolCall, toolResult, update], undefined, settings);
     const secondEvents = collect(second.stream);
     expect(harness.socket.requests.at(-1)).toMatchObject({
       type: "response.create",
       previous_response_id: "resp_1",
       input: [toolResult],
+      ...settings,
     });
     harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
     harness.socket.emit(completed("resp_2"));

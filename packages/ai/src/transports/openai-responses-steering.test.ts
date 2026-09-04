@@ -86,26 +86,59 @@ describe("Responses steering admission", () => {
     expect(harness.send).toHaveBeenCalledOnce();
   });
 
-  it("distinguishes rejection before acceptance from failure after acceptance", async () => {
-    const harness = setup();
-    harness.steering.handle(created);
-    const rejected = harness.control.steer(messages);
-    harness.steering.handle({
-      ...acknowledgement("failed"),
-      steer: {
-        ...acknowledgement("failed").steer,
-        input,
-      },
-      error: { code: "steering_not_supported" },
+  it.each(["steer_1", undefined])(
+    "distinguishes rejection with ID %s before acceptance from failure after acceptance",
+    async (id) => {
+      const harness = setup();
+      harness.steering.handle(created);
+      const rejected = harness.control.steer(messages);
+      harness.steering.handle({
+        ...acknowledgement("failed"),
+        steer: {
+          previous_response_id: "resp_1",
+          ...(id === undefined ? {} : { id }),
+          input,
+        },
+        error: { code: "steering_not_supported" },
+      });
+      expect(await rejected).toBe(false);
+      expect(harness.steering.acceptedInput).toEqual([]);
+      const accepted = harness.control.steer(messages);
+      harness.steering.handle(acknowledgement("accepted", "steer_2"));
+      expect(await accepted).toBe(true);
+      expect(() => harness.steering.handle(acknowledgement("failed", "steer_2"))).toThrow(
+        "could not apply accepted steering",
+      );
+      expect(harness.steering.acceptedInput).toEqual(input);
+      harness.steering.seal();
+    },
+  );
+
+  it("matches rejection before ID allocation to the returned pending input", async () => {
+    const later: UserMessage[] = [{ role: "user", content: "later update", timestamp: 2 }];
+    const laterInput: ResponseInput = [{ role: "user", content: "later update" }];
+    const harness = setup({
+      toInput: vi
+        .fn<(messages: readonly UserMessage[]) => ResponseInput>()
+        .mockReturnValueOnce(input)
+        .mockReturnValueOnce(laterInput),
     });
-    expect(await rejected).toBe(false);
+    harness.steering.handle(created);
+    const first = harness.control.steer(messages);
+    const second = harness.control.steer(later);
+    const failure = {
+      type: "response.steer.failed",
+      steer: { previous_response_id: "resp_1", input: laterInput },
+      error: { code: "response_already_completed" },
+    };
+    expect(harness.steering.handle(failure)).toBe(true);
+    expect(await second).toBe(false);
+    expect(harness.steering.pending).toBe(true);
     expect(harness.steering.acceptedInput).toEqual([]);
-    const accepted = harness.control.steer(messages);
-    harness.steering.handle(acknowledgement("accepted", "steer_2"));
-    expect(await accepted).toBe(true);
-    expect(() => harness.steering.handle(acknowledgement("failed", "steer_2"))).toThrow(
-      "could not apply accepted steering",
-    );
+    expect(() => harness.steering.handle(failure)).toThrow("no pending submission");
+    harness.steering.handle(acknowledgement("accepted"));
+    expect(await first).toBe(true);
+    expect(harness.steering.pending).toBe(false);
     expect(harness.steering.acceptedInput).toEqual(input);
     harness.steering.seal();
   });
@@ -113,6 +146,9 @@ describe("Responses steering admission", () => {
   it.each([
     acknowledgement("accepted", "steer_1", "resp_other"),
     acknowledgement("accepted", ""),
+    { type: "response.steer.accepted", steer: { previous_response_id: "resp_1" } },
+    { type: "response.steer.pending", steer: { previous_response_id: "resp_1" } },
+    { type: "response.steer.failed", steer: { previous_response_id: "resp_other", input } },
     acknowledgement("pending", "steer_unknown"),
   ])("rejects unowned acknowledgements without consuming pending input: $type", async (event) => {
     const harness = setup();

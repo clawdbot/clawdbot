@@ -57,6 +57,61 @@ function recordMessage(event: AgentEvent, messages: AgentMessage[]) {
   }
 }
 
+it.each(["replace", "remove"] as const)(
+  "honors a message finalization hook that %ss an async call",
+  async (change) => {
+    const source = { ...call("lookup"), arguments: { text: "original" } };
+    const execute = vi.fn(async () => ({ content: [], details: {}, terminate: true }));
+    const response = createAssistantMessageEventStream();
+    response.push({ type: "start", partial: assistant([]) });
+    response.push({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: source,
+      partial: assistant([source]),
+    });
+    response.push({ type: "done", reason: "stop", message: assistant([source]) });
+    response.end();
+    const persisted: AgentMessage[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "look up", timestamp: 0 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [{ ...tool("lookup", execute), parameters: Type.Object({ text: Type.String() }) }],
+      },
+      { model, convertToLlm: (messages) => messages as Context["messages"] },
+      async (event) => {
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          await setImmediate();
+          event.message.content = event.message.content.flatMap(
+            (block): AssistantMessage["content"] =>
+              block.type !== "toolCall"
+                ? [block]
+                : change === "remove"
+                  ? []
+                  : [{ ...block, arguments: { text: "corrected" } }],
+          );
+        }
+        recordMessage(event, persisted);
+      },
+      undefined,
+      () => response,
+    );
+    if (change === "remove") {
+      expect(execute).not.toHaveBeenCalled();
+      expect(persisted.filter((message) => message.role === "toolResult")).toHaveLength(0);
+    } else {
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        "lookup",
+        { text: "corrected" },
+        expect.any(AbortSignal),
+        expect.any(Function),
+      );
+    }
+  },
+);
+
 it.each([
   "default",
   "parallel",
