@@ -45,6 +45,68 @@ const localPrepareOptions = [
 ];
 
 suite.define(() => {
+  it("refreshes detected authentication without retaining an account email for API-key access", async () => {
+    await suite.withPage(
+      {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const candidate = {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex",
+          modelRef: "openai/gpt-5.6-luna",
+          recommended: false,
+          credentials: true,
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "openclaw.setup.detect"],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              sequence: [
+                "logged in · ChatGPT account · alex@example.com",
+                "logged in · API key (usage-billed)",
+              ].map((detail) => ({
+                candidates: [{ ...candidate, detail }],
+                manualProviders: [],
+                workspace: "/tmp/openclaw-e2e",
+                setupComplete: false,
+              })),
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const row = page.locator('[data-candidate-kind="codex-cli"]');
+        await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "auth-account-desktop.png"),
+            fullPage: true,
+          });
+        }
+        const detectionCount = (await gateway.getRequests("openclaw.setup.detect")).length;
+        await page.getByRole("button", { name: "Check again" }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
+          .toBe(detectionCount + 1);
+        await expect.poll(() => row.textContent()).toContain("API key (usage-billed)");
+        expect(await row.textContent()).not.toContain("alex@example.com");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "auth-api-key-desktop.png"),
+            fullPage: true,
+          });
+        }
+      },
+    );
+  });
+
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
       {
@@ -61,7 +123,8 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
+            "wizard.next",
             "openclaw.chat",
           ],
           methodResponses: {
@@ -81,11 +144,15 @@ suite.define(() => {
               workspace: "/tmp/openclaw-e2e",
               setupComplete: false,
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef: "openai/gpt-5",
-              latencyMs: 73,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            },
+            "wizard.next": {
+              done: true,
+              status: "done",
+              modelActivation: { modelRef: "openai/gpt-5" },
             },
             "openclaw.chat": {
               sessionId: "e2e-custodian",
@@ -111,8 +178,9 @@ suite.define(() => {
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
         expect(detect.params).toEqual({ agentId: "main" });
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "openai-api-key",
           agentId: "main",
           modelRef: "openai/gpt-5",
@@ -329,7 +397,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
@@ -340,11 +408,10 @@ suite.define(() => {
               done: false,
               status: "running",
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef: "ollama/qwen3:0.6b",
-              latencyMs: 284,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
             },
             "wizard.next": {
               sequence: [
@@ -407,6 +474,7 @@ suite.define(() => {
                   status: "done",
                   preparedModelRef: "ollama/qwen3:0.6b",
                 },
+                { done: true, status: "done", modelActivation: { modelRef: "ollama/qwen3:0.6b" } },
               ],
             },
           },
@@ -480,13 +548,14 @@ suite.define(() => {
           .toContain("ollama/qwen3:0.6b");
         await expect
           .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 284 ms");
+          .not.toContain("Verified in");
         await expect
           .poll(() => page.locator('.model-setup-success [data-provider-icon="ollama"]').count())
           .toBe(1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "provider-auto:ollama",
           agentId: "main",
           modelRef: "ollama/qwen3:0.6b",
@@ -523,7 +592,7 @@ suite.define(() => {
         }
 
         const wizardRequests = await gateway.getRequests("wizard.next");
-        expect(wizardRequests).toHaveLength(5);
+        expect(wizardRequests).toHaveLength(6);
         expect(wizardRequests[2]?.params).toMatchObject({
           answer: {
             stepId: "ollama-base-url",
@@ -554,8 +623,9 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.prepare.start",
+            "wizard.next",
           ],
           methodResponses: {
             "openclaw.setup.detect": {
@@ -594,11 +664,15 @@ suite.define(() => {
               workspace: "/tmp/openclaw-e2e",
               setupComplete: false,
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef: "qwen/qwen3-coder-plus",
-              latencyMs: 412,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            },
+            "wizard.next": {
+              done: true,
+              status: "done",
+              modelActivation: { modelRef: "qwen/qwen3-coder-plus" },
             },
           },
         });
@@ -775,8 +849,9 @@ suite.define(() => {
             }),
         );
         await page.getByRole("button", { name: "Connect & verify" }).click();
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "api-key",
           agentId: "main",
           authChoice: "qwen-cn",
@@ -808,7 +883,7 @@ suite.define(() => {
         }
         await expect
           .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 412 ms");
+          .not.toContain("Verified in");
 
         const detectCountBeforeDismiss = (await gateway.getRequests("openclaw.setup.detect"))
           .length;

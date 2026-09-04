@@ -10,9 +10,8 @@ import {
   resolveMemoryCoreLocalServiceHostIdentity,
   type MemoryCoreAcquireLocalService,
 } from "./embedding-local-service.js";
-import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
 
-const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagers");
 const MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY = Symbol.for("openclaw.memoryIndexManagerScopeCloses");
 const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
   "openclaw.memoryIndexManagerGlobalLifecycle.v3",
@@ -20,6 +19,10 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
 const log = createSubsystemLogger("memory");
 
 export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+
+export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+  return purpose !== "default";
+}
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
@@ -35,14 +38,12 @@ type ClosableMemoryManager = {
 
 type PreparedMemoryManager<T extends ClosableMemoryManager> = {
   key: string;
-  transient: boolean;
   create: () => Promise<T> | T;
   reuse: (manager: T) => boolean;
 };
 
 type MemoryManagerRegistryCallbacks<T extends ClosableMemoryManager> = {
   prepare: () => Promise<PreparedMemoryManager<T> | null> | PreparedMemoryManager<T> | null;
-  close: (manager: T) => Promise<void>;
 };
 
 type MemoryManagerRegistryGlobalLifecycle = {
@@ -70,14 +71,11 @@ export function resolveMemoryIndexManagerCacheKey(params: {
 
 export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   private readonly cache: Map<string, T>;
-  private readonly pending: Map<string, Promise<T>>;
   private readonly scopeOperations: Map<string, Promise<void>>;
   private readonly globalLifecycle: MemoryManagerRegistryGlobalLifecycle;
 
   constructor() {
-    const managedCache = resolveSingletonManagedCache<T>(MEMORY_INDEX_MANAGER_CACHE_KEY);
-    this.cache = managedCache.cache;
-    this.pending = managedCache.pending;
+    this.cache = resolveGlobalSingleton(MEMORY_INDEX_MANAGER_CACHE_KEY, () => new Map<string, T>());
     this.scopeOperations = resolveGlobalSingleton<Map<string, Promise<void>>>(
       MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY,
       () => new Map(),
@@ -102,56 +100,44 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     }
     return await this.runScopeOperation(params, async () => {
       if (this.globalLifecycle.closeFailed) {
-        await this.retryFailedGlobalClose(callbacks.close);
+        await this.retryFailedGlobalClose();
       }
       const prepared = await callbacks.prepare();
       if (!prepared) {
         return null;
       }
-      const getOrCreate = async () =>
-        await getOrCreateManagedCacheEntry({
-          cache: this.cache,
-          pending: this.pending,
-          key: prepared.key,
-          bypassCache: prepared.transient,
-          create: prepared.create,
-        });
-      if (prepared.transient) {
-        return await getOrCreate();
+      const transient = isTransientMemoryIndexManagerPurpose(params.purpose);
+      if (transient) {
+        return await prepared.create();
       }
       const cachedManager = this.cache.get(prepared.key);
-      await this.closeScopeUnlocked(
-        {
-          agentId: params.agentId,
-          purpose: params.purpose,
-          ...(cachedManager && prepared.reuse(cachedManager) ? { exceptKey: prepared.key } : {}),
-        },
-        callbacks.close,
-      );
-      return await getOrCreate();
+      await this.closeScopeUnlocked({
+        agentId: params.agentId,
+        purpose: params.purpose,
+        ...(cachedManager && prepared.reuse(cachedManager) ? { exceptKey: prepared.key } : {}),
+      });
+      // The scope queue already serializes creation and replacement for this agent.
+      const existing = this.cache.get(prepared.key);
+      if (existing) {
+        return existing;
+      }
+      const manager = await prepared.create();
+      this.cache.set(prepared.key, manager);
+      return manager;
     });
   }
 
-  async closeAll(close: (manager: T) => Promise<void>): Promise<void> {
-    await this.runGlobalClose(async () => {
-      try {
-        await this.closeAllUnlocked(close);
-        this.globalLifecycle.closeFailed = false;
-      } catch (err) {
-        this.globalLifecycle.closeFailed = true;
-        throw err;
-      }
-    });
+  async closeAll(): Promise<void> {
+    await this.runGlobalClose(() => this.retryFailedGlobalClose());
   }
 
   async closeForAgent(params: {
     agentId: string;
     purpose: MemoryIndexManagerPurpose;
-    close: (manager: T) => Promise<void>;
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
     await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope, params.close);
+      await this.closeScopeUnlocked(scope);
     });
   }
 
@@ -161,9 +147,9 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     }
   }
 
-  private async retryFailedGlobalClose(close: (manager: T) => Promise<void>): Promise<void> {
+  private async retryFailedGlobalClose(): Promise<void> {
     try {
-      await this.closeAllUnlocked(close);
+      await this.closeAllUnlocked();
       this.globalLifecycle.closeFailed = false;
     } catch (err) {
       this.globalLifecycle.closeFailed = true;
@@ -191,7 +177,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         await globalClose;
       } catch {
         if (this.globalLifecycle.closePromise === globalClose) {
-          await this.closeAll(async (manager) => await manager.close());
+          await this.closeAll();
         }
       }
     }
@@ -212,52 +198,34 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     }
   }
 
-  private async closeAllUnlocked(close: (manager: T) => Promise<void>): Promise<void> {
+  private async closeAllUnlocked(): Promise<void> {
     const scopedOperations = Array.from(this.scopeOperations.values());
     if (scopedOperations.length > 0) {
       await Promise.allSettled(scopedOperations);
     }
-    const pending = Array.from(this.pending.values());
-    if (pending.length > 0) {
-      await Promise.allSettled(pending);
-    }
-    await this.closeEntries(Array.from(this.cache.entries()), close);
+    await this.closeEntries(Array.from(this.cache.entries()));
   }
 
-  private async closeScopeUnlocked(
-    params: {
-      agentId: string;
-      purpose: MemoryIndexManagerPurpose;
-      exceptKey?: string;
-    },
-    close: (manager: T) => Promise<void>,
-  ): Promise<void> {
+  private async closeScopeUnlocked(params: {
+    agentId: string;
+    purpose: MemoryIndexManagerPurpose;
+    exceptKey?: string;
+  }): Promise<void> {
     const isScopedKey = (key: string) =>
       key !== params.exceptKey &&
       key.startsWith(`${params.agentId}:`) &&
       key.endsWith(`:${params.purpose}`);
-    const pending = Array.from(this.pending.entries())
-      .filter(([key]) => isScopedKey(key))
-      .map(([, value]) => value);
-    if (pending.length > 0) {
-      await Promise.allSettled(pending);
-    }
     await this.closeEntries(
       Array.from(this.cache.entries()).filter(([key]) => isScopedKey(key)),
-      close,
       params.agentId,
     );
   }
 
-  private async closeEntries(
-    entries: Array<[string, T]>,
-    close: (manager: T) => Promise<void>,
-    agentId?: string,
-  ): Promise<void> {
+  private async closeEntries(entries: Array<[string, T]>, agentId?: string): Promise<void> {
     let firstError: unknown;
     for (const [key, manager] of entries) {
       try {
-        await close(manager);
+        await manager.close();
         this.deleteIfCurrent(key, manager);
       } catch (err) {
         firstError ??= err;

@@ -42,8 +42,8 @@ type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
   // Restart remains one-way; only suspension preserves an admitted cleanup owner.
   return isGatewayRestartDraining()
-    ? runWithGatewayIndependentRootWorkAdmission(run)
-    : runWithGatewayIndependentRootWorkContinuation(run);
+    ? runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup")
+    : runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-cleanup");
 }
 
 export function scheduleResumeSubagentRun(
@@ -71,7 +71,7 @@ export function scheduleResumeSubagentRun(
       }
       params.resumedRuns.delete(runId);
       params.resumeSubagentRun(runId);
-    }).catch((err: unknown) => {
+    }, "subagents:resume").catch((err: unknown) => {
       defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
       const current = params.runs.get(runId);
       if (

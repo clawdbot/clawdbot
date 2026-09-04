@@ -168,6 +168,7 @@ async function handleSessionSend(params: {
         sessionKey: canonicalKey,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         message: (p as { message: string }).message,
+        ...(p.mentions ? { mentions: p.mentions } : {}),
         thinking: (p as { thinking?: string }).thinking,
         attachments: (p as { attachments?: unknown[] }).attachments,
         timeoutMs: (p as { timeoutMs?: number }).timeoutMs,

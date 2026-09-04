@@ -54,7 +54,8 @@ export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 
-export { normalizeGithubCopilotDomain };
+export { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,

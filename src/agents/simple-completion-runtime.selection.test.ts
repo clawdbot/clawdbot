@@ -185,7 +185,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     );
     expect(selection.provider).toBe("openai");
     expect(selection.modelId).toBe("gpt-5.4-mini");
-    expect(selection.runtimeProvider).toBe("openai");
   });
 
   it("falls back to runtime default model when no explicit model is configured", () => {

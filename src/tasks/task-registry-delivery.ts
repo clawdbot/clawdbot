@@ -181,7 +181,7 @@ async function runTaskDeliveryWithIndependentAdmission(
     return await runWithGatewayIndependentRootWorkContinuation(async () => {
       admitted = true;
       return await deliver();
-    });
+    }, "tasks:delivery");
   } catch (error) {
     // Late lifecycle callbacks must not leak a rejected detached promise after
     // restart closes admission. An already-admitted delivery still reports its

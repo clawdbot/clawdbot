@@ -1260,12 +1260,13 @@ fn classify_connect_failure(
     if detail_code == Some(PAIRING_REQUIRED_DETAIL_CODE) {
         return Some(GatewayConnectionState::PairingRequired);
     }
-    let credential_required = !has_local_credential
-        && detail_code.is_some_and(|code| {
-            code == AUTH_TOKEN_MISSING_DETAIL_CODE
-                || code == AUTH_PASSWORD_MISSING_DETAIL_CODE
-                || (code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
-        });
+    // A retained device token can fail because the Gateway now requires shared credentials.
+    // Mismatch errors remain credential-aware so configured auth keeps its existing recovery path.
+    let credential_required = detail_code.is_some_and(|code| {
+        code == AUTH_TOKEN_MISSING_DETAIL_CODE
+            || code == AUTH_PASSWORD_MISSING_DETAIL_CODE
+            || (!has_local_credential && code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
+    });
     credential_required.then_some(GatewayConnectionState::CredentialRequired)
 }
 
@@ -2490,6 +2491,69 @@ esac
         assert!(should_clear_stored_device_token(
             &stale_device_auth,
             &GatewayAuth::DeviceToken("stale".to_string())
+        ));
+    }
+
+    #[test]
+    fn missing_gateway_credentials_override_retained_device_auth() {
+        for detail_code in [
+            AUTH_TOKEN_MISSING_DETAIL_CODE,
+            AUTH_PASSWORD_MISSING_DETAIL_CODE,
+        ] {
+            let details = json!({
+                "code": detail_code,
+                "retryable": false,
+                "pauseReconnect": true
+            });
+            let auth = GatewayAuth::DeviceToken("retained-device-token".to_string());
+            let failure = RequestFailure::method_with_details("credential missing", Some(&details))
+                .classify_connect(&auth);
+
+            assert_eq!(
+                failure.connect_state,
+                Some(GatewayConnectionState::CredentialRequired)
+            );
+            assert!(should_pause_reconnect(&failure.connect_details));
+            assert!(!should_clear_stored_device_token(&failure, &auth));
+            let state = failure.connect_state.expect("classified state");
+            let notice = connection_notice(state, &failure.connect_details, true);
+            assert_eq!(
+                notice.as_deref(),
+                Some("Gateway requires a credential — open the dashboard on the gateway host")
+            );
+            assert_eq!(
+                serde_json::to_value(GatewayStateEvent::new(state, notice, None, None))
+                    .expect("serialize credential-required state"),
+                json!({
+                    "state": "credential-required",
+                    "notice": "Gateway requires a credential — open the dashboard on the gateway host"
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reopening_quick_chat_resumes_only_a_paused_reconnect() {
+        let client = GatewayClient::new();
+        let (commands, mut receiver) = mpsc::channel(2);
+        *client
+            .inner
+            .commands
+            .lock()
+            .expect("gateway command mutex poisoned") = Some(commands);
+
+        client.resume_paused_reconnect();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), receiver.recv())
+                .await
+                .is_err()
+        );
+
+        client.inner.reconnect_paused.store(true, Ordering::SeqCst);
+        client.resume_paused_reconnect();
+        assert!(matches!(
+            receiver.recv().await,
+            Some(DriverCommand::Reconfigure)
         ));
     }
 

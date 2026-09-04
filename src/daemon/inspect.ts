@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -14,7 +15,7 @@ import { parseLaunchdPlistLabel } from "./launchd-plist.js";
 import { readLaunchDaemonPlistLabel } from "./launchd-system.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
@@ -30,19 +31,6 @@ export type FindExtraGatewayServicesOptions = {
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
-const SYSTEMD_REFERENCE_ONLY_KEYS = new Set([
-  "after",
-  "before",
-  "bindsto",
-  "conflicts",
-  "partof",
-  "propagatesreloadto",
-  "reloadpropagatedfrom",
-  "requisite",
-  "requires",
-  "upholds",
-  "wants",
-]);
 
 function quotePosixCleanupArgument(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
@@ -112,27 +100,20 @@ function hasGatewaySubcommandArg(args: string[]): boolean {
 }
 
 export function detectMarkerLineWithGateway(contents: string): Marker | null {
-  // Join line continuations before scanning systemd ExecStart commands; marker
-  // detection must ignore relationship-only unit keys.
-  const lower = normalizeLowercaseStringOrEmpty(contents.replace(/\\\r?\n\s*/g, " "));
-  for (const line of lower.split(/\r?\n/)) {
-    const trimmed = line.trim();
+  // Use the same physical-comment rules as service rewrites; comments must not
+  // hide a runnable extra service from diagnostics.
+  for (const line of splitSystemdLogicalLines(contents)) {
+    const trimmed = normalizeLowercaseStringOrEmpty(line);
     if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
       continue;
     }
     const assignment = trimmed.indexOf("=");
     if (assignment > 0) {
       const key = trimmed.slice(0, assignment).trim();
-      if (SYSTEMD_REFERENCE_ONLY_KEYS.has(key)) {
-        continue;
-      }
       if (
-        key === "execstart" &&
+        key !== "execstart" ||
         !hasGatewaySubcommandArg(parseSystemdExecStart(trimmed.slice(assignment + 1).trim()))
       ) {
-        continue;
-      }
-      if (key !== "execstart") {
         continue;
       }
     }
@@ -529,11 +510,31 @@ export async function findExtraGatewayServices(
     try {
       const home = resolveDaemonHomeDir(env);
       const userDir = path.join(home, ".config", "systemd", "user");
-      for (const svc of await scanSystemdDir({
+      const userServices = await scanSystemdDir({
         dir: userDir,
         scope: "user",
-      })) {
+      });
+      for (const svc of userServices) {
         push(svc);
+      }
+      for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
+        const label = `${name}.service`;
+        // The unit and its managed backup are one cleanup target. Report the
+        // backup separately only when it is the remaining orphaned artifact.
+        if (userServices.some((service) => service.label === label)) {
+          continue;
+        }
+        const backupPath = path.join(userDir, `${name}.service.bak`);
+        if ((await readUtf8File(backupPath)) !== null) {
+          push({
+            platform: "linux",
+            label,
+            detail: `unit backup: ${backupPath}`,
+            scope: "user",
+            marker: "clawdbot",
+            legacy: true,
+          });
+        }
       }
       if (opts.deep) {
         for (const dir of [

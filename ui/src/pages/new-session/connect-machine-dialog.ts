@@ -5,9 +5,12 @@ import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+
+registerNewSessionSetupEnglish();
 
 /**
  * The join setup behind the connect-machine dialog.
@@ -154,45 +157,57 @@ export function renderConnectMachineDialog(props: ConnectMachineDialogProps) {
         </header>
 
         <div class="connect-machine-dialog__body">
-          ${props.loading && !command
-            ? html`<p class="connect-machine-dialog__status" role="status">
-                ${t("newSession.connectMachineGenerating")}
-              </p>`
-            : nothing}
-          ${props.error
-            ? html`<p class="exec-approval-error" role="alert">
-                ${t("newSession.connectMachineFailed")} ${props.error}
-              </p>`
-            : nothing}
-          ${command
-            ? html`
-                ${renderConnectCommand(command)}
-                <p class="connect-machine-dialog__hint">
-                  ${t("newSession.connectMachineTeamHint")}
-                </p>
-                <p class="connect-machine-dialog__hint">
-                  ${expiresAt
-                    ? t("newSession.connectMachineSingleUseExpires", { time: expiresAt })
-                    : t("newSession.connectMachineSingleUse")}
-                </p>
-              `
-            : nothing}
+          ${
+            props.loading && !command
+              ? html`<p class="connect-machine-dialog__status" role="status">
+                  ${t("newSession.connectMachineGenerating")}
+                </p>`
+              : nothing
+          }
+          ${
+            props.error
+              ? html`<p class="exec-approval-error" role="alert">
+                  ${t("newSession.connectMachineFailed")} ${props.error}
+                </p>`
+              : nothing
+          }
+          ${
+            command
+              ? html`
+                  ${renderConnectCommand(command)}
+                  <p class="connect-machine-dialog__hint">
+                    ${t("newSession.connectMachineTeamHint")}
+                  </p>
+                  <p class="connect-machine-dialog__hint">
+                    ${
+                      expiresAt
+                        ? t("newSession.connectMachineSingleUseExpires", { time: expiresAt })
+                        : t("newSession.connectMachineSingleUse")
+                    }
+                  </p>
+                `
+              : nothing
+          }
         </div>
 
         <footer class="exec-approval-actions connect-machine-dialog__actions">
-          ${command || props.error
-            ? html`<button
-                class="btn"
-                type="button"
-                ?disabled=${props.loading}
-                @click=${props.onRefresh}
-              >
-                ${icons.refresh}
-                ${props.loading
-                  ? t("newSession.connectMachineRefreshing")
-                  : t("newSession.connectMachineFreshCode")}
-              </button>`
-            : nothing}
+          ${
+            command || props.error
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  ?disabled=${props.loading}
+                  @click=${props.onRefresh}
+                >
+                  ${icons.refresh}
+                  ${
+                    props.loading
+                      ? t("newSession.connectMachineRefreshing")
+                      : t("newSession.connectMachineFreshCode")
+                  }
+                </button>`
+              : nothing
+          }
           <button class="btn btn--ghost" type="button" @click=${props.onManageDevices}>
             ${t("newSession.connectMachineManageDevices")}
           </button>

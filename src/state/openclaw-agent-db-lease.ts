@@ -60,7 +60,7 @@ export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   maintenanceAuthority.getStore()?.assertOwned();
 }
 
-/** Renew a maintenance owner before a synchronous schema phase can block its heartbeat. */
+/** Verify the maintenance owner and its independent heartbeat before a synchronous phase. */
 export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   const authority = maintenanceAuthority.getStore();
   if (!authority) {

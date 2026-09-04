@@ -81,7 +81,6 @@ export async function loadModelProvidersData(
       loadModelCatalog(client, {
         agentId: opts.agentId,
         ...loadOpts,
-        rejectOnFailure: true,
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     );

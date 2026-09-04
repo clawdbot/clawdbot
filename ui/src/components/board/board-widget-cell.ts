@@ -6,6 +6,7 @@ import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import {
+  BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
   toCssPlacement,
@@ -66,6 +67,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
+  @property({ type: Boolean }) fitAutoContent = false;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -99,6 +101,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
     reportContentHeight: (name, height) => this.callbacks?.reportContentHeight(name, height),
+    scrollBy: (deltaY) => {
+      this.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" });
+    },
     requestUpdate: () => this.requestUpdate(),
     resolveFrameUrl: () => this.widgetFrameUrl,
     root: () => this,
@@ -418,13 +423,18 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     // the user manipulates the quantized rect they will actually commit.
     const exactHeightPx = this.dragging
       ? undefined
-      : exactBoardWidgetHeightPx(widget, this.contentHeightPx, boardChromeRowPx());
+      : exactBoardWidgetHeightPx(
+          widget,
+          this.contentHeightPx,
+          boardChromeRowPx(),
+          this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+        );
     const exactHeightStyle =
       exactHeightPx === undefined ? "" : ` height: ${exactHeightPx}px; align-self: start;`;
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
-        style=${`${toCssPlacement(rect)}${exactHeightStyle}`}
+        style=${`${toCssPlacement(rect)} --board-widget-rows: ${rect.h}; --board-widget-order: ${this.positionInSet};${exactHeightStyle}`}
         role="listitem"
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}
@@ -436,55 +446,67 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, widget, callbacks)}
       >
         <header class="board-widget__bar">
-          ${readOnly
-            ? nothing
-            : html`<span
-                class="board-widget__drag-handle"
-                aria-hidden="true"
-                title=${t("board.widget.moveHandle", { title: label })}
-                @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
-              >
-                <span aria-hidden="true">⠿</span>
-              </span>`}
+          ${
+            readOnly
+              ? nothing
+              : html`<span
+                  class="board-widget__drag-handle"
+                  aria-hidden="true"
+                  title=${t("board.widget.moveHandle", { title: label })}
+                  @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
+                >
+                  <span aria-hidden="true">⠿</span>
+                </span>`
+          }
           <span class="board-widget__title" title=${label}>${label}</span>
           <span class="board-widget__kind"
-            >${widget.contentKind === "mcp-app"
-              ? t("board.widget.kindMcp")
-              : widget.contentKind === "plugin"
-                ? widget.kindLabel || this.pluginRendererLabel || t("board.widget.kindPlugin")
-                : t("board.widget.kindHtml")}</span
+            >${
+              widget.contentKind === "mcp-app"
+                ? t("board.widget.kindMcp")
+                : widget.contentKind === "plugin"
+                  ? widget.kindLabel || this.pluginRendererLabel || t("board.widget.kindPlugin")
+                  : t("board.widget.kindHtml")
+            }</span
           >
           ${renderBoardGrantedCapabilities(widget)}
-          ${readOnly
-            ? nothing
-            : renderBoardWidgetMenu({
-                widget,
-                tabs: this.tabs,
-                disabled: this.busy || this.actionPending,
-                onSelect: (event) => this.handleMenuSelect(event, widget, callbacks),
-              })}
+          ${
+            readOnly
+              ? nothing
+              : renderBoardWidgetMenu({
+                  widget,
+                  tabs: this.tabs,
+                  disabled: this.busy || this.actionPending,
+                  onSelect: (event) => this.handleMenuSelect(event, widget, callbacks),
+                })
+          }
         </header>
         <div
           class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""} ${presentation === "card" ? "board-widget__body--card" : ""}`}
         >
           ${body}
-          ${this.actionError && widget.grantState !== "pending"
-            ? html`<div class="board-widget__error-overlay">
-                ${renderBoardWidgetActionError(this.actionError)}
-              </div>`
-            : nothing}
+          ${
+            this.actionError && widget.grantState !== "pending"
+              ? html`<div class="board-widget__error-overlay">
+                  ${renderBoardWidgetActionError(this.actionError)}
+                </div>`
+              : nothing
+          }
         </div>
-        ${readOnly
-          ? nothing
-          : html`<span
-              class="board-widget__resize-handle"
-              aria-hidden="true"
-              title=${t("board.widget.resizeHandle", { title: label })}
-              @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
-            ></span>`}
-        ${widget.grantState === "granted"
-          ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
-          : nothing}
+        ${
+          readOnly
+            ? nothing
+            : html`<span
+                class="board-widget__resize-handle"
+                aria-hidden="true"
+                title=${t("board.widget.resizeHandle", { title: label })}
+                @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
+              ></span>`
+        }
+        ${
+          widget.grantState === "granted"
+            ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
+            : nothing
+        }
       </section>
     `;
   }

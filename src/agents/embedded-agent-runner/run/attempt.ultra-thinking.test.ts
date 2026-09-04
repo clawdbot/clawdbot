@@ -48,6 +48,9 @@ describe("runEmbeddedAttempt Ultra thinking", () => {
 
     expect(promptInput.defaultThinkLevel).toBe("ultra");
     expect(promptInput.proactiveSubagentOrchestration).toBe(true);
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ requesterThinkingLevel: "ultra" }),
+    );
     expect(sessionOptions.thinkingLevel).toBe("max");
     expect(providerThinkingLevel).toBe("max");
   });
@@ -74,6 +77,9 @@ describe("runEmbeddedAttempt Ultra thinking", () => {
 
     expect(promptInput.defaultThinkLevel).toBe("max");
     expect(promptInput.proactiveSubagentOrchestration).toBe(false);
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ requesterThinkingLevel: "max" }),
+    );
     expect(sessionOptions.thinkingLevel).toBe("max");
     expect(providerThinkingLevel).toBe("max");
   });

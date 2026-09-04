@@ -1,7 +1,6 @@
 // Policy plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { POLICY_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
-import { registerPolicyCli } from "./src/cli.js";
 import { registerPolicyDoctorChecks } from "./src/doctor/register.js";
 
 export default definePluginEntry({
@@ -11,6 +10,7 @@ export default definePluginEntry({
   register(api) {
     api.registerCli(
       async ({ program }) => {
+        const { registerPolicyCli } = await import("./src/cli.js");
         registerPolicyCli(program);
       },
       {

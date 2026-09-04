@@ -57,6 +57,14 @@ public enum OpenClawChatGatewayPayloadCodec {
         return decoded.models.map(self.modelChoice)
     }
 
+    public static func decodeChatMetadataModelChoices(_ data: Data) throws -> [OpenClawChatModelChoice] {
+        struct ChatMetadataModels: Decodable {
+            let models: [ModelChoice]?
+        }
+        let decoded = try JSONDecoder().decode(ChatMetadataModels.self, from: data)
+        return (decoded.models ?? []).map(self.modelChoice)
+    }
+
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
         let decoded = try JSONDecoder().decode(AgentsListResult.self, from: data)
         guard let identity = OpenClawChatSessionRoutingIdentity(
@@ -73,6 +81,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             modelID: model.id,
             name: name.isEmpty ? model.id : model.name,
             provider: model.provider,
+            available: model.available,
+            unavailableReason: model.unavailablereason?.value as? String,
+            unavailableUntil: model.unavailableuntil,
             contextWindow: model.contextwindow,
             reasoning: model.reasoning)
     }
@@ -112,6 +123,8 @@ public enum OpenClawChatGatewayPayloadCodec {
         switch frame.event {
         case "tick":
             return .tick
+        case "chat.metadata.changed":
+            return .chatMetadataChanged
         case "sessions.changed":
             guard let payload = frame.payload,
                   let change = try? GatewayPayloadDecoding.decode(

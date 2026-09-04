@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { property, state as litState } from "lit/decorators.js";
 import type {
-  SessionGitHubPublicationResult,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionDiscussionState,
@@ -14,6 +13,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import { applicationContext } from "../../app/context.ts";
 import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
@@ -26,17 +26,13 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
-import { FullscreenController } from "../../components/fullscreen-controller.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import { t } from "../../i18n/index.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
@@ -44,14 +40,14 @@ import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import { GitHubPublicationController } from "./chat-github-publication.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
-import {
-  boardChatDockLayout,
-  type ChatPaneConnectionScope,
-  type ChatPageContext,
-  type PaneSessionChangeOptions,
+import type {
+  ChatPaneConnectionScope,
+  ChatPageContext,
+  PaneSessionChangeOptions,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import {
@@ -127,11 +123,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
   @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
-  // Empty means "no route/layout opinion yet": the pane boots on the page
-  // state's default session and must not canonicalize or write global session
-  // bindings until the container supplies a real key (classic mode renders
-  // before route data resolves).
+  // Empty means unresolved route data: boot on the page state's default session
+  // without canonicalizing until the container supplies a real key.
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) agentId?: string;
+  @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
+  @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) workContext?: string;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
   @property({ attribute: false }) visuallyPresented = true;
@@ -152,14 +150,26 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.presentedChanged(value);
   }
   protected presentedChanged(_presented: boolean): void {}
+  /** True while the authoritative transcript for this pane is still being fetched. */
+  get transcriptLoading(): boolean {
+    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    return phase === "pending-connection" || phase === "in-flight";
+  }
   protected get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }
   protected ownsHeaderOutcome(owner: string): boolean {
     return this.presented && owner === this.headerOutcomeOwner;
   }
-  get active(): boolean {
+  protected get selected(): boolean {
     return this.activeValue;
+  }
+  get active(): boolean {
+    // The selected split pane stays selected while another region owns input.
+    return (
+      this.activeValue &&
+      (!this.context || chatInputOwnerForContext(this.context).current === this.inputRegion)
+    );
   }
   set active(value: boolean) {
     const previous = this.activeValue;
@@ -168,7 +178,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     this.activeValue = value;
     this.requestUpdate("active", previous);
-    this.activeChanged(value);
+    this.activeChanged(this.active);
   }
   protected activeChanged(_active: boolean): void {}
   // Call wherever connectionGeneration itself advances (reconnect, capability
@@ -180,6 +190,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) focusComposer = false;
+  @property({ attribute: false }) dashboardExpanded = false;
   @property({ attribute: false }) routeFace: BoardFace = "chat";
   @property({ attribute: false }) onFaceChange?: (
     paneId: string,
@@ -225,22 +236,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     sessionKey: () =>
       this.state && !this.isCurrentSessionArchived(this.state) ? this.state.sessionKey : undefined,
   });
-  private boardFullscreenController: FullscreenController | null = null;
-  protected get boardFullscreen(): FullscreenController {
-    this.boardFullscreenController ??= new FullscreenController(this, {
-      section: () => this.querySelector<HTMLElement>(".chat-pane-primary-column"),
-      onChange: () => this.requestUpdate(),
-      onError: (message) => this.publishHeaderError(message),
-      buttonClass: "btn btn--ghost btn--icon chat-icon-btn board-fullscreen-button",
-      buttonSelector: ".board-fullscreen-button",
-      iconClass: "board-fullscreen-button__icon",
-      enterLabel: () => t("chat.board.enterFullscreen"),
-      exitLabel: () => t("chat.board.exitFullscreen"),
-      unavailableLabel: () => t("chat.board.fullscreenUnavailable"),
-      errorMessage: (error) => t("chat.board.fullscreenFailed", { error: formatUiError(error) }),
-    });
-    return this.boardFullscreenController;
-  }
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -261,7 +256,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
-  protected boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
+  protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
   protected connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
@@ -282,15 +277,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   } | null = null;
   @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
+  @litState() protected headerPlacementRestartingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @litState() protected boardCommandDock: {
-    sessionKey: string;
-    tabId: string;
-    dock: BoardTab["chatDock"];
-  } | null = null;
-  @litState() protected boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() protected resetConfirmationOpen = false;
   protected deferredSessionHydrationRequestVersion = 0;
   protected sessionCompanionHydrationKey = "";
@@ -318,10 +308,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const renderedLayout = layout ?? state.sidebarLayout;
+    const nextLayout = setSidebarOpen(renderedLayout, open);
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
-      this.setSessionObserverVisibility(open);
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
     }
-    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(nextLayout);
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -390,13 +381,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   protected resetConfirmation:
     | {
-        sessionKey: string;
+        scopeKey: string;
         promise: Promise<boolean>;
         resolve: (confirmed: boolean) => void;
       }
     | undefined;
-  protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
   protected retainedBoardSessionKey = "";
+  protected readonly observedBoardPresence = new Map<string, boolean>();
+  protected dashboardExpandedRouteKey = "";
   protected swarmHydrator: SwarmRosterHydrator | null = null;
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
@@ -453,11 +445,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
   protected sessionPullRequestsExpanded = false;
-  protected githubPublicationBusy = false;
-  protected githubPublicationResult: SessionGitHubPublicationResult | null = null;
-  protected githubPublicationError: string | null = null;
-  protected githubPublicationIdempotencyKey: string | null = null;
-  protected githubPublicationRequestVersion = 0;
+  protected readonly githubPublication = new GitHubPublicationController(() =>
+    this.requestUpdate(),
+  );
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() protected catalogMessages: unknown[] = [];
@@ -488,6 +478,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
+      .watch(
+        () => this.context && chatInputOwnerForContext(this.context),
+        (owner, notify) => owner.subscribe(notify),
+        () => this.activeChanged(this.active),
+      )
       .watch(
         () => this.context?.overlays,
         (overlays, notify) =>

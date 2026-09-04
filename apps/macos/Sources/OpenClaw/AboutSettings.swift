@@ -203,15 +203,29 @@ private struct AboutBuildMetadataStrip: View {
         let timestamp = self.metadata.buildTimestamp
         let built = self.metadata.localizedBuildDate() ?? timestamp
         if let commit, let timestamp, let built {
-            return Text("Version \(version), commit \(commit), built \(built), timestamp \(timestamp)")
+            return Text(String(
+                format: String(localized: "Version %@, commit %@, built %@, timestamp %@"),
+                version,
+                commit,
+                built,
+                timestamp))
         }
         if let commit {
-            return Text("Version \(version), commit \(commit), build date unavailable")
+            return Text(String(
+                format: String(localized: "Version %@, commit %@, build date unavailable"),
+                version,
+                commit))
         }
         if let timestamp, let built {
-            return Text("Version \(version), commit unavailable, built \(built), timestamp \(timestamp)")
+            return Text(String(
+                format: String(localized: "Version %@, commit unavailable, built %@, timestamp %@"),
+                version,
+                built,
+                timestamp))
         }
-        return Text("Version \(version), commit unavailable, build date unavailable")
+        return Text(String(
+            format: String(localized: "Version %@, commit unavailable, build date unavailable"),
+            version))
     }
 
     private func copyCommit() {

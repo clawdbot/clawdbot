@@ -162,13 +162,10 @@ export const toolIcons = {
   spark: strokeIcon(svg` <path
     d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
   />`),
+  // Theme tokens brighten the gradient in dark mode; var() needs style attributes.
   lobster: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
-        <!-- Gradient stops read theme tokens (base.css --lobster-icon-*): the
-             shipped hex pair sank into dark backgrounds, so dark mode brightens
-             both stops while light mode keeps the original artwork. var() is
-             only valid in style="", not presentation attributes. -->
         <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" style="stop-color: var(--lobster-icon-body, #ff4d4d)" />
           <stop offset="100%" style="stop-color: var(--lobster-icon-shade, #991b1b)" />

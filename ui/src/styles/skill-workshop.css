@@ -16,7 +16,10 @@
   flex-direction: column;
   flex: 1 1 auto;
   box-sizing: border-box;
+  width: 100%;
+  max-width: 1120px;
   height: 100%;
+  margin-inline: auto;
   min-height: 0;
   overflow: hidden;
   padding-bottom: 16px;

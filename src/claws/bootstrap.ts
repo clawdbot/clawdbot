@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, seedWorkspaceBootstrap } from "../agents/workspace.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { clawContainedRelativePath } from "./path-containment.js";
 import type { ClawAddPlan } from "./types.js";
 
 export class ClawBootstrapWriteError extends Error {
@@ -19,14 +20,6 @@ export class ClawBootstrapWriteError extends Error {
 
 function contentDigest(content: Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
-}
-
-function containedRelativePath(root: string, path: string): string | undefined {
-  const child = relative(root, path);
-  if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
-    return undefined;
-  }
-  return child;
 }
 
 export async function seedClawPackageBootstrap(
@@ -62,7 +55,7 @@ export async function seedClawPackageBootstrap(
 
   const packageRoot = await realpath(resolve(plan.claw.packageRoot));
   const sourcePath = resolve(action.source);
-  const sourceRelative = containedRelativePath(packageRoot, sourcePath);
+  const sourceRelative = clawContainedRelativePath(packageRoot, sourcePath);
   if (!sourceRelative) {
     throw new ClawBootstrapWriteError(
       "bootstrap_source_escape",

@@ -376,9 +376,20 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   return {
     loadPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
-    loadPreparedModelCatalogSnapshot: async () => {
+    withPreparedModelCatalogOwner: async (
+      _params: unknown,
+      read: (owner: {
+        modelCatalog: { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] };
+        authModes: object;
+        isCurrent: () => boolean;
+      }) => unknown,
+    ) => {
       const entries = await loadModelCatalog();
-      return { entries, routeVariants: entries };
+      return read({
+        modelCatalog: { entries, routeVariants: entries },
+        authModes: {},
+        isCurrent: () => true,
+      });
     },
   };
 });

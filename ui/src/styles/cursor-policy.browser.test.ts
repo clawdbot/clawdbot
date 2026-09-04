@@ -83,6 +83,8 @@ function readUiCss(): string {
     "ui/src/styles/settings.css",
     "ui/src/styles/skill-workshop.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/split-view.css",
     "ui/src/styles/chat/text.css",
   ]

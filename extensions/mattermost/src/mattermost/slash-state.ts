@@ -16,6 +16,7 @@ import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  sendHttpRequestRejection,
   type OpenClawPluginApi,
 } from "./runtime-api.js";
 import {
@@ -334,15 +335,15 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       bodyStr = await readRequestBodyWithLimit(req, {
         maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
         timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejections below reach Mattermost before the close.
+        destroyOnLimit: false,
       });
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.end("Request body timeout");
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
         return;
       }
-      res.statusCode = 413;
-      res.end("Payload Too Large");
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
       return;
     }
 

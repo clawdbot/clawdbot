@@ -2,18 +2,8 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 // Markdown Core module implements render aware chunking behavior.
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
-import {
-  copyMarkdownLinkSpan,
-  isAutoLinkedMarkdownLink,
-  mergeAnnotationSpans,
-  type MarkdownAnnotationSpan,
-} from "./ir-spans.js";
-import {
-  sliceMarkdownIR,
-  type MarkdownIR,
-  type MarkdownLinkSpan,
-  type MarkdownStyleSpan,
-} from "./ir.js";
+import { mergeAnnotationSpans, mergeStyleSpans } from "./ir-spans.js";
+import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
 /** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
@@ -277,148 +267,101 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   return chunks;
 }
 
-function mergeAdjacentStyleSpans(styles: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const merged: MarkdownStyleSpan[] = [];
-  for (const span of styles) {
-    const last = merged.at(-1);
-    if (
-      last &&
-      last.style === span.style &&
-      last.language === span.language &&
-      span.start <= last.end
-    ) {
-      last.end = Math.max(last.end, span.end);
-      continue;
-    }
-    merged.push({ ...span });
-  }
-  return merged;
-}
-
-function mergeAdjacentLinkSpans(links: MarkdownLinkSpan[]): MarkdownLinkSpan[] {
-  const merged: MarkdownLinkSpan[] = [];
-  for (const link of links) {
-    const last = merged.at(-1);
-    if (
-      last &&
-      last.href === link.href &&
-      isAutoLinkedMarkdownLink(last) === isAutoLinkedMarkdownLink(link) &&
-      link.start <= last.end
-    ) {
-      last.end = Math.max(last.end, link.end);
-      continue;
-    }
-    merged.push(copyMarkdownLinkSpan(link));
-  }
-  return merged;
-}
-
-function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR {
-  const offset = left.text.length;
-  const shiftedAnnotations: MarkdownAnnotationSpan[] = [];
-  for (const annotation of right.annotations ?? []) {
-    shiftedAnnotations.push({
-      ...annotation,
-      start: annotation.start + offset,
-      end: annotation.end + offset,
-    });
-  }
-  const shiftedStyles: MarkdownStyleSpan[] = [];
-  for (const span of right.styles) {
-    shiftedStyles.push({
-      ...span,
-      start: span.start + offset,
-      end: span.end + offset,
-    });
-  }
-  const shiftedLinks: MarkdownLinkSpan[] = [];
-  for (const link of right.links) {
-    shiftedLinks.push(
-      copyMarkdownLinkSpan(link, {
-        start: link.start + offset,
-        end: link.end + offset,
-      }),
-    );
-  }
-  const annotations = mergeAnnotationSpans([...(left.annotations ?? []), ...shiftedAnnotations]);
-  return {
-    text: left.text + right.text,
-    styles: mergeAdjacentStyleSpans([...left.styles, ...shiftedStyles]),
-    links: mergeAdjacentLinkSpans([...left.links, ...shiftedLinks]),
-    ...(annotations.length > 0 ? { annotations } : {}),
-  };
-}
+type SourceRange = { start: number; end: number };
 
 function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
   chunks: RenderedCandidate<TRendered>[],
   renderedLimit: number,
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
 ): RenderedCandidate<TRendered>[] {
-  const coalesced: RenderedCandidate<TRendered>[] = [];
-  let index = 0;
+  // Finalized slices partition the source; only coalescing can discard separators.
+  let offset = 0;
+  const pending = chunks.map((chunk) => {
+    const start = offset;
+    offset += chunk.rawSource.text.length;
+    return { ...chunk, start, end: offset };
+  });
+  const coalesced: Array<RenderedCandidate<TRendered> & { ranges: SourceRange[] }> = [];
 
-  while (index < chunks.length) {
-    const chunk = chunks[index];
-    if (!chunk) {
-      index += 1;
-      continue;
-    }
+  pending.forEach((chunk, index) => {
+    const currentRange = { start: chunk.start, end: chunk.end };
+    const current = { ...chunk, ranges: [currentRange] };
     if (chunk.rawSource.text.trim().length > 0) {
-      coalesced.push(chunk);
-      index += 1;
-      continue;
+      coalesced.push(current);
+      return;
     }
 
     const prev = coalesced.at(-1);
-    const next = chunks[index + 1];
+    const next = pending[index + 1];
     const chunkLength = chunk.rawSource.text.length;
 
-    // Keep raw IR for merges: a new boundary annotation may no longer apply
-    // after whitespace joins neighbors. Retain the exact measured output pair.
-    const renderIfFits = (source: MarkdownIR) => {
+    const renderIfFits = (ranges: SourceRange[]) => {
+      const retained: SourceRange[] = [];
+      for (const range of ranges) {
+        const last = retained.at(-1);
+        if (last?.end === range.start) {
+          last.end = range.end;
+        } else {
+          retained.push({ ...range });
+        }
+      }
+      // Slice contiguous source once, but never restore a discarded separator gap.
+      // Raw source also excludes annotations introduced only by a message boundary.
+      const source: MarkdownIR = { text: "", styles: [], links: [] };
+      for (const range of retained) {
+        appendMarkdownIR(source, sliceMarkdownIR(options.ir, range.start, range.end));
+      }
+      source.styles = mergeStyleSpans(source.styles);
+      if (source.annotations) {
+        source.annotations = mergeAnnotationSpans(source.annotations);
+      }
       const candidate = renderCandidate(options, source);
       return options.measureRendered(candidate.output.rendered) <= renderedLimit
-        ? candidate
+        ? { ...candidate, ranges: retained }
         : undefined;
     };
 
     if (prev) {
-      const mergedPrev = renderIfFits(mergeMarkdownIRChunks(prev.rawSource, chunk.rawSource));
+      const mergedPrev = renderIfFits([...prev.ranges, currentRange]);
       if (mergedPrev) {
         coalesced[coalesced.length - 1] = mergedPrev;
-        index += 1;
-        continue;
+        return;
       }
     }
 
     if (next) {
-      const mergedNext = renderIfFits(mergeMarkdownIRChunks(chunk.rawSource, next.rawSource));
+      const mergedNext = renderIfFits([{ start: chunk.start, end: next.end }]);
       if (mergedNext) {
-        chunks[index + 1] = mergedNext;
-        index += 1;
-        continue;
+        pending[index + 1] = { ...mergedNext, start: chunk.start, end: next.end };
+        return;
       }
     }
 
     if (prev && next) {
-      // Split pure whitespace between neighbors before dropping it so list,
-      // paragraph, and quote spacing survives when both sides still fit.
+      // Split whitespace between neighbors when neither can retain the whole range.
       for (let prefixLength = chunkLength - 1; prefixLength >= 1; prefixLength -= 1) {
-        const prefix = sliceMarkdownIR(chunk.rawSource, 0, prefixLength);
-        const suffix = sliceMarkdownIR(chunk.rawSource, prefixLength, chunkLength);
-        const mergedPrev = renderIfFits(mergeMarkdownIRChunks(prev.rawSource, prefix));
-        const mergedNext =
-          mergedPrev && renderIfFits(mergeMarkdownIRChunks(suffix, next.rawSource));
+        const boundary = chunk.start + prefixLength;
+        const mergedPrev = renderIfFits([...prev.ranges, { start: chunk.start, end: boundary }]);
+        const mergedNext = mergedPrev && renderIfFits([{ start: boundary, end: next.end }]);
         if (mergedPrev && mergedNext) {
           coalesced[coalesced.length - 1] = mergedPrev;
-          chunks[index + 1] = mergedNext;
-          break;
+          pending[index + 1] = { ...mergedNext, start: boundary, end: next.end };
+          return;
         }
       }
     }
 
-    index += 1;
-  }
+    // Preserve zero chunks when a renderer trims semantic whitespace away.
+    if (
+      options.measureRendered(chunk.output.rendered) > 0 &&
+      (chunk.rawSource.styles.length > 0 ||
+        chunk.rawSource.links.length > 0 ||
+        chunk.rawSource.annotations?.length ||
+        chunk.rawSource.listItems?.length)
+    ) {
+      coalesced.push(current);
+    }
+  });
 
   return coalesced;
 }

@@ -72,7 +72,8 @@ function fileResult(patch: string): SessionsDiffResult {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   document.body.replaceChildren();
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
@@ -124,6 +125,8 @@ describe("SessionDiffPanel", () => {
       data.files[0]!.path = "example.ts";
       panel.loader = async () => data;
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
       );
@@ -163,6 +166,8 @@ describe("SessionDiffPanel", () => {
     };
     panel.loader = async () => data;
     document.body.append(panel);
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
 
     const oldSide = split ? ".session-diff-split__side--left" : ".chat-diff__row--del";
     const newSide = split ? ".session-diff-split__side--right" : ".chat-diff__row--add";

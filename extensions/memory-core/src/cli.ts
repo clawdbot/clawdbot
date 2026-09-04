@@ -18,6 +18,7 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemoryResetCommandOptions,
 } from "./cli.types.js";
 import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
@@ -216,6 +217,16 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryIndex(opts, hostOptions);
+    });
+
+  memory
+    .command("reset")
+    .description("Clear the derived memory index and embedding cache without deleting sessions")
+    .option("--agent <id>", "Agent id (default: all configured agents)")
+    .option("--yes", "Skip confirmation", false)
+    .action(async (opts: MemoryResetCommandOptions) => {
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryReset(opts);
     });
 
   memory

@@ -343,16 +343,18 @@ actor MacGatewayConnectionFleet {
         return connection
     }
 
-    func remove(profileID: String) async {
-        guard let connection = self.connections.removeValue(forKey: profileID) else { return }
+    func remove(profileID: String) async -> GatewayConnection? {
+        guard let connection = self.connections.removeValue(forKey: profileID) else { return nil }
         await connection.shutdown()
+        return connection
     }
 
-    func shutdown() async {
-        let connections = self.connections.values
+    func shutdown() async -> [GatewayConnection] {
+        let connections = Array(self.connections.values)
         self.connections.removeAll()
         for connection in connections {
             await connection.shutdown()
         }
+        return connections
     }
 }

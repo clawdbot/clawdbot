@@ -9,6 +9,7 @@ import {
   readProviderApiKeyEnv,
   readProviderBaseUrl,
   readProviderHeaders,
+  readProviderTransport,
   resolveHermesEndpointApiKeyEnv,
   resolveHermesImplicitBaseUrl,
   resolveHermesProviderApiKeyEnv,
@@ -28,7 +29,27 @@ type HermesProviderSource = {
   id: string;
   raw: Record<string, unknown>;
   source: string;
+  custom: boolean;
 };
+
+function* providerSources(config: Record<string, unknown>): Generator<HermesProviderSource> {
+  for (const [id, raw] of Object.entries(childRecord(config, "providers"))) {
+    if (isRecord(raw)) {
+      yield { id, raw, source: `config.yaml:providers.${id}`, custom: false };
+    }
+  }
+  if (Array.isArray(config.custom_providers)) {
+    for (const raw of config.custom_providers) {
+      if (!isRecord(raw)) {
+        continue;
+      }
+      const id = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+      if (id) {
+        yield { id, raw, source: `config.yaml:custom_providers.${id}`, custom: true };
+      }
+    }
+  }
+}
 
 export function collectHermesProviders(
   config: Record<string, unknown>,
@@ -54,58 +75,27 @@ export function collectHermesProviders(
       ],
     };
   };
-  for (const [id, raw] of Object.entries(childRecord(config, "providers"))) {
-    if (!isRecord(raw)) {
-      continue;
-    }
+  for (const { id, raw, custom } of providerSources(config)) {
     const resolvedBaseUrl = readProviderBaseUrl(raw, env);
-    const baseUrl = resolvedBaseUrl.baseUrl ?? resolveHermesImplicitBaseUrl(id);
+    const baseUrl =
+      resolvedBaseUrl.baseUrl ?? (custom ? undefined : resolveHermesImplicitBaseUrl(id));
     const api = resolveProviderApi(baseUrl ? { ...raw, base_url: baseUrl } : raw, id);
     if (!baseUrl || !api) {
       continue;
     }
     const headerConfig = readProviderHeaders(raw, env, includeSecrets);
-    upsert({
-      id: resolveHermesConfiguredProviderId(config, id, env),
-      baseUrl,
-      api,
-      apiKeyEnv: readProviderApiKeyEnv(raw) ?? resolveHermesEndpointApiKeyEnv(baseUrl),
-      headers: headerConfig.headers,
-      models: collectProviderModels(raw),
-      sensitive: resolvedBaseUrl.sensitive || headerConfig.sensitive,
-    });
-  }
-
-  const customProviders = config.custom_providers;
-  if (Array.isArray(customProviders)) {
-    for (const raw of customProviders) {
-      if (!isRecord(raw)) {
-        continue;
-      }
-      const id = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-      if (!id) {
-        continue;
-      }
-      const resolvedBaseUrl = readProviderBaseUrl(raw, env);
-      const baseUrl = resolvedBaseUrl.baseUrl;
-      const api = resolveProviderApi(baseUrl ? { ...raw, base_url: baseUrl } : raw, id);
-      if (!baseUrl || !api) {
-        continue;
-      }
-      const headerConfig = readProviderHeaders(raw, env, includeSecrets);
-      upsert(
-        {
-          id: resolveHermesConfiguredProviderId(config, id, env),
-          baseUrl,
-          api,
-          apiKeyEnv: readProviderApiKeyEnv(raw) ?? resolveHermesEndpointApiKeyEnv(baseUrl),
-          headers: headerConfig.headers,
-          models: collectProviderModels(raw),
-          sensitive: resolvedBaseUrl.sensitive || headerConfig.sensitive,
-        },
-        { fallbackOnly: true },
-      );
-    }
+    upsert(
+      {
+        id: resolveHermesConfiguredProviderId(config, id, env),
+        baseUrl,
+        api,
+        apiKeyEnv: readProviderApiKeyEnv(raw) ?? resolveHermesEndpointApiKeyEnv(baseUrl),
+        headers: headerConfig.headers,
+        models: collectProviderModels(raw),
+        sensitive: resolvedBaseUrl.sensitive || headerConfig.sensitive,
+      },
+      { fallbackOnly: custom },
+    );
   }
 
   const model = config.model;
@@ -159,31 +149,14 @@ export function collectHermesProviderSecretBindings(
   const bindings = collectHermesProviders(config, env).flatMap((entry) =>
     entry.apiKeyEnv ? [{ envVar: entry.apiKeyEnv, provider: entry.id }] : [],
   );
-  for (const [sourceProvider, raw] of Object.entries(childRecord(config, "providers"))) {
-    if (!isRecord(raw)) {
-      continue;
-    }
-    const envVar = readProviderApiKeyEnv(raw) ?? resolveHermesProviderApiKeyEnv(sourceProvider);
+  for (const { id, raw, custom } of providerSources(config)) {
+    const envVar =
+      readProviderApiKeyEnv(raw) ?? (custom ? undefined : resolveHermesProviderApiKeyEnv(id));
     if (envVar) {
       bindings.push({
         envVar,
-        provider: resolveHermesConfiguredProviderId(config, sourceProvider, env),
+        provider: resolveHermesConfiguredProviderId(config, id, env),
       });
-    }
-  }
-  if (Array.isArray(config.custom_providers)) {
-    for (const raw of config.custom_providers) {
-      if (!isRecord(raw)) {
-        continue;
-      }
-      const sourceProvider = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-      const envVar = readProviderApiKeyEnv(raw);
-      if (sourceProvider && envVar) {
-        bindings.push({
-          envVar,
-          provider: resolveHermesConfiguredProviderId(config, sourceProvider, env),
-        });
-      }
     }
   }
   const model = isRecord(config.model) ? config.model : undefined;
@@ -228,26 +201,12 @@ export function providerManualItems(
   env: Record<string, string>,
   includeSecrets: boolean,
 ): MigrationItem[] {
-  const entries: HermesProviderSource[] = [];
   const currentProviderIds = new Set(
     Object.keys(childRecord(config, "providers")).map(normalizeHermesCustomProviderId),
   );
-  for (const [id, raw] of Object.entries(childRecord(config, "providers"))) {
-    if (isRecord(raw)) {
-      entries.push({ id, raw, source: `config.yaml:providers.${id}` });
-    }
-  }
-  if (Array.isArray(config.custom_providers)) {
-    for (const raw of config.custom_providers) {
-      if (!isRecord(raw)) {
-        continue;
-      }
-      const id = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-      if (id && !currentProviderIds.has(normalizeHermesCustomProviderId(id))) {
-        entries.push({ id, raw, source: `config.yaml:custom_providers.${id}` });
-      }
-    }
-  }
+  const entries = [...providerSources(config)].filter(
+    ({ id, custom }) => !custom || !currentProviderIds.has(normalizeHermesCustomProviderId(id)),
+  );
   if (isRecord(config.model)) {
     const provider = normalizeOptionalString(config.model.provider);
     const baseUrl =
@@ -260,13 +219,13 @@ export function providerManualItems(
           : "custom",
         raw: config.model,
         source: "config.yaml:model",
+        custom: false,
       });
     }
   }
   const items: MigrationItem[] = [];
   for (const { id, raw, source } of entries) {
-    const transport =
-      normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.api_mode);
+    const transport = readProviderTransport(raw);
     const baseUrlConfig = readProviderBaseUrl(raw, env);
     const baseUrl = baseUrlConfig.baseUrl ?? resolveHermesImplicitBaseUrl(id);
     const headerConfig = readProviderHeaders(raw, env, includeSecrets);
@@ -299,7 +258,8 @@ export function providerManualItems(
         }),
       );
     }
-    if (normalizeOptionalString(raw.api_key) && !readEnvReference(raw.api_key)) {
+    const inlineKey = raw.api_key ?? raw.apiKey;
+    if (normalizeOptionalString(inlineKey) && !readEnvReference(inlineKey)) {
       items.push(
         createMigrationManualItem({
           id: `manual:model-provider-inline-key:${sanitizeName(id)}`,

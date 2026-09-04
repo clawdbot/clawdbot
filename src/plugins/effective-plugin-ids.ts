@@ -13,7 +13,10 @@ import {
   loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
 } from "./channel-plugin-ids.js";
-import { normalizePluginsConfig, resolveSelectedContextEnginePluginId } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveSelectedContextEnginePluginIdFromConfig,
+} from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -47,14 +50,16 @@ function collectConfiguredChannelIds(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectBundledChannelOwnerPluginIds(params: {
+function addBundledChannelOwnerPluginIds(params: {
+  pluginIds: Set<string>;
   config: OpenClawConfig;
   channelIds: readonly string[];
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
   bundledPluginsDir?: string;
   manifestRecords?: readonly PluginManifestRecord[];
-}): string[] {
+}): void {
+  // Channel state callbacks run before this pass and may update config.
   const plugins = normalizePluginsConfig(params.config.plugins);
   const channelIds = new Set(
     params.channelIds
@@ -62,7 +67,7 @@ function collectBundledChannelOwnerPluginIds(params: {
       .filter((channelId): channelId is string => Boolean(channelId)),
   );
   if (channelIds.size === 0) {
-    return [];
+    return;
   }
   const env = params.bundledPluginsDir
     ? {
@@ -80,7 +85,6 @@ function collectBundledChannelOwnerPluginIds(params: {
       env,
       workspaceDir: params.workspaceDir,
     }).plugins;
-  const pluginIds = new Set<string>();
   for (const plugin of records) {
     if (plugin.origin !== "bundled") {
       continue;
@@ -99,37 +103,10 @@ function collectBundledChannelOwnerPluginIds(params: {
           allowRestrictiveAllowlistBypass: true,
         })
       ) {
-        pluginIds.add(pluginId);
+        params.pluginIds.add(pluginId);
       }
     }
   }
-  return sortUniqueStrings(pluginIds);
-}
-
-function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
-  const plugins = normalizePluginsConfig(config.plugins);
-  if (!plugins.enabled) {
-    return [];
-  }
-
-  const ids = new Set(plugins.allow);
-  for (const [pluginId, entry] of Object.entries(plugins.entries)) {
-    if (
-      entry?.enabled === true &&
-      (plugins.allow.length === 0 || plugins.allow.includes(pluginId))
-    ) {
-      ids.add(pluginId);
-    }
-  }
-  for (const pluginId of plugins.deny) {
-    ids.delete(pluginId);
-  }
-  for (const [pluginId, entry] of Object.entries(plugins.entries)) {
-    if (entry?.enabled === false) {
-      ids.delete(pluginId);
-    }
-  }
-  return sortUniqueStrings(ids);
 }
 
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
@@ -156,8 +133,27 @@ export function resolveEffectivePluginIds(params: {
     ...(prepared?.discovery ? { discovery: prepared.discovery } : {}),
   });
   const effectiveConfig = autoEnabled.config;
-  const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
-  const contextEnginePluginId = resolveSelectedContextEnginePluginId(effectiveConfig);
+  const plugins = normalizePluginsConfig(effectiveConfig.plugins);
+  const ids = new Set(plugins.enabled ? plugins.allow : []);
+  if (plugins.enabled) {
+    for (const [pluginId, entry] of Object.entries(plugins.entries)) {
+      if (entry?.enabled === false) {
+        ids.delete(pluginId);
+      } else if (
+        entry?.enabled === true &&
+        (plugins.allow.length === 0 || plugins.allow.includes(pluginId))
+      ) {
+        ids.add(pluginId);
+      }
+    }
+    for (const pluginId of plugins.deny) {
+      ids.delete(pluginId);
+    }
+  }
+  const contextEnginePluginId = resolveSelectedContextEnginePluginIdFromConfig(
+    plugins,
+    plugins.slots.contextEngine,
+  );
   if (contextEnginePluginId) {
     ids.add(contextEnginePluginId);
   }
@@ -177,16 +173,15 @@ export function resolveEffectivePluginIds(params: {
   })) {
     ids.add(pluginId);
   }
-  for (const pluginId of collectBundledChannelOwnerPluginIds({
+  addBundledChannelOwnerPluginIds({
+    pluginIds: ids,
     config: effectiveConfig,
     channelIds: configuredChannelIds,
     env: params.env,
     workspaceDir: params.workspaceDir,
     manifestRecords: prepared?.plugins,
     ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
-  })) {
-    ids.add(pluginId);
-  }
+  });
   for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,

@@ -12,6 +12,7 @@ import {
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 
 type JsonSchema = {
+  "~openclawClosedObjectIdentity"?: symbol;
   type?: string | string[];
   const?: boolean | number | string | null;
   properties?: Record<string, JsonSchema>;
@@ -133,8 +134,8 @@ function swiftCompatibilityPropertyLines(structName: string, key: string): strin
 
 // filled later once schemas are loaded
 const schemaNameByObject = new Map<object, string>();
-const schemaNameBySignature = new Map<string, string>();
-const duplicateSchemaSignatures = new Set<string>();
+const schemaNameBySignature = new Map<string, string | undefined>();
+const schemaNamesByIdentity = new Map<symbol, Map<string, string | undefined>>();
 
 function stableJson(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -158,21 +159,35 @@ function schemaSignature(schema: JsonSchema): string {
 function registerNamedSchema(name: string, schema: JsonSchema): void {
   schemaNameByObject.set(schema as object, name);
   const signature = schemaSignature(schema);
-  if (duplicateSchemaSignatures.has(signature)) {
-    return;
+  registerUniqueName(schemaNameBySignature, signature, name);
+  const identity = schema["~openclawClosedObjectIdentity"];
+  if (identity) {
+    const names = schemaNamesByIdentity.get(identity) ?? new Map<string, string | undefined>();
+    registerUniqueName(names, signature, name);
+    schemaNamesByIdentity.set(identity, names);
   }
-  if (schemaNameBySignature.has(signature)) {
-    schemaNameBySignature.delete(signature);
-    duplicateSchemaSignatures.add(signature);
-    return;
-  }
-  schemaNameBySignature.set(signature, name);
 }
 
-function namedSchema(schema: JsonSchema, allowStructuralFallback = false): string | undefined {
+function registerUniqueName(
+  names: Map<string, string | undefined>,
+  signature: string,
+  name: string,
+) {
+  names.set(signature, names.has(signature) ? undefined : name);
+}
+
+function namedSchema(
+  schema: JsonSchema,
+  allowStructuralFallback = false,
+  identity?: symbol,
+): string | undefined {
   return (
     schemaNameByObject.get(schema as object) ??
-    (allowStructuralFallback ? schemaNameBySignature.get(schemaSignature(schema)) : undefined)
+    (identity
+      ? schemaNamesByIdentity.get(identity)?.get(schemaSignature(schema))
+      : allowStructuralFallback
+        ? schemaNameBySignature.get(schemaSignature(schema))
+        : undefined)
   );
 }
 
@@ -195,10 +210,12 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   const t = normalizedSchema.type;
   const isOptional = !required;
   let base: string;
-  let named = namedSchema(normalizedSchema, allowStructuralNamed);
+  // Normalization spreads the schema, so retain its hidden identity before copying.
+  const identity = schema["~openclawClosedObjectIdentity"];
+  let named = namedSchema(normalizedSchema, allowStructuralNamed, identity);
   if (!named && nullableTypeArray && (normalizedSchema.anyOf || normalizedSchema.oneOf)) {
     const { type: _normalizedType, ...normalizedStructuralSchema } = normalizedSchema;
-    named = namedSchema(normalizedStructuralSchema, allowStructuralNamed);
+    named = namedSchema(normalizedStructuralSchema, allowStructuralNamed, identity);
   }
   if (named) {
     base = named;
@@ -696,6 +713,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
         return undefined;
       }
       const caseName = swiftUnionCaseName(literal, `case${index + 1}`);
+      // Union cases retain their established structural names; properties use nominal identity.
       const registeredName = namedSchema(branch, true);
       const branchName =
         registeredName ?? `${name}${caseName.charAt(0).toUpperCase()}${caseName.slice(1)}`;

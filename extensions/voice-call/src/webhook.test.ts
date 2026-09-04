@@ -1,6 +1,7 @@
 // Voice Call tests cover webhook plugin behavior.
 import crypto from "node:crypto";
 import { request, type IncomingMessage } from "node:http";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,14 +166,6 @@ function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string)
   const requestUrl = new URL(baseUrl);
   requestUrl.port = String(address.port);
   return requestUrl;
-}
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 function createCapturingLogger() {
@@ -1962,7 +1955,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      const parseOptions = requireFirstMockCall(parseWebhookEvent.mock.calls, "webhook parse")[1];
+      const parseOptions = expectDefined(parseWebhookEvent.mock.calls.at(0), "webhook parse")[1];
       if (!parseOptions) {
         throw new Error("webhook server did not pass verified parse options");
       }
@@ -1970,7 +1963,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const firstEvent = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+      const firstEvent = expectDefined(processEvent.mock.calls.at(0), "processed event")[0] as
         | NormalizedEvent
         | undefined;
       if (!firstEvent) {
@@ -2072,19 +2065,8 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
 
     let enteredReads = 0;
-    let releaseReads: (() => void) | undefined;
-    let unblockReadBodies: (() => void) | undefined;
-    const enteredEightReads = new Promise<void>((resolve) => {
-      releaseReads = resolve;
-    });
-    const unblockReads = new Promise<void>((resolve) => {
-      unblockReadBodies = resolve;
-    });
-    if (!releaseReads || !unblockReadBodies) {
-      throw new Error("Expected webhook read gates to be initialized");
-    }
-    const releaseEnteredReads = releaseReads;
-    const unblockStartedReads = unblockReadBodies;
+    const enteredEightReads = createDeferred<void>();
+    const unblockReads = createDeferred<void>();
     const readBodySpy = vi.spyOn(
       server as unknown as {
         readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -2094,10 +2076,10 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
-        releaseEnteredReads();
+        enteredEightReads.resolve();
       }
       if (enteredReads <= 8) {
-        await unblockReads;
+        await unblockReads.promise;
       }
       return "CallSid=CA123&SpeechResult=hello";
     });
@@ -2108,18 +2090,18 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       const inFlightRequests = Array.from({ length: 8 }, () =>
         postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA123", headers),
       );
-      await enteredEightReads;
+      await enteredEightReads.promise;
 
       const rejected = await postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA999", headers);
       expect(rejected.status).toBe(429);
       expect(await rejected.text()).toBe("Too Many Requests");
 
-      unblockStartedReads();
+      unblockReads.resolve();
 
       const settled = await Promise.all(inFlightRequests);
       expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
-      unblockStartedReads();
+      unblockReads.resolve();
       readBodySpy.mockRestore();
       await server.stop();
     }
@@ -2144,19 +2126,8 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     ).runWebhookPipeline.bind(server);
 
     let enteredReads = 0;
-    let releaseReads: (() => void) | undefined;
-    let unblockReadBodies: (() => void) | undefined;
-    const enteredEightReads = new Promise<void>((resolve) => {
-      releaseReads = resolve;
-    });
-    const unblockReads = new Promise<void>((resolve) => {
-      unblockReadBodies = resolve;
-    });
-    if (!releaseReads || !unblockReadBodies) {
-      throw new Error("Expected webhook read gates to be initialized");
-    }
-    const releaseEnteredReads = releaseReads;
-    const unblockStartedReads = unblockReadBodies;
+    const enteredEightReads = createDeferred<void>();
+    const unblockReads = createDeferred<void>();
     const readBodySpy = vi.spyOn(
       server as unknown as {
         readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -2166,9 +2137,9 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
-        releaseEnteredReads();
+        enteredEightReads.resolve();
       }
-      await unblockReads;
+      await unblockReads.promise;
       return "CallSid=CA123&SpeechResult=hello";
     });
 
@@ -2184,7 +2155,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       const inFlightRequests = Array.from({ length: 8 }, () =>
         runWebhookPipeline(makeRequestWithoutRemoteAddress(), "/voice/webhook"),
       );
-      await enteredEightReads;
+      await enteredEightReads.promise;
 
       const rejected = await runWebhookPipeline(
         makeRequestWithoutRemoteAddress(),
@@ -2194,12 +2165,12 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       expect(rejected.body).toBe("Too Many Requests");
       expect(readBodySpy).toHaveBeenCalledTimes(8);
 
-      unblockStartedReads();
+      unblockReads.resolve();
 
       const settled = await Promise.all(inFlightRequests);
       expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
     } finally {
-      unblockStartedReads();
+      unblockReads.resolve();
       readBodySpy.mockRestore();
     }
   });
@@ -2242,8 +2213,8 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       }
     ).handleInboundResponse(call.callId, "hello");
 
-    const params = requireFirstMockCall(
-      mocks.generateVoiceResponse.mock.calls,
+    const params = expectDefined<unknown[]>(
+      mocks.generateVoiceResponse.mock.calls.at(0),
       "classic voice response",
     )[0] as
       | { agentId?: string; senderIsOwner?: boolean; voiceConfig?: VoiceCallConfig }
@@ -2677,8 +2648,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const [calledCallId, calledTranscript] = requireFirstMockCall(
-        handleInboundResponse.mock.calls,
+      const [calledCallId, calledTranscript] = expectDefined<unknown[]>(
+        handleInboundResponse.mock.calls.at(0),
         "inbound response",
       ) as [string | undefined, string | undefined];
       expect(calledCallId).toBe(call.callId);
@@ -2746,7 +2717,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onTranscript?.("CA-inbound", "hello", "MZ-inbound");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const event = requireFirstMockCall(processEvent.mock.calls, "inbound processed event")[0] as
+      const event = expectDefined(processEvent.mock.calls.at(0), "inbound processed event")[0] as
         | NormalizedEvent
         | undefined;
       expect(event?.type).toBe("call.speech");

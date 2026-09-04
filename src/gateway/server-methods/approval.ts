@@ -429,7 +429,7 @@ export function createApprovalHandlers(
       const custody = resolveParams?.reviewer
         ? prepareApprovalChannelCustody({
             cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind === "plugin" ? "plugin" : "exec",
+            approvalKind: record.kind,
             reviewer: resolveParams.reviewer,
           })
         : null;
@@ -438,7 +438,7 @@ export function createApprovalHandlers(
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
-            : undefined;
+            : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
       if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;

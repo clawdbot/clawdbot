@@ -64,15 +64,27 @@ function readWorkflow(workflowPath: string): ScopeWorkflow {
   return parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
 }
 
-function scopeScript(workflowPath: string): string {
-  const step = readWorkflow(workflowPath).jobs?.scope?.steps?.find(
-    (candidate) => candidate.id === "scope",
-  );
-  if (!step?.with?.script) {
+function compileScopeWorkflow(workflowPath: string) {
+  const workflow = readWorkflow(workflowPath);
+  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
+  const script = step?.with?.script;
+  if (!script) {
     throw new Error(`missing Periphery scope script in ${workflowPath}`);
   }
-  return step.with.script;
+  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
+    "context",
+    "core",
+    "exec",
+  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+  return { workflow, script, execute };
 }
+
+const scopeWorkflows = new Map<string, ReturnType<typeof compileScopeWorkflow>>(
+  WORKFLOW_CASES.map(({ path: workflowPath }) => [
+    workflowPath,
+    compileScopeWorkflow(workflowPath),
+  ]),
+);
 
 async function runScope(workflowPath: string, options: ScopeOptions): Promise<string | undefined> {
   const outputs = new Map<string, string>();
@@ -102,11 +114,7 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
       return { exitCode: changed ? 1 : 0 };
     },
   };
-  const execute = compileFunction(`return (async () => {\n${scopeScript(workflowPath)}\n})();`, [
-    "context",
-    "core",
-    "exec",
-  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+  const { execute } = scopeWorkflows.get(workflowPath)!;
 
   await execute(
     context,
@@ -134,10 +142,9 @@ describe("Periphery scope workflows", () => {
   it.each(WORKFLOW_CASES)(
     "uses the synthetic merge parent for $name scope",
     ({ path: workflowPath }) => {
-      const workflow = readWorkflow(workflowPath);
+      const { workflow, script } = scopeWorkflows.get(workflowPath)!;
       const steps = workflow.jobs?.scope?.steps ?? [];
       const checkout = steps.find((step) => step.name === "Checkout");
-      const script = scopeScript(workflowPath);
 
       expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
       expect(workflow.on?.pull_request?.paths).toBeUndefined();
@@ -210,10 +217,7 @@ describe("Periphery scope workflows", () => {
     expect(oldDiff.status).toBe(1);
 
     const outputs = new Map<string, string>();
-    const execute = compileFunction(
-      `return (async () => {\n${scopeScript(".github/workflows/shared-openclawkit-periphery.yml")}\n})();`,
-      ["context", "core", "exec"],
-    ) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+    const { execute } = scopeWorkflows.get(".github/workflows/shared-openclawkit-periphery.yml")!;
     await execute(
       { eventName: "pull_request", payload: { pull_request: { draft: false, number: 123 } } },
       { setOutput: (name: string, value: string) => outputs.set(name, value) },

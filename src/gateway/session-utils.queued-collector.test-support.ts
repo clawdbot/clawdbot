@@ -57,6 +57,8 @@ export function useQueuedCollectorFixture() {
     });
     registryTesting.setDepsForTest({
       loadAgentRuntimePluginRegistryHandle: () => undefined,
+      // These collectors own no browser sessions; lifecycle cleanup has separate coverage.
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
       callGateway: async () => await new Promise<never>(() => {}),
       restoreSubagentRunsFromDisk: () => 0,
     });

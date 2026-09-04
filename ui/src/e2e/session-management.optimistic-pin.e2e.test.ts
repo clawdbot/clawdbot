@@ -13,6 +13,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 const candidateKey = "agent:main:candidate";
 const companionKey = "agent:main:companion";
@@ -62,19 +63,19 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.patch");
       await row.hover();
-      await row.getByRole("button", { name: "Pin session: Pin me" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
 
       // The Gateway response is still held, so this can only come from the
       // optimistic snapshot write in the mutation owner.
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
       await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
 
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
 
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => zoneEntry.count()).toBe(1);
       await expect.poll(() => row.count()).toBe(0);
       expect(await page.locator("[data-sidebar-session-error]").count()).toBe(0);
@@ -153,13 +154,13 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.patch");
       await row.hover();
-      await row.getByRole("button", { name: "Pin session: Pin me" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
       await expect.poll(() => zoneEntry.count()).toBe(1);
 
       await gateway.deferNext("sessions.patch");
       const pinnedRow = zoneEntry.locator(".sidebar-recent-session");
       await pinnedRow.hover();
-      await pinnedRow.getByRole("button", { name: "Unpin session: Pin me" }).click();
+      await pinnedRow.getByRole("button", { name: "Unpin session" }).click();
       await expect.poll(() => row.count()).toBe(1);
       await expect.poll(() => zoneEntry.count()).toBe(0);
 
@@ -167,13 +168,13 @@ suite.define(() => {
       // unpin already replaced locally.
       await gateway.setMethodResponse("sessions.list", pinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(2);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.list", unpinnedList());
       await gateway.resolveDeferred("sessions.patch", { ok: true, key: candidateKey, path: "" });
-      await expect.poll(() => gateway.getRequests("sessions.list")).toHaveLength(3);
+      await expect.poll(() => gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(3);
       await expect.poll(() => row.count()).toBe(1);
       expect(await zoneEntry.count()).toBe(0);
       await captureUiProof(suite, page, "optimistic-pin-06-newest-intent-wins.png");
