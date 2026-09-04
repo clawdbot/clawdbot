@@ -33,7 +33,11 @@ export function readAcpSessionMetaForOwnerMigration(params: {
     ({ db }) =>
       keys
         .map((key) => selectAcpSessionRow(db, key))
-        .find((candidate) => candidate && acpSessionRowMatchesEntry(candidate, params.entry)),
+        .find(
+          (candidate) =>
+            candidate?.agent === params.agentId &&
+            acpSessionRowMatchesEntry(candidate, params.entry),
+        ),
     { env: params.env, path: params.databasePath },
   );
   return row ? rowToAcpSessionMeta(row) : undefined;
