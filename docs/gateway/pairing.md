@@ -253,6 +253,24 @@ Harden or disable:
 }
 ```
 
+## Manual approval (macOS app)
+
+The macOS app shows node and device requests in one OpenClaw approval panel.
+Each request keeps the name, platform, source address, and all requested access
+visible. System-command execution and device admin access are highlighted.
+Node requests that Gateway classifies as requiring administrator approval also
+show a warning for the whole request. Expand **Details**
+for the full identity, app/core versions, and request metadata.
+
+**Approve Node** approves the node's declared capabilities; it does not rotate
+the device's access token. **Command-Return** approves only a single displayed
+request. Return alone does not approve. **Not Now** or **Escape** hides the panel
+without resolving requests; they remain pending until resolved or expired.
+
+For multiple requests, **Approve All** and **Reject All** apply only to the
+displayed requests. Requests arriving after that view was displayed are not
+included in the decision.
+
 ## Auto-approval (macOS app)
 
 The macOS app can attempt a **silent approval** of node capability requests

@@ -1,7 +1,4 @@
-export {
-  resolveSessionHistoryTranscriptPathAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
+export { resolveSessionTranscriptCandidates } from "./session-utils.fs.js";
 export { resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewaySessionRow,

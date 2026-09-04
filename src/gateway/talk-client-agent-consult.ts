@@ -175,6 +175,11 @@ export function createTalkClientAgentConsultRunner(params: {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const authority = params.authority ?? resolveTalkAgentConsultAuthority(undefined);
   let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+  const getAgentRuntime = () =>
+    (agentRuntime ??= createTalkClientAgentRuntime({
+      config: params.config,
+      ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+    }));
   const runArgs = async (args: unknown, signal?: AbortSignal) => {
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
     const voiceSessionId = params.getVoiceSessionId();
@@ -193,10 +198,7 @@ export function createTalkClientAgentConsultRunner(params: {
           confirmationId: parsedArgs.confirmationId,
         })
       : undefined;
-    const runtime = (agentRuntime ??= createTalkClientAgentRuntime({
-      config: params.config,
-      ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-    }));
+    const runtime = getAgentRuntime();
     const talkConfig = normalizeTalkSection(params.config.talk);
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
@@ -267,9 +269,7 @@ export function createTalkClientAgentConsultRunner(params: {
         sessionTarget: params.sessionTarget,
         authority: currentAuthority,
         source,
-        agentRuntime: (agentRuntime ??= createTalkClientAgentRuntime({
-          config: params.config,
-        })),
+        agentRuntime: getAgentRuntime(),
       }),
     runArgs,
     runPrompt: async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>

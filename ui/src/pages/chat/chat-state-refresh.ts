@@ -267,7 +267,6 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     await loadModelCatalog(client, {
       agentId: agentId ?? "",
       refreshIfDue: true,
-      rejectOnFailure: true,
     });
     if (binding.isCurrent()) {
       await refreshChatMetadata(host);

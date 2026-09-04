@@ -153,7 +153,7 @@ class NodeForegroundServiceTest {
   }
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopDuringRuntimeConstructionRetiresBackgroundStartup() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val fixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
@@ -187,11 +187,11 @@ class NodeForegroundServiceTest {
       assertFalse(runtime.nodeConnected.value)
       assertFalse(runtime.isForeground.value)
       assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
-      while (gateway.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
-        // Construction may have started a socket before Stop retired it.
-      }
+      // A startup socket's HTTP upgrade can reach the server after Stop retires it.
+      // Observe new session admissions instead of the asynchronous server request queue.
+      fixture.sessionConnections.clear()
       runtime.setForeground(true)
-      assertNull("Foreground re-entry must not reconnect a stopped runtime", gateway.takeRequest(10, TimeUnit.SECONDS))
+      assertNull("Foreground re-entry must not reconnect a stopped runtime", fixture.sessionConnections.poll(10, TimeUnit.SECONDS))
     } finally {
       gate.release.countDown()
       fixture.prefsReadGate = null

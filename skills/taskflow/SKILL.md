@@ -55,6 +55,12 @@ Managed-flow lifecycle:
 - Treat `stateJson` as the persisted state bag. There is no separate `setFlowOutput` or `appendFlowOutput` API.
 - Every mutating method after creation is revision-checked. Carry forward the latest `flow.revision` after each successful mutation.
 - `runTask(...)` links the child task to the flow. Use it instead of manually creating detached tasks when you want parent orchestration.
+- A linked child reaching a terminal state does not finish a managed flow. Compare
+  its result with the flow goal, schedule the next in-scope step, and call
+  `finish(...)` only after the goal's acceptance condition is verified.
+- Persist explicit acceptance state in `stateJson` for terminal-outcome workflows.
+  For example, a PR-landing flow should remain running or waiting through review
+  and CI, and finish only after the hosting service reports the PR as merged.
 
 ## Example shape
 

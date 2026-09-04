@@ -94,8 +94,9 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Probing is best-effort: a missing or failed probe leaves fields absent
-instead of rejecting the attachment.
+probe. Video dimensions account for quarter-turn display rotation; image
+dimensions account for EXIF orientation. Probing is best-effort: a missing or
+failed probe leaves fields absent instead of rejecting the attachment.
 
 Gateway-managed assistant attachments use these per-file caps:
 

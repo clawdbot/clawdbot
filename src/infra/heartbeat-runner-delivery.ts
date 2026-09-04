@@ -293,6 +293,21 @@ export async function finalizeHeartbeatOutcome(params: {
   const stateKey = params.prepared.outboundPolicySessionKey ?? sessionKey;
   const stateEntry = loadExactSessionEntryReadOnly({ storePath, sessionKey: stateKey })?.entry;
   const outcome = params.outcome;
+  const finish = (event: Parameters<typeof emitHeartbeatEvent>[0], consumeEvents = true) => {
+    emitHeartbeatEvent({
+      ...event,
+      durationMs: Date.now() - startedAt,
+      accountId: delivery.accountId,
+    });
+    if (
+      consumeEvents &&
+      params.wake.preflight.shouldInspectPendingEvents &&
+      params.prepared.inspectedSystemEventsToConsume.length
+    ) {
+      consumeSelectedSystemEventEntries(sessionKey, params.prepared.inspectedSystemEventsToConsume);
+    }
+    return { status: "ran", durationMs: Date.now() - startedAt } as const;
+  };
   const recordOutcome = (response: HeartbeatToolResponse) =>
     persistHeartbeatOutcome({
       agentId,
@@ -340,19 +355,13 @@ export async function finalizeHeartbeatOutcome(params: {
       restoreUpdatedAt: async () => {
         await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
       },
-      ...(checkReady
-        ? {
-            checkReady: async () =>
-              await checkReady({
-                cfg,
-                accountId: delivery.accountId,
-                deps: params.opts.deps,
-              }),
-          }
-        : {}),
-      ...(failureChannel !== "none" && failureTarget
-        ? {
-            deliver: async () => {
+      checkReady: checkReady
+        ? async () =>
+            await checkReady({ cfg, accountId: delivery.accountId, deps: params.opts.deps })
+        : undefined,
+      deliver:
+        failureChannel !== "none" && failureTarget
+          ? async () => {
               const send = await sendDurableMessageBatchCore({
                 cfg,
                 channel: failureChannel,
@@ -374,26 +383,23 @@ export async function finalizeHeartbeatOutcome(params: {
                 throw send.error;
               }
               return send.status === "sent" ? "sent" : "suppressed";
-            },
+            }
+          : undefined,
+      clearSatisfiedPendingFinalDelivery: failureReplyPayload
+        ? async () => {
+            const pendingFinalText = buildRecoverablePendingFinalDeliveryText([
+              failureReplyPayload,
+            ]);
+            if (!pendingFinalText) {
+              return;
+            }
+            await clearSatisfiedPendingFinalDelivery(
+              params.wake,
+              params.prepared,
+              pendingFinalText,
+            );
           }
-        : {}),
-      ...(failureReplyPayload
-        ? {
-            clearSatisfiedPendingFinalDelivery: async () => {
-              const pendingFinalText = buildRecoverablePendingFinalDeliveryText([
-                failureReplyPayload,
-              ]);
-              if (!pendingFinalText) {
-                return;
-              }
-              await clearSatisfiedPendingFinalDelivery(
-                params.wake,
-                params.prepared,
-                pendingFinalText,
-              );
-            },
-          }
-        : {}),
+        : undefined,
       onChannelNotReady: (reason) => {
         log.info("heartbeat: channel not ready for failure notice", {
           channel: failureChannel,
@@ -415,20 +421,16 @@ export async function finalizeHeartbeatOutcome(params: {
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     const okSent =
       "silent" in outcome && outcome.silent ? false : await params.maybeSendHeartbeatOk();
-    emitHeartbeatEvent({
+    return finish({
       status: outcome.eventStatus,
       reason: params.opts.reason,
       ...("preview" in outcome ? { preview: outcome.preview } : {}),
-      durationMs: Date.now() - startedAt,
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
       silent: !okSent,
       indicatorType: visibility.useIndicator
         ? resolveIndicatorType(outcome.eventStatus)
         : undefined,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
   }
   const { hasStructuredReplyContent, mediaUrls, normalized, replyPayload } = outcome;
   // Suppress duplicate heartbeats (same payload) within a short window.
@@ -448,52 +450,39 @@ export async function finalizeHeartbeatOutcome(params: {
   if (isDuplicateMain) {
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     await clearSatisfiedPendingFinalDelivery(params.wake, params.prepared);
-    emitHeartbeatEvent({
+    return finish({
       status: "skipped",
       reason: "duplicate",
       preview: truncateHeartbeatPreview(normalized.text),
-      durationMs: Date.now() - startedAt,
       hasMedia: false,
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
   const deliveryText =
     delivery.implicitDefaultRoute && prevHeartbeatAt === undefined
       ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${normalized.text}`
       : normalized.text;
-  const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
     recordUnconfirmedAlert(delivery.reason ?? "no-target");
-    emitHeartbeatEvent({
+    return finish({
       status: "skipped",
       reason: delivery.reason ?? "no-target",
-      preview: truncateHeartbeatPreview(previewText),
-      durationMs: Date.now() - startedAt,
+      preview: truncateHeartbeatPreview(deliveryText),
       hasMedia: mediaUrls.length > 0,
-      accountId: delivery.accountId,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
   }
   if (!visibility.showAlerts) {
     recordUnconfirmedAlert("alerts-disabled");
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
-    emitHeartbeatEvent({
+    return finish({
       status: "skipped",
       reason: "alerts-disabled",
-      preview: truncateHeartbeatPreview(previewText),
-      durationMs: Date.now() - startedAt,
+      preview: truncateHeartbeatPreview(deliveryText),
       channel: delivery.channel,
       hasMedia: mediaUrls.length > 0,
-      accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-    return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
   const deliveryAccountId = delivery.accountId;
@@ -508,7 +497,7 @@ export async function finalizeHeartbeatOutcome(params: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: readiness.reason,
-        preview: truncateHeartbeatPreview(previewText),
+        preview: truncateHeartbeatPreview(deliveryText),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
         channel: delivery.channel,
@@ -588,24 +577,21 @@ export async function finalizeHeartbeatOutcome(params: {
   }
 
   const eventStatus = visibleSendSucceeded ? "sent" : "skipped";
-  emitHeartbeatEvent({
-    status: eventStatus,
-    to: delivery.to,
-    ...(!visibleSendSucceeded ? { reason: send.reason } : {}),
-    preview: truncateHeartbeatPreview(previewText),
-    durationMs: Date.now() - startedAt,
-    hasMedia: mediaUrls.length > 0,
-    channel: delivery.channel,
-    accountId: delivery.accountId,
-    ...(normalized.silent === true ? { silent: true } : {}),
-    indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
-  });
   // Intentional internal-only/no-target runs consume above. Once this branch
   // expects visible delivery, suppressed sends must retain the original event.
-  if (visibleSendSucceeded) {
-    consumeInspectedSystemEvents(params.wake, params.prepared);
-  }
-  return { status: "ran", durationMs: Date.now() - startedAt };
+  return finish(
+    {
+      status: eventStatus,
+      to: delivery.to,
+      ...(!visibleSendSucceeded ? { reason: send.reason } : {}),
+      preview: truncateHeartbeatPreview(deliveryText),
+      hasMedia: mediaUrls.length > 0,
+      channel: delivery.channel,
+      ...(normalized.silent === true ? { silent: true } : {}),
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
+    },
+    visibleSendSucceeded,
+  );
 }
 
 // The duplicate-suppression branch returns before any send, so it never hits
@@ -646,10 +632,4 @@ async function clearSatisfiedPendingFinalDelivery(
     },
     { preserveActivity: true },
   );
-}
-
-function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: PreparedHeartbeatRun) {
-  if (wake.preflight.shouldInspectPendingEvents && prepared.inspectedSystemEventsToConsume.length) {
-    consumeSelectedSystemEventEntries(prepared.sessionKey, prepared.inspectedSystemEventsToConsume);
-  }
 }

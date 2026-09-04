@@ -68,6 +68,7 @@ type ChatPaneHeaderProps = {
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
+  panelLayoutActions: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
@@ -553,7 +554,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${renderGatewayPicker(props)}
         <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
-          ${compactSessionActions ? nothing : props.panelActions}
+          ${compactSessionActions ? nothing : props.panelActions} ${props.panelLayoutActions}
           ${compactSessionActions ? nothing : props.discussionAction}
           ${
             props.catalog || compactSessionActions

@@ -45,6 +45,11 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
+- The Gateway offers `permessage-deflate`. Peers that negotiate it (browsers, `ws`
+  clients) receive frames of 4 KiB and up compressed; smaller frames such as
+  streaming deltas stay raw. Context takeover is disabled in both directions, so
+  each frame compresses independently. Peers that do not offer the extension are
+  unaffected. Payload limits apply to the inflated size.
 
 Frame shapes:
 
@@ -66,6 +71,13 @@ Authenticated operator requests share a bounded queue for starting RPC handlers.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
+
+Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
+handler in a retiring Gateway instance. Shutdown fences new request entry and
+joins pending handler loading and authorization before releasing their runtime.
+Already-started methods retain their own shutdown behavior; shutdown does not
+wait for every RPC to finish. Exact pending node progress and result replies
+remain available during node cleanup, until transport shutdown seals entry.
 
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
@@ -236,6 +248,16 @@ accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
 needs a restart. `config.get.hash` remains the raw root-file revision used by
 config write conflict guards.
+
+The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
+HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
+Operator clients can open this URL for personal browser sign-in instead of
+forwarding shared device credentials. The URL includes the Control UI base path;
+clients must use normal HTTPS trust instead of native TLS pins and must not send
+native connection tokens or passwords to it. Re-read it from each authenticated
+hello snapshot and discard it when that connection closes. If the managed Serve
+route exits or is replaced, the Gateway closes connections that received its
+identity URL with code `1012`; reconnect to discover the current route.
 
 `openclaw.setup.verify` additionally checks the Gateway's current application and
 restart state before and after its live inference probe. It returns

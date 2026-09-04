@@ -917,7 +917,7 @@ describe("memory index", () => {
     }
   });
 
-  it("derives batch attempts locally instead of trusting provider error metadata", async () => {
+  it("counts local batch attempts and bypasses batching after repeated failures", async () => {
     providerFixture.providerRuntimeBatchErrors = [
       Object.assign(new Error("provider runtime batch failed"), {
         batchAttempts: Number.MAX_SAFE_INTEGER,
@@ -936,6 +936,23 @@ describe("memory index", () => {
         failures: 1,
         lastError: "provider runtime batch failed",
       });
+
+      for (const day of [13, 14]) {
+        await fs.writeFile(
+          path.join(fixture.paths.memory, `2026-01-${day}.md`),
+          `# Log\nBeta memory line ${day}.`,
+        );
+        providerFixture.providerRuntimeBatchErrors = [new Error("second batch failure")];
+        await manager.sync({ reason: "test", force: true });
+        expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+        expect(providerFixture.embedBatchCalls).toBe(day - 11);
+        expect(manager.status().batch).toMatchObject({
+          enabled: false,
+          failures: 2,
+          lastError: "second batch failure",
+          lastProvider: "batch-wide-test",
+        });
+      }
     } finally {
       await manager.close?.();
     }
@@ -1084,41 +1101,58 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "2026-01-13.md"),
-      "# Log\nBeta memory line.",
-    );
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "2026-01-14.md"),
-      "# Log\nGamma memory line.",
-    );
-    const cfg = createCfg({
-      provider: "batch-test",
-      batchEnabled: true,
-    });
-    const manager = await getFreshManager(cfg);
-    let releaseBatchGate: (() => void) | undefined;
-    providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
-      releaseBatchGate = resolve;
-    });
-    const syncPromise = manager.sync({ reason: "test" });
-    let waitError: Error | undefined;
-    try {
-      await vi.waitFor(() =>
-        expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1),
+  it.each([
+    ["success", 0, 0, { enabled: true, failures: 0, lastError: undefined }],
+    ["repeated failures", 0, 2, { enabled: false, failures: 2, lastError: "failure 2" }],
+    ["late failure", 1, 2, { enabled: false, failures: 2, lastError: "failure 1" }],
+    ["late recovery", 1, 1, { enabled: false, failures: 0, lastError: undefined }],
+  ] as const)(
+    "keeps custom batches concurrent through %s",
+    async (_outcome, priorFailures, errors, expected) => {
+      const manager = await getFreshManager(
+        createCfg({ provider: "batch-test", batchEnabled: true }),
       );
-    } catch (err) {
-      waitError = err instanceof Error ? err : new Error(String(err));
-    } finally {
-      releaseBatchGate?.();
-      await syncPromise;
-      await manager.close?.();
-    }
-    if (waitError) {
-      throw waitError;
-    }
-  });
+      try {
+        providerFixture.providerRuntimeBatchFailuresRemaining = priorFailures;
+        await manager.sync({ reason: "test" });
+        expect(manager.status().batch?.failures).toBe(priorFailures);
+
+        await fs.writeFile(
+          path.join(fixture.paths.memory, "2026-01-13.md"),
+          "# Log\nBeta memory line.",
+        );
+        await fs.writeFile(
+          path.join(fixture.paths.memory, "2026-01-14.md"),
+          "# Log\nGamma memory line.",
+        );
+        providerFixture.providerRuntimeBatchCalls = [];
+        providerFixture.providerRuntimeMaxActiveBatchCalls = 0;
+        providerFixture.embedBatchCalls = 0;
+        providerFixture.providerRuntimeBatchErrors = Array.from(
+          { length: errors },
+          (_, index) => new Error(`failure ${index + 1}`),
+        );
+        let releaseBatchGate: (() => void) | undefined;
+        providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
+          releaseBatchGate = resolve;
+        });
+        const syncPromise = manager.sync({ reason: "test", force: true });
+        try {
+          await vi.waitFor(() =>
+            expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2),
+          );
+        } finally {
+          releaseBatchGate?.();
+          await syncPromise;
+        }
+        expect(manager.status().batch).toMatchObject(expected);
+        expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+        expect(providerFixture.embedBatchCalls).toBe(errors);
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
 
   it("bounds source-wide memory batches", async () => {
     const batchFileLimit = 2048;

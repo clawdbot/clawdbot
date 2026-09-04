@@ -146,11 +146,11 @@ extension DashboardWindowController {
               let json = String(data: data, encoding: .utf8)
         else { return }
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
-        _ = try? await self.webView.evaluateJavaScript(
+        _ = try? await self.webView.evaluateJavaScript(Self.scopedDashboardScript(
             """
             window.__OPENCLAW_NATIVE_NOTIFICATIONS__ = \(json);
             window.dispatchEvent(new CustomEvent('openclaw:native-notifications-status', \
             {detail:window.__OPENCLAW_NATIVE_NOTIFICATIONS__}));
-            """)
+            """, url: self.currentURL))
     }
 }

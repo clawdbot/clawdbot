@@ -231,7 +231,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             );
             expect(
               (await fs.readdir(globalRoot)).filter((entry) =>
-                entry.startsWith(".openclaw-update-stage-"),
+                entry.startsWith(".openclaw.update-stage-"),
               ),
             ).toEqual([]);
           }

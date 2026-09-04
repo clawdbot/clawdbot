@@ -11,6 +11,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("patches a selectable Claude CLI context window", async () => {
@@ -123,8 +124,8 @@ suite.define(() => {
         ),
       ).toBe(false);
 
-      const firstListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const firstListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
       const firstOption = pane.locator('[data-chat-permission-option="default"]');
       await firstOption.waitFor({ state: "visible" });
@@ -147,7 +148,7 @@ suite.define(() => {
         key: session.key,
         permissionMode: "workspace",
       });
-      await waitForRequests(gateway, "sessions.list", firstListCount + 1);
+      await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -164,8 +165,8 @@ suite.define(() => {
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Workspace");
 
-      const secondListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
       await pane.locator('[data-chat-permission-option="default"]').click();
       const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
@@ -173,7 +174,7 @@ suite.define(() => {
         key: session.key,
         permissionMode: null,
       });
-      await waitForRequests(gateway, "sessions.list", secondListCount + 1);
+      await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -969,13 +970,7 @@ suite.define(() => {
       modelProvider: "openai",
       thinkingDefault: "high",
       thinkingLevel: "high",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "ultra", label: "ultra" },
-      ],
+      thinkingLevels: ["off", "low", "medium", "high", "ultra"].map((id) => ({ id, label: id })),
       updatedAt: 2,
     };
     const gateway = await installMockGateway(page, {

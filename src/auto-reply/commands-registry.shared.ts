@@ -166,6 +166,19 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand(
+      "dashboard",
+      "Create or update this session's dashboard.",
+      "tools",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("request", "Dashboard requirements", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
       "learn",
       "Draft a reusable skill from recent work or named sources.",
       "tools",

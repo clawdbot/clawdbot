@@ -2253,7 +2253,7 @@ describe("gateway server chat", () => {
               preparedAuthStore: requirePreparedAuthStore(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
-                ? { lockedProfileId: profileId }
+                ? { pinnedProfileId: profileId }
                 : {}),
             });
             const projection = Promise.all([

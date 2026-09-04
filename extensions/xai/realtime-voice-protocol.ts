@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoicePlaybackItem,
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -41,6 +42,8 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected continuingToolCallIds = new Set<string>();
   protected pendingToolCallIds = new Set<string>();
   protected latestMediaTimestamp = 0;
+  protected outputAudioGeneration = 0;
+  private interruptingPlayback = false;
   protected assistantAudioItem: XaiAssistantAudioItem | null = null;
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
@@ -109,36 +112,11 @@ export abstract class XaiRealtimeVoiceProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
-    const assistantAudioItem = this.assistantAudioItem;
-    const shouldInterruptProvider =
-      assistantAudioItem !== null &&
-      (this.responseActive || this.markQueue.length > 0 || options?.audioPlaybackActive === true);
-    const audioEndMs = shouldInterruptProvider ? this.audioEndMs(assistantAudioItem) : null;
-    if (this.responseActive && !this.responseCancelInFlight) {
-      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
-      this.responseCancelInFlight = true;
-    }
-    if (shouldInterruptProvider && audioEndMs !== null) {
-      this.truncateAssistantAudio(assistantAudioItem, "barge-in", audioEndMs);
-      this.config.onClearAudio("barge-in");
-      this.markQueue = [];
-      this.assistantAudioItem = null;
-      return;
-    }
-    this.config.onClearAudio("barge-in");
-    this.markQueue = [];
+    this.interruptPlayback("barge-in", options);
   }
 
   protected handleServerVadBargeIn(): void {
-    // xAI owns server-VAD cancellation, but only the relay knows how much
-    // queued audio actually played. Trim provider history to that boundary.
-    const assistantAudioItem = this.assistantAudioItem;
-    if (assistantAudioItem !== null && this.markQueue.length > 0) {
-      this.truncateAssistantAudio(assistantAudioItem, "server-vad-barge-in");
-    }
-    this.config.onClearAudio("barge-in");
-    this.markQueue = [];
-    this.assistantAudioItem = null;
+    this.interruptPlayback("server-vad-barge-in");
   }
 
   private audioEndMs(item: XaiAssistantAudioItem): number {
@@ -147,20 +125,64 @@ export abstract class XaiRealtimeVoiceProtocol {
     return Math.min(producedAudioMs, playbackAudioMs);
   }
 
-  private truncateAssistantAudio(
-    item: XaiAssistantAudioItem,
+  private interruptPlayback(
     reason: "barge-in" | "server-vad-barge-in",
-    audioEndMs = this.audioEndMs(item),
+    options?: RealtimeVoiceBargeInOptions,
   ): void {
-    this.sendEvent(
-      {
-        type: "conversation.item.truncate",
-        item_id: item.itemId,
-        content_index: 0,
-        audio_end_ms: audioEndMs,
-      },
-      `reason=${reason} audioEndMs=${audioEndMs}`,
-    );
+    // Wire observers can synchronously reenter before the sink clears its snapshot.
+    if (this.interruptingPlayback) {
+      return;
+    }
+    this.interruptingPlayback = true;
+    try {
+      const item = this.assistantAudioItem;
+      const hasLegacyPlayback =
+        this.markQueue.length > 0 ||
+        (reason === "barge-in" && (this.responseActive || options?.audioPlaybackActive === true));
+      // Timestamp/mark-only transports retain their shipped clock contract;
+      // an empty native snapshot means all prior audio was already heard.
+      const playbackState: readonly RealtimeVoicePlaybackItem[] = this.config.getPlaybackState
+        ? this.config.getPlaybackState()
+        : item && hasLegacyPlayback
+          ? [{ itemId: item.itemId, audioEndMs: this.audioEndMs(item) }]
+          : [];
+      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({ itemId, audioEndMs }));
+      const cancelResponse =
+        reason === "barge-in" &&
+        (this.responseActive || this.responseCreateInFlight || playbackItems.length > 0) &&
+        !this.responseCancelInFlight;
+      this.outputAudioGeneration += 1;
+      this.markQueue = [];
+      this.assistantAudioItem = null;
+      if (this.responseActive || this.responseCreateInFlight) {
+        this.responseCancelInFlight = true;
+      }
+      // xAI requires manual cancellation before truncating even completed playback.
+      // Only active generation has a later response.done; VAD owns its cancellation.
+      if (cancelResponse) {
+        this.sendEvent({ type: "response.cancel" }, `reason=${reason}`);
+      }
+      for (const playbackItem of playbackItems) {
+        this.sendEvent(
+          {
+            type: "conversation.item.truncate",
+            item_id: playbackItem.itemId,
+            content_index: 0,
+            audio_end_ms: playbackItem.audioEndMs,
+          },
+          `reason=${reason} audioEndMs=${playbackItem.audioEndMs}`,
+        );
+      }
+      // The sink can request replacement generation when cleared; trim its history first.
+      this.config.onClearAudio("barge-in");
+    } finally {
+      this.interruptingPlayback = false;
+    }
+    // Observer requests wait until history and the sink are cleared. Server VAD
+    // owns its next response; only a host interruption drains this gate.
+    if (reason === "barge-in") {
+      this.flushPendingResponseCreate();
+    }
   }
 
   protected buildSessionUpdate(): XaiRealtimeSessionUpdate {
@@ -269,6 +291,7 @@ export abstract class XaiRealtimeVoiceProtocol {
     // xAI requires every parallel function output before one response.create, and
     // relay playback must drain before the next response starts.
     if (
+      this.interruptingPlayback ||
       this.responseActive ||
       this.responseCreateInFlight ||
       this.responseCancelInFlight ||
@@ -293,6 +316,7 @@ export abstract class XaiRealtimeVoiceProtocol {
   }
 
   protected resetRealtimeSessionState(options: { preserveToolCallState?: boolean } = {}): void {
+    this.outputAudioGeneration += 1;
     this.markQueue = [];
     this.responseActive = false;
     this.responseCreateInFlight = false;
@@ -309,7 +333,7 @@ export abstract class XaiRealtimeVoiceProtocol {
     }
   }
 
-  protected emitAudioWithPlaybackMark(audio: Buffer): void {
+  protected createPlaybackMark(): string {
     // Playback marks gate the next response. Dropping one would invent an
     // acknowledgement, so fail before delivering audio that cannot be tracked.
     if (this.markQueue.length >= XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS) {
@@ -318,9 +342,8 @@ export abstract class XaiRealtimeVoiceProtocol {
       );
     }
     const markName = `audio-${randomUUID()}`;
-    this.config.onAudio(audio);
     this.markQueue.push(markName);
-    this.config.onMark?.(markName);
+    return markName;
   }
 
   protected abstract resetInputTranscripts(): void;

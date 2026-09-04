@@ -1,36 +1,21 @@
-import { html, nothing } from "lit";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import { html } from "lit";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
-export type WorkboardCardChipProps = {
-  active: boolean;
-  basePath: string;
-  client: GatewayBrowserClient;
-  sessionKey: string;
-};
-
 type BoardSessionSurfaceProps = {
   active: boolean;
+  session: BoardGetParams;
   snapshot: BoardSnapshot;
   activeTabId: string;
   canMutate: boolean;
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
-  workboardCardChip?: WorkboardCardChipProps | null;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
-
-export function ensureWorkboardCardChipElement(): Promise<void> {
-  return ensureCustomElementDefined(
-    "openclaw-workboard-card-chip",
-    () => import("./workboard-card-chip.runtime.ts"),
-  );
-}
 
 export async function ensureBoardViewElement(): Promise<boolean> {
   if (customElements.get("openclaw-board-view")) {
@@ -46,20 +31,9 @@ export async function ensureBoardViewElement(): Promise<boolean> {
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
-      ${
-        props.workboardCardChip
-          ? html`
-              <openclaw-workboard-card-chip
-                .active=${props.workboardCardChip.active}
-                .basePath=${props.workboardCardChip.basePath}
-                .client=${props.workboardCardChip.client}
-                .sessionKey=${props.workboardCardChip.sessionKey}
-              ></openclaw-workboard-card-chip>
-            `
-          : nothing
-      }
       <openclaw-board-view
         .active=${props.active}
+        .session=${props.session}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}

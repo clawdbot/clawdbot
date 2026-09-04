@@ -1,6 +1,5 @@
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -304,7 +303,9 @@ export class SessionManagerCore {
         opaqueIndex += 1;
       }
       const entry = this.fileEntries[index];
-      if (!isIndexedSessionEntry(entry)) {
+      // Current entries were validated by partition/append. Legacy imports retain readable rows
+      // through migration, so only those need the final shape check before indexing.
+      if (!entry || entry.type === "session" || (this.migrated && !isIndexedSessionEntry(entry))) {
         continue;
       }
       if (entry.type === "label" && !this.byId.has(entry.targetId)) {
@@ -572,22 +573,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-  }
-
-  protected replacePersistedTranscript(options?: {
-    leafAppendParentId?: string | null;
-    leafAppendMode?: "side";
-  }): void {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    const leafAppendParentId =
-      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
-    this.persistenceHeaderPending = false;
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */

@@ -431,6 +431,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
+      () => this.context?.nativeDeviceSettings ?? undefined,
+      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
+    )
+    .watch(
       () => this.context?.nativeNotifications ?? undefined,
       (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
@@ -810,7 +814,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.agentSelection.state.selectedId === agentId &&
       // Agent selection can cycle A -> B -> A while the first A load is still pending.
       this.sessionObserverModelsRequest?.promise === promise;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
       .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
@@ -1083,6 +1087,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
+        nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
           this.context.config.current.serverVersion ??

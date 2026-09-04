@@ -296,6 +296,18 @@ export type CodexThreadTurnsListResponse = {
   backwardsCursor?: string | null;
 };
 
+export type CodexThreadItemsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: "desc";
+};
+
+export type CodexThreadItemsListResponse = {
+  data: Array<{ turnId: string; item: CodexThreadItem }>;
+  nextCursor?: string | null;
+};
+
 type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
   data: Pick<CodexTurn, "id" | "status">[];
 };
@@ -684,6 +696,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
   "thread/turns/list": CodexThreadTurnsListParams;
+  "thread/items/list": CodexThreadItemsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
   "thread/resume": CodexThreadResumeParams;
@@ -738,6 +751,7 @@ type CodexAppServerRequestResultMap = {
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
   "thread/turns/list": CodexThreadTurnsListResponse;
+  "thread/items/list": CodexThreadItemsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;

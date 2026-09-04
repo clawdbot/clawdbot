@@ -11,6 +11,7 @@ beforeEach(() => {
     : undefined;
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -34,6 +35,7 @@ async function captureProof(page: import("playwright").Page, name: string) {
 }
 
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
   it("keeps visual output visible and virtual rows apart when completed work expands", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1200 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:worked-for-geometry";
@@ -64,10 +66,7 @@ suite.define(() => {
           }
         };
       });
-      await page.route("**/cv_worked_for_visual/index.html", async (route) => {
-        await route.fulfill({
-          contentType: "text/html",
-          body: `<!doctype html>
+      const documentHtml = `<!doctype html>
             <style>
               * { box-sizing: border-box; }
               html, body { margin: 0; min-height: 100%; background: #0d1017; color: #f4f6fa; font: 14px system-ui; }
@@ -84,11 +83,10 @@ suite.define(() => {
               <div class="row"><span class="label">Gateway</span><div class="track"><div class="bar" style="width:92%"></div></div><span class="value">92%</span></div>
               <div class="row"><span class="label">Control UI</span><div class="track"><div class="bar" style="width:84%"></div></div><span class="value">84%</span></div>
               <div class="row"><span class="label">Mobile</span><div class="track"><div class="bar" style="width:68%"></div></div><span class="value">68%</span></div>
-            </figure>`,
-        });
-      });
+            </figure>`;
       await installMockGateway(page, {
         sessionKey,
+        methodResponses: { "canvas.document.view": canvasView(documentHtml) },
         historyMessages: [
           { role: "user", content: "Check it.", timestamp: 1_000 },
           {

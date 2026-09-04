@@ -17,6 +17,7 @@ import {
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-state.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -65,6 +66,7 @@ import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
+  dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
 };
@@ -250,10 +252,7 @@ export function createPageState(
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
-    chatScrollCommitCleanup: null,
     chatStreamRenderFrame: null,
-    chatScrollFrame: null,
-    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
@@ -273,6 +272,12 @@ export function createPageState(
     ...createInitialChatRealtimeState(),
     renderLifecycle,
     requestUpdate: () => renderLifecycle.invalidate(),
+    // Background warming gates on these edges. Session-event reloads never
+    // re-render the page, so no update can carry the fact to it.
+    transcriptLoadingChanged: () =>
+      page.dispatchEvent(
+        new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
     sessionWorkspaceState: undefined,
     backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),

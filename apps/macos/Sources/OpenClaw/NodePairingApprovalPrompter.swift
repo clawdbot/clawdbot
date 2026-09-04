@@ -90,6 +90,7 @@ final class NodePairingApprovalPrompter {
         let remoteIp: String?
         let silent: Bool?
         let ts: Double
+        var requiredApproveScopes: [String]?
 
         var id: String {
             self.requestId
@@ -292,7 +293,10 @@ final class NodePairingApprovalPrompter {
     }
 
     private func enqueue(_ req: PendingRequest, source: PairingPromptSupport.Source) {
-        if self.queue.contains(where: { $0.requestId == req.requestId }) {
+        if let index = self.queue.firstIndex(where: { $0.requestId == req.requestId }) {
+            // A fresh list can add approval requirements absent from an older
+            // Gateway's push; refresh its metadata without repeating auto-approval.
+            self.queue[index] = req
             return
         }
         // The gateway keeps at most one live pending request per node; a newer
@@ -371,6 +375,7 @@ final class NodePairingApprovalPrompter {
                 ? nil
                 : self.pairedNodeIds.contains(req.nodeId),
             requestedAt: Date(timeIntervalSince1970: req.ts / 1000),
+            requiredApproveScopes: req.requiredApproveScopes,
             source: self.source)
     }
 

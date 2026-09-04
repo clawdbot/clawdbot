@@ -2,7 +2,6 @@ import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts"
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
 import {
   captureDurableChatAttachments,
   chatAttachmentDraftSignature,
@@ -403,7 +402,6 @@ export class NewSessionDraftPersistence {
           hydratedCurrent.mentions,
         )
     ) {
-      releaseChatAttachmentPayloads(attachments);
       return;
     }
     this.revision = storedRevision;

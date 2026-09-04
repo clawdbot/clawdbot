@@ -995,6 +995,31 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        When native audio events identify an item, pass that identity alongside
+        PCM as `req.onAudio(audio, { itemId })`; omit
+        metadata for transports without native item IDs. If supplied,
+        `req.getPlaybackState()` returns retained items in playback order with
+        cumulative, item-relative `audioEndMs`; queued items have zero duration.
+        Snapshot these offsets before clearing output and synchronize discarded
+        output using the provider's native cancellation and truncation semantics.
+        An empty snapshot means no retained audio, even if a new response is
+        generating. Hosts without playback measurements omit the callback and
+        keep the existing media-timestamp and playback-mark contract.
+
+        After emitting PCM, providers can call `req.onMark?.(name, acknowledge)`
+        with an acknowledgment callback bound to that exact provider connection.
+        The callback must reject replaced connections and retired marks, while
+        remaining valid if a newer response starts before older playback drains.
+        Transports invoke scoped callbacks in order after consuming the associated
+        PCM, not when receiving or encoding it. Cancellation and failure retire
+        provider mark ownership separately; discarded PCM is never reported as played.
+        The existing `onMark(name)` and `bridge.acknowledgeMark(name)` contract
+        remains available to remote transports and installed providers. Discord
+        retains immediate acknowledgments for those legacy unscoped marks.
+        `onEvent` observes diagnostic events. OpenAI and xAI report outbound
+        frames after submitting them to the local socket; the callback neither
+        acknowledges remote receipt nor vetoes the frame. Control requested
+        inside an observer runs after that frame.
         `submitToolResult` may return `void` for synchronous submission, or a
         `Promise<void>` for an asynchronous completion boundary the provider
         bridge can expose. Gateway relay sessions wait for that promise before

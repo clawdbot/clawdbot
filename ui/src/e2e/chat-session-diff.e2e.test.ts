@@ -253,7 +253,7 @@ suite.define(() => {
     await waitForSessionDiff(page);
   });
 
-  it("replaces an automatically seeded diff when the pane session changes", async () => {
+  it("shows each session's diff and retains its local view state when navigating away", async () => {
     const firstSessionKey = "agent:main:first-review";
     const secondSessionKey = "agent:main:second-review";
     const context = await newBrowserContext();
@@ -316,15 +316,38 @@ suite.define(() => {
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSessionKey));
     await waitForSessionDiff(page);
+    const firstFileToggle = page.locator(".session-diff__file-toggle").first();
+    await firstFileToggle.click();
+    await expect.poll(() => firstFileToggle.getAttribute("aria-expanded")).toBe("false");
 
     await navigateToControlUiSession(page, secondSessionKey);
 
     await expect
-      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
       .toEqual(["second.md"]);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
       .toMatchObject({ sessionKey: secondSessionKey });
+    expect(
+      await firstFileToggle.evaluate((element) =>
+        element.closest("openclaw-chat-pane")?.getAttribute("aria-hidden"),
+      ),
+    ).toBe("true");
+
+    await navigateToControlUiSession(page, firstSessionKey);
+    await expect
+      .poll(() =>
+        page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .session-diff__filename')
+          .allTextContents(),
+      )
+      .toEqual(["app.ts", "notes.md"]);
+    expect(await firstFileToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
   });
 
   it("opens the session diff from the branch change stats", async () => {
@@ -535,7 +558,7 @@ suite.define(() => {
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
-    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    const panelSurface = page.locator('[data-panel-slot="detail"]').filter({ has: panel });
     await expect
       .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(480);

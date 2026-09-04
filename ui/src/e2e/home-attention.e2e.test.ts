@@ -19,6 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const mainSessionKey = "agent:main:main";
+const rosterMatch = { includeGlobal: true };
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofVariant = process.env.OPENCLAW_HOME_ATTENTION_PROOF_VARIANT || "candidate";
 let proofDir: string;
@@ -55,14 +56,14 @@ async function publishSessionRow(
   row: GatewaySessionRow,
 ): Promise<void> {
   await gateway.setSessionsListResponse(sessionsList(row));
-  const requestCount = (await gateway.getRequests("sessions.list")).length;
+  const requestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
   await gateway.emitGatewayEvent("sessions.changed", {
     key: row.key,
     reason: "home-attention-proof",
     updatedAt: row.updatedAt,
   });
   await expect
-    .poll(async () => (await gateway.getRequests("sessions.list")).length)
+    .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
     .toBeGreaterThan(requestCount);
 }
 
@@ -108,7 +109,7 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
-    await gateway.waitForRequest("sessions.list");
+    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     const home = page.locator(".nav-item--home");
     await home.waitFor();
     const observed = {

@@ -17,6 +17,7 @@ import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-a
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
+import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
@@ -227,7 +228,24 @@ export async function sendGatewayHello(
     }
   }
   try {
-    // Bootstrap bookkeeping can await; hello must supersede any earlier admission event.
+    // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
+    if (role === "operator") {
+      const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
+      if (identity) {
+        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.signal && !context.handler.isClosed()) {
+          const signal = identity.signal;
+          const withdraw = () => {
+            setCloseCause("browser-identity-route-withdrawn");
+            close(1012, "browser identity route changed");
+          };
+          // Hello is frozen for this connection. Bind its route lifetime before
+          // delivery can await, so a vanished claim cannot remain advertised.
+          signal.addEventListener("abort", withdraw, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+        }
+      }
+    }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

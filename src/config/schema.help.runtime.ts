@@ -152,8 +152,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":
-    "Collector-mode subagent orchestration. Default is off; enable it to expose agents_wait and swarm spawn options.",
-  "tools.swarm.enabled": "Enables collector-mode subagents and agents_wait. Default is off.",
+    "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
+  "tools.swarm.enabled":
+    "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
   "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
@@ -198,6 +199,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.experimental":
+    "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
+  "gateway.controlUi.experimental.customPlugins":
+    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
