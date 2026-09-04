@@ -24,7 +24,10 @@ import {
   type SkillResourceRuntimeOperation,
 } from "./skill-resource-transfer-contract.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
-type ResourceOperation = SkillResourceRuntimeOperation;
+type ResourceOperation = Extract<
+  SkillResourceRuntimeOperation,
+  { op: "init" | "renew" | "commit" | "write" }
+>;
 
 const RESOURCE_ROOT_PREFIX = "openclaw-inbound-";
 const RESOURCE_REGISTRY_PREFIX = ".openclaw-skill-resource-lease-";
@@ -380,27 +383,22 @@ export async function transferSkillResources(params: {
     allocationOwner.coordinator.assertOwned();
   };
   const execute = async (operation: ResourceOperation, signal = params.signal) => {
-    const cleanup =
-      operation.op === "cleanup" ||
-      operation.op === "cleanup-finalize" ||
-      operation.op === "cleanup-intent";
-    const assertDispatchCurrent = cleanup ? params.assertCurrent : assertAllocationCurrent;
-    assertDispatchCurrent();
+    assertAllocationCurrent();
     const result = await params.tunnel.runWorkspaceCommand({
       argv: ["node", "-e", SKILL_RESOURCE_RUNTIME_SCRIPT],
       input: JSON.stringify(operation),
       transportRetry: "never",
-      assertCurrent: assertDispatchCurrent,
-      signal: cleanup ? undefined : signal,
-      timeoutMs: cleanup ? 5000 : 60000,
+      assertCurrent: assertAllocationCurrent,
+      signal,
+      timeoutMs: 60000,
     });
     // Preserve the accepted cleanup locator before observing turn cancellation.
-    // The exact placement must still own every command, including cleanup.
+    // The coordinator and placement must still own initialization.
     if (operation.op === "init") {
       allocationOwner.coordinator.assertOwned();
       params.assertCurrent();
     } else {
-      assertDispatchCurrent();
+      assertAllocationCurrent();
     }
     if (result.termination !== "exit" || result.code !== 0) {
       throw new Error(
