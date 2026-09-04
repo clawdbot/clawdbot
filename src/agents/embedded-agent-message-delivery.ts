@@ -254,6 +254,11 @@ export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
   currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  if (currentSourceReply && result.handledBy === "plugin") {
+    return result.dryRun
+      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
+      : projectPluginPayload(result.payload);
+  }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
       ? projectSend(result.sendResult)
@@ -263,9 +268,7 @@ export function projectEmbeddedMessageDeliveryFact(
             partialDelivery: false,
             createdThreadIds: [],
           }
-        : currentSourceReply
-          ? projectPluginPayload(result.payload)
-          : undefined;
+        : undefined;
   }
   if (result.kind === "poll") {
     return result.handledBy === "core" && result.pollResult

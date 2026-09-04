@@ -36,9 +36,11 @@ import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
 
@@ -654,6 +656,78 @@ describe("message tool gateway timeout", () => {
       ).toBe(expected);
     },
   );
+
+  it.each(
+    (["reply", "thread-reply", "poll"] as const).flatMap((action) =>
+      (["final", "other target", "partial", "progress", "dry run"] as const).map((mode) => ({
+        action,
+        mode,
+      })),
+    ),
+  )("records only final source delivery for $action ($mode)", async ({ action, mode }) => {
+    const sessionKey = "agent:main:telegram:group:123";
+    const marker = "source action delivered once";
+    const target = mode === "other target" ? "telegram:999" : "telegram:123";
+    const payload = {
+      messageId: "delivered-message",
+      receipt: { replyToId: "inbound-message" },
+      ...(mode === "partial" ? { status: "partial_failed" } : {}),
+    };
+    const common = {
+      channel: "telegram" as const,
+      handledBy: "plugin" as const,
+      payload,
+      dryRun: mode === "dry run",
+    };
+    mocks.runMessageAction.mockResolvedValue(
+      action === "poll"
+        ? { ...common, kind: "poll", action, to: target }
+        : { ...common, kind: "action", action },
+    );
+    const { result } = await executeSendWithResult({
+      action: {
+        action,
+        target,
+        messageId: "inbound-message",
+        message: marker,
+        final: mode !== "progress",
+      },
+      toolOptions: {
+        agentSessionKey: sessionKey,
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentMessagingTarget: "telegram:123",
+        currentMessageId: "inbound-message",
+      },
+    });
+    const delivery = readEmbeddedMessageDeliveryFact(
+      (result.details as { messageDelivery?: unknown }).messageDelivery,
+    );
+    if (mode === "final") {
+      const visible = [marker];
+      const gateway = vi.fn();
+      gateway.mockImplementation(async (request) => {
+        if (request.method === "send") {
+          visible.push(request.params.message);
+        }
+        return {};
+      });
+      await runSessionsSendA2AFlow({
+        callGateway: gateway,
+        targetSessionKey: sessionKey,
+        requesterSessionKey: sessionKey,
+        requesterChannel: "telegram",
+        displayKey: sessionKey,
+        message: "Reply to the source",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: marker,
+        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+      });
+      expect(visible).toEqual([marker]);
+    }
+    expect(delivery?.sourceReplyDelivered).toBe(mode === "final" ? true : undefined);
+  });
 
   it("does not advertise source-reply finality on ordinary message tools", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
