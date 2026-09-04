@@ -5338,6 +5338,38 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("hello /statu");
   });
 
+  it.each(["/verb", "hello /verb"])(
+    "does not dispatch a stale command argument after disconnect for %s",
+    (commandDraft) => {
+      let draft = "";
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      const onSend = vi.fn();
+      const onSlashCommand = vi.fn();
+      const { container, renderCurrent } = createReactiveDraftHarness({
+        onDraftChange,
+        onSend,
+        onSlashCommand,
+      });
+
+      inputDraftAtEnd(container, commandDraft);
+      keydownComposer(container, "Enter");
+      const fullOption = Array.from(
+        container.querySelectorAll<HTMLElement>(".slash-menu-item"),
+      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "full");
+      expect(fullOption).toBeInstanceOf(HTMLElement);
+      const draftBeforeDisconnect = draft;
+
+      renderCurrent({ connected: false });
+      fullOption?.click();
+
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(draft).toBe(draftBeforeDisconnect);
+    },
+  );
+
   it("clears the visible local draft immediately when send clears the host draft", () => {
     const { container, onDraftChange, onSend } = createDraftHarness();
     inputDraft(container, "submitted message");

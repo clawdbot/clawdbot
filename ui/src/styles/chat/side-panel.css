@@ -386,20 +386,10 @@
 }
 
 .side-panel-type-menu__item {
+  padding: 9px 8px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
   font-size: calc(13px * var(--control-ui-text-scale));
   white-space: nowrap;
-}
-
-.side-panel-type-menu__item::part(base) {
-  min-height: var(--menu-item-height);
-  padding: 9px 8px;
-  border-radius: var(--menu-item-radius);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-}
-
-.side-panel-type-menu__item:hover::part(base),
-.side-panel-type-menu__item:focus-visible::part(base) {
-  background: var(--bg-hover);
 }
 
 .side-panel-type-menu__item + .side-panel-type-menu__item {

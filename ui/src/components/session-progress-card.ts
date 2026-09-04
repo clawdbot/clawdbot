@@ -99,23 +99,60 @@ class ProgressActivityTimeDirective extends AsyncDirective {
 
 const progressActivityTime = directive(ProgressActivityTimeDirective);
 
-const composerDisclosureOwners = new WeakMap<HTMLDetailsElement, string>();
+type ComposerProgressRunLifecycle = {
+  activeRunId?: string | null;
+  completedRunId?: string | null;
+};
 
-function initializeComposerDisclosure(
+type ComposerDisclosureOwner = {
+  activeRunId: string | null;
+  handledCompletedRunId: string | null;
+  sessionKey: string;
+};
+
+const composerDisclosureOwners = new WeakMap<HTMLDetailsElement, ComposerDisclosureOwner>();
+
+function reconcileComposerDisclosure(
   element: Element | undefined,
   sessionKey: string,
-  open: boolean,
+  initialOpen: boolean,
+  collapseByDefault: boolean,
+  lifecycle?: ComposerProgressRunLifecycle,
 ): void {
-  if (
-    !(element instanceof HTMLDetailsElement) ||
-    composerDisclosureOwners.get(element) === sessionKey
-  ) {
+  if (!(element instanceof HTMLDetailsElement)) {
     return;
   }
-  // The native disclosure owns later toggles; progress rerenders must not
-  // overwrite the operator's open/closed choice.
-  element.open = open;
-  composerDisclosureOwners.set(element, sessionKey);
+  const activeRunId = lifecycle?.activeRunId ?? null;
+  const completedRunId = lifecycle?.completedRunId ?? null;
+  const owner = composerDisclosureOwners.get(element);
+  if (!owner || owner.sessionKey !== sessionKey) {
+    element.open = initialOpen;
+    composerDisclosureOwners.set(element, {
+      activeRunId,
+      handledCompletedRunId: completedRunId,
+      sessionKey,
+    });
+    return;
+  }
+  // Run boundaries intentionally override the native disclosure. Same-run
+  // rerenders leave the operator's manual open/closed choice untouched.
+  if (activeRunId && activeRunId !== owner.activeRunId) {
+    owner.activeRunId = activeRunId;
+    owner.handledCompletedRunId = null;
+    if (collapseByDefault) {
+      element.open = false;
+    }
+  }
+  if (
+    completedRunId &&
+    completedRunId === owner.activeRunId &&
+    completedRunId !== owner.handledCompletedRunId
+  ) {
+    owner.handledCompletedRunId = completedRunId;
+    if (collapseByDefault) {
+      element.open = true;
+    }
+  }
 }
 
 function progressCounts(card: ProgressCard): { completed: number; total: number } | null {
@@ -293,6 +330,7 @@ export function renderSessionProgressCard(
   endedAt?: number,
   hasActiveRun = true,
   collapseComposerByDefault = false,
+  composerRunLifecycle?: ComposerProgressRunLifecycle,
 ) {
   if (!card) {
     return nothing;
@@ -392,10 +430,12 @@ export function renderSessionProgressCard(
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
       ${ref((element) =>
-        initializeComposerDisclosure(
+        reconcileComposerDisclosure(
           element,
           card.sessionKey,
           !complete && !collapseComposerByDefault,
+          collapseComposerByDefault,
+          composerRunLifecycle,
         ),
       )}
     >
