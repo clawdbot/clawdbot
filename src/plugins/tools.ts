@@ -634,6 +634,8 @@ function createCachedPluginRuntimeResolver(params: {
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
+  runtimeRegistry?: PluginRegistry;
+  manifestPlugins: PluginMetadataManifestView["plugins"];
 }): (toolName: string) => AnyAgentTool | undefined {
   const { pluginId } = params;
   const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
@@ -649,6 +651,8 @@ function createCachedPluginRuntimeResolver(params: {
     const registry = resolvePluginToolRegistry({
       loadOptions,
       onlyPluginIds: [pluginId],
+      runtimeRegistry: params.runtimeRegistry,
+      manifestPlugins: params.manifestPlugins,
       retainedRegistry: pluginToolDescriptorCacheState.runtimeRegistries.get(params.descriptor),
       onRetainRegistry: (retainedRegistry) => {
         pluginToolDescriptorCacheState.runtimeRegistries.set(params.descriptor, retainedRegistry);
@@ -781,6 +785,7 @@ function resolveCachedPluginTools(params: {
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
+  runtimeRegistry?: PluginRegistry;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo: PluginToolDescriptorConfigCacheKeyMemo;
   clientCaps: ReadonlySet<string>;
@@ -909,6 +914,8 @@ function resolveCachedPluginTools(params: {
             ctx: params.ctx,
             loadContext: params.loadContext,
             runtimeOptions: params.runtimeOptions,
+            runtimeRegistry: params.runtimeRegistry,
+            manifestPlugins: params.snapshot.plugins,
           })),
         });
         if (pluginTool) {
@@ -935,10 +942,19 @@ function resolveCachedPluginTools(params: {
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
+  runtimeRegistry?: PluginRegistry;
+  manifestPlugins?: PluginMetadataManifestView["plugins"];
   retainedRegistry?: PluginRegistry;
   onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
   const requestedPluginIds = params.onlyPluginIds;
+  // Cold and cached tools belong to the same prepared generation, even when
+  // process-global discovery would select a different registry.
+  if (
+    registryHasScopedPluginTools(params.runtimeRegistry, requestedPluginIds, params.manifestPlugins)
+  ) {
+    return params.runtimeRegistry;
+  }
   if (registryHasScopedPluginTools(params.retainedRegistry, requestedPluginIds)) {
     return params.retainedRegistry;
   }
@@ -1118,6 +1134,10 @@ export function resolvePluginTools(params: {
       currentRuntimeConfigForDescriptorCache = null;
     }
   }
+  const runtimeRegistry =
+    context === params.preparedRuntime?.loadContext
+      ? params.preparedRuntime.registry
+      : params.runtimeRegistry;
   const cached = resolveCachedPluginTools({
     snapshot,
     config: context.config,
@@ -1133,6 +1153,7 @@ export function resolvePluginTools(params: {
     ctx: params.context,
     loadContext: context,
     runtimeOptions,
+    runtimeRegistry,
     currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
     configCacheKeyMemo,
     clientCaps,
@@ -1150,23 +1171,12 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  const preparedOrExplicitRegistry =
-    context === params.preparedRuntime?.loadContext
-      ? params.preparedRuntime.registry
-      : params.runtimeRegistry;
-  let registry = registryHasScopedPluginTools(
-    preparedOrExplicitRegistry,
-    runtimePluginIds,
-    snapshot.plugins,
-  )
-    ? preparedOrExplicitRegistry
-    : undefined;
-  if (!registry) {
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
-    });
-  }
+  const registry = resolvePluginToolRegistry({
+    loadOptions,
+    onlyPluginIds: runtimePluginIds,
+    runtimeRegistry,
+    manifestPlugins: snapshot.plugins,
+  });
   if (!registry) {
     context.logger.warn(
       `plugin tool registry unavailable for plugin ids [${runtimePluginIds.join(", ")}]`,

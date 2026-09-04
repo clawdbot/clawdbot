@@ -1044,7 +1044,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("standalone bootstrap loads configured plugin tools before resolution", () => {
+  it("standalone bootstrap retains configured plugin tools through cold and warm resolution", async () => {
     const config = createContext().config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
     loadOpenClawPluginsMock.mockReturnValue(registry);
@@ -1057,18 +1057,21 @@ describe("resolvePluginTools optional tools", () => {
       context: createContext() as never,
       toolAllowlist: ["optional_tool"],
     });
-    const tools = resolvePluginTools({
-      ...createResolveToolsParams({
-        toolAllowlist: ["optional_tool"],
-      }),
-      runtimeRegistry,
-    });
-
-    expectResolvedToolNames(tools, ["optional_tool"]);
+    for (const phase of ["cold", "warm"]) {
+      const tools = resolvePluginTools({
+        ...createResolveToolsParams({ toolAllowlist: ["optional_tool"] }),
+        runtimeRegistry,
+      });
+      expectResolvedToolNames(tools, ["optional_tool"]);
+      await expect(tools[0]?.execute(phase, {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+    }
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledOnce();
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
-  it("uses owner-prepared load facts without invoking the cold resolver", () => {
+  it("uses owner-prepared load facts through cold and warm resolution without rediscovery", async () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
@@ -1082,31 +1085,38 @@ describe("resolvePluginTools optional tools", () => {
       ],
     });
 
-    const tools = resolvePluginTools({
-      ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
-      preparedRuntime: {
-        loadContext: {
-          rawConfig: preparedConfig,
-          config: preparedConfig,
-          activationSourceConfig: preparedConfig,
-          autoEnabledReasons: {},
-          workspaceDir: "/gateway/plugin-runtime",
-          env: process.env,
-          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          manifestRegistry: metadataSnapshot.manifestRegistry as never,
+    const resolveTools = () =>
+      resolvePluginTools({
+        ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
+        preparedRuntime: {
+          loadContext: {
+            rawConfig: preparedConfig,
+            config: preparedConfig,
+            activationSourceConfig: preparedConfig,
+            autoEnabledReasons: {},
+            workspaceDir: "/gateway/plugin-runtime",
+            env: process.env,
+            logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            manifestRegistry: metadataSnapshot.manifestRegistry as never,
+            metadataSnapshot: metadataSnapshot as never,
+            installRecords: {},
+          },
           metadataSnapshot: metadataSnapshot as never,
-          installRecords: {},
+          registry: registry as never,
         },
-        metadataSnapshot: metadataSnapshot as never,
-        registry: registry as never,
-      },
-    });
+      });
 
-    expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
-      pluginId: "optional-demo",
-      sideEffecting: true,
-    });
+    for (const phase of ["cold", "warm"]) {
+      const tools = resolveTools();
+      expectResolvedToolNames(tools, ["optional_tool"]);
+      expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
+        pluginId: "optional-demo",
+        sideEffecting: true,
+      });
+      await expect(tools[0]?.execute(phase, {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+    }
     expect(loadContextMocks.resolve).not.toHaveBeenCalled();
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
