@@ -1474,7 +1474,7 @@ packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
-packages/ai/src/providers/openai-tool-schema-compat.ts	7
+packages/ai/src/providers/openai-tool-schema-compat.ts	6
 packages/ai/src/providers/openai-tool-schema.ts	7
 packages/ai/src/providers/schema-keyword-strip.ts	2
 packages/ai/src/providers/simple-options.ts	1

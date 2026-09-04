@@ -1242,6 +1242,28 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("publishes and executes a repaired schema with a literal prototype property", async () => {
+    const args = { ["__proto__"]: "synthetic value" };
+    const schema = {
+      type: "object",
+      properties: { ["__proto__"]: { type: "string", description: null } },
+      required: ["__proto__"],
+      additionalProperties: false,
+    };
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: args,
+      callId: "call-literal-schema-property",
+      parameters: schema,
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toStrictEqual({
+      ...schema,
+      properties: { ["__proto__"]: { type: "string" } },
+    });
+    expect(response).toEqual(expectInputText("done"));
+    expectExecuteCall(execute, { callId: "call-literal-schema-property", args });
+  });
+
   it("enforces the strict empty-object schema published to Codex", async () => {
     const { bridge, execute, response } = await runSchemaToolCall({
       arguments: { unexpected: true },
