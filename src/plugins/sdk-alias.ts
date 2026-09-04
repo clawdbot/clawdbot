@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
@@ -573,6 +574,7 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "configured-model-refs",
       "model-catalog-refs",
       "model-catalog-normalize",
+      "model-catalog-pricing",
       "model-catalog-types",
       "provider-id",
       "provider-model-id-normalization",
@@ -583,15 +585,13 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
 
 const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
   WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
-    subpaths.map(
-      (subpath): WorkspacePackageAliasEntry => ({
-        packageName: `@openclaw/${packageDir}`,
-        packageDir,
-        subpath,
-        srcFile: `${subpath || "index"}.ts`,
-        distFile: `${subpath || "index"}.mjs`,
-      }),
-    ),
+    subpaths.map((subpath): WorkspacePackageAliasEntry => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
+      subpath,
+      srcFile: `${subpath || "index"}.ts`,
+      distFile: `${subpath || "index"}.mjs`,
+    })),
   );
 const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
   ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),
@@ -1553,7 +1553,7 @@ export function buildPluginLoaderJitiOptions(
     // When jiti must transform a plugin entry, keep OpenClaw's own package
     // chunks on the native module graph instead of re-evaluating them in jiti.
     nativeModules: resolvePluginLoaderJitiNativeModules(),
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    extensions: [...PLUGIN_SOURCE_MODULE_EXTENSIONS, ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
           alias: jitiAliasMap,

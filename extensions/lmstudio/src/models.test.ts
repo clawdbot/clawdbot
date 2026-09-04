@@ -841,6 +841,7 @@ describe("lmstudio-models", () => {
     // path must stop reading at the byte cap instead of buffering it all.
     let canceled = false;
     let bytesEmitted = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
     const oversizedStream = new ReadableStream<Uint8Array>({
       pull(controller) {
         // Far exceeds the 16 MiB provider JSON cap if read to completion.
@@ -848,8 +849,8 @@ describe("lmstudio-models", () => {
           controller.close();
           return;
         }
-        bytesEmitted += 64 * 1024;
-        controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+        bytesEmitted += chunk.byteLength;
+        controller.enqueue(chunk);
       },
       cancel() {
         canceled = true;

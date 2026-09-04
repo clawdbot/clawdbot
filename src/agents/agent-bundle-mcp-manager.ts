@@ -1,6 +1,7 @@
 /** Session MCP runtime manager: get-or-create and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   createCombinedSessionMcpRuntime,
   isCombinedSessionMcpRuntime,
@@ -21,30 +22,20 @@ import {
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
 
-/** Bound from agent-bundle-mcp-runtime.ts to avoid an import cycle with the facade. */
-let defaultCreateSessionMcpRuntime: CreateSessionMcpRuntime | undefined;
+const sessionMcpRuntimeLoader = createLazyImportLoader(
+  () => import("./agent-bundle-mcp-runtime.js"),
+);
 
-export function setDefaultCreateSessionMcpRuntime(fn: CreateSessionMcpRuntime): void {
-  defaultCreateSessionMcpRuntime = fn;
-}
-
-function resolveCreateSessionMcpRuntime(
-  createRuntime?: CreateSessionMcpRuntime,
-): CreateSessionMcpRuntime {
-  const resolved = createRuntime ?? defaultCreateSessionMcpRuntime;
-  if (!resolved) {
-    throw new Error("Session MCP runtime factory is not bound");
-  }
-  return resolved;
-}
+// Peeking and retiring sessions need the manager, not its transport implementation.
+const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
+  const runtime = await sessionMcpRuntimeLoader.load();
+  return runtime.createSessionMcpRuntime(params);
+};
 
 export function createSessionMcpRuntimeManager(
   opts: SessionMcpRuntimeManagerOpts = {},
 ): SessionMcpRuntimeManager {
-  const store = createSessionMcpRuntimeManagerStore(
-    opts,
-    resolveCreateSessionMcpRuntime(opts.createRuntime),
-  );
+  const store = createSessionMcpRuntimeManagerStore(opts, createSessionMcpRuntimeLazy);
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
   const materializeRequesterScopedRuntime = async (
@@ -359,29 +350,16 @@ export function createSessionMcpRuntimeManager(
     },
     async disposeAll() {
       lifecycle.clearIdleSweepTimer();
-      // Drain all requester chains before clearing maps.
-      const chains = Array.from(store.requesterWorkChains.values());
-      store.requesterWorkChains.clear();
-      await Promise.allSettled(chains);
-      const inFlightRuntimes = Array.from(store.createInFlight.values());
-      store.createInFlight.clear();
-      const runtimes = Array.from(store.runtimesBySessionId.values());
-      store.runtimesBySessionId.clear();
+      const runtimeKeys = new Set([
+        ...store.runtimesBySessionId.keys(),
+        ...store.createInFlight.keys(),
+        ...store.requesterWorkChains.keys(),
+      ]);
       store.sessionIdBySessionKey.clear();
       store.deferredRetirementSessionIds.clear();
       store.requiredRetirementSessionIds.clear();
-      store.connectionMetaByRuntimeKey.clear();
       store.advertisedScopedCatalogBySessionId.clear();
-      const lateRuntimes = await Promise.all(
-        inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
-      );
-      const allRuntimes = new Set<SessionMcpRuntime>(runtimes);
-      for (const runtime of lateRuntimes) {
-        if (runtime) {
-          allRuntimes.add(runtime);
-        }
-      }
-      await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
+      await lifecycle.disposeRuntimeKeys(runtimeKeys);
     },
     sweepIdleRuntimes: lifecycle.sweepIdleRuntimes,
     listSessionIds() {

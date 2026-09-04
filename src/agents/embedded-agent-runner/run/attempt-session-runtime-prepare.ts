@@ -4,8 +4,10 @@ import { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { readCacheTtlEntries } from "../cache-ttl.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
+import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
 import {
   prepareEmbeddedAttemptAgentSession,
@@ -137,26 +139,37 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
+    assertInitialUserTurnReplay: preparedSessionManager.assertInitialUserTurnReplay,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = prepareEmbeddedAttemptSessionBoundary({
-    activeSession,
-    attempt,
-    ...preparedSessionManager.userMessageBoundary,
-    isRawModelRun: input.isRawModelRun,
-    sessionManager,
-    setActiveSessionSystemPrompt,
-  });
+  const boundary = await input.sessionManager.withOwnedTranscriptWrite(() =>
+    prepareEmbeddedAttemptSessionBoundary({
+      abortSignal: input.agentSession.runAbortSignal,
+      activeSession,
+      appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+      attempt,
+      ...preparedSessionManager.userMessageBoundary,
+      isRawModelRun: input.isRawModelRun,
+      sessionManager,
+      setActiveSessionSystemPrompt,
+    }),
+  );
   state.prePromptMessageCount = activeSession.messages.length;
 
   // Session-owned projections survive attempt teardown so already-sent tool results
   // cannot rewrite the provider prompt-cache tail between turns (#99495).
   const sessionPromptState = getEmbeddedSessionPromptState(attempt.sessionId);
   const toolResultPromptProjectionState = sessionPromptState.toolResults;
+  if (!input.isRawModelRun) {
+    restoreCacheTtlToolResultProjections(
+      toolResultPromptProjectionState,
+      readCacheTtlEntries(sessionManager),
+    );
+  }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
   input.externalAbortController.setActiveSessionAbort(settleTracker.abortActiveSession);
   input.lifecycle.onSessionSettleTrackerReady(settleTracker.buildAbortSettlePromise);
@@ -181,6 +194,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
     getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
     getCompactionReplayEnabled: () => transport.compactionReplayEnabled,
+    getServerToolClearingEnabled: () => transport.serverToolClearingEnabled,
+    toolResultPromptProjectionState,
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,

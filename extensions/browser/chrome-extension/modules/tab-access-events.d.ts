@@ -37,15 +37,13 @@ export type TabAccessEventPolicy = {
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
   retireTab(tabId: number): void;
-  retireTabDocument: TabAccessPolicy["retireTabDocument"];
   forwardDocumentEvent: TabAccessPolicy["forwardDocumentEvent"];
-  invalidateDocumentGroup: TabAccessPolicy["invalidateDocumentGroup"];
   renewTabAccess(
     tabId: number,
     attachedEpoch: TabAccessEpoch | undefined,
     tab: BrowserTabSnapshot | undefined,
   ): TabAccessEpoch | undefined;
-  invalidateAll(group?: { id: number; title?: string }): void;
+  invalidateGroup(group?: { id: number; title?: string }, removed?: boolean): void;
   observeTabUpdate(
     tabId: number,
     change: { groupId?: number; url?: string; status?: string },
@@ -61,9 +59,11 @@ export function registerTabAccessEvents(options: {
   chromeApi?: TabAccessEventsChromeApi;
   accessReady: Promise<unknown>;
   policy: TabAccessEventPolicy;
-  attachedTabs: Set<number>;
-  attachedAccessEpochs: Map<number, TabAccessEpoch>;
-  attachingTabs: Map<number, Promise<unknown>>;
+  attachments: Map<
+    number,
+    { epoch?: TabAccessEpoch; pending?: Promise<unknown>; retired?: boolean }
+  >;
+  nativeDetached(tabId: number): void;
   send(message: Record<string, unknown>): void;
   scheduleTabsSync(): void;
   detachDebugger(tabId: number): Promise<void>;

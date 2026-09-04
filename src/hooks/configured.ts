@@ -1,92 +1,54 @@
 // Configured hook helpers combine config and install records into active hooks.
-import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 
-function hasEnabledFlag(entry: HookConfig | undefined): boolean {
-  return entry?.enabled !== false;
-}
-
-function hasEnabledEntry(entries: Record<string, HookConfig> | undefined): boolean {
-  if (!entries) {
-    return false;
-  }
-  return Object.values(entries).some(hasEnabledFlag);
-}
-
-function hasConfiguredInstalls(installs: Record<string, HookInstallRecord> | undefined): boolean {
-  return installs ? Object.keys(installs).length > 0 : false;
-}
-
-function readConfiguredInstalls(): Record<string, HookInstallRecord> | undefined {
-  return readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
-}
-
-/** Return whether config can load any internal hooks. */
-export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
+/** Capture discovery and explicit selection from one config/install snapshot. */
+export function resolveInternalHookSelection(config: OpenClawConfig): {
+  configured: boolean;
+  names: Set<string> | null;
+  declaredNames: Set<string>;
+} {
   const internal = config.hooks?.internal;
-  const installs = readConfiguredInstalls();
-  if (!internal) {
-    return hasConfiguredInstalls(installs);
-  }
-  if (internal.enabled === false) {
-    return false;
-  }
-  if (internal.enabled === true) {
-    return true;
-  }
-  if (hasEnabledEntry(internal.entries)) {
-    return true;
-  }
-  if ((internal.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
-    return true;
-  }
-  if (hasConfiguredInstalls(installs)) {
-    return true;
-  }
-  return false;
-}
-
-/** Resolve explicitly configured internal hook names; null means all/discovered hooks may load. */
-export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<string> | null {
-  const internal = config.hooks?.internal;
-  const installs = readConfiguredInstalls();
-  if (internal?.enabled === false) {
-    return new Set();
-  }
-
+  const installs =
+    readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
   const names = new Set<string>();
-  let hasNamedEntries = false;
+  const declaredNames = new Set<string>();
+  let open = (internal?.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0);
   for (const [name, entry] of Object.entries(internal?.entries ?? {})) {
     const trimmed = name.trim();
-    if (!trimmed) {
-      continue;
-    }
-    hasNamedEntries = true;
-    if (hasEnabledFlag(entry)) {
-      names.add(trimmed);
+    if (trimmed) {
+      declaredNames.add(trimmed);
+      if (entry?.enabled !== false) {
+        names.add(trimmed);
+      }
     }
   }
   for (const [installId, install] of Object.entries(installs ?? {})) {
     const hookNames = install.hooks ?? [];
-    if (hookNames.length === 0 && installId.trim()) {
-      // An install without an explicit hook list can add hooks dynamically, so
-      // callers must treat the allowlist as open-ended.
-      return null;
-    }
-    for (const hookName of hookNames) {
-      const trimmedHookName = hookName.trim();
-      if (trimmedHookName) {
-        names.add(trimmedHookName);
+    open ||= hookNames.length === 0 && Boolean(installId.trim());
+    for (const name of hookNames) {
+      const trimmed = name.trim();
+      if (trimmed) {
+        declaredNames.add(trimmed);
+        names.add(trimmed);
       }
     }
   }
-
-  if ((internal?.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
-    return null;
-  }
-  if (hasNamedEntries || names.size > 0) {
-    return names;
-  }
-  return internal?.enabled === true ? null : names;
+  const configured =
+    internal?.enabled !== false &&
+    (internal?.enabled === true ||
+      Object.values(internal?.entries ?? {}).some((entry) => entry?.enabled !== false) ||
+      open ||
+      Object.keys(installs ?? {}).length > 0);
+  return {
+    configured,
+    names:
+      internal?.enabled === false
+        ? new Set()
+        : open || (declaredNames.size === 0 && internal?.enabled === true)
+          ? null
+          : names,
+    declaredNames,
+  };
 }

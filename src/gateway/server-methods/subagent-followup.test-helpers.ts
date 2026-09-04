@@ -52,5 +52,9 @@ export function expectSubagentFollowupReactivation(params: {
   expect(call?.[1]?.startedAt).toBe(123);
   expect(call?.[1]?.endedAt).toBeUndefined();
   expect(call?.[2]).toEqual(new Set(["conn-1"]));
-  expect(call?.[3]).toEqual({ agentId: "main", dropIfSlow: true });
+  expect(call?.[3]).toEqual({
+    agentId: "main",
+    dropIfSlow: true,
+    sessionKeys: [params.childSessionKey],
+  });
 }

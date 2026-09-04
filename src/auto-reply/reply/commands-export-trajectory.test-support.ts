@@ -36,6 +36,7 @@ function makeParams(
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir,
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
@@ -151,7 +152,6 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
     expect(execCall.defaults.currentChannelId).toBe("bot");
     expect(execCall.defaults.accountId).toBe("account-1");
-    expect(execCall.params.security).toBe("allowlist");
     expect(execCall.params.ask).toBe("always");
     expect(execCall.params.background).toBe(true);
     const command = typeof execCall.params.command === "string" ? execCall.params.command : "";

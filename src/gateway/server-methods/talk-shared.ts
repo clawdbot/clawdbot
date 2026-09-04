@@ -17,7 +17,6 @@ import {
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
-import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
 import type {
@@ -64,38 +63,15 @@ export function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: stri
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   configuredInstructions?: string;
-  sessionKey?: unknown;
-  /** Relay sessions bind their agent lazily; injecting a guessed profile would mix agents. */
-  requireSessionKeyForProfile?: boolean;
+  sessionKey: string;
   warn: (message: string) => void;
-}): Promise<{ agentId: string; instructions: string; requestedSessionKey?: string }> {
-  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-  const defaultAgentId = resolveTalkTargetAgentId(params.config);
-  // Older clients can prefetch without a key. Client-owned creates bind to the
-  // default agent immediately, so its workspace profile stays consistent there.
-  const agentId =
-    params.agentId ??
-    (requestedSessionKey
-      ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
-      : defaultAgentId);
-  const bootstrapContext =
-    params.requireSessionKeyForProfile && !requestedSessionKey
-      ? undefined
-      : await resolveRealtimeBootstrapContextInstructions({
-          agentId,
-          config: params.config,
-          sessionKey: requestedSessionKey,
-          warn: params.warn,
-        });
-  return {
-    agentId,
-    instructions: [params.configuredInstructions, bootstrapContext]
-      .filter((entry): entry is string => Boolean(entry?.trim()))
-      .join("\n\n"),
-    ...(requestedSessionKey ? { requestedSessionKey } : {}),
-  };
+}): Promise<string> {
+  const bootstrapContext = await resolveRealtimeBootstrapContextInstructions(params);
+  return [params.configuredInstructions, bootstrapContext]
+    .filter((entry): entry is string => Boolean(entry?.trim()))
+    .join("\n\n");
 }
 
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
@@ -220,6 +196,7 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   provider: string | undefined;
   providerConfigs: Record<string, TConfig>;
   providers: readonly RealtimeProviderWithConfig<TConfig>[];
+  requestedModel?: string;
 }): { provider: string; model: string } | undefined {
   const configuredProvider = normalizeOptionalString(params.provider);
   const refs = resolveSupportedVoiceModelRefs({
@@ -237,8 +214,11 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
         providerConfigs: params.providerConfigs,
         provider,
       });
-      const rawConfigWithModel =
-        rawConfig.model === undefined ? { ...rawConfig, model: ref.model } : rawConfig;
+      const rawConfigWithModel = {
+        ...rawConfig,
+        model:
+          params.requestedModel ?? (rawConfig.model === undefined ? ref.model : rawConfig.model),
+      };
       const providerConfig =
         provider.resolveConfig?.({
           cfg: params.config,
@@ -253,7 +233,11 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   return undefined;
 }
 
-export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
+export function buildTalkRealtimeConfig(
+  config: OpenClawConfig,
+  requestedProvider?: string,
+  requestedModel?: string,
+) {
   const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
   const talkRealtime = getRecord(config.talk?.realtime);
   const talkRealtimeProviderConfigs = talkRealtime?.providers as
@@ -278,6 +262,8 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     provider: selectedProvider,
     providerConfigs,
     providers: listRealtimeVoiceProviders(config),
+    requestedModel:
+      normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
   const provider = selectedProvider ?? voiceModelDefault?.provider;
   const model = normalizeOptionalString(talkRealtime?.model) ?? voiceModelDefault?.model;
@@ -313,7 +299,11 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   };
 }
 
-export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedProvider?: string) {
+export function buildTalkTranscriptionConfig(
+  config: OpenClawConfig,
+  requestedProvider?: string,
+  requestedModel?: string,
+) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
@@ -323,6 +313,7 @@ export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedPr
     provider,
     providerConfigs,
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
+    requestedModel: normalizeOptionalString(requestedModel),
   });
   return {
     provider: provider ?? voiceModelDefault?.provider,
@@ -343,6 +334,7 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   config: OpenClawConfig;
   configuredProviderId?: string;
   providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>;
+  requestedModel?: string;
   defaultModel?: string;
 }) {
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
@@ -362,10 +354,9 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
       provider,
       configuredProviderId: params.configuredProviderId,
     });
-    const rawConfigWithModel =
-      params.defaultModel && rawConfig.model === undefined
-        ? { ...rawConfig, model: params.defaultModel }
-        : rawConfig;
+    const model =
+      params.requestedModel ?? (rawConfig.model === undefined ? params.defaultModel : undefined);
+    const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
     const providerConfig =
       provider.resolveConfig?.({ cfg: params.config, rawConfig: rawConfigWithModel }) ??
       rawConfigWithModel;

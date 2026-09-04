@@ -15,9 +15,9 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, normalizeLineMessageActions } from "./actions.js";
+import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
-import { validateLineMediaUrl } from "./outbound-media.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import { runLinePushWithRetries } from "./send-retry.js";
@@ -25,9 +25,6 @@ import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./t
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
-type ImageMessage = messagingApi.ImageMessage;
-type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
-type AudioMessage = messagingApi.AudioMessage;
 type LocationMessage = messagingApi.LocationMessage;
 type FlexContainer = messagingApi.FlexContainer;
 type TemplateMessage = messagingApi.TemplateMessage;
@@ -174,10 +171,6 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
-function isLineUserChatId(chatId: string): boolean {
-  return /^U/i.test(chatId);
-}
-
 function resolveLineMessagingAccount(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   token: string;
@@ -266,38 +259,6 @@ async function sendLineProviderMessages(
 
 function createTextMessage(text: string): TextMessage {
   return { type: "text", text };
-}
-
-export function createImageMessage(
-  originalContentUrl: string,
-  previewImageUrl?: string,
-): ImageMessage {
-  return {
-    type: "image",
-    originalContentUrl,
-    previewImageUrl: previewImageUrl ?? originalContentUrl,
-  };
-}
-
-export function createVideoMessage(
-  originalContentUrl: string,
-  previewImageUrl: string,
-  trackingId?: string,
-): VideoMessage {
-  return {
-    type: "video",
-    originalContentUrl,
-    previewImageUrl,
-    ...(trackingId ? { trackingId } : {}),
-  };
-}
-
-export function createAudioMessage(originalContentUrl: string, durationMs: number): AudioMessage {
-  return {
-    type: "audio",
-    originalContentUrl,
-    duration: durationMs,
-  };
 }
 
 function isValidLineLocation(location: LineLocation): boolean {
@@ -400,7 +361,7 @@ async function pushLineMessages(
   }
 
   const { account, token, chatId } = createLinePushContext(to, opts);
-  const normalizedMessages = messages.map(normalizeLineMessageActions);
+  const normalizedMessages = messages.map(normalizeLineMessage);
   // One retry key per logical push: every attempt reuses it so LINE deduplicates
   // an attempt that was accepted before its outcome reached us.
   const retryKey = randomUUID();
@@ -451,7 +412,7 @@ async function replyLineMessages(
   opts: LinePushOpts,
 ): Promise<{ messageId: string; messageIds: string[]; accountId: string }> {
   const { account, token } = resolveLineMessagingAccount(opts);
-  const normalizedMessages = messages.map(normalizeLineMessageActions);
+  const normalizedMessages = messages.map(normalizeLineMessage);
 
   const response = await sendLineProviderMessages("reply", token, {
     replyToken,
@@ -471,30 +432,18 @@ export async function sendMessageLine(
 
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
-    await validateLineMediaUrl(mediaUrl);
-    switch (opts.mediaKind) {
-      case "video": {
-        const previewImageUrl = opts.previewImageUrl?.trim();
-        if (!previewImageUrl) {
-          throw new Error("LINE video messages require previewImageUrl to reference an image URL");
-        }
-        await validateLineMediaUrl(previewImageUrl);
-        const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
-        messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
-        break;
-      }
-      case "audio":
-        messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
-        break;
-      default:
-        // Backward compatibility: keep image as default when media kind is unspecified.
+    messages.push(
+      await buildLineMediaMessage(
+        mediaUrl,
         {
-          const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
-          await validateLineMediaUrl(previewImageUrl);
-          messages.push(createImageMessage(mediaUrl, previewImageUrl));
-        }
-        break;
-    }
+          mediaKind: opts.mediaKind,
+          previewImageUrl: opts.previewImageUrl,
+          durationMs: opts.durationMs,
+          trackingId: opts.trackingId,
+        },
+        chatId,
+      ),
+    );
   }
 
   if (text?.trim()) {
@@ -581,11 +530,12 @@ export async function pushImageMessage(
   previewImageUrl: string | undefined,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  await validateLineMediaUrl(originalContentUrl);
-  if (previewImageUrl) {
-    await validateLineMediaUrl(previewImageUrl);
-  }
-  return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
+  const message = await buildLineMediaMessage(
+    originalContentUrl,
+    { mediaKind: "image", previewImageUrl },
+    to,
+  );
+  return pushLineMessages(to, [message], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
   });
 }

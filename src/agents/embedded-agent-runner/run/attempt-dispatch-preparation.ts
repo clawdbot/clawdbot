@@ -45,6 +45,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
+  permissionChange?: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["permissionChange"];
 }) {
   const {
     runInput,
@@ -55,9 +56,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = input.terminalRetryState.forceCodeModeReconciliationTools
-    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
-    : runInput.runParams;
+  const params = runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
@@ -81,8 +80,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
-    runInput.laneController;
+  const { createAttemptControls } = runInput.laneController;
   const {
     requestedModelId,
     expectedHarnessArtifact,
@@ -173,7 +171,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimePlan,
   });
   const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
+    runtime.agentHarness.id === CODEX_HARNESS_ID &&
+    !params.disableTrajectory &&
+    params.sessionPersistence !== "detached"
       ? createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
@@ -226,6 +226,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    permissionChange: input.permissionChange,
     runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
@@ -252,6 +253,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
       fallbackReason,
       agentHarnessId: runtime.agentHarness.id,
+      nativeSessionRuntime: preparedRuntime.nativeSessionRuntime,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: effectiveModel,
@@ -281,9 +283,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     control: {
       lifecycleGeneration,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-      laneTaskAbortController,
-      laneTaskReleaseController,
-      noteLaneTaskProgress,
+      createAttemptControls,
       onToolOutcome: input.observeToolOutcome,
       isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

@@ -74,7 +74,7 @@ export async function resolveQueuedReplyExecutionConfig(
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
     optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;

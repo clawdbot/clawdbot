@@ -2,7 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -104,7 +104,6 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
-  mediaCleanupTtlMs?: number;
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
@@ -215,8 +214,7 @@ export function startGatewayMaintenanceTimers(params: {
       return managedWorktrees.gc({
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
-        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
-        // Read limits per run so a config edit applies at the next hourly sweep.
+        ...createManagedWorktreeOwnerPolicy(cfg),
         limits: resolveWorktreeCleanupLimits(),
       });
     });
@@ -472,13 +470,13 @@ export function startGatewayMaintenanceTimers(params: {
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {
-    const ttlMs = params.mediaCleanupTtlMs;
     if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
+    const ttlHours = params.getRuntimeConfig().attachments?.ttlHours;
     const cleanup =
-      typeof ttlMs === "number"
-        ? cleanOldMedia(ttlMs, { recursive: true, pruneEmptyDirs: true })
+      ttlHours !== undefined
+        ? cleanOldMedia(ttlHours * 60 * 60_000, { recursive: true, pruneEmptyDirs: true })
         : pruneOutboundMedia();
     mediaCleanupInFlight = cleanup
       .catch((err: unknown) => {

@@ -88,6 +88,10 @@ type RuntimeCreateSessionEntryResult = {
   sessionId: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
+  /** Host creation authority; runtimes that cannot supply it must leave it absent. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+};
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
 };
@@ -108,11 +112,13 @@ type RuntimeCreateSessionEntryBaseParams = {
   initialEntry:
     | {
         agentHarnessId: string;
+        color?: string;
         modelSelectionLocked?: true;
         pluginExtensions?: RuntimeSessionPluginExtensions;
       }
     | {
         cliBackendId: string;
+        color?: string;
         model: string;
         cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
         modelSelectionLocked: true;
@@ -122,6 +128,7 @@ type RuntimeCreateSessionEntryBaseParams = {
       }
     | {
         acpBackendId: string;
+        color?: string;
         acpSessionBinding: {
           acpAgentId: string;
           agentSessionId: string;
@@ -138,17 +145,19 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
         /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
         recoverMatchingInitialEntry: true;
         afterCreate: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
       }
     | {
         recoverMatchingInitialEntry?: never;
         afterCreate?: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
       }
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -436,6 +445,7 @@ export type PluginRuntimeCore = {
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];

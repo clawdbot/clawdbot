@@ -51,18 +51,23 @@ type SidebarMenuAgent = {
   identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
 };
 
+type MenuPosition = { x: number; y: number };
+type CatalogMenuPosition = MenuPosition & { catalogId: string };
+
 interface SidebarMenusControllerState {
   customizeMenuPosition: { x: number; y: number } | null;
   moreMenuPosition: { x: number; y: number } | null;
   sessionMenu: SidebarSessionMenuState | null;
   sessionMenuWork: SessionMenuWork | null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  sessionSortMenuPosition: { x: number; y: number } | null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
+  sessionSortMenuPosition: MenuPosition | null;
+  catalogViewMenuPosition: CatalogMenuPosition | null;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuInteractionState: AgentMenuInteractionState;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
+
+export type SidebarFilterMenuView = "root" | "specific-owner";
 
 type SidebarMenusRenderer = {
   renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
@@ -159,8 +164,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenu: SidebarSessionMenuState | null = null;
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-  sessionSortMenuPosition: { x: number; y: number } | null = null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null = null;
+  sessionSortMenuPosition: MenuPosition | null = null;
+  catalogViewMenuPosition: CatalogMenuPosition | null = null;
+  filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
@@ -449,6 +455,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     this.sessionSortMenuTrigger = trigger;
+    this.filterMenuView = "root";
     this.updateState("sessionSortMenuPosition", {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
@@ -470,10 +477,35 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     const menuMaxHeight = 360;
     this.dismissTransientMenus();
     this.catalogViewMenuTrigger = trigger;
+    this.filterMenuView = "root";
     this.updateState("catalogViewMenuPosition", {
       catalogId,
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    });
+  }
+
+  setFilterMenuView(view: SidebarFilterMenuView) {
+    if (!this.sessionSortMenuPosition && !this.catalogViewMenuPosition) {
+      return;
+    }
+    this.filterMenuView = view;
+    this.host.requestUpdate();
+    this.focusFilterMenuView();
+  }
+
+  private focusFilterMenuView() {
+    void this.host.updateComplete.then(() => {
+      const trigger = this.sessionSortMenuTrigger ?? this.catalogViewMenuTrigger;
+      const dropdown = trigger
+        ?.closest("openclaw-app-sidebar")
+        ?.querySelector<HTMLElement>(".sidebar-session-sort-menu");
+      const menu = dropdown?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      if (!dropdown || !menu) {
+        return;
+      }
+      menu.scrollTop = 0;
+      dropdown.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
     });
   }
 

@@ -38,21 +38,19 @@ type FeishuTraceState = {
   wireFaults: Array<{ fault: "rate-limit"; retryAfterMs: number }>;
 };
 
-const traceState = vi.hoisted(
-  (): FeishuTraceState => ({
-    recordWireCall: () => {},
-    account: null,
-    larkClient: null,
-    cardKitFetch: null,
-    messageCount: 0,
-    reactionCount: 0,
-    cardCount: 0,
-    setupCount: 0,
-    loadedMedia: null,
-    omitNextMessageReceipt: false,
-    wireFaults: [],
-  }),
-);
+const traceState = vi.hoisted((): FeishuTraceState => ({
+  recordWireCall: () => {},
+  account: null,
+  larkClient: null,
+  cardKitFetch: null,
+  messageCount: 0,
+  reactionCount: 0,
+  cardCount: 0,
+  setupCount: 0,
+  loadedMedia: null,
+  omitNextMessageReceipt: false,
+  wireFaults: [],
+}));
 
 vi.mock("./accounts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./accounts.js")>();

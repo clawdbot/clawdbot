@@ -140,12 +140,12 @@ describe("chat pane reply-source history navigation", () => {
     await vi.waitFor(() => expect(revealMessage).toHaveBeenCalledWith("source-message"));
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
-      limit: 400,
+      limit: 1000,
       offset: 2,
     });
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: state.sessionKey,
-      limit: 400,
+      limit: 1000,
       offset: 4,
     });
     expect(pane.currentReplyNavigationId(state.sessionKey)).toBeNull();

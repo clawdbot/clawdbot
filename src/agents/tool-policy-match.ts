@@ -4,10 +4,17 @@
  */
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  readToolAllowlistIntersection,
+} from "./tool-policy-shared.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch = true) {
+/** Snapshot one synchronous filtering operation; execution checks must prepare current policy. */
+export function createToolPolicyMatcher(policy?: SandboxToolPolicy, writeAllowsApplyPatch = true) {
+  if (!policy) {
+    return () => true;
+  }
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -45,10 +52,19 @@ export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPoli
   if (!policy) {
     return true;
   }
-  return makeToolPolicyMatcher(policy)(name);
+  return createToolPolicyMatcher(policy)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
+export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApplyPatch = true) {
+  const matchers = (
+    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow])
+  ).map((allow) =>
+    allow.length > 0 ? createToolPolicyMatcher({ allow }, writeAllowsApplyPatch) : () => false,
+  );
+  return (name: string) => matchers.every((matches) => matches(name));
+}
+
 export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boolean {
   return (
     toolsAllow === undefined ||
@@ -58,14 +74,19 @@ export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boole
   );
 }
 
-/** Avoid selecting the shell factory solely through the `write` compatibility alias. */
-export function isRuntimeToolAllowedForConstruction(name: string, toolsAllow?: string[]): boolean {
-  return (
-    toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
-      (allow) => allow.length > 0 && makeToolPolicyMatcher({ allow }, false)(name),
-    )
-  );
+/** Filter runtime tools by policy without rebuilding its patterns for each tool. */
+export function filterToolsByPolicy<TTool extends { name: string }>(
+  tools: TTool[],
+  policy?: SandboxToolPolicy,
+): TTool[] {
+  if (!policy) {
+    return tools;
+  }
+  if (tools.length === 0) {
+    return [];
+  }
+  const matches = createToolPolicyMatcher(policy);
+  return tools.filter((tool) => matches(tool.name));
 }
 
 /** Return whether one tool name is allowed by every active sandbox policy. */

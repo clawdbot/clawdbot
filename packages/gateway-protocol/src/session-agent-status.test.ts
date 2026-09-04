@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeSessionColorValue,
   normalizeSessionIconValue,
   SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "./session-agent-status.js";
 
@@ -35,6 +37,26 @@ describe("session icon grammar", () => {
     const attentionIds = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
     expect(SESSION_ICON_GLYPH_IDS.filter((id) => attentionIds.has(id))).toEqual([]);
   });
+});
+
+describe("session color grammar", () => {
+  it.each([
+    ...SESSION_COLOR_IDS.map((id) => [`${id} color`, id, id] as const),
+    ["trimmed uppercase", "  Blue ", "blue"],
+    // Claude Code /color treats these as clear values, never stored colors.
+    ["claude clear alias default", "default", null],
+    ["claude clear alias gray", "gray", null],
+    ["claude clear alias grey", "grey", null],
+    ["hex value", "#ff5c5c", null],
+    ["word", "crimson", null],
+    ["empty", "", null],
+    ["whitespace", " ", null],
+  ] as ReadonlyArray<readonly [label: string, input: string, expected: string | null]>)(
+    "normalizes %s",
+    (_label, input, expected) => {
+      expect(normalizeSessionColorValue(input)).toBe(expected);
+    },
+  );
 });
 
 describe("session icon grammar without Unicode Sets support", () => {

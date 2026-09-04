@@ -108,15 +108,14 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
   if (types.length === 1 && !Array.isArray(type)) {
     return schema;
   }
-  const resourceEntries = Object.entries(rest).filter(([key]) => schemaResourceKeywords.has(key));
-  const branchEntries = Object.entries(rest).filter(([key]) => !schemaResourceKeywords.has(key));
+  const entries = Object.entries(rest);
+  const resourceEntries = entries.filter(([key]) => schemaResourceKeywords.has(key));
+  const branch = Object.fromEntries(entries.filter(([key]) => !schemaResourceKeywords.has(key)));
   // Keep value-wide constraints on every branch: const, enum, and applicators
   // must still decide whether null is valid. Type-specific keywords ignore null.
   return {
     ...Object.fromEntries(resourceEntries),
-    anyOf: types.map((entry) =>
-      Object.assign({}, Object.fromEntries(branchEntries), { type: entry }),
-    ),
+    anyOf: types.map((entry) => Object.assign({}, branch, { type: entry })),
   };
 }
 

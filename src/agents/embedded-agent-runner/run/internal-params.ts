@@ -1,10 +1,40 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export type CompactionAccountingTarget = Readonly<
+  SessionTranscriptRuntimeTarget &
+    Pick<InternalSessionEntry, "lifecycleRevision" | "activeWriterRunId">
+>;
+
+/** Ordered producer observations; unknown context never borrows an older request's usage. */
+export type EmbeddedContextAccountingEvent = Readonly<
+  | { kind: "compaction"; tokensAfter: number | undefined }
+  | { kind: "model"; contextTokens: number | undefined }
+>;
+
+/** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
+export type CompactionAccountingFact = Readonly<
+  { count: number; currentContextSnapshot?: { tokens: number | undefined } } & (
+    | {
+        kind: "durable";
+        target: CompactionAccountingTarget;
+        /** Present only when the host committed a successor session rotation. */
+        previousSessionId?: string;
+      }
+    | { kind: "presentation-only" }
+  )
+>;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
+  /** Attempt-local context observer, installed by the host loop before dispatch. */
+  onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
   /** Maintenance needs the winning profile, not native runtime artifact capture. */
   onSuccessfulAuthProfile?: (profileId: string | undefined) => void;
@@ -22,6 +52,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
 };
+
+export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
+  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent"> & {
+    compactionCountOwner?: "subscription" | "caller";
+  };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;

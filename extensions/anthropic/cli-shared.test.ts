@@ -215,20 +215,20 @@ describe("Claude backend setting sources", () => {
   });
 });
 
-describe("Claude CLI model aliases", () => {
-  it("keeps pinned Claude CLI model refs on exact selectors", () => {
-    const aliases = buildAnthropicCliBackend().config.modelAliases;
+it("keeps pinned Claude CLI model refs on exact selectors", () => {
+  const aliases = buildAnthropicCliBackend().config.modelAliases;
 
-    expect(aliases?.["opus"]).toBe("opus");
-    expect(aliases?.["opus-5"]).toBe("claude-opus-5");
-    expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
-    expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
-    expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
-    expect(aliases?.["claude-opus-5"]).toBe("claude-opus-5");
-    expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
-    expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
-    expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
-  });
+  expect(aliases?.["opus"]).toBe("opus");
+  expect(aliases?.["opus-5"]).toBe("claude-opus-5");
+  expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
+  expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
+  expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+  expect(aliases?.["claude-opus-5"]).toBe("claude-opus-5");
+  expect(aliases?.["claude-fable-5-1"]).toBe("claude-fable-5-1");
+  expect(aliases?.["fable"]).toBe("fable");
+  expect(aliases?.["fable-5"]).toBe("claude-fable-5");
+  expect(aliases?.["fable-5.1"]).toBe("claude-fable-5-1");
+  expect(aliases?.["fable-5-1"]).toBe("claude-fable-5-1");
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
@@ -309,10 +309,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "ScheduleWakeup,mcp__other__*",
         ],
-        toolAvailability: {
-          native: [],
-          openClaw: ["openclaw"],
-        },
+        toolAvailability: { native: [], openClaw: ["openclaw"] },
       }),
     ).toEqual([
       "-p",
@@ -333,6 +330,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__openclaw",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -384,10 +383,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "ScheduleWakeup,mcp__other__*",
         ],
-        toolAvailability: {
-          native: [],
-          openClaw: ["message"],
-        },
+        toolAvailability: { native: [], openClaw: ["message"] },
       }),
     ).toEqual([
       "-p",
@@ -406,6 +402,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__message",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -464,7 +462,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "--tools",
       "",
       "--disallowedTools",
-      "mcp__*",
+      "mcp__*,mcp__other__*",
     ]);
   });
 
@@ -877,6 +875,7 @@ describe("normalizeClaudeBackendConfig", () => {
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 
+    expect(backend.autoSelectAuthProfile).toBe(false);
     expect(backend.config.env).toBeUndefined();
     expect(backend.config.liveSession).toBe("claude-stdio");
     expect(backend.config.output).toBe("jsonl");

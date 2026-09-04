@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -156,38 +157,17 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
   }
 }
 
-export async function reloadCodexRegistryAfterActivation(params: {
+export async function restoreSetupPluginMetadata(params: {
   readSnapshot: () => Promise<
     Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-  requireValidConfig?: boolean;
-}): Promise<OpenClawConfig | null> {
-  let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
+}): Promise<void> {
   try {
-    snapshot = await params.readSnapshot();
-  } catch {
-    setupInferenceLog.warn(
-      "Could not read config while reloading the plugin registry after Codex activation.",
-    );
-    return null;
-  }
-  if (params.requireValidConfig && (!snapshot.exists || !snapshot.valid)) {
-    setupInferenceLog.warn(
-      "Could not reload the plugin registry after Codex activation because the committed config is unavailable.",
-    );
-    return null;
-  }
-  const runtimeConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.runtimeConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  const sourceConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  try {
+    const snapshot = await params.readSnapshot();
+    const sourceConfig =
+      snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const refreshPluginRegistry =
       params.deps.refreshPluginRegistryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
@@ -198,26 +178,7 @@ export async function reloadCodexRegistryAfterActivation(params: {
       logger: setupInferenceLog,
     });
   } catch {
-    setupInferenceLog.warn(
-      "Could not refresh persisted plugin registry metadata after Codex activation.",
-    );
-  }
-  try {
-    const ensurePluginRegistryLoaded =
-      params.deps.ensurePluginRegistryLoaded ??
-      (await import("../plugins/runtime/runtime-registry-loader.js")).ensurePluginRegistryLoaded;
-    ensurePluginRegistryLoaded({
-      scope: "all",
-      config: runtimeConfig,
-      activationSourceConfig: sourceConfig,
-      workspaceDir: params.workspaceDir,
-    });
-    return runtimeConfig;
-  } catch {
-    setupInferenceLog.warn(
-      "Could not reload the active plugin registry after Codex inference activation.",
-    );
-    return null;
+    setupInferenceLog.warn("Could not restore plugin metadata after the inference setup probe.");
   }
 }
 
@@ -278,6 +239,7 @@ export type ManualAuthPersistenceReceipt = {
   }>;
   /** Profiles created by this activation; rollback must not delete prior identical entries. */
   insertedProfileIds: ReadonlySet<string>;
+  rollbackProtectedSecretStorage: () => void;
 };
 
 type ManualAuthProfilesReadback = "present" | "absent" | "mismatch" | "unknown";
@@ -364,13 +326,26 @@ export async function persistManualAuthProfiles(params: {
   profiles: ProviderAuthResult["profiles"];
   agentDir: string;
   deps: ActivateSetupInferenceDeps;
+  secretStorage?: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 }): Promise<ManualAuthPersistenceResult> {
-  const profiles = params.profiles.map((profile) => ({
+  const prepared = params.secretStorage
+    ? prepareProviderAuthProfilesForPersistence({
+        profiles: params.profiles,
+        config: params.secretStorage.config,
+        ...(params.secretStorage.env ? { env: params.secretStorage.env } : {}),
+      })
+    : { profiles: [...params.profiles], rollback: () => {} };
+  const profiles = prepared.profiles.map((profile) => ({
     profileId: profile.profileId,
     credential: normalizeAuthProfileCredential(profile.credential),
   }));
   const insertedProfileIds = new Set<string>();
-  const receipt = { agentDir: params.agentDir, profiles, insertedProfileIds };
+  const receipt = {
+    agentDir: params.agentDir,
+    profiles,
+    insertedProfileIds,
+    rollbackProtectedSecretStorage: prepared.rollback,
+  };
   let collision = false;
   const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   const updated = await update({
@@ -394,6 +369,7 @@ export async function persistManualAuthProfiles(params: {
     },
   });
   if (collision) {
+    prepared.rollback();
     return { status: "not-persisted" };
   }
   // The store helper can report a post-commit chmod failure as null. Read back
@@ -402,7 +378,20 @@ export async function persistManualAuthProfiles(params: {
   if (updated !== null || readback === "present") {
     return { status: "persisted", receipt };
   }
-  return readback === "absent" ? { status: "not-persisted" } : { status: "unknown", receipt };
+  if (readback === "absent") {
+    prepared.rollback();
+    return { status: "not-persisted" };
+  }
+  return { status: "unknown", receipt };
+}
+
+function rollbackManualAuthSecretStorage(receipt: ManualAuthPersistenceReceipt): boolean {
+  try {
+    receipt.rollbackProtectedSecretStorage();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function rollbackManualAuthProfiles(
@@ -410,7 +399,7 @@ export async function rollbackManualAuthProfiles(
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
   if (receipt.insertedProfileIds.size === 0) {
-    return true;
+    return rollbackManualAuthSecretStorage(receipt);
   }
   const update = deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -446,7 +435,7 @@ export async function rollbackManualAuthProfiles(
           updated.profiles[profile.profileId] === undefined,
       )
     ) {
-      return true;
+      return rollbackManualAuthSecretStorage(receipt);
     }
     let persistedStore: ReturnType<typeof loadPersistedAuthProfileStore>;
     try {
@@ -464,7 +453,7 @@ export async function rollbackManualAuthProfiles(
           persistedStore.profiles[profile.profileId] === undefined,
       )
     ) {
-      return true;
+      return rollbackManualAuthSecretStorage(receipt);
     }
   }
   return false;
@@ -570,6 +559,8 @@ export async function runSetupInferenceTest(params: {
         sessionId,
         sessionKey,
         sessionManager,
+        // The probe owns its transcript; session admission must not create durable agent state.
+        sessionPersistence: "detached",
         agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,

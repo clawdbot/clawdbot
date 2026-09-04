@@ -17,6 +17,7 @@ function group(
     kind: "group",
     key: `group:${key}`,
     role,
+    visibleContent: "text",
     messages: [
       {
         key,
@@ -362,6 +363,62 @@ describe("coalesceAgentRunFrames", () => {
           __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
         }),
         group("tool", "reasoning-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "attachment-only final followed by work",
+      parts: [
+        group("assistant", "final-document", "run-1", {
+          phase: "final_answer",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "https://files.example.test/report.pdf",
+                label: "report.pdf",
+                mimeType: "application/pdf",
+              },
+            },
+          ],
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-document" } },
+    },
+    {
+      name: "image-only final",
+      parts: [
+        group("assistant", "final-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", url: "https://files.example.test/banner.png" }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-image" } },
+    },
+    {
+      name: "omitted-image-only final",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
+    },
+    {
+      name: "empty final",
+      parts: [group("assistant", "empty", "run-1", { stopReason: "stop", content: [] })],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "reasoning-only final",
+      parts: [
+        group("assistant", "thinking", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "thinking", thinking: "I am considering the request." }],
+        }),
       ],
       outcome: { kind: "completed", actionOwner: null },
     },

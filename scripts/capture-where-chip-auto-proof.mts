@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Captures placement, inventory, and context-meter proof in both themes.
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -12,9 +12,11 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 
 const captureLabel = process.argv[2] ?? "after";
-const outputDir = path.resolve(process.argv[3] ?? "/tmp/node-slot-pips-proof");
+const outputDir = createControlUiE2eArtifactDir(
+  "node-slot-pips-proof",
+  process.argv[3] ?? "/tmp/node-slot-pips-proof",
+);
 const remoteExec = process.argv[4] === "remote-exec";
-await mkdir(outputDir, { recursive: true });
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium unavailable at ${executablePath}`);

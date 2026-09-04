@@ -15,10 +15,8 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import {
-  requestCloudWorkerStop,
-  resolveCloudWorkerStopAction,
-} from "../../components/cloud-worker-stop.ts";
+import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
@@ -29,7 +27,6 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -63,6 +60,10 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  runSessionNavigationAction,
+} from "../../lib/sessions/session-menu-navigation.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -78,6 +79,7 @@ import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
 import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
+const SESSION_SEARCH_DEBOUNCE_MS = 200;
 
 type SessionsPageRequestScope = {
   epoch: number;
@@ -99,6 +101,7 @@ type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
   query: ReturnType<typeof sessionsPageListQuery>;
   key: string;
+  transcriptKey: string;
 };
 
 class SessionsPage extends OpenClawLightDomElement {
@@ -148,6 +151,8 @@ class SessionsPage extends OpenClawLightDomElement {
   private sessionMenuWorkVersion = 0;
   private listBinding?: SessionsPageListBinding;
   private unsubscribeList?: () => void;
+  private listRequest?: Promise<void>;
+  private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
@@ -155,6 +160,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.page = 0;
       this.selectedKeys = new Set();
       this.routeDataEnabled = false;
+      this.clearSearchTimer();
       this.bindSessionList();
     }
     this.requestUpdate();
@@ -208,7 +214,7 @@ class SessionsPage extends OpenClawLightDomElement {
         client,
         query,
         listSessions: context.sessions.list,
-        listOptions: this.sessionListOptions(context),
+        listOptions: this.sessionListOptions(context, ""),
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
@@ -281,6 +287,8 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private invalidatePageWork() {
     this.pageEpoch += 1;
+    this.clearSearchTimer();
+    this.listRequest = undefined;
     this.submittedTranscriptSearchQuery = "";
     this.transcriptSearch = { status: "idle" };
     void this.transcriptSearchTask.run(this.transcriptSearchArgs());
@@ -416,21 +424,6 @@ class SessionsPage extends OpenClawLightDomElement {
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
-    if (!this.gatewayLifecycle.isRouteDataCurrent(data) || data.sessions !== context.sessions) {
-      this.routeDataEnabled = false;
-      void this.refreshSessionList();
-      if (data.expandedSessionKey) {
-        void this.loadCheckpoint(data.expandedSessionKey);
-      }
-      return;
-    }
-    this.result = data.result
-      ? filterSessionRows(data.result, { archivedFilter: data.statusFilter })
-      : null;
-    this.appliedListResult = data.result;
-    this.error = data.error;
-    this.loading = data.loading;
-    this.ensureAgentIdentities(this.result);
     if (data.expandedSessionKey) {
       void this.loadCheckpoint(data.expandedSessionKey);
     }
@@ -457,7 +450,7 @@ class SessionsPage extends OpenClawLightDomElement {
     return this.sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
   }
 
-  private sessionListOptions(context: ApplicationContext) {
+  private sessionListOptions(context: ApplicationContext, search = this.searchQuery) {
     return sessionsPageListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(this.activeMinutes),
       // The Limit box is an explicit page size, so an unparseable entry falls
@@ -467,40 +460,54 @@ class SessionsPage extends OpenClawLightDomElement {
       includeUnknown: this.includeUnknown,
       statusFilter: this.statusFilter,
       deepLinkSessionKey: this.deepLinkSessionKey,
+      search,
     });
   }
 
   private bindSessionList(refreshMissing = true): SessionsPageListBinding | undefined {
     const context = this.context;
-    if (!context) {
+    if (!context || !this.isConnected) {
       return undefined;
     }
     const sessions = context.sessions;
     const query = this.sessionListOptions(context);
     const key = JSON.stringify(query);
     const current = this.listBinding;
-    if (current?.sessions === sessions && current.key === key) {
-      return current;
+    const transcriptKey = JSON.stringify(this.sessionListOptions(context, ""));
+    if (current?.sessions !== sessions || current.key !== key) {
+      // An event refresh can already own the old query's request.
+      if (current?.sessions === sessions && sessions.listSnapshot(current.query).loading) {
+        void this.loadSessionList(current);
+      }
+      this.unsubscribeList?.();
+      this.unsubscribeList = undefined;
+      if (current?.sessions !== sessions || current.transcriptKey !== transcriptKey) {
+        this.resetTranscriptSearchState(this.transcriptSearchQuery);
+      }
+      // Retired rows cannot be selected under replacement text, even during debounce.
+      this.result = null;
+      this.error = null;
+      this.selectedKeys = new Set();
+      this.page = 0;
+      this.listBinding = { sessions, query, key, transcriptKey };
+      this.appliedListResult = undefined;
     }
-    this.unsubscribeList?.();
-    // Search hits and pending work belong to the roster query, not just its agent.
-    this.resetTranscriptSearchState(this.transcriptSearchQuery);
-    const binding = { sessions, query, key };
-    this.listBinding = binding;
-    this.appliedListResult = undefined;
+    const binding = this.listBinding!;
+    if (this.unsubscribeList) {
+      return binding;
+    }
+    this.loading = context.gateway.snapshot.phase === "connected";
+    if (!this.captureRequestScope() || this.searchTimer !== undefined || this.listRequest) {
+      return binding;
+    }
     const apply = (snapshot: SessionListSnapshot) => {
       this.applyListSnapshot(binding, snapshot);
     };
     this.unsubscribeList = sessions.subscribeList(query, apply);
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
-    if (
-      refreshMissing &&
-      !snapshot.result &&
-      !snapshot.loading &&
-      context.gateway.snapshot.phase === "connected"
-    ) {
-      void sessions.refreshList({ ...query, force: true });
+    if (refreshMissing && (!snapshot.result || snapshot.loading)) {
+      void this.loadSessionList(binding);
     }
     return binding;
   }
@@ -530,14 +537,51 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.routeDataEnabled = false;
+    this.clearSearchTimer();
     const binding = this.bindSessionList(false);
     if (!binding || binding.sessions !== scope.sessions || !this.isRequestScopeCurrent(scope)) {
       return;
     }
-    await binding.sessions.refreshList({ ...binding.query, force: true });
+    await this.loadSessionList(binding, { force: true });
     if (this.isRequestScopeCurrent(scope) && this.listBinding === binding) {
       this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
     }
+  }
+
+  private loadSessionList(
+    binding: SessionsPageListBinding,
+    options: { force?: boolean; offset?: number; append?: boolean } = {},
+  ): Promise<void> {
+    if (this.listRequest) {
+      // Only the bound query may queue mutation invalidation in its managed owner.
+      if (options.force && this.unsubscribeList) {
+        void binding.sessions.refreshList({ ...binding.query, ...options });
+      }
+      return this.listRequest;
+    }
+    if (!this.captureRequestScope()) {
+      return Promise.resolve();
+    }
+    // Claim before refreshList publishes. Only this connection's completion may
+    // release the slot; the next query is read from page state, never queued here.
+    let start!: (request: Promise<void>) => void;
+    const pending = new Promise<void>((resolve) => {
+      start = resolve;
+    }).finally(() => {
+      if (this.listRequest !== pending) {
+        return;
+      }
+      this.listRequest = undefined;
+      this.bindSessionList();
+    });
+    this.listRequest = pending;
+    start(binding.sessions.refreshList({ ...binding.query, ...options }));
+    return pending;
+  }
+
+  private clearSearchTimer() {
+    clearTimeout(this.searchTimer);
+    this.searchTimer = undefined;
   }
 
   private adoptCurrentListSnapshot() {
@@ -651,11 +695,12 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.statusFilter = statusFilter;
+    this.clearSearchTimer();
     this.page = 0;
     this.selectedKeys = new Set();
     this.deepLinkSessionKey = null;
-    // Route navigation refetches (statusFilter is in loaderDeps); mask the old
-    // view's rows until the new result applies via applyRouteData.
+    // Route navigation changes the managed query; mask the old view's rows
+    // until its current list subscription publishes.
     this.loading = true;
     this.error = null;
     context.navigate(
@@ -879,10 +924,14 @@ class SessionsPage extends OpenClawLightDomElement {
     let mutationError: string | null = null;
     try {
       const agentId = parseAgentSessionKey(row.key)?.agentId;
-      await requestCloudWorkerStop(scope.client, {
-        key: row.key,
-        ...(agentId ? { agentId } : {}),
-      });
+      await requestCloudWorkerStop(
+        scope.client,
+        {
+          key: row.key,
+          ...(agentId ? { agentId } : {}),
+        },
+        scope.context.placementStartup,
+      );
       if (this.isRequestScopeCurrent(scope)) {
         await this.refreshSessionList(scope);
       }
@@ -1426,11 +1475,15 @@ class SessionsPage extends OpenClawLightDomElement {
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
           icon: normalizeOptionalString(row.icon) ?? null,
+          color: normalizeOptionalString(row.color) ?? null,
           categoryClearReturnsToGroups: false,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
+        .navigationAllowed=${true}
+        .copyMarkdownAllowed=${canCopySessionMarkdown(gateway)}
+        .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
           session: row,
@@ -1443,12 +1496,14 @@ class SessionsPage extends OpenClawLightDomElement {
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
         .work=${this.sessionMenuWork}
-        .workboard=${canCapture && row.kind !== "global"
-          ? {
-              captured: capturedSessionKeys.has(row.key),
-              busy: workboardState.capturingSessionKeys.has(row.key),
-            }
-          : null}
+        .workboard=${
+          canCapture && row.kind !== "global"
+            ? {
+                captured: capturedSessionKeys.has(row.key),
+                busy: workboardState.capturingSessionKeys.has(row.key),
+              }
+            : null
+        }
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
@@ -1459,8 +1514,17 @@ class SessionsPage extends OpenClawLightDomElement {
               openEditor(action.editor, action.path);
               break;
             case "copy-session-id":
-              void copyToClipboard(row.sessionId ?? "").then((copied) => {
-                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            case "copy-session-link":
+            case "copy-markdown":
+            case "open-new-tab":
+            case "open-new-window":
+            case "split-right":
+            case "split-below":
+              void runSessionNavigationAction(action.kind, {
+                context,
+                session: row,
+                agentId: row.agentId,
+                isCurrent: () => this.isConnected && this.context === context,
               });
               break;
             case "toggle-pin":
@@ -1472,8 +1536,14 @@ class SessionsPage extends OpenClawLightDomElement {
             case "rename":
               void this.renameSession(row);
               break;
+            case "set-color":
+              void this.patchSession(row.key, { color: action.color });
+              break;
             case "set-icon":
               void this.patchSession(row.key, { icon: action.icon });
+              break;
+            case "reset-appearance":
+              void this.patchSession(row.key, { icon: null, color: null });
               break;
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);
@@ -1612,9 +1682,19 @@ class SessionsPage extends OpenClawLightDomElement {
             void this.refreshSessionList();
           },
           onSearchChange: (query) => {
+            this.routeDataEnabled = false;
+            this.deepLinkSessionKey = null;
             this.searchQuery = query;
             this.page = 0;
             this.selectedKeys = new Set();
+            this.clearSearchTimer();
+            if (this.captureRequestScope()) {
+              this.searchTimer = setTimeout(() => {
+                this.searchTimer = undefined;
+                this.bindSessionList();
+              }, SESSION_SEARCH_DEBOUNCE_MS);
+            }
+            this.bindSessionList();
           },
           onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
           onTranscriptSearch: () => void this.runTranscriptSearch(),
@@ -1627,6 +1707,13 @@ class SessionsPage extends OpenClawLightDomElement {
           onGroupByChange: (mode) => this.setGroupBy(mode),
           onAssignCategory: (key, category) => this.assignCategory(key, category),
           onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
+          onLoadMore: () => {
+            const binding = this.listBinding;
+            const offset = this.result?.nextOffset;
+            if (binding && this.result?.hasMore && offset != null && !this.loading) {
+              void this.loadSessionList(binding, { offset, append: true });
+            }
+          },
           onPageChange: (page) => {
             this.page = page;
           },

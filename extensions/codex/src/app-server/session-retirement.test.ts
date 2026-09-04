@@ -95,7 +95,7 @@ describe("Codex session deletion subscriptions", () => {
     await expect(fixture.remove(session, transaction)).rejects.toThrow("claimed by active work");
 
     expect(transaction).not.toHaveBeenCalled();
-    expect(await fixture.bindingStore.read(session)).toEqual(fixture.binding);
+    expect(fixture.bindingStore.read(session)).toEqual(fixture.binding);
     expect(isCodexAppServerLiveThreadClaimed(fixture.client, fixture.binding.threadId)).toBe(true);
     expect(fixture.request).not.toHaveBeenCalled();
   });
@@ -112,8 +112,8 @@ describe("Codex session deletion subscriptions", () => {
 
     await fixture.remove();
 
-    expect(await fixture.bindingStore.read(session)).toBeUndefined();
-    expect(await fixture.bindingStore.read(conversation)).toEqual(fixture.binding);
+    expect(fixture.bindingStore.read(session)).toBeUndefined();
+    expect(fixture.bindingStore.read(conversation)).toEqual(fixture.binding);
     expect(
       await consumeCodexAppServerLiveThread(fixture.client, fixture.binding.threadId),
     ).toBeDefined();
@@ -148,7 +148,7 @@ describe("Codex session deletion subscriptions", () => {
         { status: "fulfilled", value: undefined },
         { status: "fulfilled", value: undefined },
       ]);
-      expect(await fixture.bindingStore.read(successor)).toEqual(fixture.binding);
+      expect(fixture.bindingStore.read(successor)).toEqual(fixture.binding);
       expect(
         await consumeCodexAppServerLiveThread(fixture.client, fixture.binding.threadId),
       ).toBeDefined();
@@ -191,7 +191,7 @@ describe("Codex session deletion subscriptions", () => {
       const completion = Promise.allSettled([deletion, resuming]);
       await withCodexAppServerThreadMutation(`other-${fixture.binding.threadId}`, async () => {});
       expect(resumeEntered).toBe(false);
-      expect(await fixture.bindingStore.read(session)).toBeUndefined();
+      expect(fixture.bindingStore.read(session)).toBeUndefined();
       unsubscribeAcknowledged.resolve();
       expect(
         await withTimeout(completion, 5_000, "resume did not follow deletion cleanup"),
@@ -203,7 +203,7 @@ describe("Codex session deletion subscriptions", () => {
         "thread/unsubscribe",
         "thread/resume",
       ]);
-      expect(await fixture.bindingStore.read(successor)).toEqual(fixture.binding);
+      expect(fixture.bindingStore.read(successor)).toEqual(fixture.binding);
       expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
     } finally {
       unsubscribeAcknowledged.resolve();
@@ -233,8 +233,8 @@ describe("Codex session deletion subscriptions", () => {
       "nested deletion deadlocked on a shared native thread",
     );
 
-    expect(await fixture.bindingStore.read(session)).toBeUndefined();
-    expect(await fixture.bindingStore.read(sibling)).toBeUndefined();
+    expect(fixture.bindingStore.read(session)).toBeUndefined();
+    expect(fixture.bindingStore.read(sibling)).toBeUndefined();
     expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/unsubscribe"]);
     expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(false);
   });
@@ -246,7 +246,7 @@ describe("Codex session deletion subscriptions", () => {
 
     await fixture.remove(incognito);
 
-    expect(await fixture.bindingStore.read(incognito)).toBeUndefined();
+    expect(fixture.bindingStore.read(incognito)).toBeUndefined();
     expect(fixture.request).toHaveBeenCalledExactlyOnceWith(
       "thread/unsubscribe",
       { threadId: fixture.binding.threadId },

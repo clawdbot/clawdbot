@@ -100,6 +100,20 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(["src/gateway/methods/core-descriptors.ts", "src/gateway/method-scopes.ts"])(
+    "keeps static method policy independent of session storage: %s",
+    (entryPath) => {
+      const graph = collectStaticValueImportGraph(entryPath);
+      const sessionStorageImports = [...graph.keys()]
+        .map((filePath) => path.relative(repoRoot, filePath))
+        .filter((filePath) =>
+          filePath.startsWith(path.join("src", "config", "sessions") + path.sep),
+        );
+
+      expect(sessionStorageImports).toEqual([]);
+    },
+  );
+
   it("keeps remote catalog refresh networking behind the overlay boundary", () => {
     const startupGraph = collectStaticValueImportGraph(
       "src/plugins/gateway-startup-plugin-providers.ts",
@@ -169,7 +183,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
@@ -256,6 +270,24 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
   });
 
+  it("keeps worker session tools out of idle worker startup", () => {
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    const startupFunction = workerStartup.indexOf(
+      "export async function createGatewayWorkerEnvironmentRuntime",
+    );
+    const eagerImportsStart = workerStartup.indexOf("const [", startupFunction);
+    const eagerImportsEnd = workerStartup.indexOf("]);", eagerImportsStart);
+    const eagerImports = workerStartup.slice(eagerImportsStart, eagerImportsEnd);
+
+    expect(eagerImports).not.toContain(
+      'import("./worker-environments/worker-session-tool-executor.js")',
+    );
+    expect(workerStartup).toContain(
+      "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
+    );
+    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
+  });
+
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
@@ -288,7 +320,7 @@ describe("gateway startup import boundaries", () => {
       "cronReconciliation.invalidate();",
     );
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
+      "void stopDeliveryRecoveryForClose();",
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
@@ -298,7 +330,7 @@ describe("gateway startup import boundaries", () => {
       "stopConfigReloaderForClose().catch",
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
+      "stopDeliveryRecoveryForClose(),",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

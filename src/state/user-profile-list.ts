@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -13,8 +14,10 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
+  selectResolvedUserProfile,
   selectResolvedUserProfileById,
   normalizeUserProfileAvatarMime,
+  userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import {
@@ -42,7 +45,7 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
             ...(hasEnsuredUserProfileRoleSchema(database.db) ? (["role"] as const) : []),
             "created_at",
             "updated_at",
-            sql`CASE WHEN avatar IS NULL THEN 0 ELSE 1 END`.as("has_avatar"),
+            userProfileAvatarPresence,
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -94,6 +97,7 @@ export function hasMultipleSessionSharingIdentities(
       .selectFrom("user_profiles")
       .select("id")
       .where("merged_into", "is", null)
+      .where("id", "!=", GATEWAY_OWNER_PROFILE_ID)
       .limit(2),
   ).rows;
   return profiles.length >= 2;
@@ -170,15 +174,31 @@ export function readUserProfileAliases(
   return aliases;
 }
 
+const userProfileDisplaySelection = [
+  "id",
+  "display_name",
+  "avatar_mime",
+  "avatar_sha256",
+  "merged_into",
+  "updated_at",
+  userProfileAvatarPresence,
+] as const;
+
+/** Reads merge-aware display data without loading avatar bytes. */
 export function getUserProfileDisplay(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileDisplay {
-  const profile = withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) =>
-      tableExists(db, "user_profiles") ? selectResolvedUserProfileById(db, profileId) : undefined,
-    options,
-  );
+  const profile = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "user_profiles")) {
+      return undefined;
+    }
+    return selectResolvedUserProfile(
+      db,
+      profileId,
+      userProfilesDb(db).selectFrom("user_profiles").select(userProfileDisplaySelection),
+    );
+  }, options);
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
@@ -191,6 +211,61 @@ export function getUserProfileDisplay(
     id: profile.id,
     displayName: profile.display_name,
     avatarRevision,
-    hasAvatar: profile.avatar !== null,
+    hasAvatar: profile.has_avatar === 1,
   };
+}
+
+/** Activity references are display navigation, never authentication identifiers. */
+export function resolveUserProfileReference(
+  reference: string,
+  options: OpenClawStateDatabaseOptions & { allowedProfileIds?: ReadonlySet<string> } = {},
+): Result<string | undefined, "ambiguous"> {
+  const { allowedProfileIds } = options;
+  if (allowedProfileIds?.size === 0) {
+    return ok(undefined);
+  }
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }): Result<string | undefined, "ambiguous"> => {
+      if (!tableExists(db, "user_profiles")) {
+        return ok(undefined);
+      }
+      let profiles = userProfilesDb(db).selectFrom("user_profiles");
+      if (allowedProfileIds) {
+        profiles = profiles.where((eb) =>
+          eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
+        );
+      }
+      const exact = selectResolvedUserProfile(
+        db,
+        reference,
+        profiles.select(["id", "merged_into"]),
+      );
+      if (exact) {
+        return ok(exact.id);
+      }
+      if (!/^[0-9a-f]{8,32}$/.test(reference)) {
+        return ok(undefined);
+      }
+      const uuidPrefix = [
+        reference.slice(0, 8),
+        reference.slice(8, 12),
+        reference.slice(12, 16),
+        reference.slice(16, 20),
+        reference.slice(20),
+      ]
+        .filter(Boolean)
+        .join("-");
+      // Tombstones retain old links; aliases of one allowed merge head are one match.
+      // Time, search, and facet caps must not choose a person within that visibility scope.
+      const matches = executeSqliteQuerySync(
+        db,
+        profiles
+          .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
+          .where("id", "like", `${uuidPrefix}%`)
+          .distinct()
+          .limit(2),
+      ).rows;
+      return matches.length > 1 ? err("ambiguous") : ok(matches[0]?.id);
+    }, options) ?? ok(undefined)
+  );
 }

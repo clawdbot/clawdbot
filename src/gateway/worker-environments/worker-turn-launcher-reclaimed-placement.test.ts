@@ -32,6 +32,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   credential,
   openSessionManager,
   placements,
@@ -155,6 +156,7 @@ describe("worker turn launcher reclaimed placement", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");

@@ -7,6 +7,7 @@ import {
   readNestedToolActivity,
   nestedToolActivityContent,
 } from "../sessions/nested-tool-activity.js";
+import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -43,16 +44,12 @@ type ChatDisplayProjectionOptions = {
   streamErrorFallbackPending?: boolean;
 };
 
-function projectCurrentUserProfileAvatars(
-  messages: Array<Record<string, unknown>>,
-  resolveDisplay: CurrentUserProfileDisplayResolver | undefined,
-): Array<Record<string, unknown>> {
-  if (!resolveDisplay) {
-    return messages;
-  }
+/** Keep profile display reads local to one history page or event projection operation. */
+export function createCurrentUserProfileMessageProjector(
+  resolveDisplay: CurrentUserProfileDisplayResolver,
+) {
   const displayBySenderId = new Map<string, CurrentUserProfileDisplay>();
-  let changed = false;
-  const projected = messages.map((message) => {
+  return (message: Record<string, unknown>): Record<string, unknown> => {
     if (message.role !== "user") {
       return message;
     }
@@ -79,7 +76,6 @@ function projectCurrentUserProfileAvatars(
     ) {
       return message;
     }
-    changed = true;
     return {
       ...message,
       __openclaw: {
@@ -88,6 +84,22 @@ function projectCurrentUserProfileAvatars(
         senderProfileAvatarUrl: display.avatarUrl,
       },
     };
+  };
+}
+
+function projectCurrentUserProfileAvatars(
+  messages: Array<Record<string, unknown>>,
+  resolveDisplay: CurrentUserProfileDisplayResolver | undefined,
+): Array<Record<string, unknown>> {
+  if (!resolveDisplay) {
+    return messages;
+  }
+  const project = createCurrentUserProfileMessageProjector(resolveDisplay);
+  let changed = false;
+  const projected = messages.map((message) => {
+    const row = project(message);
+    changed ||= row !== message;
+    return row;
   });
   return changed ? projected : messages;
 }
@@ -107,7 +119,10 @@ function isContextOverflowErrorSignal(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
   }
-  return normalizeErrorSignal(value) === "context_overflow" || isContextOverflowError(value);
+  return (
+    normalizeErrorSignal(value) === "context_overflow" ||
+    isContextOverflowError(value, { providerPlugin: null })
+  );
 }
 
 function isContextOverflowAssistantError(message: Record<string, unknown>): boolean {
@@ -119,9 +134,12 @@ function isContextOverflowAssistantError(message: Record<string, unknown>): bool
 }
 
 function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
-  return isContextOverflowAssistantError(message)
-    ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
-    : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT;
+  return (
+    formatProviderRefusalText(message) ??
+    (isContextOverflowAssistantError(message)
+      ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
+      : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)
+  );
 }
 
 function sanitizeAssistantErrorDisplayMessage(

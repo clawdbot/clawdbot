@@ -10,6 +10,7 @@ import {
   type LegacyMediaContextKey,
 } from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeInternalTurnContext } from "../internal-turn-source.js";
 import type {
   CanonicalInboundText,
   FinalizedMsgContext,
@@ -124,6 +125,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  normalizeInternalTurnContext(normalized);
   foldDeprecatedPromptContextFields(normalized);
   applySupplementalContext(normalized);
 

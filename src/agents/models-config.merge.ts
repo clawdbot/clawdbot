@@ -6,11 +6,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeModelCost } from "../config/model-cost.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import {
   modelKey,
-  normalizeConfiguredProviderCatalogModelId,
+  createConfiguredProviderCatalogModelIdNormalizer,
   type ModelManifestNormalizationContext,
 } from "./model-ref-shared.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -49,6 +50,11 @@ export type ExistingProviderConfig = ProviderConfig & {
   api?: string;
 };
 
+export type SourceModelFields = ReadonlyMap<
+  string,
+  { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
+>;
+
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {
     return "";
@@ -63,7 +69,7 @@ export function mergeProviderModels(
   explicit: ProviderConfig,
   options?: {
     providerId: string;
-    sourceModelInputOmissions?: ReadonlySet<string>;
+    sourceModelFields?: SourceModelFields;
     manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
     preserveConfiguredModelMembership?: boolean;
   },
@@ -99,6 +105,7 @@ export function mergeProviderModels(
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
 
   const mergedModels = explicitModels.map((explicitModel) => {
     const id = getProviderModelId(explicitModel);
@@ -110,18 +117,28 @@ export function mergeProviderModels(
     if (!implicitModel) {
       return explicitModel;
     }
-    const sourceOmittedInput =
-      options &&
-      options.sourceModelInputOmissions?.has(
-        modelKey(
-          normalizeProviderId(options.providerId),
-          normalizeConfiguredProviderCatalogModelId(options.providerId, id, options),
-        ),
-      ) === true;
+    const sourceFields = options?.sourceModelFields?.get(
+      modelKey(normalizeProviderId(options.providerId), normalizeModelId(options.providerId, id)),
+    );
+    // Materialized defaults are not authored pins. Reuse raw source cost in both
+    // merge passes so the final pass cannot restore an older catalog schedule.
+    const cost = mergeModelCost(
+      implicitModel.cost,
+      sourceFields ? sourceFields.cost : explicitModel.cost,
+    );
+    const input =
+      sourceFields?.inputOmitted && implicitModel.input !== undefined
+        ? implicitModel.input
+        : "input" in explicitModel
+          ? explicitModel.input
+          : implicitModel.input;
     if (options?.preserveConfiguredModelMembership) {
-      return sourceOmittedInput && implicitModel.input !== undefined
-        ? Object.assign({}, explicitModel, { input: implicitModel.input })
-        : explicitModel;
+      return Object.assign(
+        {},
+        explicitModel,
+        { cost },
+        sourceFields?.inputOmitted ? { input } : {},
+      );
     }
 
     const contextWindow =
@@ -151,12 +168,8 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input:
-          sourceOmittedInput && implicitModel.input !== undefined
-            ? implicitModel.input
-            : "input" in explicitModel
-              ? explicitModel.input
-              : implicitModel.input,
+        input,
+        cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
@@ -196,7 +209,7 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
-  sourceModelInputOmissions?: ReadonlySet<string>;
+  sourceModelFields?: SourceModelFields;
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
@@ -205,7 +218,7 @@ export function mergeProviders(params: {
     out[providerKey] = implicit
       ? mergeProviderModels(implicit, explicit, {
           providerId: providerKey,
-          sourceModelInputOmissions: params.sourceModelInputOmissions,
+          sourceModelFields: params.sourceModelFields,
           manifestPlugins: params.manifestPlugins,
         })
       : explicit;
@@ -279,7 +292,7 @@ function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
-  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */

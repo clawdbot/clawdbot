@@ -145,7 +145,15 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
-    const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    if (params?.agentScope === "all" && agentId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentScope=all cannot be combined with agentId"),
+      );
+      return;
+    }
+    const agentScope = params?.agentScope === "all" ? "all" : undefined;
     let effectiveAgentId = agentId;
     if (!agentScope && !effectiveAgentId) {
       const requestedAgent = resolveRequestedSessionAgentId(config, "main");

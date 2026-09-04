@@ -20,7 +20,11 @@ import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import {
+  indexPluginNodeCapabilitySurfaces,
+  reconcileClientPluginNodeCapabilities,
+  type PluginNodeCapabilitySurface,
+} from "../plugin-node-capability.js";
 import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
@@ -34,6 +38,7 @@ import {
   GATEWAY_STALE_INSTALL_CLOSE_REASON,
 } from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -288,9 +293,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let stopKeepalive: (() => void) | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
-    let awaitingPong = false;
     let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
@@ -320,7 +324,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      clearInterval(pingTimer);
+      stopKeepalive?.();
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
@@ -410,7 +414,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     socket.on("pong", () => {
-      awaitingPong = false;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -603,6 +606,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (closed || client) {
         return false;
       }
+      if (
+        next.connect.role === "node" &&
+        !reconcileClientPluginNodeCapabilities(
+          next,
+          indexPluginNodeCapabilitySurfaces(getPluginNodeCapabilities?.() ?? []),
+          () => close(1012, "node capabilities changed"),
+        )
+      ) {
+        return false;
+      }
       if (next.worker) {
         for (const existing of clients) {
           if (existing.worker?.environmentId === next.worker.environmentId) {
@@ -619,50 +632,49 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       releasePreauthBudget();
       client = next;
       clients.add(next);
-      if (next.presenceKey && next.authenticatedUserId && next.connect.role !== "node") {
+      if (
+        next.presenceKey &&
+        (next.authenticatedUserId || next.authenticatedUserProfile) &&
+        next.connect.role !== "node"
+      ) {
         next.personPresence = { onlineSince: Date.now() };
         refreshClientPresence(clients, next);
       }
-      pingTimer = setInterval(() => {
-        // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
-        if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
-          }
-          return;
-        }
-        awaitingPong = true;
+      stopKeepalive = startWebSocketKeepalive(socket, () => {
+        // A half-open control connection must release its node and worker owners.
+        setCloseCause("heartbeat-timeout");
         try {
-          socket.ping();
-        } catch {}
-      }, 25_000);
+          socket.terminate();
+        } catch {
+          close();
+        }
+      });
       return true;
     };
 
+    const connectionLifecycle = {
+      socket,
+      connId,
+      isStartupPending,
+      send,
+      close,
+      isClosed: () => closed,
+      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+      getClient: () => client,
+      setClient,
+      setHandshakeState: (next: "pending" | "connected" | "failed") => {
+        handshakeState = next;
+      },
+      advanceHandshakePhase,
+      setCloseCause,
+      setLastFrameMeta,
+      logGateway,
+      logWsControl,
+    };
     if (connectionKind === "worker") {
       cleanupWorkerConnection = attachWorkerWsMessageHandler({
-        socket,
-        connId,
+        ...connectionLifecycle,
         service: workerConnectionService,
-        isStartupPending,
-        send,
-        close,
-        isClosed: () => closed,
-        clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-        getClient: () => client,
-        setClient,
-        setHandshakeState: (next) => {
-          handshakeState = next;
-        },
-        advanceHandshakePhase,
-        setCloseCause,
-        setLastFrameMeta,
-        logGateway,
-        logWsControl,
         publicAdmission: publicWorkerIngress,
       });
       return;
@@ -677,10 +689,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     }
 
     attachGatewayWsMessageHandlerOnDemand({
-      socket,
+      ...connectionLifecycle,
       upgradeReq,
       ingressAttribution,
-      connId,
       bootId: params.bootId,
       remoteAddr,
       remotePort,
@@ -700,7 +711,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       rateLimiter,
       browserRateLimiter,
       nodeReapprovalCoordinator,
-      isStartupPending,
       isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
@@ -709,22 +719,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       buildRequestContext,
       nodeLifecycleDispatch,
       refreshHealthSnapshot,
-      send,
-      close,
-      isClosed: () => closed,
-      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-      getClient: () => client,
-      setClient,
-      setHandshakeState: (next) => {
-        handshakeState = next;
-      },
-      advanceHandshakePhase,
-      setCloseCause,
-      setLastFrameMeta,
       originCheckMetrics,
-      logGateway,
       logHealth,
-      logWsControl,
     });
   });
 }

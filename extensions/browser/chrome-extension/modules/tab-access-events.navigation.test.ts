@@ -72,20 +72,17 @@ async function createNavigationHarness(
   if (proveAttachment) {
     await policy.requireTab(7, attachmentEpoch);
   }
-  const attachedTabs = new Set([7]);
-  const attachedAccessEpochs = new Map<number, TabAccessEpoch>([[7, attachmentEpoch]]);
+  const attachments = new Map<number, { epoch: TabAccessEpoch }>([[7, { epoch: attachmentEpoch }]]);
   const send = vi.fn<(message: Record<string, unknown>) => void>();
   const detachDebugger = vi.fn(async (tabId: number) => {
-    attachedTabs.delete(tabId);
-    attachedAccessEpochs.delete(tabId);
+    attachments.delete(tabId);
   });
   registerTabAccessEvents({
     chromeApi,
     accessReady: Promise.resolve(),
     policy,
-    attachedTabs,
-    attachedAccessEpochs,
-    attachingTabs: new Map(),
+    attachments,
+    nativeDetached: (tabId: number) => attachments.delete(tabId),
     send,
     scheduleTabsSync() {},
     detachDebugger,
@@ -97,7 +94,7 @@ async function createNavigationHarness(
     chromeApi,
     policy,
     attachmentEpoch,
-    attachedAccessEpochs,
+    attachments,
     send,
     detachDebugger,
     setTab(update: Partial<BrowserTabSnapshot>) {
@@ -110,7 +107,7 @@ async function createNavigationHarness(
         7,
         epoch,
         { url: "about:blank" },
-        () => attachedAccessEpochs.get(7),
+        () => attachments.get(7)?.epoch,
         () => true,
         async (method) => {
           if (method === "Page.getFrameTree") {
@@ -383,7 +380,7 @@ describe("Chrome navigation event access", () => {
           harness.policy.invalidateTab(7);
           break;
         case "forged epoch copy":
-          harness.attachedAccessEpochs.set(7, { ...harness.attachmentEpoch });
+          harness.attachments.set(7, { epoch: { ...harness.attachmentEpoch } });
           break;
         case "detached tab":
           harness.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
@@ -401,6 +398,49 @@ describe("Chrome navigation event access", () => {
     }
     // Events observed without authority must never replay after an async lookup.
     expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it("preserves commands admitted after a newer tab event when an older group lookup completes", async () => {
+    const harness = await createNavigationHarness("selected");
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let observed = () => {};
+    const started = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
+    const get = harness.chromeApi.tabs.get.getMockImplementation()!;
+    harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
+      observed();
+      await pending;
+      return await get(tabId);
+    });
+
+    harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
+    await started;
+    try {
+      harness.update({ url: "https://destination.example/" });
+      await vi.waitFor(() => {
+        harness.send.mockClear();
+        harness.emitNavigation();
+        expect(harness.send).toHaveBeenCalledTimes(navigationEvents.length);
+      });
+      const commandEpoch = harness.policy.capture(7, "Page.navigate");
+      await expect(harness.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({ id: 7 });
+      release();
+      // Drain the superseded lookup without introducing a second Chrome event.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await expect(harness.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({
+        id: 7,
+        url: "https://destination.example/",
+      });
+      expect(harness.detachDebugger).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
   });
 
   it("does not retain file permission across a recreated extension policy", async () => {

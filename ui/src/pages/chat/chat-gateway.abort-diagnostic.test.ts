@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
-import type { ChatState } from "./chat-history.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 type AbortDiagnosticState = ChatState & {
   chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;

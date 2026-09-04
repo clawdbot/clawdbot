@@ -1,5 +1,4 @@
 // Applies parsed directives to session state, config overrides, and run options.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -11,6 +10,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -182,6 +182,7 @@ export async function applyInlineDirectiveOverrides(params: {
     typing,
     effectiveModelDirective,
   } = params;
+  const requesterProfileId = readSessionInputProfileId(ctx);
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
@@ -194,6 +195,7 @@ export async function applyInlineDirectiveOverrides(params: {
   };
   const createDirectiveHandlingBase = () => ({
     cfg,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,
@@ -301,6 +303,7 @@ export async function applyInlineDirectiveOverrides(params: {
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
       agentId,
+      requesterProfileId,
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
@@ -407,6 +410,7 @@ export async function applyInlineDirectiveOverrides(params: {
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
         agentId,
+        requesterProfileId,
       });
       if (modelResolution.errorText) {
         typing.cleanup();
@@ -447,6 +451,7 @@ export async function applyInlineDirectiveOverrides(params: {
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
+          validateAuthProfileSelection: modelResolution.validateAuthProfileSelection,
           ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           request: {
             ...modelSelection,
@@ -503,6 +508,7 @@ export async function applyInlineDirectiveOverrides(params: {
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
+        agentId,
         command,
         sessionEntry: targetSessionEntry,
         sessionKey,
@@ -561,7 +567,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         modelId: model,
         config: cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId,
         sessionKey,
       }).runtime,
       config: cfg,

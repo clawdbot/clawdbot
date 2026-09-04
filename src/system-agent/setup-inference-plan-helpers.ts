@@ -238,6 +238,9 @@ export function projectSetupTargetModelMetadata(
 export function resolveSetupAgentRuntimeId(
   kind: ActivateSetupInferenceParams["kind"],
 ): string | undefined {
+  if (kind === "claude-cli") {
+    return "claude-cli";
+  }
   if (kind === "codex-cli") {
     return "codex";
   }

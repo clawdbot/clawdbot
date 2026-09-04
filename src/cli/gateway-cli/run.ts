@@ -1,15 +1,11 @@
 // Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
-import { TLSSocket } from "node:tls";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -27,6 +23,11 @@ import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../con
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import {
+  createConfiguredGatewayLocalProbe,
+  normalizeGatewayHttpProbeHost,
+  requestGatewayLocalHttpProbe,
+} from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -60,8 +61,6 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
-import { findOpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
-import { findOpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -80,13 +79,13 @@ import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
+import { resolveGatewayStartupMaintenanceReason } from "./startup-maintenance.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
-const GATEWAY_HEALTH_PROBE_MAX_RESPONSE_CHARS = 1024;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type Awaitable<T> = T | Promise<T>;
@@ -352,7 +351,7 @@ async function resolveGatewayRunShellEnvFallbackPlan(
   const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
   return {
     enabled: true,
-    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
+    expectedKeys: resolveShellEnvExpectedKeys(planEnv, cfg),
     timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
   };
 }
@@ -480,18 +479,12 @@ function resolveGatewayLockErrorExitCode(err: unknown): number {
 function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||
     isTailscaleRouteOwnershipConflictError(err) ||
-    findOpenClawAgentDatabaseMediaMigrationRequiredError(err) ||
-    findOpenClawStateDatabaseSchemaMigrationRequiredError(err)
+    resolveGatewayStartupMaintenanceReason(err)
     ? EXIT_CONFIG_ERROR
     : 1;
 }
 
-function normalizeGatewayHealthProbeHost(host: string): string {
-  if (host === "0.0.0.0" || host === "::") {
-    return "127.0.0.1";
-  }
-  return host;
-}
+const normalizeGatewayHealthProbeHost = normalizeGatewayHttpProbeHost;
 
 function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
   if (statusCode !== 200) {
@@ -512,92 +505,23 @@ async function probeGatewayHealthz(params: {
   tlsFingerprint?: string;
 }): Promise<boolean> {
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS;
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (healthy: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(deadline);
-      resolve(healthy);
-    };
-    const request = params.tlsFingerprint ? httpsRequest : httpRequest;
-    const req = request(
-      {
-        hostname: normalizeGatewayHealthProbeHost(params.host),
-        port: params.port,
-        path: "/healthz",
-        method: "GET",
-        timeout: timeoutMs,
-        // The probe sends no credentials. Pin the configured certificate below
-        // before accepting a self-signed gateway's liveness payload.
-        ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
-      },
-      (res) => {
-        if (params.tlsFingerprint) {
-          const peerFingerprint =
-            res.socket instanceof TLSSocket
-              ? normalizeTlsFingerprint(res.socket.getPeerCertificate().fingerprint256 ?? "")
-              : "";
-          if (peerFingerprint !== normalizeTlsFingerprint(params.tlsFingerprint)) {
-            res.resume();
-            finish(false);
-            return;
-          }
-        }
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => {
-          if (body.length + chunk.length > GATEWAY_HEALTH_PROBE_MAX_RESPONSE_CHARS) {
-            res.destroy();
-            finish(false);
-            return;
-          }
-          body += chunk;
-        });
-        res.once("end", () => {
-          finish(isGatewayHealthzResponse(res.statusCode, body));
-        });
-        res.once("error", () => {
-          finish(false);
-        });
-      },
-    );
-    const deadline = setTimeout(() => {
-      req.destroy();
-      finish(false);
-    }, timeoutMs);
-    req.once("timeout", () => {
-      req.destroy();
-      finish(false);
-    });
-    req.once("error", () => {
-      finish(false);
-    });
-    req.end();
+  const result = await requestGatewayLocalHttpProbe({
+    ...params,
+    pathname: "/healthz",
+    timeoutMs,
   });
+  return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
 }
 
 function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
-  const tlsConfig = cfg.gateway?.tls;
-  let tlsFingerprint: string | undefined;
+  const probe = createConfiguredGatewayLocalProbe(cfg);
   return async (params: { host: string; port: number }): Promise<boolean> => {
-    if (tlsConfig?.enabled !== true) {
-      return await probeGatewayHealthz(params);
-    }
-    if (!tlsFingerprint) {
-      const gatewayTls = await import("../../infra/tls/gateway.js")
-        .then(({ loadGatewayTlsRuntime }) =>
-          loadGatewayTlsRuntime({ ...tlsConfig, autoGenerate: false }),
-        )
-        .catch(() => undefined);
-      tlsFingerprint = gatewayTls?.fingerprintSha256;
-    }
-    if (!tlsFingerprint) {
-      return false;
-    }
-    return await probeGatewayHealthz({ ...params, tlsFingerprint });
+    const result = await probe.requestHttp({
+      ...params,
+      pathname: "/healthz",
+      timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
+    });
+    return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
   };
 }
 
@@ -1127,23 +1051,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       : "start";
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
+  let tryRecoverChannelAutostartSuppression: (() => boolean) | undefined;
   let activeBootId: string | undefined;
-  const tryRecoverChannelAutostartSuppression = () => {
-    const decision = inspectGatewayCrashLoopBreaker(process.env);
-    // The current safe-mode boot remains an open row until the full window has
-    // drained. Requiring zero prevents a near-expiry history from restoring
-    // channels before this process itself has proven stable for the whole window.
-    if (!decision.recovered || decision.uncleanBoots !== 0) {
-      return false;
-    }
-    const recoveredBootId = recordGatewayCrashLoopRecovery(activeBootId, process.env);
-    if (!recoveredBootId) {
-      return false;
-    }
-    activeBootId = recoveredBootId;
-    gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
-    return true;
-  };
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
@@ -1159,6 +1068,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     // row exists for Doctor to reconcile after it repairs the schema.
     activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
     channelAutostartSuppression = undefined;
+    tryRecoverChannelAutostartSuppression = undefined;
     if (crashLoopDecision.recovered) {
       gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
     }
@@ -1169,6 +1079,26 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
       `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${formatGatewayCrashLoopManualChannelStartHint()}`;
     channelAutostartSuppression = { reason: "crash-loop-breaker", message };
+    const suppressedBootId = activeBootId;
+    tryRecoverChannelAutostartSuppression = () => {
+      if (!suppressedBootId || activeBootId !== suppressedBootId) {
+        return false;
+      }
+      const decision = inspectGatewayCrashLoopBreaker(process.env);
+      // The current safe-mode boot remains an open row until the full window has
+      // drained. Requiring zero prevents a near-expiry history from restoring
+      // channels before this process itself has proven stable for the whole window.
+      if (!decision.recovered || decision.uncleanBoots !== 0) {
+        return false;
+      }
+      const recoveredBootId = recordGatewayCrashLoopRecovery(suppressedBootId, process.env);
+      if (!recoveredBootId || activeBootId !== suppressedBootId) {
+        return false;
+      }
+      activeBootId = recoveredBootId;
+      gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
+      return true;
+    };
     gatewayLog.error(message);
     if (crashLoopDecision.shouldWriteStabilityBundle) {
       await maybeWriteGatewayStartupFailureBundle(
@@ -1189,7 +1119,12 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
-      start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
+      start: async ({
+        processStartedAt,
+        startupStartedAt,
+        requestHotReloadRecovery,
+        hostLifecycle,
+      } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -1197,7 +1132,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
+          ...(processStartedAt !== undefined ? { processStartedAt } : {}),
           startupStartedAt,
+          hostLifecycle,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
@@ -1249,35 +1186,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     if (isInvalidConfigError(err)) {
       throw err;
     }
-    if (findOpenClawAgentDatabaseMediaMigrationRequiredError(err)) {
-      try {
-        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
-        if (await parkCurrentLaunchAgentForMaintenance()) {
-          gatewayLog.error(
-            `gateway requires offline media migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
-          );
-        }
-      } catch (parkError) {
-        gatewayLog.error(
-          `failed to park the managed LaunchAgent after migration-required startup: ${formatErrorMessage(parkError)}`,
-        );
-      }
-    }
-    if (findOpenClawStateDatabaseSchemaMigrationRequiredError(err)) {
-      try {
-        const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
-        if (await parkCurrentLaunchAgentForMaintenance()) {
-          gatewayLog.error(
-            `gateway requires state database schema migration; parked the managed LaunchAgent. Run ${formatCliCommand("openclaw doctor --fix")} to repair and restart it.`,
-          );
-        }
-      } catch (parkError) {
-        gatewayLog.error(
-          `failed to park the managed LaunchAgent after state schema migration-required startup: ${formatErrorMessage(parkError)}`,
-        );
-      }
-    }
     await maybeWriteGatewayStartupFailureBundle(err);
+    if (resolveGatewayStartupMaintenanceReason(err)) {
+      throw err;
+    }
     defaultRuntime.error(
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
@@ -1291,6 +1203,11 @@ export async function runGatewayCommand(
   hooks: GatewayRunRuntimeHooks = {},
   recoveryDeps?: InvalidConfigRecoveryDeps,
 ) {
+  if (opts.taskSupervisor) {
+    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
+    await runWindowsGatewayTaskSupervisor();
+    return;
+  }
   try {
     await runGatewayCommandOnce(opts, hooks);
   } catch (error) {

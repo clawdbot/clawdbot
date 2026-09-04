@@ -878,6 +878,12 @@
       ],
       "openclaw/plugin-sdk/gateway-config-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/gateway-config-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/model-catalog-pricing": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/model-catalog-pricing.d.ts"
+      ],
+      "openclaw/plugin-sdk/blob-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/blob-runtime.d.ts"
       ]
     }
   }

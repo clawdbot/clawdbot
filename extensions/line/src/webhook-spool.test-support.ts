@@ -31,6 +31,7 @@ export function createEvent(params: {
   messageId?: string;
   userId?: string;
   text?: string;
+  mode?: webhook.EventMode;
 }): webhook.Event {
   const event: webhook.MessageEvent = {
     type: "message",
@@ -40,10 +41,10 @@ export function createEvent(params: {
       text: params.text ?? "hello",
       quoteToken: "test-quote-token-placeholder",
     },
-    replyToken: "test-reply-token",
+    ...(params.mode === "standby" ? {} : { replyToken: "test-reply-token" }),
     timestamp: Date.now(),
     source: { type: "user", userId: params.userId ?? "user-1" },
-    mode: "active",
+    mode: params.mode ?? "active",
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: false },
   };

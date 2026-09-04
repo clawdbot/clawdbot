@@ -56,14 +56,12 @@ async function invokeMemorySearch(params: unknown, cfg: OpenClawConfig) {
 function createStubManager() {
   return {
     search: vi.fn(async (): Promise<MemorySearchResult[]> => []),
-    status: vi.fn(
-      (): MemoryProviderStatus => ({
-        backend: "builtin" as const,
-        provider: "none",
-        dirty: false,
-        custom: { searchMode: "fts-only" },
-      }),
-    ),
+    status: vi.fn((): MemoryProviderStatus => ({
+      backend: "builtin" as const,
+      provider: "none",
+      dirty: false,
+      custom: { searchMode: "fts-only" },
+    })),
     close: vi.fn(async () => undefined),
   };
 }
@@ -259,13 +257,39 @@ describe("memory.search gateway method", () => {
     );
   });
 
-  it("qualifies results from a dirty index", async () => {
+  it("does not qualify routine pending index work as a search failure", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
     manager.status.mockReturnValue({
       backend: "builtin",
       provider: "none",
       dirty: true,
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+      },
+      undefined,
+    );
+  });
+
+  it("qualifies results after automatic indexing fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      lastSyncError: "embedding request timed out",
       custom: { searchMode: "fts-only" },
     });
     getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
@@ -280,22 +304,32 @@ describe("memory.search gateway method", () => {
         searchMode: "fts-only",
         results: [],
         stale: true,
-        warning: "Memory index is dirty. Search results may be incomplete.",
-        action: "Run: openclaw memory status --index --agent main",
+        warning:
+          "Memory index is stale: embedding request timed out. Search results may be incomplete.",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
       },
       undefined,
     );
   });
 
-  it("does not qualify results while session-only catch-up is in progress", async () => {
+  it("preserves OpenClaw index ownership and configured provider intent", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
     manager.status.mockReturnValue({
       backend: "builtin",
       provider: "none",
+      requestedProvider: "openai",
       dirty: true,
-      pendingSyncSources: ["sessions"],
-      custom: { searchMode: "fts-only" },
+      custom: {
+        searchMode: "fts-only",
+        indexIdentity: {
+          status: "mismatched",
+          reason: "index provenance classifier changed",
+          code: "provenance_version",
+          owner: "openclaw",
+        },
+      },
     });
     getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
 
@@ -308,6 +342,11 @@ describe("memory.search gateway method", () => {
         provider: "none",
         searchMode: "fts-only",
         results: [],
+        stale: true,
+        warning:
+          "Memory index is stale: index provenance classifier changed (owner: openclaw, code: provenance_version). Search results may be incomplete.",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
       },
       undefined,
     );

@@ -44,9 +44,15 @@ export OPENCLAW_AUTH_PROFILE_SECRET_DIR="$HOME/.openclaw-auth-profile-secrets"
 ```
 
 Override those paths before setup if your VM uses a dedicated data disk. Keep
-all three directories in backups. The auth-profile secret directory contains
-the local encryption key for OAuth-backed auth profile token material, so it
-must persist but remain separate from `OPENCLAW_CONFIG_DIR`.
+all three directories in backups. Current OAuth token material is stored as
+plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and
+ID-token values. Treat the config directory and its backups or copies as
+credentials.
+
+The auth-profile secret directory contains only the local key used to recover
+legacy encrypted OAuth sidecar credentials. It must persist for that recovery
+path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
+current SQLite rows or protect a state-only backup or copy.
 
 ## Run the maintained Docker setup
 
@@ -80,8 +86,8 @@ from the provider guide.
 ## Bake required binaries into the image
 
 Installing binaries inside a running container is a trap: anything installed
-at runtime is lost on restart. Bake every external binary a skill needs into
-the image at build time.
+at runtime is lost when the container is recreated. Bake every external binary
+a skill needs into the image at build time.
 
 The examples below cover three binaries only, alphabetically:
 
@@ -160,11 +166,36 @@ truth. Long-lived state must survive restarts, rebuilds, and reboots.
 | Agent workspace      | `/home/node/.openclaw/workspace/`   | Workspace mount             | Code and agent artifacts                                                                   |
 | Channel credentials  | `/home/node/.openclaw/credentials/` | Config mount                | Channel credential material                                                                |
 | Model auth profiles  | `/home/node/.openclaw/`             | Config mount                | Shared `state/openclaw.sqlite`; agent-local `agents/<agentId>/agent/openclaw-agent.sqlite` |
-| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Encryption key material; keep separate from the config mount                               |
+| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Legacy encrypted-sidecar recovery key; does not protect current SQLite rows                |
 | Skill state          | `/home/node/.openclaw/skills/`      | Config mount                | Skill-level state                                                                          |
 | External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                                |
 | Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                                          |
 | Docker container     | Ephemeral                           | Restartable                 | Safe to replace after mounted state is verified                                            |
+
+## Common pitfall: never file-bind `openclaw.json`
+
+Mount the gateway state **as a directory**, never as a single file. The repo
+`docker-compose.yml` already does this:
+
+```yaml
+# Supported: whole state directory.
+- "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+```
+
+```yaml
+# Unsupported: single-file bind. Do not use this.
+# - "./openclaw.json:/home/node/.openclaw/openclaw.json"
+```
+
+A single-file bind remains attached to the mounted file. Normal OpenClaw
+configuration saves replace `openclaw.json`. If a host-side save replaces the
+source of a single-file bind after the container starts, the container can keep
+reading the old file while the host path points to the new one. The host-side
+save can succeed without updating what the container sees. An edit that writes
+to the same file in place does not cause this divergence.
+
+Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
+inside that directory.
 
 ## Update OpenClaw
 
@@ -185,4 +216,3 @@ for recovery when a migration cannot complete automatically.
 
 - [Docker](/install/docker)
 - [Podman](/install/podman)
-- [ClawDock](/install/clawdock)

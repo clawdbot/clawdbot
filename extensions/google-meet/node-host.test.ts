@@ -13,6 +13,16 @@ type MockChild = EventEmitter & {
   stdin?: EventEmitter & { write: ReturnType<typeof vi.fn> };
 };
 
+function finishMockChild(child: MockChild, code: number | null, signal: NodeJS.Signals | null) {
+  child.exitCode = code;
+  child.signalCode = signal;
+  child.emit("exit", code, signal);
+  // Capture EOF follows exit; otherwise a finite fake waits for the real drain deadline.
+  child.stdout?.emit("end");
+  child.stdout?.emit("close");
+  child.emit("close", code, signal);
+}
+
 const children: MockChild[] = [];
 let handleGoogleMeetNodeHostCommand: typeof import("./src/node-host.js").handleGoogleMeetNodeHostCommand;
 let originalPlatform: NodeJS.Platform;
@@ -65,8 +75,7 @@ vi.mock("node:child_process", async (importOriginal) => {
           return true;
         }
         queueMicrotask(() => {
-          child.signalCode = resolvedSignal;
-          child.emit("exit", null, resolvedSignal);
+          finishMockChild(child, null, resolvedSignal);
         });
         return true;
       });
@@ -366,8 +375,7 @@ describe("google-meet node host bridge sessions", () => {
     expect(typeof activeList.bridges[0]?.createdAt).toBe("string");
 
     if (children[1]) {
-      children[1].exitCode = 0;
-      children[1].emit("exit", 0, null);
+      finishMockChild(children[1], 0, null);
     }
 
     const afterExitList = await invokeNodeHostJson(listParams);

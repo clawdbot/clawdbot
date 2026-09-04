@@ -31,9 +31,10 @@ WebSocket model APIs, build a [provider plugin](/plugins/sdk-provider-plugins).
 
 ## What core still owns
 
-Before a harness is selected, OpenClaw has already resolved:
+For ordinary concrete-model turns, OpenClaw prepares these inputs before
+calling `runAttempt`:
 
-- provider and model
+- provider and model, including discovery and concrete request parameters
 - runtime auth state, unless the harness declares that it owns auth bootstrap
 - thinking level and context budget
 - the OpenClaw transcript/session file
@@ -42,7 +43,11 @@ Before a harness is selected, OpenClaw has already resolved:
 - model fallback and live model switching policy
 
 A harness runs a prepared attempt; it does not pick providers, replace channel
-delivery, or silently switch models.
+delivery, or silently switch models. Locking a concrete model chat does not skip
+model discovery, auth preparation, or Responses parameters. An explicit
+`pluginOwnerId` owns session control; a later producing `agentHarnessId` is an
+observation, not a native ownership claim. Bound native sessions use the separate
+ownership contract below.
 
 ### Native tool-policy enforcement
 
@@ -74,15 +79,89 @@ rejected by core and are not covered by this declaration.
 
 By default, core resolves provider credentials before calling a harness. A
 trusted harness that can authenticate through its own native runtime may set
-`authBootstrap: "harness"` on its static `AgentHarness` registration. Core then
-skips its generic provider credential bootstrap and missing-credential failure
-for every attempt claimed by that harness.
+`authBootstrap: "harness"` on its static `AgentHarness` registration. Core can
+then delegate credential bootstrap instead of rejecting a route merely because
+generic provider credentials are absent. Prepared route and explicit profile
+requirements still apply.
 
 Core still forwards a compatible, explicitly selected or ordered OpenClaw auth
 profile and its scoped store when one exists. The harness must resolve that
 profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
+This static bootstrap capability is distinct from ownership of an already-bound
+native session's model and connection.
+
+### Bound native session ownership
+
+The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
+sessionKey, assertCurrent })` callback reports private binding ownership. Core
+calls it only on the exact pinned harness after validating the durable session
+identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
+`sessionKey` are optional. Return synchronously:
+
+- `{ model: "native", auth: "native" }` when the binding owns both model selection
+  and authentication through its native connection.
+- `{ model: "native", auth: "host" }` when it owns model selection but still needs
+  host auth preparation.
+- `undefined` when no matching native-model binding exists. For a validated
+  native harness pin, an implemented callback returning `undefined` is an
+  unavailable-owner error: fail visibly, without ordinary discovery or a fresh
+  native thread. Reattach the original native session before retrying.
+
+Omitting the callback preserves normal concrete model/auth preparation for
+third-party harnesses. Concrete plugin-owned chats never query it; a runtime
+request or model lock alone cannot establish native ownership. Paired-node
+Codex sessions use their owning node handler; a missing local binding must not
+turn a misrouted continuation into a local run.
+
+Include `modelRef: { provider, model }` only when both values are known from that
+same binding. Do not infer a missing value from outer configuration, credentials,
+or usage. Host-auth ownership requires this tuple before credential preparation;
+native-auth pending branches may omit it until their native owner selects a model.
+
+Read the existing private binding synchronously. Call `assertCurrent()` before
+and after the read. Do not discover models, reclaim a generation, start a client,
+authenticate, or mutate the binding. The assertion expires when the callback
+returns. This ownership fact is neither execution authority nor credential readiness.
+
+The Codex implementation reports native model ownership from `preserveNativeModel`.
+It reports native auth only for the separate private supervision connection;
+preserving a model on a managed connection leaves auth with the host. A
+native-auth binding uses its verified connection instead of testing irrelevant
+outer model route/auth metadata or forwarding a host profile. Native connection
+policy still applies. Explicit per-run provider stream parameters are rejected
+rather than dropped; use a concrete model chat to apply them.
+
+For host-auth bindings, the actual native tuple controls model, auth, and request
+transport preparation. Explicit profile locks remain strict; automatic profile
+rotation remains available. Authored settings on that tuple and explicit per-run
+parameters must be supported by the pinned runtime, not silently dropped or
+redirected through another runtime.
+
+Core binds steering and pending-question authority to the final prepared model
+route, using the reply's original caller-policy snapshot for both its fingerprint
+and incoming-message projection. Native ownership or model-selection hooks do not
+replace that snapshot or authorize a different caller.
+
+Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
+`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
+credential, or retained capability. Revalidate during preflight, under the binding
+lease, and against the ready thread after resume before inference. A changed host-auth
+tuple rejects stale prepared credentials while retaining the newly observed binding.
+Native-auth connections may follow their native owner's model changes. Missing or
+changed ownership must never start a replacement thread.
+
+The same synchronous read supplies session rows, events, and session-scoped chat
+metadata. Native-auth metadata omits inapplicable host availability fields only for
+the session's rendered model; it does not set `available: true` or modify the shared
+catalog. Pending native branches may still show a configured placeholder until a
+native tuple exists.
+
+An attempt may report `runtimeModelSelection: { provider, model }` from its ready
+native thread. Core accepts this diagnostic only for a prepared native-owned run.
+It records the selected model separately from response/billing attribution, so a
+host finalizer's model does not overwrite the native session's selection.
 
 ### Verified setup runtime artifacts
 
@@ -126,6 +205,14 @@ snapshot. Preserve the selected attempt's profile, API, and fallback restriction
 when materializing credentials; this keeps control calls on the same billing
 route as agent turns.
 
+For tools that support both standalone and Gateway execution,
+`hasGatewayToolRoutingContext()` from
+`openclaw/plugin-sdk/agent-harness-runtime` reports whether the caller or hosting
+process owns Gateway routing. Local embedded RPC contexts do not count as a
+running Gateway. A caller's or ambient binding remains present after its
+Gateway retires, so dispatch can reject the stale call. The helper does not
+check credentials, grant authority, or guarantee that the Gateway is available.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.
@@ -151,6 +238,20 @@ When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
 own the full set; an explicit or persisted plugin selection fails closed unless
 the plugin declares the lossless OpenClaw fallback.
+
+### Per-turn temporal context
+
+Native harnesses that own their model prompt can use `buildTemporalContextText`
+from `openclaw/plugin-sdk/agent-harness-runtime`. It renders the same current
+local date and time zone as the built-in OpenClaw runtime. It uses
+`agents.defaults.userTimezone` when configured and the host zone otherwise.
+
+Call it for each turn, after the final tool surface is known. Pass
+`sessionStatusAvailable: true` only when that exact surface includes
+`session_status`; this keeps the exact-time hint out of prompts where the tool
+is unavailable. Carry the result through the native runtime's existing
+per-turn application or developer context instead of appending it to stable
+thread instructions.
 
 ## Register a harness
 
@@ -213,6 +314,14 @@ Harness-authorized calls may resolve only the supplied prepared
 route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
+
+When supplied, call `params.assertCurrent()` after preparation awaits and
+immediately before each credential handoff, inference request, or process start,
+including retries.
+It revalidates the caller's live authority and expires when the completion ends.
+A thrown assertion ends execution; do not treat it as a credential failure or
+retry with another profile. Continue to honor `abortSignal`; cleanup must remain
+available after authority expires.
 
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
@@ -289,14 +398,19 @@ checks. Plugins opt into the scope but never name the harness owner on the
 error. Do not use harness scope after a request or tool action may have produced
 side effects.
 
-Configured runtime policy remains authoritative about the desired runtime. A
-locked session `agentHarnessId` keeps ownership of its native transcript
-while route/auth preparation is still pending. Neither makes an incompatible
-route compatible: once prepared facts exist, the selected or pinned harness
-must support them, declare the exact-request OpenClaw fallback, or the run fails
-closed. Next-turn metadata uses the same registered support decision and retains
-its model/provider/session source. An unlocked historical producer does not pin
-the next turn. Projection never loads a harness or reads credentials.
+Configured runtime policy remains authoritative about the desired runtime.
+A durable native harness pin retains its transcript owner; an observed harness
+on a plugin-owned concrete model chat does not become a pin, even when model
+selection is locked. For concrete-model execution, neither a request nor a pin
+makes an incompatible route compatible: the harness must support the prepared
+facts, declare the exact-request OpenClaw fallback, or fail closed.
+[Bound native session ownership](/plugins/sdk-agent-harness#bound-native-session-ownership) separately
+identifies sessions whose verified native connection owns model and auth, so
+unrelated outer route metadata does not replace that connection.
+
+Next-turn metadata uses the registered support decision and retains its
+model/provider/session source. Historical producer observations do not pin the
+next turn. Projection never loads a harness or reads credentials.
 Prepared status is explicit: missing `runtimePolicy` stays undeclared instead
 of being inferred from whichever transport fields happen to be present.
 When harness-owned auth leaves multiple physical routes unresolved, the
@@ -326,8 +440,8 @@ The bundled Codex plugin follows this pattern:
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
-- auth: synthetic provider availability, because the Codex harness owns the
-  native Codex login/session
+- auth: prepared OpenAI route/profile policy for concrete requests; verified
+  native-auth bindings use their native connection
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
@@ -347,6 +461,52 @@ The Codex plugin enforces the minimum app-server version documented in
 [Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
 blocks older, malformed, or unversioned servers. Admission permits startup to
 continue; it does not prove later runtime or capability operations will succeed.
+
+### Guarded active-run injection
+
+Backends that accept source-bound controls advertise `messageInjectionV2` on
+their active-run handle. The capability is contextually typed by
+`setActiveEmbeddedRun` from `openclaw/plugin-sdk/agent-harness-runtime`; its type
+can also be derived from that function's handle parameter. It requires
+`version: 2`, `isAvailable()`, and
+`queueMessage(text, options, assertCurrent, authorityKind)`.
+The required third argument is a host-owned assertion for that individual
+injection, not a run ID, fingerprint, or diagnostic identity. The required
+`authorityKind` is `"run"` for ordinary input or `"source-bound"` for input
+whose source lifetime also constrains dispatch. Both retain the backing-run
+check; a source-bound input must never be relabeled as ordinary input.
+
+Invoke `assertCurrent()` alongside the backend's own live-run check after
+awaited preparation and immediately before queue mutation or provider dispatch.
+The host normalizes false or throwing source authority into rejection and keeps
+that injection revoked even if the source later appears current again. Plugins
+invoke the supplied assertion; they do not reconstruct its authority. Batched
+backends retain and revalidate each item's assertion, including before retries;
+omit revoked items without cancelling independently accepted work or poisoning
+later authorized controls.
+
+Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
+and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
+require the same assertion and authority kind. Carry it through question registration and persistence to the final
+claim or cancellation boundary. Do not implement V2 by checking only before
+calling an SDK method that itself awaits before dispatch. If the sink cannot
+enforce the assertion, leave V2 unsupported.
+
+The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
+`setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Unscoped V1 injection retains its existing behavior. Source-bound controls
+require V2 and reject visibly before queue or I/O when only V1 is available;
+they never fall back to an unchecked V1 callback. Existing deprecation windows
+are unchanged.
+
+Copilot remains V1-only: `@github/copilot-sdk` 1.0.11 awaits trace-context and
+JSON-RPC writer preparation after `send` entry without a final-dispatch guard.
+Scoped steering therefore fails before its queue, question claim, or provider
+I/O; ordinary unscoped injection is unchanged. Check status, cancel the run, or
+start a new explicit request instead. Update the runtime when guarded injection
+is supported. Once upstream supplies a final-dispatch assertion, migrate
+Copilot to V2 and remove this internal V1 reliance; do not add an unchecked
+fallback or shorten the shipped API's deprecation window.
 
 ### Tool-result middleware
 
@@ -368,6 +528,11 @@ middleware, but new result transforms should use the runtime-neutral API. The
 embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
 removed; embedded tool-result transforms must use runtime-neutral middleware.
 
+Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
+before middleware transforms its result, and carry it into the attempt result.
+This confirms a final external source reply and does not depend on destination
+arguments or transcript mirrors.
+
 ### Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use
@@ -379,6 +544,23 @@ different model. `planning-only` requires the harness's explicit `planText`
 field; OpenClaw does not infer it from assistant prose. The helper
 intentionally leaves prompt errors, in-flight turns, and intentional silent
 replies such as `NO_REPLY` unclassified.
+
+### Live output-token usage
+
+Call `params.hostCapabilities.reportOutputTokens?.(outputTokens)` once per
+completed model response. Pass that response's output tokens, not a
+thread-lifetime or cumulative attempt total. Deduplicate native response
+notifications before calling it.
+
+The host binds this callback to the admitted run, adds the response to its
+lifecycle-scoped total, and publishes the cumulative `usage` event globally and
+through `params.onAgentEvent`. Do not emit a second usage event. Retries share
+the same run total; run cleanup releases it. A closed or superseded capability
+rejects reporting. Invalid or nonpositive counts do not emit an event.
+
+The capability is optional for compatibility with older hosts; when absent,
+live output-token reporting is unavailable. Keep last-response context
+snapshots and persisted billing usage separate from this live counter.
 
 ### Agent-end side effects
 
@@ -408,6 +590,17 @@ choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
 
+OpenClaw's own blocking question tools — `ask_user`, and a `secrets` request —
+are a separate case. They register a Gateway question and then wait, and the
+prompt that lets a person answer it is published by whatever runs the tool. A
+harness whose tools go through the embedded tool lifecycle gets that publication
+from its tool-start handler. A harness that dispatches tools itself passes
+`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+builds a tool surface — a side thread is its own such path: `send` is the run's
+`onToolResult`, and `messageChannel` is the conversation the prompt would appear
+in. Leave it out and the question is registered but never shown, so the turn
+waits out its whole timeout and then reports that nobody answered.
+
 For schema-backed forms and literal URL confirmation, use the
 `agentHarnessStructuredInput` runtime surface from the same subpath. It
 snapshots bounded own data without invoking accessors, compiles supported
@@ -416,6 +609,83 @@ secret-input, timeout, and cancellation fencing. Harnesses keep ownership of
 their protocol envelope and must pass the exact turn signal and active-owner
 check; `run(...)` returns an answered, declined, cancelled, or unsupported
 outcome for the adapter to translate.
+
+Pass the original prepared attempt, including its exact `hostCapabilities`
+object, as `delivery` when using the native question helpers. Core captures the
+question creator's prepared caller policy and lifetime before any steering handle
+is published. Copies of the capability object do not carry that binding. Built-in
+tools capture their creation scope; CLI native questions retain the original
+caller policy before tool-cap translation. The answering turn's model choice or
+queued operation never replaces the question creator's authority.
+
+Plain-text channel answers use this creator binding even when the runtime cannot
+accept ordinary steering. Missing, closed, or mismatched creator authority produces
+a visible refusal, not a new agent turn. The incoming source and creator must
+both remain current through the final answer dispatch. Gateway-launched CLI MCP
+tools use the same original caller snapshot, bound to their exact live grant.
+Standalone attach grants have no prepared run snapshot; their questions retain
+structured question controls but do not accept ordinary channel text.
+
+Omit `gatewayCall` in `runAgentHarnessGatewayQuestion(...)` or
+`agentHarnessStructuredInput.run(...)` to use the core-owned Gateway transport.
+It carries each input's source and backing-run assertion through registration,
+persistence, connection preparation, and hello, then checks synchronously
+immediately before the resolve request is sent. A refused input releases only
+its own reservation: the question remains pending and its prompt and later
+valid input remain usable. Persistence and a local reservation are not an
+answered transition. Closure after dispatch does not make an accepted answer
+replayable. Plain-text submissions carry a fresh, bounded `resolutionId` on
+`question.resolve`; the question owner records it only when that submission commits.
+Host waiters request `includeResolutionId: true` on `question.waitAnswer` and use
+that receipt to recover a lost response using the question waiter's existing
+deadline, not a separate shorter timer. Another actor's answer, even identical
+text, does not establish consumption of this input. A definitive resolve rejection
+releases the input immediately; a cancelled or expired waiter proves non-consumption.
+
+If the receipt is missing, rejected, or still pending when the waiter settles,
+the host records the input as unconfirmed and non-replayable rather than sending
+it through ordinary steering again. This is routing ownership, not proof that the
+answer committed. Channel replies, Gateway chat, Talk, and the TUI surface the
+uncertainty without starting another turn or cancelling independently accepted
+backing work. Notice delivery or source adoption failure does not release the
+input for replay. Backing-run abort, timeout, and error cleanup retain independent
+authority.
+
+Custom transports must preserve these request and response fields for lost-response
+recovery. A legacy receipt-less response remains unconfirmed; it does not prove
+that another submission answered the question. `resolutionId` is an opaque
+1–128-character correlation value, not permission
+to resolve a question or reuse closed-source authority. Ordinary waiters omit
+`includeResolutionId` (default `false`) and receive the existing response shape;
+question records, lookup results, and broadcast events never gain the receipt.
+The receipt is transient question-lifecycle state, not a durable record or migration.
+
+The shipped `AgentHarnessQuestionGatewayCall` function type is unchanged.
+Legacy function overrides remain valid for ordinary, unscoped input, including
+run-lifetime checks. Source-bound input with only a legacy callback fails before
+input persistence or resolution I/O. Function arity or the presence of a callback
+does not establish guarded transport support.
+
+A custom guarded transport instead supplies an explicit object:
+
+```typescript
+type QuestionDispatcher = Exclude<
+  Parameters<typeof agentHarnessStructuredInput.run>[0]["gatewayCall"],
+  AgentHarnessQuestionGatewayCall | undefined
+>;
+```
+
+That object has `version: 2` and `call(request)`. The request contains `method`,
+`options` (`timeoutMs?`), `params?`, `signal?`, and a required `authority`:
+`{ kind: "unscoped" }` or `{ kind: "source-bound", assertCurrent }`.
+The source-bound variant requires a synchronous assertion. Invoke it after all
+awaited preparation and immediately before every dispatch or retry, without an
+intervening await. Never substitute an observer or an after-response check.
+When delegating to `callGatewayTool`, forward the protected assertion in its
+existing extra bag as
+`dispatchAuthority: { version: 2, kind: "source-bound", assertCurrent }`.
+The same bag accepts `kind: "run"` for run-only assertions. These are local code
+contracts, not Gateway wire fields, operator settings, or new SDK exports.
 
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
@@ -467,6 +737,27 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+After the last policy filter, schema quarantine, and native registration
+intersection, call `finalizeAgentToolAvailability(tools, options?)` from
+`openclaw/plugin-sdk/agent-harness-runtime` before snapshotting tool definitions.
+It returns a new array containing the same tool objects and updates only
+host-owned dependent affordances, such as collector spawning when its native
+result reader is callable. It does not add tools, change profiles, replace
+executors, or rebind authorization and approval wrappers.
+
+Pass `options.toolExecutionAllow` when a run retains schemas for tools it cannot
+execute. Omission uses the supplied tool set; an empty list permits no execution.
+The optional synchronous `options.onPrepared(tool)` observer identifies definitions
+whose owner participated, so a harness can refresh their cached schemas and
+prompt text without changing unrelated definitions. Reapply finalization after
+later filtering, and keep the existing attempt-lifecycle guards on every tool.
+Finalization does not update declarations already registered in a native runtime.
+Preserve native-owned catalog bytes and fingerprints; current executor guards
+still reject unavailable modes. New host-owned declarations use the harness's
+existing catalog-registration lifecycle.
+OpenClaw Code Mode's joined `agents.run()` path retains internal waiting; this
+helper does not make raw collector calls available without a native result reader.
 
 ### Paired-device execution
 
@@ -653,6 +944,24 @@ The OpenClaw transcript remains the compatibility layer for:
 - switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
 
+For user-message mirrors, use
+`restorePreparedUserTurnOperationalMetaForRuntime({ runtimeMessage, preparedMessage })`
+from `openclaw/plugin-sdk/agent-harness-runtime`. Pass an independent, trusted
+snapshot of the host-prepared input as `preparedMessage`. Clone `content` and
+selected-mention metadata before hooks that can mutate them in place, and keep
+that snapshot unchanged.
+
+The helper restores operational metadata on user messages without replacing
+native or hook-rewritten content. Non-user runtime messages are returned unchanged.
+Human mentions survive only when the entire `content` value exactly matches the
+prepared snapshot; changed text must not inherit the old selections.
+
+Restored metadata neither authorizes actions nor proves a fresh transcript append.
+After the canonical append, pass its committed message, anchor, and actual
+`{ appended }` result to `userTurnTranscriptRecorder.markRuntimePersisted(...)`.
+Only `appended: true` can trigger an original-input commit notification; an
+idempotent history match must report `false`.
+
 Store native bindings in plugin state. Implement `reset(...)` for an in-place
 session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the
@@ -758,14 +1067,35 @@ rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
 projects only the narrow result. It is defense in depth after native isolation,
 not a substitute for removing the native capability surface.
 
-A projection-backed harness must put the complete context on
-`settledAttempt.settledTurnFinalizationContext` with
-`source: "openclaw-transcript"`. It must capture the active branch after the
-settled turn is mirrored, prove that the current prompt and every current tool
-call/result are present through that boundary, and freeze the resulting message
-array before returning the attempt. The finalizer must reject a missing,
+A projection-backed harness must capture the active branch after the settled
+turn is mirrored and prove that the current prompt and every current tool
+call/result are present through that boundary. Put the frozen evidence on
+`settledAttempt.settledTurnFinalizationContext` as one of:
+
+- `source: "openclaw-transcript"` with `messages`: the complete application
+  transcript through the boundary.
+- `source: "harness"` with `data`: an immutable, bounded projection interpreted
+  only by the owning harness. Core passes this opaque value through; the
+  finalizer must verify its own context type before using it.
+- `source: "unavailable"`: the harness permits finalization for this settled
+  turn, but safe replay evidence could not be captured. The finalizer must
+  reject this state before provider or native I/O; core can still use its
+  existing host-owned fallback without repeating tools.
+
+The unavailable state records eligibility, not validated history. Eligible
+capture failures, including missing, drifting, or oversized evidence, can reach
+that no-model fallback. Do not emit it for failures the harness excludes from
+finalization, such as authentication or usage-limit errors. Command-only
+harnesses must retain the attributed assistant tool-call entry in
+`messagesSnapshot`; the host fallback can use that settled-batch identity when
+visible-assistant fields are absent.
+
+Enforce projection limits while acquiring messages, rather than cloning the
+whole transcript before checking its size. Successful capture must finish all
+identity and source-evidence checks before returning the attempt. Do not retain
+an open transcript reader in `data`. The finalizer must reject a missing,
 unsupported, ambiguous, or oversized context. It must not truncate messages,
-drop earlier history, or describe this application transcript as exact native
+drop earlier history, or describe an application projection as exact native
 history. Harnesses that resume one restricted native session do not need this
 projection field.
 

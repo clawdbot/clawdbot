@@ -26,6 +26,7 @@ export const QuestionManagerErrorCodes = {
   ALREADY_TERMINAL: "QUESTION_ALREADY_TERMINAL",
   ID_IN_USE: "QUESTION_ID_IN_USE",
   INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
+  REQUESTER_INACTIVE: "QUESTION_REQUESTER_INACTIVE",
 } as const;
 
 type QuestionManagerErrorCode =
@@ -49,33 +50,46 @@ type QuestionManagerRequest = {
   runId?: string;
   timeoutMs: number;
   onResolved?: (event: QuestionResolvedEvent) => void;
+  isRequesterActive?: () => boolean;
+  /** Trusted handler binds the run; the manager owns expiry and terminal release. */
+  registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
 };
 
 type Waiter = {
   resolve: (result: QuestionWaitAnswerResult) => void;
   timer: ReturnType<typeof setTimeout> | null;
+  includeResolutionId: boolean;
 };
 
 type QuestionEntry = {
   record: QuestionRecord;
+  resolutionId?: string;
   expiryTimer: ReturnType<typeof setTimeout>;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   waiters: Set<Waiter>;
   onResolved?: (event: QuestionResolvedEvent) => void;
+  isRequesterActive?: () => boolean;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
+  releaseHumanInputWait?: (resolved: boolean) => void;
 };
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   timer.unref?.();
 }
 
-function waitResult(record: QuestionRecord): QuestionWaitAnswerResult {
+function waitResult(entry: QuestionEntry, includeResolutionId: boolean): QuestionWaitAnswerResult {
+  const { record, resolutionId } = entry;
   switch (record.status) {
     case "pending":
       return { status: "pending" };
     case "answered":
-      // The manager only sets status "answered" together with validated answers.
-      return { status: "answered", answers: record.answers ?? { answers: {} } };
+      // Legacy native decoders reject extra fields. Correlation is opt-in per
+      // waiter, never exposed on records/events or used as resolution authority.
+      return {
+        status: "answered",
+        answers: record.answers ?? { answers: {} },
+        ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
+      };
     case "cancelled":
       return { status: "cancelled" };
     case "expired":
@@ -98,6 +112,12 @@ export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
 
   request(params: QuestionManagerRequest): QuestionRecord {
+    if (params.isRequesterActive && !params.isRequesterActive()) {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.REQUESTER_INACTIVE,
+        "the agent run that requested this question is no longer active",
+      );
+    }
     const createdAtMs = Date.now();
     const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
     const expiresAtMs = resolveExpiresAtMsFromDurationMs(timeoutMs, { nowMs: createdAtMs });
@@ -128,9 +148,13 @@ export class QuestionManager {
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
+      isRequesterActive: params.isRequesterActive,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
+    entry.releaseHumanInputWait = params.registerHumanInputWait?.(
+      () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
+    );
     unrefTimer(entry.expiryTimer);
     return record;
   }
@@ -143,7 +167,17 @@ export class QuestionManager {
     if (entry.record.status === "pending" && entry.record.expiresAtMs <= Date.now()) {
       this.expire(id);
     }
+    if (entry.record.status === "pending" && entry.isRequesterActive?.() === false) {
+      this.cancelEntry(entry, "requester-inactive");
+    }
     return this.entries.get(id)?.record ?? null;
+  }
+
+  /** Called by the Gateway's existing authority-close observer. */
+  cancelClosedAuthorities(): void {
+    for (const id of this.entries.keys()) {
+      this.get(id);
+    }
   }
 
   list(): QuestionRecord[] {
@@ -161,6 +195,7 @@ export class QuestionManager {
 
   /** Re-enters only the still-pending question's original admitted root. */
   runPendingContinuation<T>(id: string, run: () => Promise<T>): Promise<T> | null {
+    this.get(id);
     const entry = this.entries.get(id);
     if (
       !entry?.admissionContinuation ||
@@ -172,17 +207,17 @@ export class QuestionManager {
     return entry.admissionContinuation.run(run);
   }
 
-  waitAnswer(id: string, timeoutMs?: number): Promise<QuestionWaitAnswerResult> {
-    const record = this.requireRecord(id);
-    if (record.status !== "pending") {
-      return Promise.resolve(waitResult(record));
-    }
-    const entry = this.entries.get(id);
-    if (!entry) {
-      throw this.notFound(id);
+  waitAnswer(
+    id: string,
+    timeoutMs?: number,
+    includeResolutionId = false,
+  ): Promise<QuestionWaitAnswerResult> {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
+      return Promise.resolve(waitResult(entry, includeResolutionId));
     }
     return new Promise<QuestionWaitAnswerResult>((resolve) => {
-      const waiter: Waiter = { resolve, timer: null };
+      const waiter: Waiter = { resolve, timer: null, includeResolutionId };
       entry.waiters.add(waiter);
       if (timeoutMs !== undefined) {
         waiter.timer = setTimeout(
@@ -197,9 +232,18 @@ export class QuestionManager {
     });
   }
 
-  resolve(id: string, answers: QuestionAnswers, resolvedBy?: string): QuestionResolveResult {
+  resolve(
+    id: string,
+    answers: QuestionAnswers,
+    resolvedBy?: string,
+    options?: { commit?: () => void; resolutionId?: string },
+  ): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
     const canonical = this.validateAnswers(entry.record.questions, answers);
+    // The commit, receipt, and answered transition are synchronous. Failed
+    // validation/writes must not publish a receipt; lost ACKs must not erase it.
+    options?.commit?.();
+    entry.resolutionId = options?.resolutionId;
     entry.record = {
       ...entry.record,
       status: "answered",
@@ -212,6 +256,10 @@ export class QuestionManager {
 
   cancel(id: string, resolvedBy?: string): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
+    return this.cancelEntry(entry, resolvedBy);
+  }
+
+  private cancelEntry(entry: QuestionEntry, resolvedBy?: string): QuestionResolveResult {
     entry.record = {
       ...entry.record,
       status: "cancelled",
@@ -225,6 +273,7 @@ export class QuestionManager {
   reset(): void {
     for (const entry of this.entries.values()) {
       clearTimeout(entry.expiryTimer);
+      entry.releaseHumanInputWait?.(false);
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
       if (entry.cleanupTimer) {
@@ -234,32 +283,30 @@ export class QuestionManager {
         if (waiter.timer) {
           clearTimeout(waiter.timer);
         }
-        waiter.resolve(waitResult(entry.record));
+        waiter.resolve(waitResult(entry, waiter.includeResolutionId));
       }
       entry.waiters.clear();
     }
     this.entries.clear();
   }
 
-  private requireRecord(id: string): QuestionRecord {
-    const record = this.get(id);
-    if (!record) {
-      throw this.notFound(id);
-    }
-    return record;
-  }
-
-  private requirePendingEntry(id: string): QuestionEntry {
-    const record = this.requireRecord(id);
-    if (record.status !== "pending") {
-      throw new QuestionManagerError(
-        QuestionManagerErrorCodes.ALREADY_TERMINAL,
-        `question '${id}' is already ${record.status}`,
-      );
-    }
+  private requireEntry(id: string): QuestionEntry {
+    // get() settles expiry/requester loss; its callbacks can replace the entry.
+    this.get(id);
     const entry = this.entries.get(id);
     if (!entry) {
       throw this.notFound(id);
+    }
+    return entry;
+  }
+
+  private requirePendingEntry(id: string): QuestionEntry {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.ALREADY_TERMINAL,
+        `question '${id}' is already ${entry.record.status}`,
+      );
     }
     return entry;
   }
@@ -333,14 +380,17 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): void {
     clearTimeout(entry.expiryTimer);
+    // Requester-scope loss must not refresh the still-live run's recovery clock.
+    entry.releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
+    entry.releaseHumanInputWait = undefined;
+    entry.isRequesterActive = undefined;
     entry.admissionContinuation?.release();
     entry.admissionContinuation = null;
-    const result = waitResult(entry.record);
     for (const waiter of entry.waiters) {
       if (waiter.timer) {
         clearTimeout(waiter.timer);
       }
-      waiter.resolve(result);
+      waiter.resolve(waitResult(entry, waiter.includeResolutionId));
     }
     entry.waiters.clear();
     const event = resolvedEvent(entry.record);

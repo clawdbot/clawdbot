@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter, trackWizardProgress } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -722,19 +722,23 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
+    const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi
-      .fn()
+      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({
         ok: false,
         status: "unknown",
         error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.4",
-        latencyMs: 700,
-        lines: ["Gateway: running"],
-      }) as GuidedOnboardingDeps["activate"];
+      .mockImplementationOnce(async ({ prompter: activationPrompter }) => {
+        activationPrompter!.progress("Testing your AI connection…").stop();
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.4",
+          latencyMs: 700,
+          lines: ["Gateway: running"],
+        };
+      });
     const deps = setupDeps({
       prompter,
       activate,
@@ -766,6 +770,7 @@ describe("runGuidedOnboarding", () => {
     expect(retryNotes).toContain(
       "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
     );
+    expectSettledProgress();
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -782,12 +787,16 @@ describe("runGuidedOnboarding", () => {
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const activate = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 500,
-      lines: ["Default model: openai/gpt-5.5"],
-    })) as GuidedOnboardingDeps["activate"];
+    const expectSettledProgress = trackWizardProgress(prompter);
+    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      params.prompter!.progress("Testing your AI connection…").stop();
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 500,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+    });
     const deps = setupDeps({
       prompter,
       detect,
@@ -798,7 +807,7 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
+      expect.objectContaining({ allowedChoices: new Set(["apiKey", "custom-api-key"]) }),
     );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -814,6 +823,7 @@ describe("runGuidedOnboarding", () => {
       enteredValue,
     );
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
+    expectSettledProgress();
   });
 
   it("offers detected OAuth methods through the grouped provider picker", async () => {
@@ -857,7 +867,7 @@ describe("runGuidedOnboarding", () => {
         includeSkip: true,
         assistantVisibleOnly: false,
         workspaceDir: "/tmp/work",
-        allowedChoices: new Set(["openai"]),
+        allowedChoices: new Set(["openai", "custom-api-key"]),
       }),
     );
     expect(activate).toHaveBeenCalledWith(
@@ -906,7 +916,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedChoices: new Set(["ollama"]),
+        allowedChoices: new Set(["ollama", "custom-api-key"]),
         detectedProviderIds: new Set(["ollama"]),
       }),
     );
@@ -949,46 +959,6 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
-    );
-  });
-
-  it("fails closed without opening an empty inference selector", async () => {
-    const select = vi.fn() as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-    const deps = setupDeps({
-      prompter,
-      detect: vi.fn(async () =>
-        detection({
-          candidates: [],
-          manualProviders: [],
-          recommendedInstalls: [
-            {
-              id: "ollama",
-              label: "Ollama",
-              hint: "Run open models locally",
-              website: "https://ollama.com/download",
-              icon: "https://cdn.simpleicons.org/ollama",
-            },
-          ],
-        }),
-      ),
-    });
-    const runtime = makeRuntime();
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
-
-    expect(select).toHaveBeenCalledTimes(2);
-    expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Ollama — Run open models locally\n  https://ollama.com/download",
-      "Recommended installs",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("No inference option is available yet"),
-      "AI access",
     );
   });
 
@@ -1058,7 +1028,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({}, runtime, deps);
+    await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();

@@ -307,6 +307,89 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("matrix");
   });
 
+  it.each(
+    [
+      { name: "preferred owner", entries: { plus: { enabled: true } }, deny: [], expected: "plus" },
+      {
+        name: "disabled replacement",
+        entries: { plus: { enabled: false }, core: { enabled: true } },
+        deny: [],
+        expected: "core",
+      },
+      {
+        name: "denied replacement",
+        entries: { plus: { enabled: true }, core: { enabled: true } },
+        deny: ["plus"],
+        expected: "core",
+      },
+      {
+        name: "explicit dual selection",
+        entries: { plus: { enabled: true }, core: { enabled: true } },
+        deny: [],
+        expected: "first",
+      },
+      {
+        name: "closer-origin owner",
+        entries: { plus: { enabled: true }, core: { enabled: true } },
+        deny: [],
+        coreOrigin: "workspace",
+        expected: "plus",
+      },
+      {
+        name: "ineligible workspace replacement",
+        entries: { core: { enabled: true } },
+        deny: [],
+        plusOrigin: "workspace",
+        expected: "core",
+      },
+    ].flatMap((scenario) => (["plus", "core"] as const).map((first) => ({ ...scenario, first }))),
+  )(
+    "publishes the $name schema and sensitive hints with $first first",
+    ({ entries, deny, expected, first, coreOrigin = "config", plusOrigin = "config" }) => {
+      mockLoadConfig.mockReturnValue({
+        ...explicitMainRoster(),
+        plugins: { entries, deny },
+        channels: { proofchat: { address: "local" } },
+      });
+      const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: order.map((id) => ({
+          id,
+          origin: id === "core" ? coreOrigin : plusOrigin,
+          channels: ["proofchat"],
+          providers: [],
+          cliBackends: [],
+          channelConfigs: {
+            proofchat: {
+              label: id,
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+                additionalProperties: false,
+              },
+              uiHints: { [id]: { sensitive: true } },
+            },
+          },
+        })),
+      });
+      const owner = expected === "first" ? first : expected;
+      const result = loadGatewayRuntimeConfigSchema();
+      expect(result.uiHints["channels.proofchat"].label).toBe(owner);
+      expect(result.uiHints[`channels.proofchat.${owner}`]?.sensitive).toBe(true);
+      expect(result.schema).toMatchObject({
+        properties: {
+          channels: {
+            properties: {
+              proofchat: { properties: { [owner]: { type: "string" } } },
+            },
+          },
+        },
+      });
+    },
+  );
+
   it("projects strict heartbeat visibility for external channels and their accounts", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],

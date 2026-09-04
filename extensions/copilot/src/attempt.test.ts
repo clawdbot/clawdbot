@@ -12,6 +12,7 @@ import {
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
+  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessV2,
   type AgentMessage,
   type AnyAgentTool,
@@ -66,6 +67,53 @@ const gatewayQuestionMock = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  type QuestionDispatcher = Exclude<
+    Parameters<typeof actual.runAgentHarnessGatewayQuestion>[0]["gatewayCall"],
+    AgentHarnessQuestionGatewayCall | undefined
+  >;
+  const questionDispatcher: QuestionDispatcher = {
+    version: 2,
+    call: async ({ method, params: rawParams, signal, authority }) => {
+      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+      const id = params?.id ?? "";
+      // No awaited preparation: this is the synthetic transport's dispatch boundary.
+      signal?.throwIfAborted();
+      if (authority.kind === "source-bound") {
+        authority.assertCurrent();
+      }
+      if (method === "question.request") {
+        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+      }
+      if (method === "question.waitAnswer") {
+        if (gatewayQuestionMock.waiters.has(id)) {
+          throw new Error("question fixture already has a waiter");
+        }
+        return await new Promise<unknown>((resolve, reject) => {
+          const cleanup = () => {
+            signal?.removeEventListener("abort", onAbort);
+            gatewayQuestionMock.waiters.delete(id);
+          };
+          const onAbort = () => {
+            cleanup();
+            reject(toLintErrorObject(signal?.reason, "question wait aborted"));
+          };
+          gatewayQuestionMock.waiters.set(id, (value) => {
+            cleanup();
+            resolve(value);
+          });
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      if (method === "question.resolve") {
+        const result = params?.cancel
+          ? { status: "cancelled" as const }
+          : { status: "answered" as const, answers: params?.answers };
+        gatewayQuestionMock.waiters.get(id)?.(result);
+        return result;
+      }
+      throw new Error(`unexpected question fixture RPC: ${method}`);
+    },
+  };
   return {
     ...actual,
     embeddedAgentLog: { ...actual.embeddedAgentLog, warn: gatewayQuestionMock.warn },
@@ -85,26 +133,16 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       gatewayQuestionMock.claimPendingAgentQuestionAnswer
         ? await gatewayQuestionMock.claimPendingAgentQuestionAnswer(...args)
         : await actual.claimPendingAgentQuestionAnswer(...args),
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          gatewayQuestionMock.waiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        gatewayQuestionMock.waiters.get(params?.id ?? "")?.(result);
-        gatewayQuestionMock.waiters.delete(params?.id ?? "");
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
+    // Keep the real question owner; only its public transport override is synthetic.
+    runAgentHarnessGatewayQuestion: (
+      params: Parameters<typeof actual.runAgentHarnessGatewayQuestion>[0],
+    ) =>
+      actual.runAgentHarnessGatewayQuestion({
+        ...params,
+        gatewayCall: params.gatewayCall === undefined ? questionDispatcher : params.gatewayCall,
+      }),
+    callGatewayTool: async (method: string) => {
+      throw new Error(`unexpected direct SDK Gateway call: ${method}`);
     },
     setActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.setActiveEmbeddedRun>
@@ -714,6 +752,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
+    const params = makeParams({
+      agentAccountId: "account-a",
+      sandboxSessionKey: "agent:agent-1:policy",
+    });
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",
       appendContext: "Finish with the current test status.",
@@ -746,7 +788,7 @@ describe("runCopilotAttempt", () => {
       return createStubToolBridge();
     });
 
-    await runCopilotAttempt(makeParams(), {
+    await runCopilotAttempt(params, {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -754,7 +796,12 @@ describe("runCopilotAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        accountId: "account-a",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     const cfg = sdk.createSession.mock.calls[0]?.[0] as {
       systemMessage?: { content?: string };
@@ -773,7 +820,11 @@ describe("runCopilotAttempt", () => {
         provider: "github-copilot",
         runId: "run-1",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -781,11 +832,11 @@ describe("runCopilotAttempt", () => {
         model: "gpt-4o",
         provider: "github-copilot",
       }),
-      expect.objectContaining({ runId: "run-1" }),
+      expect.objectContaining({ runId: "run-1", sessionKey: params.sessionKey }),
     );
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),
-      expect.objectContaining({ sessionId: "session-1" }),
+      expect.objectContaining({ sessionId: "session-1", sessionKey: params.sessionKey }),
     );
     expect(afterToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -793,7 +844,11 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
   });
 
@@ -821,7 +876,7 @@ describe("runCopilotAttempt", () => {
       });
     });
 
-    const attempt = runCopilotAttempt(makeParams(), {
+    const attempt = runCopilotAttempt(makeParams({ agentAccountId: "account-a" }), {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -849,7 +904,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -857,7 +912,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
@@ -1872,11 +1927,34 @@ describe("runCopilotAttempt", () => {
     expect(capturedParams).toBe(params);
   });
 
-  it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
+  it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(
-      async (input: { onYieldDetected?: (message?: string, acknowledgment?: string) => void }) => {
+      async (input: {
+        onToolCompleted?: (completion: {
+          args: Record<string, unknown>;
+          result: unknown;
+          startedAt: number;
+          toolCallId: string;
+          toolName: string;
+        }) => void | Promise<void>;
+        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
+      }) => {
+        await input.onToolCompleted?.({
+          args: { task: "review" },
+          result: {
+            details: {
+              status: "accepted",
+              runId: "run-copilot-child",
+              childSessionKey: "agent:main:subagent:copilot-child",
+              expectsCompletionMessage: true,
+            },
+          },
+          startedAt: Date.now(),
+          toolCallId: "spawn-1",
+          toolName: "sessions_spawn",
+        });
         // Simulate a wrapped tool invoking sessions_yield before the
         // attempt settles. The bridge is responsible for notifying the
         // caller via onYieldDetected so the final result can carry the
@@ -1894,6 +1972,13 @@ describe("runCopilotAttempt", () => {
 
     expect(result.yieldDetected).toBe(true);
     expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
+    expect(result.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-copilot-child",
+        childSessionKey: "agent:main:subagent:copilot-child",
+        expectsCompletionMessage: true,
+      },
+    ]);
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {
@@ -2006,6 +2091,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("registers ask_user and resolves it from the active OpenClaw queue", async () => {
+    const controller = new AbortController();
     const onBlockReply = vi.fn();
     const sdk = makeFakeSdk((session, cfg) => {
       session.sendAndWait.mockImplementationOnce(async () => {
@@ -2028,28 +2114,37 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
 
     const toolAuthorityFingerprint = "ask-user-authority";
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
-      pool,
-    });
-
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
-    expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
-    await waitForEventLoopTurn();
-    expect(
-      queueAgentHarnessMessage("session-1", "2", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint,
-      }),
-    ).toBe(true);
-    const result = await attempt;
-
-    const cfg = requireCreateSessionConfig(sdk);
-    expect(typeof cfg.onUserInputRequest).toBe("function");
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ text: expect.stringContaining("Pick a mode") }),
+    const attempt = runCopilotAttempt(
+      makeParams({ abortSignal: controller.signal, onBlockReply, toolAuthorityFingerprint }),
+      { pool },
     );
-    expect(result.assistantTexts).toEqual(["selected Deep"]);
-    expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+    const settledAttempt = attempt.catch(() => undefined);
+
+    try {
+      await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+      expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
+      await waitForEventLoopTurn();
+      expect(
+        queueAgentHarnessMessage("session-1", "2", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint,
+        }),
+      ).toBe(true);
+      const result = await vi.waitFor(() => attempt);
+
+      const cfg = requireCreateSessionConfig(sdk);
+      expect(typeof cfg.onUserInputRequest).toBe("function");
+      expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ text: expect.stringContaining("Pick a mode") }),
+      );
+      expect(result.assistantTexts).toEqual(["selected Deep"]);
+      expect(requireSession(sdk).send).toHaveBeenCalledExactlyOnceWith({ prompt: "tool progress" });
+      expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+    } finally {
+      controller.abort();
+      await vi.waitFor(() => settledAttempt);
+      expect(gatewayQuestionMock.waiters.size).toBe(0);
+    }
   });
 
   it("injects active-run steering and waits for its canonical transcript receipt", async () => {
@@ -2486,7 +2581,7 @@ describe("runCopilotAttempt", () => {
       expect(content).toContain("## Skill Workshop");
       expect(content).toContain("## Delegation");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("For the current source conversation, reply normally");
+      expect(content).toContain("You can participate in the conversation throughout your work.");
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
         expect.any(Object),

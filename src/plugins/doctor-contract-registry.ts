@@ -153,6 +153,20 @@ function collectConfiguredModelProviderIds(params: {
   }
 }
 
+function hasScopedProviderAuthAlias(
+  record: PluginManifestRegistryRecord,
+  scopedProviderIds: ReadonlySet<string>,
+): boolean {
+  return Object.entries(record.providerAuthAliases ?? {}).some(([rawAlias, rawTarget]) => {
+    const target = normalizeProviderId(rawTarget);
+    return (
+      scopedProviderIds.has(normalizeProviderId(rawAlias)) &&
+      target !== "" &&
+      record.providers.some((providerId) => normalizeProviderId(providerId) === target)
+    );
+  });
+}
+
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
   const root = asNullableRecord(raw);
@@ -277,7 +291,13 @@ export function collectDoctorConfigRepairPluginIds(
 
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
+  surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
+  const declaration = record.doctorContract;
+  // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
+  if (declaration && declaration[surface] !== true) {
+    return null;
+  }
   const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
   if (!contractSource) {
     return null;
@@ -320,6 +340,9 @@ function resolvePluginDoctorManifestRecords(params: {
   });
 
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
+  const scopedProviderIds = params?.pluginIds
+    ? new Set(params.pluginIds.map(normalizeProviderId).filter(Boolean))
+    : null;
   return manifestRegistry.plugins.filter(
     (record) =>
       !(
@@ -328,7 +351,8 @@ function resolvePluginDoctorManifestRecords(params: {
         !(record.packageName && scopedPluginIds.has(record.packageName)) &&
         !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
         !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
-        !record.providers.some((providerId) => scopedPluginIds.has(providerId))
+        !record.providers.some((providerId) => scopedPluginIds.has(providerId)) &&
+        !(scopedProviderIds && hasScopedProviderAuthAlias(record, scopedProviderIds))
       ),
   );
 }
@@ -386,12 +410,7 @@ function loadPluginDoctorContractEntries(params: {
 }): PluginDoctorContractEntry[] {
   const entries: PluginDoctorContractEntry[] = [];
   for (const record of params.records) {
-    const declaration = record.doctorContract;
-    // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
-    if (declaration && declaration[params.surface] !== true) {
-      continue;
-    }
-    const entry = loadPluginDoctorContractEntry(record);
+    const entry = loadPluginDoctorContractEntry(record, params.surface);
     if (entry) {
       entries.push(entry);
     }
@@ -512,7 +531,11 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     // after its operator has disabled the owning plugin or every configured channel.
     if (
       channelOwner &&
-      !shouldIncludeChannelSetupFeatureForConfig({ plugin: record, config: params?.config })
+      !shouldIncludeChannelSetupFeatureForConfig({
+        plugin: record,
+        config: params?.config,
+        normalizedConfig,
+      })
     ) {
       continue;
     }
@@ -525,25 +548,22 @@ export function listPluginDoctorStateMigrationEntries(params?: {
       continue;
     }
 
-    const modernEntries = loadPluginDoctorContractEntries({
-      records: [record],
-      surface: "stateMigrations",
-    }).flatMap((entry) =>
-      entry.stateMigrations.map((migration) => ({
-        pluginId: entry.pluginId,
-        channelIds: record.channels,
-        trustedForDurableStores: isTrustedForDurableStores(record),
-        migration,
-      })),
-    );
-    if (modernEntries.length > 0) {
-      entries.push(...modernEntries);
+    const modern = loadPluginDoctorContractEntry(record, "stateMigrations");
+    if (modern?.stateMigrations.length) {
+      for (const migration of modern.stateMigrations) {
+        entries.push({
+          pluginId: modern.pluginId,
+          channelIds: record.channels,
+          trustedForDurableStores: isTrustedForDurableStores(record),
+          migration,
+        });
+      }
       continue;
     }
     if (record.doctorContract?.stateMigrations === true) {
       continue;
     }
-    if (!channelOwner) {
+    if (!channelOwner || record.origin === "bundled") {
       continue;
     }
 

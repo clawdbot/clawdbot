@@ -9,7 +9,7 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
+import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
@@ -77,7 +77,10 @@ export type ChannelHandler = {
     payloads: NormalizedPayloadForChannelDelivery[],
   ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
-  renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+  renderPresentation?: (
+    payload: ReplyPayload,
+    sourcePresentation?: MessagePresentation,
+  ) => Promise<ReplyPayload | null>;
   /** Resolved for the delivery's account when the adapter declares an account-aware resolver. */
   presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
   pinDeliveredMessage?: (params: {
@@ -146,6 +149,7 @@ export type ChannelHandlerParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
+  abortSignal?: AbortSignal;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
@@ -154,6 +158,8 @@ export type ChannelHandlerParams = {
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   onDirectAdapterHandoff?: () => Promise<void>;
+  /** @internal Synchronously fence authority at the final adapter invocation. */
+  assertDirectAdapterHandoff?: () => void;
   onPlatformSendDispatch?: () => Promise<void>;
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -218,6 +224,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   requireUnknownSendReconciliation?: boolean;
   /** @internal Revalidate caller authority before direct adapter code can run. */
   onDirectAdapterHandoff?: () => Promise<void>;
+  /** @internal Synchronously fence authority at the final adapter invocation. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */

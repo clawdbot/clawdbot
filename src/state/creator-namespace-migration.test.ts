@@ -11,6 +11,7 @@ import {
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -51,21 +52,20 @@ describe("creator namespace upgrades", () => {
           createdVia: "operator",
         },
       );
-      const initial = openOpenClawAgentDatabase(options);
-      initial.db.exec(
-        `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
-      );
-      initial.db
-        .exec(`UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.createdActor.source');
-        PRAGMA user_version = 18; UPDATE schema_meta SET schema_version = 18;`);
-      const backupPath = state.path("before.sqlite");
-      await backup(initial.db, backupPath);
-      const databasePath = initial.path;
+      const databasePath = openOpenClawAgentDatabase(options).path;
+      // Retire automatic maintenance before constructing the historical snapshot.
       closeOpenClawAgentDatabasesForTest();
       const db = openNodeSqliteDatabase(databasePath);
+      const backupPath = state.path("before.sqlite");
       const migrate = () =>
         ensureOpenClawAgentDatabaseSchema(db, { ...options, path: databasePath });
       try {
+        db.exec(
+          `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
+        );
+        db.exec(`UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.createdActor.source');
+        PRAGMA user_version = 18; UPDATE schema_meta SET schema_version = 18;`);
+        await backup(db, backupPath);
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
@@ -150,7 +150,9 @@ describe("creator namespace upgrades", () => {
         PRAGMA user_version = 13; UPDATE schema_meta SET schema_version = 13;`);
       closeOpenClawStateDatabaseForTest();
       const reopened = openOpenClawStateDatabase({ env: state.env });
-      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(14);
+      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
         createdActor: {
           type: "human",

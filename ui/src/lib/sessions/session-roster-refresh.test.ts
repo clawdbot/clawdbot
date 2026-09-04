@@ -11,8 +11,176 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-describe("session roster refresh completion", () => {
-  it("settles coalesced refresh callers after their snapshot without waiting for later work", async () => {
+describe("session roster refresh", () => {
+  it.each([
+    { name: "primary", scope: { agentId: " Main " } },
+    { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },
+    { name: "owner-filtered", scope: { agentId: "main", ownerId: "profile-self" } },
+    { name: "involving-me", scope: { agentId: "main", involvingMe: true } },
+    { name: "searched", scope: { agentId: "main", search: "report" } },
+    { name: "all-agents", scope: {} },
+  ])("invalidates the $name roster only for matching or unscoped events", async ({ scope }) => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => sessionsResult([], 1));
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
+      request as unknown as GatewayBrowserClient["request"],
+      { ownerId: "profile-self" },
+    );
+    try {
+      await sessions.refresh({ ...scope, force: true });
+      request.mockClear();
+      for (const agentId of ["research", "main", undefined]) {
+        emitEvent({
+          type: "event",
+          event: "session.message",
+          payload: { sessionKey: "global", agentId, hasActiveRun: false, status: "done" },
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(request).toHaveBeenCalledTimes(agentId === "research" && scope.agentId ? 0 : 1);
+        request.mockClear();
+      }
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "rows" },
+    { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "error" },
+    { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "rows" },
+    { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "error" },
+  ] as const)(
+    "keeps a queued Research replacement ahead of a later Work $weakKind after stale Work $outcome",
+    async ({ weakOptions, outcome }) => {
+      const workList = createDeferred<SessionsListResult>();
+      const researchList = createDeferred<SessionsListResult>();
+      const workResult = sessionsResult(
+        [{ key: "agent:work:main", kind: "direct", updatedAt: 1 }],
+        1,
+      );
+      const researchResult = sessionsResult(
+        [{ key: "agent:research:main", kind: "direct", updatedAt: 2 }],
+        2,
+      );
+      const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+        expect(method).toBe("sessions.list");
+        if (params?.agentId === "work") {
+          return await workList.promise;
+        }
+        if (params?.agentId === "research") {
+          return await researchList.promise;
+        }
+        throw new Error(`Unexpected refresh: ${params?.agentId}`);
+      });
+      const { sessions } = createSessionCapabilityHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+      const observed: Array<{
+        result: SessionsListResult | null;
+        error: string | null;
+      }> = [];
+      const unsubscribe = sessions.subscribe(({ result, error }) => {
+        observed.push({ result, error });
+      });
+      const workSettled = vi.fn();
+      const researchSettled = vi.fn();
+      const weakSettled = vi.fn();
+      const work = sessions.refresh({ agentId: "work", force: true }).then(workSettled);
+      const research = sessions.refresh({ agentId: "research", force: true }).then(researchSettled);
+      const weak = sessions
+        .refresh({ agentId: "work", limit: 25, force: true, ...weakOptions })
+        .then(weakSettled);
+
+      try {
+        if (outcome === "rows") {
+          workList.resolve(workResult);
+        } else {
+          workList.reject(new Error("stale Work failure"));
+        }
+        await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+        await waitForFast(() => expect(workSettled).toHaveBeenCalledOnce());
+
+        expect(researchSettled).not.toHaveBeenCalled();
+        expect(weakSettled).not.toHaveBeenCalled();
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "research" });
+        expect(
+          observed.some(({ result }) =>
+            result?.sessions.some((row) => row.key === "agent:work:main"),
+          ),
+        ).toBe(false);
+        expect(observed.some(({ error }) => error === "stale Work failure")).toBe(false);
+
+        researchList.resolve(researchResult);
+        await Promise.all([research, weak]);
+        expect(researchSettled).toHaveBeenCalledOnce();
+        expect(weakSettled).toHaveBeenCalledOnce();
+        expect(sessions.state.agentId).toBe("research");
+        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.error).toBeNull();
+      } finally {
+        workList.resolve(workResult);
+        researchList.resolve(researchResult);
+        unsubscribe();
+        sessions.dispose();
+        await Promise.all([work, research, weak]);
+      }
+    },
+  );
+
+  it.each([
+    { weakKind: "append", weakOptions: { offset: 25, append: true } },
+    { weakKind: "background", weakOptions: { backgroundHydrate: true } },
+  ] as const)(
+    "lets a foreground replacement supersede an already queued $weakKind",
+    async ({ weakOptions }) => {
+      const activeList = createDeferred<SessionsListResult>();
+      const researchList = createDeferred<SessionsListResult>();
+      const researchResult = sessionsResult(
+        [{ key: "agent:research:main", kind: "direct", updatedAt: 2 }],
+        2,
+      );
+      const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+        expect(method).toBe("sessions.list");
+        if (params?.agentId === "work") {
+          return await activeList.promise;
+        }
+        if (params?.agentId === "research") {
+          return await researchList.promise;
+        }
+        throw new Error(`Unexpected refresh: ${params?.agentId}`);
+      });
+      const { sessions } = createSessionCapabilityHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+      const active = sessions.refresh({ agentId: "work", force: true });
+      const weak = sessions.refresh({
+        agentId: "work",
+        limit: 25,
+        force: true,
+        ...weakOptions,
+      });
+      const research = sessions.refresh({ agentId: "research", force: true });
+
+      try {
+        activeList.resolve(sessionsResult([], 1));
+        await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "research" });
+
+        researchList.resolve(researchResult);
+        await Promise.all([active, weak, research]);
+        expect(sessions.state.agentId).toBe("research");
+        expect(sessions.state.result).toBe(researchResult);
+      } finally {
+        activeList.resolve(sessionsResult([], 1));
+        researchList.resolve(researchResult);
+        sessions.dispose();
+        await Promise.all([active, weak, research]);
+      }
+    },
+  );
+
+  it("settles coalesced refresh callers without waiting for a later replacement", async () => {
     const initialList = createDeferred<SessionsListResult>();
     const coalescedList = createDeferred<SessionsListResult>();
     const laterList = createDeferred<SessionsListResult>();
@@ -51,7 +219,7 @@ describe("session roster refresh completion", () => {
       coalescedList.resolve(sessionsResult([], 2));
       await waitForFast(() => expect(coalescedSettled).toHaveBeenCalledTimes(2));
 
-      expect(sessions.state.result?.ts).toBe(2);
+      expect(sessions.state.result).toBeNull();
       expect(sessions.state.loading).toBe(true);
       expect(request.mock.calls.map(([, params]) => params?.search)).toEqual([
         "initial",

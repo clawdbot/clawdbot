@@ -62,19 +62,19 @@ describe("entry root help fast path", () => {
   });
 
   it("prefers precomputed root help text when available", async () => {
-    let outputPrecomputedRootHelpTextCalls = 0;
+    const outputPrecomputedRootHelpText = vi.fn(() => true);
+    const outputRootHelp = vi.fn();
 
     const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
       env: {},
-      outputPrecomputedRootHelpText: () => {
-        outputPrecomputedRootHelpTextCalls += 1;
-        return true;
-      },
+      outputPrecomputedRootHelpText,
+      outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
     });
 
     expect(handled).toBe(true);
-    expect(outputPrecomputedRootHelpTextCalls).toBe(1);
+    expect(outputPrecomputedRootHelpText).toHaveBeenCalledOnce();
+    expect(outputRootHelp).not.toHaveBeenCalled();
   });
 
   it("renders root help without importing the full program", async () => {
@@ -126,12 +126,10 @@ describe("entry root help fast path", () => {
   it("structures root help rendering failures for JSON console style", async () => {
     const logging = await import("./logging.js");
     logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`exit ${String(code)}`);
-    }) as typeof process.exit);
+    });
 
     try {
       await expect(

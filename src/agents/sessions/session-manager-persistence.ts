@@ -5,17 +5,21 @@ import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import {
+  getOwnedSessionTranscriptInitialWriter,
+  SessionTranscriptWriterClaimReboundError,
+  type InitialSessionTranscriptWriter,
+} from "../../config/sessions/transcript-write-context.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
 
 type PersistRecordResult =
-  | string
-  | null
   | undefined
   | {
       anchor?: TranscriptEntryAnchor;
+      appended: boolean;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
     };
@@ -32,6 +36,8 @@ function requireTranscriptEventAppend(
 }
 
 export class SessionManagerPersistence extends SessionManagerCore {
+  #initialWriter: InitialSessionTranscriptWriter | undefined;
+
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
@@ -162,7 +168,24 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     const scope = this.persistenceTarget;
-    if (this.persistenceHeaderPending) {
+    const inheritedWriter = getOwnedSessionTranscriptInitialWriter({ sessionTarget: scope });
+    this.#initialWriter ??= inheritedWriter;
+    const initialWriter = this.#initialWriter;
+    if (initialWriter) {
+      initialWriter.assertActive();
+      if (!initialWriter.committedFence && inheritedWriter !== initialWriter) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      // Retained managers keep this exact owner; a later attempt cannot lend them a new claim.
+      Object.assign(
+        scope,
+        initialWriter.committedFence ?? {
+          expectedLifecycleRevision: undefined,
+          expectedWriterRunId: initialWriter.writerRunId,
+        },
+      );
+    }
+    if (this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)) {
       if (
         !ensureSessionEntrySync(scope, {
           sessionId: scope.sessionId,
@@ -171,6 +194,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ) {
         throw new Error("Session transcript header was not persisted");
       }
+      initialWriter?.assertActive();
+      if (initialWriter?.committedFence) {
+        Object.assign(scope, initialWriter.committedFence);
+      }
+    }
+    if (this.persistenceHeaderPending) {
       const header = this.fileEntries[0];
       if (!header || header.type !== "session") {
         throw new Error("Session transcript header was not persisted");
@@ -225,6 +254,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
+    // Carry the canonical storage bytes even when adopting a context-excluded row.
+    entry.message = result.message;
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
@@ -242,6 +273,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         return {
           adoptedMessageId: result.messageId,
           anchor: result.anchor,
+          appended: result.appended,
           effectiveParentId: result.effectiveParentId ?? null,
         };
       }
@@ -256,11 +288,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
-    // appendEntry owns this JSON copy. Cache the final storage projection: a
-    // second credential mask can differ from the guard's diagnostic hint.
-    entry.message = result.message;
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
+      appended: result.appended,
       effectiveParentId: result.effectiveParentId,
     };
   }

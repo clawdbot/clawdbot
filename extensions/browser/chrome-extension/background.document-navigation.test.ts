@@ -11,13 +11,13 @@ import {
 const originalUrl = "https://example.com/existing";
 const blankResult = { frameId: "root", loaderId: "blank-loader" };
 
-async function setup() {
+async function setup(mode: "all" | "selected" = "selected") {
   const h = await loadBackground({
     storedConfig: {
       relayUrl: "ws://127.0.0.1:18797/extension",
       token: TEST_RELAY_KEY,
       authVersion: 2,
-      accessMode: "selected",
+      accessMode: mode,
     },
     initialTabs: [
       { id: 7, url: originalUrl, groupId: 7, windowId: 1 },
@@ -70,6 +70,37 @@ afterEach(async () => {
 });
 
 describe("commanded existing document navigation", () => {
+  it.each(["all", "selected"] as const)(
+    "does not admit an old %s navigation through a replacement native attachment",
+    async (mode) => {
+      const h = await setup(mode);
+      const access = createDeferred<void>();
+      releases.push(() => access.resolve());
+      const get = h.tabsGet.getMockImplementation()!;
+      let held = false;
+      h.tabsGet.mockImplementationOnce(async (id) => {
+        const tab = await get(id);
+        held = true;
+        await access.promise;
+        return tab;
+      });
+      h.native(async () => {
+        h.commitBlank();
+        return blankResult;
+      });
+      const navigating = h.navigate();
+      await vi.waitFor(() => expect(held).toBe(true));
+      expect(await h.request({ type: "detach", tabId: 7 })).toMatchObject({ type: "result" });
+      expect(await h.request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
+      access.resolve();
+      expect.soft(await navigating).toMatchObject({ type: "error" });
+      expect.soft(h.debuggerSendCommand).not.toHaveBeenCalled();
+      expect(h.tabsRemove).not.toHaveBeenCalled();
+      expect(h.tabsUpdate).not.toHaveBeenCalled();
+      expect(await h.navigate()).toMatchObject({ type: "result", result: blankResult });
+    },
+  );
+
   it("preserves the native blank/reset/trace/return order in selected mode", async () => {
     const h = await setup();
     h.native(async () => {

@@ -25,6 +25,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkSession: ForkSession;
   let spawnSubagentDirect: SpawnSubagent;
   let createSessionsSpawnTool: typeof import("../../tools/sessions-spawn-tool.js").createSessionsSpawnTool;
+  let createAgentsWaitTool: typeof import("../../tools/agents-wait-tool.js").createAgentsWaitTool;
+  let finalizeAgentToolAvailability: typeof import("../../agent-tool-availability.js").finalizeAgentToolAvailability;
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
@@ -124,6 +126,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       .mockImplementation(sessions.upsertSessionEntryCore);
     restoreUpsert = () => upsert.mockRestore();
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
+    ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
+    ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
     decisionWork = await import("../../../audit/execution-decision-work.js");
     identityAdmission = await import("../../../audit/execution-identity-admission.js");
     callerContext = await import("../../tools/gateway-caller-context.js");
@@ -351,6 +355,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         agentAccountId: "default",
         agentTo: "channel:123",
       });
+      const wait = createAgentsWaitTool({ config, agentSessionKey: parentKey, agentId: "main" });
+      finalizeAgentToolAvailability([tool, wait]);
       const clearSink = decisionWork.configureExecutionDecisionWorkSink((item) => {
         work.push(decisionWork.parseExecutionDecisionWork(item));
         return true;
@@ -519,6 +525,88 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       if (stage === "collector") {
         expect(completeCollectorLaunchCleanup).toHaveBeenCalledWith(result.runId);
       }
+    },
+  );
+
+  it.each(["no replacement", "session id", "lifecycle revision"] as const)(
+    "cleans up the committed fork after source closure with %s",
+    async (replacement) => {
+      let active = true;
+      let childKey: string | undefined;
+      let successor: SessionEntry | undefined;
+      let successorHistory: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> = [];
+      const rollback = vi.fn();
+      const parentScope = {
+        agentId: "main",
+        sessionKey: parentKey,
+        sessionId: parentId,
+        storePath,
+      };
+      const parentBefore = sessions.loadSessionEntry(parentScope);
+      const parentHistory = await sessions.loadTranscriptEvents(parentScope);
+      prepareSubagentSpawn.mockImplementation(
+        async ({ childSessionKey }: { childSessionKey: string }) => {
+          // The existing fork fixture proves real copied history before this source closes.
+          const entry = expectDefined(forkedEntry, "committed fork entry");
+          childKey = childSessionKey;
+          if (replacement !== "no replacement") {
+            const scope = { agentId: "main", sessionKey: childSessionKey, storePath };
+            await sessions.replaceSessionEntry(scope, {
+              ...entry,
+              ...(replacement === "session id"
+                ? { sessionId: "replacement-session" }
+                : { lifecycleRevision: "replacement-revision" }),
+            });
+            const current = expectDefined(sessions.loadSessionEntry(scope), "replacement entry");
+            const successorScope = { ...scope, sessionId: current.sessionId };
+            await sessions.appendTranscriptMessage(successorScope, {
+              message: { role: "user", content: "replacement work" },
+            });
+            successor = sessions.loadSessionEntry(scope);
+            successorHistory = await sessions.loadTranscriptEvents(successorScope);
+          }
+          active = false;
+          return { rollback };
+        },
+      );
+      const tool = createSessionsSpawnTool({ config, agentSessionKey: parentKey });
+      const result = await callerContext.withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: parentKey, receiptAuthority: () => active },
+        () =>
+          tool.execute("closed-fork-source", { task: "inspect parent history", context: "fork" }),
+      );
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: "tool invocation authority is no longer active",
+      });
+      expect(registerSubagentRun).not.toHaveBeenCalled();
+      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+      expect(rollback).toHaveBeenCalledOnce();
+      const childSessionKey = expectDefined(childKey, "prepared child key");
+      const entry = expectDefined(forkedEntry, "committed fork entry");
+      expect(dispatch).toHaveBeenCalledWith(
+        "sessions.delete",
+        expect.objectContaining({
+          key: childSessionKey,
+          expectedSessionId: entry.sessionId,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+        }),
+        expect.anything(),
+      );
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+      ).toEqual(successor);
+      expect(
+        await sessions.loadTranscriptEvents({
+          agentId: "main",
+          sessionKey: childSessionKey,
+          sessionId: successor?.sessionId ?? entry.sessionId,
+          storePath,
+        }),
+      ).toEqual(successorHistory);
+      expect(sessions.loadSessionEntry(parentScope)).toEqual(parentBefore);
+      expect(await sessions.loadTranscriptEvents(parentScope)).toEqual(parentHistory);
     },
   );
 

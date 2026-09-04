@@ -108,13 +108,13 @@ export function buildStatusUpdateSurface(params: {
 }
 
 /** Formats missing dashboard URLs as disabled instead of leaking empty/null into status rows. */
-export function formatStatusDashboardValue(value: string | null | undefined): string {
+function formatStatusDashboardValue(value: string | null | undefined): string {
   const trimmed = normalizeOptionalString(value);
   return trimmed && trimmed.length > 0 ? trimmed : "disabled";
 }
 
 /** Formats Tailscale exposure in a compact, warning-aware status row value. */
-export function formatStatusTailscaleValue(params: {
+function formatStatusTailscaleValue(params: {
   tailscaleMode: string;
   dnsName?: string | null;
   httpsUrl?: string | null;
@@ -157,7 +157,7 @@ export function formatStatusTailscaleValue(params: {
 }
 
 /** Formats launchd/systemd service state into one row-friendly string. */
-export function formatStatusServiceValue(params: StatusManagedService): string {
+function formatStatusServiceValue(params: StatusManagedService): string {
   const inspectionDetail =
     params.loadState?.status === "unknown"
       ? params.loadState.detail
@@ -186,7 +186,7 @@ export function formatStatusServiceValue(params: StatusManagedService): string {
 }
 
 /** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */
-export function resolveStatusDashboardUrl(params: {
+function resolveStatusDashboardUrl(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
 }): string | null {
   if (!(params.cfg.gateway?.controlUi?.enabled ?? true)) {
@@ -202,7 +202,7 @@ export function resolveStatusDashboardUrl(params: {
 }
 
 /** Builds the ordered overview rows shared by status command variants. */
-export function buildStatusOverviewRows(params: {
+function buildStatusOverviewRows(params: {
   prefixRows?: StatusOverviewRow[];
   dashboardValue: string;
   tailscaleValue: string;
@@ -342,7 +342,7 @@ export function buildStatusOverviewSurfaceRows(params: {
 }
 
 /** Returns which gateway auth material was actually used for the probe. */
-export function formatGatewayAuthUsed(
+function formatGatewayAuthUsed(
   auth: {
     token?: string;
     password?: string;
@@ -363,7 +363,7 @@ export function formatGatewayAuthUsed(
 }
 
 /** Formats gateway self metadata returned by the health endpoint. */
-export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
+function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
   return gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
     ? [
         gatewaySelf.host ? gatewaySelf.host : null,
@@ -377,7 +377,7 @@ export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string
 }
 
 /** Builds gateway target, reachability, auth, and mode strings for text status output. */
-export function buildGatewayStatusSummaryParts(params: {
+function buildGatewayStatusSummaryParts(params: {
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
   gatewayConnection: StatusGatewayConnection;
@@ -417,7 +417,7 @@ export function buildGatewayStatusSummaryParts(params: {
 }
 
 /** Builds gateway/dashboard/service values for overview rows. */
-export function buildStatusGatewaySurfaceValues(params: {
+function buildStatusGatewaySurfaceValues(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
   advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   gatewayMode: "local" | "remote";

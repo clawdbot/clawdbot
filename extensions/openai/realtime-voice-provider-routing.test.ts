@@ -1,5 +1,6 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -461,6 +462,35 @@ describe("OpenAI realtime voice provider routing", () => {
     });
   });
 
+  it.each([
+    { name: "OAuth", hostClaim: true, broker: true, auth: "oauth", supported: true },
+    { name: "Platform", hostClaim: true, broker: true, auth: "api_key", supported: true },
+    { name: "older host", hostClaim: false, broker: true, auth: "oauth", supported: false },
+    { name: "missing broker", hostClaim: true, broker: false, auth: "oauth", supported: false },
+    { name: "missing auth", hostClaim: true, broker: true, auth: "none", supported: false },
+  ])("negotiates native Gateway control with $name", ({ hostClaim, broker, auth, supported }) => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes(auth) === true,
+    );
+    const fixture = createQuicksilverBrowserBrokerFixture();
+    const provider = buildOpenAIRealtimeVoiceProvider(
+      broker ? { quicksilverBrowserSessionBroker: fixture.broker } : undefined,
+    );
+    const capabilities = readInternalRealtimeVoiceProviderApi(
+      provider,
+    ).resolveBrowserSessionCapabilities({
+      cfg: {},
+      providerConfig: { model: OPENAI_GPT_LIVE_MODELS[0] },
+      ...(hostClaim ? { clientControl: { owner: "gateway" as const } } : {}),
+    });
+    expect(capabilities.supportsGatewayControl === true).toBe(supported);
+    expect(capabilities.handlesAgentConsult).toBe(true);
+    expect(capabilities.supportsToolCalls).toBe(false);
+    expect(fixture.createBrowserSession).not.toHaveBeenCalled();
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it("does not advertise GA Gateway control for OAuth-only browser auth", () => {
     isProviderAuthProfileConfiguredMock.mockImplementation(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
@@ -620,11 +650,14 @@ describe("OpenAI realtime voice provider routing", () => {
     });
 
     await provider.createBrowserSession?.({
-      providerConfig: {
-        apiKey: "test-api-key-platform",
-        model: "gpt-live-1",
-        speakerVoice: "cedar",
-      },
+      providerConfig: provider.resolveConfig?.({
+        cfg: {} as never,
+        rawConfig: {
+          apiKey: "test-api-key-platform",
+          model: "gpt-live-1-codex",
+          speakerVoice: "spruce",
+        },
+      }),
       instructions: "Always address the caller as Captain.",
       agentId: "voice-agent",
       workspaceDir: "/tmp/openclaw-agent-workspace",
@@ -633,7 +666,7 @@ describe("OpenAI realtime voice provider routing", () => {
     } as never);
 
     expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-live-1", voice: "cedar" }),
+      expect.objectContaining({ model: "gpt-live-1-codex", voice: "spruce" }),
       { type: "api-key", token: "test-api-key-platform" },
     );
     const quicksilverRequest = requireRecord(
@@ -649,6 +682,48 @@ describe("OpenAI realtime voice provider routing", () => {
     );
     expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
   });
+
+  it.each([
+    { configuredModel: "gpt-live-1-codex", requestedModel: "gpt-realtime-2.1", voice: "marin" },
+    { configuredModel: "gpt-realtime-2.1", requestedModel: "gpt-live-1-codex", voice: "spruce" },
+  ])(
+    "preserves the configured voice when $configuredModel is overridden by $requestedModel",
+    async ({ configuredModel, requestedModel, voice }) => {
+      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: broker,
+      });
+      const providerConfig = provider.resolveConfig?.({
+        cfg: {} as never,
+        rawConfig: {
+          model: configuredModel,
+          speakerVoice: voice,
+          apiKey: "test-api-key-platform",
+        },
+      });
+      mockRealtimeClientSecretResponse();
+
+      await provider.createBrowserSession?.({
+        providerConfig,
+        model: requestedModel,
+        agentId: "main",
+        workspaceDir: "/tmp/openclaw-agent-workspace",
+        initialItems: [],
+        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      } as never);
+
+      if (requestedModel === "gpt-live-1-codex") {
+        expect(createBrowserSession).toHaveBeenCalledWith(
+          expect.objectContaining({ model: requestedModel, voice }),
+          { type: "api-key", token: "test-api-key-platform" },
+        );
+      } else {
+        expect(requireFetchJsonBody()).toMatchObject({
+          session: { model: requestedModel, audio: { output: { voice } } },
+        });
+      }
+    },
+  );
 
   it("explains both gpt-live authentication options when neither is available", async () => {
     const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
@@ -667,15 +742,18 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(createBrowserSession).not.toHaveBeenCalled();
   });
 
-  it("normalizes provider-owned voice settings from raw provider config", () => {
+  it.each([
+    { model: "gpt-realtime-2", voice: " Verse ", expectedVoice: "verse" },
+    { model: "gpt-live-1-codex", voice: " Spruce ", expectedVoice: "spruce" },
+  ])("normalizes provider-owned voice settings for $model", ({ model, voice, expectedVoice }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
       rawConfig: {
         providers: {
           openai: {
-            model: "gpt-realtime-2",
-            voice: " Verse ",
+            model,
+            voice,
             temperature: 0.6,
             silenceDurationMs: 850,
             vadThreshold: 0.35,
@@ -686,8 +764,8 @@ describe("OpenAI realtime voice provider routing", () => {
     });
 
     expect(resolved).toEqual({
-      model: "gpt-realtime-2",
-      voice: "verse",
+      model,
+      voice: expectedVoice,
       temperature: 0.6,
       silenceDurationMs: 850,
       vadThreshold: 0.35,

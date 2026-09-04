@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 import SwiftUI
 
 struct HealthSnapshot: Codable {
@@ -90,65 +91,190 @@ final class HealthStore {
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "health")
 
-    private(set) var snapshot: HealthSnapshot?
-    private(set) var lastSuccess: Date?
-    private(set) var lastError: String?
-    private(set) var isRefreshing = false
+    private struct Output {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var snapshot: HealthSnapshot?
+        var lastSuccess: Date?
+        var lastError: String?
+    }
+
+    private final class Refresh {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var task: Task<Void, Never>?
+
+        init(revision: UInt64?) {
+            self.revision = revision
+        }
+    }
+
+    private var output: Output
+    private var activeRefresh: Refresh?
+    var snapshot: HealthSnapshot? {
+        self.sourceIsCurrent ? self.output.snapshot : nil
+    }
+
+    var lastSuccess: Date? {
+        self.sourceIsCurrent ? self.output.lastSuccess : nil
+    }
+
+    var lastError: String? {
+        self.sourceIsCurrent ? self.output.lastError : nil
+    }
+
+    var isRefreshing: Bool {
+        self.activeRefresh.map(self.refreshIsCurrent) == true
+    }
+
+    private let control: ControlChannel
+    private var gateway: GatewayConnection {
+        self.control.gateway
+    }
 
     private var loopTask: Task<Void, Never>?
+    private var eventTask: Task<Void, Never>?
     private let refreshInterval: TimeInterval = 60
 
-    private init() {
+    init(control: ControlChannel = .shared) {
+        self.control = control
+        self.output = Output(revision: control.gateway.selectedEndpointRevision)
         // Avoid background health polling in SwiftUI previews and tests.
         if !ProcessInfo.processInfo.isPreview, !ProcessInfo.processInfo.isRunningTests {
             self.start()
         }
     }
 
+    isolated deinit {
+        self.loopTask?.cancel()
+        self.eventTask?.cancel()
+        self.activeRefresh?.task?.cancel()
+    }
+
     /// Test-only escape hatch: the HealthStore is a process-wide singleton but
     /// state derivation is pure from `snapshot` + `lastError`.
     func __setSnapshotForTest(_ snapshot: HealthSnapshot?, lastError: String? = nil) {
-        self.snapshot = snapshot
-        self.lastError = lastError
+        self.output.snapshot = snapshot
+        self.output.lastError = lastError
     }
 
     func start() {
         guard self.loopTask == nil else { return }
+        GatewayPushSubscription.restartTask(task: &self.eventTask, connection: self.gateway) { [weak self] delivery in
+            self?.handle(delivery)
+        }
+        let interval = self.refreshInterval
         self.loopTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
+            repeat {
+                guard let self else { return }
                 await self.refresh()
-                try? await Task.sleep(nanoseconds: UInt64(self.refreshInterval * 1_000_000_000))
-            }
+            } while await SimpleTaskSupport.waitForNextOperation(interval: interval)
         }
     }
 
     func refresh(onDemand: Bool = false) async {
-        guard !self.isRefreshing else { return }
-        self.isRefreshing = true
-        defer { self.isRefreshing = false }
+        guard !Task.isCancelled, let task = self.beginRefresh(onDemand: onDemand) else { return }
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    private func beginRefresh(onDemand: Bool = false) -> Task<Void, Never>? {
+        self.clearReplacedSource()
+        if let refresh = self.activeRefresh, self.refreshIsCurrent(refresh) { return nil }
+        self.cancelRefresh()
+        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        self.activeRefresh = refresh
+        let task = Task<Void, Never> { [weak self] in
+            await self?.performRefresh(onDemand: onDemand, refresh: refresh)
+        }
+        refresh.task = task
+        return task
+    }
+
+    private func cancelRefresh() {
+        self.activeRefresh?.task?.cancel()
+        self.activeRefresh = nil
+    }
+
+    private func refreshIsCurrent(_ refresh: Refresh) -> Bool {
+        self.ownsRefresh(refresh) &&
+            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    }
+
+    private func ownsRefresh(_ refresh: Refresh) -> Bool {
+        self.activeRefresh === refresh && refresh.task?.isCancelled != true &&
+            refresh.revision == self.gateway.selectedEndpointRevision
+    }
+
+    private var sourceIsCurrent: Bool {
+        self.output.revision == self.gateway.selectedEndpointRevision &&
+            self.output.lease.map(self.gateway.serverLeaseMatchesCurrentRoute) != false
+    }
+
+    private func clearReplacedSource() {
+        if !self.sourceIsCurrent {
+            self.output = Output(revision: self.gateway.selectedEndpointRevision)
+        }
+    }
+
+    private func handle(_ delivery: GatewayConnection.PushDelivery) {
+        self.clearReplacedSource()
+        switch delivery.event {
+        case let .disconnected(reason):
+            // The transport finishes pending RPCs. Let that read apply its cache
+            // policy; only the current terminal receipt may report transport failure.
+            if delivery.isCurrent { self.output.lastError = reason }
+        case .push(.snapshot):
+            guard delivery.isCurrent, self.output.lease != delivery.serverLease else { return }
+            self.output.lease = delivery.serverLease
+            // The first hello belongs to an in-flight acquisition; let that read finish.
+            if let refresh = self.activeRefresh, refresh.lease == nil,
+               refresh.revision == self.output.revision
+            {
+                refresh.lease = delivery.serverLease
+                return
+            }
+            _ = self.beginRefresh()
+        case .push(.seqGap):
+            self.cancelRefresh()
+            _ = self.beginRefresh()
+        default: break
+        }
+    }
+
+    private func performRefresh(onDemand: Bool, refresh: Refresh) async {
+        defer {
+            if self.activeRefresh === refresh { self.activeRefresh = nil }
+        }
+        guard self.refreshIsCurrent(refresh) else { return }
         let previousError = self.lastError
 
         do {
-            let data = try await ControlChannel.shared.health(timeout: 15)
+            let lease = try await self.control.acquireServerLease()
+            guard self.refreshIsCurrent(refresh), self.gateway.serverLeaseMatchesCurrentState(lease) else { return }
+            refresh.lease = lease
+            self.output.lease = lease
+            let data = try await self.control.health(timeout: 15, ifCurrentServerLease: lease)
+            guard self.refreshIsCurrent(refresh) else { return }
             if let decoded = decodeHealthSnapshot(from: data) {
-                self.snapshot = decoded
-                self.lastSuccess = Date()
-                self.lastError = nil
+                self.output.snapshot = decoded
+                self.output.lastSuccess = Date()
+                self.output.lastError = nil
                 if previousError != nil {
                     Self.logger.info("health refresh recovered")
                 }
             } else {
-                self.lastError = "health output not JSON"
-                if onDemand { self.snapshot = nil }
+                self.output.lastError = "health output not JSON"
+                if onDemand { self.output.snapshot = nil }
                 if previousError != self.lastError {
                     Self.logger.warning("health refresh failed: output not JSON")
                 }
             }
         } catch {
+            guard self.ownsRefresh(refresh) else { return }
+            if onDemand { self.output.snapshot = nil }
+            guard !(error is CancellationError), self.refreshIsCurrent(refresh) else { return }
             let desc = error.localizedDescription
-            self.lastError = desc
-            if onDemand { self.snapshot = nil }
+            self.output.lastError = desc
             if previousError != desc {
                 Self.logger.error("health refresh failed \(desc, privacy: .public)")
             }

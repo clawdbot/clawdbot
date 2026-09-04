@@ -1,7 +1,36 @@
+import Foundation
 import XCTest
 @testable import OpenClawKit
 
 final class TalkDirectiveTests: XCTestCase {
+    func testResolvesNormalizedVoiceAliases() {
+        let aliases = TalkVoiceAliases.normalizedMap(AnyCodable([
+            " Reader ": " Short-ID ", "longalias1": "mapped", "zero": "0",
+            "blank": " ", " ": "ignored", "bool": false,
+            "number": NSNumber(value: 0), "null": NSNull(),
+        ]))
+
+        XCTAssertEqual(aliases, ["reader": "Short-ID", "longalias1": "mapped", "zero": "0"])
+        XCTAssertEqual(TalkVoiceAliases.resolve(" READER ", aliases: aliases), "Short-ID")
+        XCTAssertEqual(TalkVoiceAliases.resolve("short-id", aliases: aliases), "short-id")
+        XCTAssertEqual(TalkVoiceAliases.resolve("longalias1", aliases: aliases), "mapped")
+        XCTAssertEqual(TalkVoiceAliases.resolve("abcdefghij", aliases: aliases), "abcdefghij")
+        XCTAssertNil(TalkVoiceAliases.resolve("unknown", aliases: aliases))
+        XCTAssertNil(TalkVoiceAliases.resolve(nil, aliases: aliases))
+    }
+
+    func testVoiceIDsPreserveUnicodeCharacterSemantics() {
+        for voice in [
+            "声声声声声声声声声声", "١٢٣٤٥٦٧٨٩٠", "abc_def-01",
+            String(repeating: "e\u{301}", count: 10),
+        ] {
+            XCTAssertEqual(TalkVoiceAliases.resolve(voice, aliases: [:]), voice)
+        }
+        for voice in ["abcdefghi", String(repeating: "e\u{301}", count: 9), "abc def012", "😀😀😀😀😀😀😀😀😀😀"] {
+            XCTAssertNil(TalkVoiceAliases.resolve(voice, aliases: [:]))
+        }
+    }
+
     func testParsesDirectiveAndStripsLine() {
         let text = """
         {"voice":"abc123","once":true}

@@ -18,14 +18,14 @@ const expectedJob = {
 
 function runVerification(job: Record<string, unknown>) {
   const binDir = tempDirs.make("verify-full-release-producer-job-");
-  const callsPath = join(binDir, "gh-calls.json");
+  const callsPath = join(binDir, "gh-calls.argv");
   const ghPath = join(binDir, "gh");
   writeFileSync(
     ghPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-fs.writeFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(process.argv.slice(2)));
-process.stdout.write(process.env.MOCK_JOB_JSON);
+    `#!/bin/sh
+set -eu
+printf '%s\\0' "$@" > "$MOCK_GH_CALLS"
+printf '%s' "$MOCK_JOB_JSON"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -62,7 +62,7 @@ describe.skipIf(process.platform === "win32")("full release producer job verific
   it("accepts the exact completed successful producer job", () => {
     const { callsPath, result } = runVerification(expectedJob);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(callsPath, "utf8"))).toEqual([
+    expect(readFileSync(callsPath, "utf8").split("\0").slice(0, -1)).toEqual([
       "api",
       "repos/openclaw/openclaw/actions/jobs/123",
     ]);
@@ -74,7 +74,10 @@ describe.skipIf(process.platform === "win32")("full release producer job verific
     ["run ID", { run_id: 457 }, "producer run ID mismatch"],
     ["run attempt", { run_attempt: 3 }, "producer run attempt mismatch"],
     ["completed status", { status: "in_progress" }, "producer job status mismatch"],
-    ["successful conclusion", { conclusion: "failure" }, "producer job conclusion mismatch"],
+    ["failure conclusion", { conclusion: "failure" }, "producer job conclusion mismatch"],
+    ["cancelled conclusion", { conclusion: "cancelled" }, "producer job conclusion mismatch"],
+    ["timed_out conclusion", { conclusion: "timed_out" }, "producer job conclusion mismatch"],
+    ["skipped conclusion", { conclusion: "skipped" }, "producer job conclusion mismatch"],
   ])("rejects a mismatched %s", (_label, override, message) => {
     const { result } = runVerification({ ...expectedJob, ...override });
     expect(result.status).toBe(1);

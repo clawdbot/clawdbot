@@ -24,6 +24,8 @@ Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPE
 
 Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as the completion follow-up requested by a background exec task. It does not create or re-enable a recurring schedule. Use tool policy and sandboxing, rather than heartbeat cadence, to control whether those agent turns may execute commands.
 
+Targeted event wakes retain the same per-agent rate limits when recurring cadence is disabled: a 30-second minimum between event turns, and a flood guard after five starts within 60 seconds. Deferred work resumes when its guard expires. Config reloads preserve this accounting without enrolling the agent in recurring or broadcast heartbeats.
+
 Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
@@ -308,7 +310,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 
 <AccordionGroup>
   <Accordion title="Session and target routing">
-    - Heartbeats run in the agent's main session by default (`agent:<id>:<mainKey>`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
+    - Heartbeats run in the agent's main session by default (`agent:<id>:main`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
     - `session` only affects the run context; delivery is controlled by `target` and `to`.
     - The default `owner` target chooses an explicitly configured owner identity. It reuses the exact account/thread only when the session's last route is a direct chat to that owner.
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.
@@ -320,6 +322,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 
   </Accordion>
   <Accordion title="Visibility and skip behavior">
+    - If the heartbeat turn fails before the model can reply, the failure notice names the reason whenever OpenClaw itself refused the run (for example, the session's runtime is still busy in another runner). Raw provider or runtime errors stay behind the verbose failure-detail setting (`/verbose on` or `/verbose full`), as in normal chats.
     - If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
     - If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.
     - If the channel readiness check blocks an alert, OpenClaw records the non-delivery and retries the heartbeat after a one-minute grace period without consuming its cadence slot. This retry runs the heartbeat again; it does not replay the exact earlier alert. Once a send enters the durable delivery queue, that queue owns transport retries.

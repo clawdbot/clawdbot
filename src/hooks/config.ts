@@ -6,7 +6,7 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "../shared/config-eval.js";
 import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
-import type { HookEligibilityContext, HookEntry } from "./types.js";
+import type { HookEligibilityContext, HookPolicyEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -31,7 +31,7 @@ export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): bo
 }
 
 function evaluateHookRuntimeEligibility(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   hookConfig?: HookConfig;
   eligibility?: HookEligibilityContext;
@@ -58,7 +58,7 @@ function evaluateHookRuntimeEligibility(params: {
 
 /** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {

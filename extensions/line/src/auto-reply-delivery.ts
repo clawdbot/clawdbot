@@ -14,10 +14,13 @@ import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-run
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
-import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { createLineQuickReply } from "./rich-messages.js";
-import { findLineHttpError, resolveLineNonDispatchRetryable } from "./send-retry.js";
+import {
+  explainLineRefusal,
+  findLineHttpError,
+  resolveLineNonDispatchRetryable,
+} from "./send-retry.js";
 import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
@@ -275,15 +278,13 @@ export async function deliverLineAutoReply(params: {
       ? deps.chunkMarkdownText(processed.text, textLimit)
       : [];
 
-  // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
-  // other LINE media options so a reply-token video/audio is not silently
-  // downgraded to an image. Generic media stays image-only but still goes
-  // through the same validation boundary. A media build failure is partial only
-  // after another visible part lands; media-only failures remain full failures.
+  // Match the push path (outbound.ts): hand the LINE media options to the same
+  // leaf so a reply-token video/audio is not downgraded to an image. A media
+  // build failure is partial only after another visible part lands; media-only
+  // failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
   const mediaOpts: Parameters<LineAutoReplyDeps["buildMediaMessage"]>[1] = {
-    mediaKind: useLineSpecificMedia ? lineData.mediaKind : "image",
+    mediaKind: lineData.mediaKind,
     previewImageUrl: lineData.previewImageUrl,
     durationMs: lineData.durationMs,
     trackingId: lineData.trackingId,
@@ -389,10 +390,16 @@ export async function deliverLineAutoReply(params: {
 
   if (deliveryError !== undefined) {
     if (!visibleReplySent) {
-      // No user-visible content landed, so this is a full delivery failure.
-      // Throwing lets the caller surface or replace it instead of recording a
-      // successful empty reply.
-      throw toLineDeliveryError(deliveryError);
+      // Only an entirely refused delivery can replace the original failure with quota guidance.
+      const named = toLineDeliveryError(deliveryError);
+      const refusal = await explainLineRefusal({
+        error: named,
+        cfg: params.cfg,
+        accountId,
+      });
+      throw refusal.reason !== named.message
+        ? new Error(refusal.reason, { cause: deliveryError })
+        : named;
     }
     // Other visible content landed; preserve that evidence so downstream
     // recovery does not replay text the user already saw.

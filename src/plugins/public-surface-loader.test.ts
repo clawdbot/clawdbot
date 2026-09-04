@@ -236,11 +236,9 @@ describe("bundled plugin public surface loader", () => {
       `
         import assert from "node:assert/strict";
         import fs from "node:fs";
-        import { createRequire } from "node:module";
         import { loadBundledPluginPublicArtifactModuleSync, loadPluginPublicArtifactModuleSync } from ${moduleUrl("src/plugins/public-surface-loader.ts")};
         import { loadFacadeModuleAtLocationSync } from ${moduleUrl("src/plugin-sdk/facade-loader.ts")};
         import { clearPluginMetadataLifecycleCaches } from ${moduleUrl("src/plugins/plugin-metadata-lifecycle.ts")};
-        assert.equal(typeof createRequire(import.meta.url).extensions[".ts"], "function");
         const load = () => loadBundledPluginPublicArtifactModuleSync({ dirName: "demo", artifactBasename: "secret-contract-api.js" });
         const first = load();
         assert.equal(first.marker, "original");

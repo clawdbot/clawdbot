@@ -1,5 +1,6 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -13,9 +14,7 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const isDefaultInstallIdentityMock = vi.hoisted(() => vi.fn(() => true));
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
-const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
 );
@@ -103,11 +102,9 @@ vi.mock("../../config/mutate.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: isDefaultInstallIdentityMock,
-  resolveNativeServiceProfileConflict: () => null,
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   resolveGatewayPort: resolveGatewayPortMock,
-  resolveIsNixMode: resolveIsNixModeMock,
 }));
 
 vi.mock("../../config/types.secrets.js", async (importOriginal) => {
@@ -150,7 +147,8 @@ vi.mock("../../daemon/program-args.js", () => ({
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   parsePort: parsePortMock,
   createDaemonInstallActionContext: (jsonFlag: unknown) => {
     const json = Boolean(jsonFlag);
@@ -165,13 +163,6 @@ vi.mock("./shared.js", () => ({
         actionState.failed.push({ message, hints });
       },
     };
-  },
-  failIfNixDaemonInstallMode: (fail: (message: string, hints?: string[]) => void) => {
-    if (!resolveIsNixModeMock()) {
-      return false;
-    }
-    fail("Nix mode detected; service install is disabled.");
-    return true;
   },
 }));
 vi.mock("../../commands/daemon-runtime.js", () => ({
@@ -256,9 +247,8 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
-    isDefaultInstallIdentityMock.mockReturnValue(true);
+    mockSystemAccountHome();
     replaceConfigFileMock.mockReset();
-    resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
     resolveGatewayAuthMock.mockReset();
     resolveGatewayBindHostMock.mockReset();
@@ -286,7 +276,7 @@ describe("runDaemonInstall", () => {
       sourceConfig: { gateway: { mode: "local", auth: { mode: "token" } } },
     });
     resolveGatewayPortMock.mockReturnValue(18789);
-    resolveIsNixModeMock.mockReturnValue(false);
+    delete process.env.OPENCLAW_NIX_MODE;
     resolveSecretInputRefMock.mockReturnValue({ ref: undefined });
     resolveGatewayAuthMock.mockReturnValue({
       mode: "token",
@@ -314,6 +304,7 @@ describe("runDaemonInstall", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
   });
 
@@ -345,6 +336,28 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("blocks sudo-to-root systemd installs before persistent mutation", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "geteuid").mockReturnValue(0);
+    process.env.HOME = "/root";
+    process.env.USER = "root";
+    process.env.LOGNAME = "root";
+    process.env.SUDO_USER = "operator";
+    delete process.env.XDG_RUNTIME_DIR;
+    delete process.env.DBUS_SESSION_BUS_ADDRESS;
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Rerun the same command without sudo");
+    expect(actionState.failed[0]?.message).toContain("chmod go-w <path>");
+    expect(actionState.failed[0]?.message).toContain(
+      "https://docs.openclaw.ai/cli/gateway#install-identity",
+    );
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("blocks inaccessible definitions before config reads or credential generation", async () => {
     service.readDefinitionMutationCapability.mockRejectedValueOnce(new Error("secret-canary"));
     await runDaemonInstall({ json: true, force: true });
@@ -355,7 +368,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("blocks non-default install identities before inspecting host services", async () => {
-    isDefaultInstallIdentityMock.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
 
     await runDaemonInstall({ json: true });
 

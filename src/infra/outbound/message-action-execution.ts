@@ -45,9 +45,7 @@ import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -73,20 +71,12 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
-    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
-    return result;
-  }
   const authorization = params.input.messageActionAuthorization;
-  if (!authorization?.toolContext) {
+  if (result.kind === "broadcast" || !authorization?.toolContext) {
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    action: result.action,
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -99,11 +89,7 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     deliveredPayload: result.payload,
     replyToIsExplicit: params.replyToIsExplicit,
   };
-  if (
-    isReplyActionResult
-      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
-      : !isDeliveredCurrentSourceReply(mirrorParams)
-  ) {
+  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
     return result;
   }
   const payload = asResultRecord(result.payload);

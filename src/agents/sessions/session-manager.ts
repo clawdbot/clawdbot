@@ -4,14 +4,27 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import {
+  readSessionTranscriptContextMessages,
+  readSessionTranscriptModelContext,
+  validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextVersion,
+} from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
+import {
+  resolveSessionTranscriptReadFence,
+  withSessionContextAdmission,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import type {
@@ -118,6 +131,69 @@ export class SessionManager extends SessionManagerBranching {
       ...context,
       limits,
     });
+  }
+
+  /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
+  static openModelContext(
+    target: SessionTranscriptRuntimeTarget,
+    options: {
+      cwd?: string;
+      admission?: UserTurnTranscriptAdmissionReceipt;
+    } = {},
+  ): SessionManager {
+    const context = withSessionContextAdmission(target, options.admission, () =>
+      readSessionTranscriptModelContext(target),
+    );
+    return SessionManager.fromModelContextEntries(context.events, options.cwd);
+  }
+
+  /** The same detached model view, with durable transcript scanning off the event loop. */
+  static async openModelContextAsync(
+    target: SessionTranscriptRuntimeTarget,
+    options: {
+      cwd?: string;
+      admission?: UserTurnTranscriptAdmissionReceipt;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<SessionManager> {
+    const readTarget = { ...target };
+    const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
+    const admission = receipt ? { ...receipt } : undefined;
+    const context = await withSessionContextAdmission(readTarget, admission, () =>
+      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal),
+    );
+    options.signal?.throwIfAborted();
+    // Even process-local reads yield here. Admitted history may exclude later
+    // appends; unadmitted context must still match the snapshot being accepted.
+    if (admission) {
+      validateSessionTranscriptContextAdmission(readTarget, admission);
+    } else {
+      validateSessionTranscriptContextVersion(readTarget, context.version);
+    }
+    return SessionManager.fromModelContextEntries(context.events, options.cwd);
+  }
+
+  private static fromModelContextEntries(contextEntries: unknown[], cwd?: string): SessionManager {
+    // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
+    const entries = contextEntries as FileEntry[];
+    const header = entries.find((entry) => entry.type === "session");
+    if (entries.length > 0 && (!header || (header.version ?? 1) < CURRENT_SESSION_VERSION)) {
+      throw new Error(
+        "Persisted legacy session transcripts require doctor/import migration before runtime use",
+      );
+    }
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+  }
+
+  /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */
+  static readSessionContext<T>(
+    target: SessionTranscriptRuntimeTarget,
+    read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+    options: { admission?: UserTurnTranscriptAdmissionReceipt } = {},
+  ): T {
+    return withSessionContextAdmission(target, options.admission, () =>
+      readSessionTranscriptContextMessages(target, read),
+    );
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */

@@ -161,6 +161,17 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
     expectSeedModels(result.provider.models);
+    // Official public-feed snapshot, 2026-08-30; connected pricing refreshes independently.
+    expect(result.provider.models.find((model) => model.id === "gpt-5.6-sol")?.cost).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheWrite: 2.5,
+      tieredPricing: [
+        { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, range: [0, 272_000] },
+        { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5, range: [272_000] },
+      ],
+    });
     expectSeedModels(manifest.modelCatalog.providers.opencode.models);
     for (const modelId of OFFLINE_MODEL_IDS) {
       expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });

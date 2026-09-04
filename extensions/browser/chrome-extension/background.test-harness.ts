@@ -179,6 +179,16 @@ export async function loadBackground({
     }
     throw new Error("Specified native messaging host not found.");
   });
+  const debuggerGetTargetInfo = vi.fn(async (source: { tabId: number }) => ({
+    targetInfo: { targetId: `tab-${source.tabId}` },
+  }));
+  const debuggerSendCommand = vi.fn(
+    async (
+      _source: { tabId: number; sessionId?: string },
+      _method: string,
+      _params?: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> => ({}),
+  );
   let runtimeLastError: { message?: string } | undefined;
   const chromeMock = {
     extension: { isAllowedFileSchemeAccess: vi.fn(async () => fileAccessAllowed) },
@@ -219,18 +229,19 @@ export async function loadBackground({
         ),
       },
       attach: vi.fn(async (_source: { tabId: number }, _version: string) => undefined),
-      detach: vi.fn(async (_source: { tabId: number }) => undefined),
+      detach: vi.fn(async (_source: { tabId?: number; targetId?: string }) => undefined),
       getTargets: vi.fn(
         async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> =>
           inheritedDebuggerTabIds.map((tabId) => ({ id: `tab-${tabId}`, tabId, attached: true })),
       ),
-      sendCommand: vi.fn(
-        async (
-          _source: { tabId: number; sessionId?: string },
-          _method: string,
-          _params?: Record<string, unknown>,
-        ): Promise<Record<string, unknown>> => ({}),
-      ),
+      sendCommand: (
+        source: { tabId: number; sessionId?: string },
+        method: string,
+        params?: Record<string, unknown>,
+      ) =>
+        method === "Target.getTargetInfo"
+          ? debuggerGetTargetInfo(source)
+          : debuggerSendCommand(source, method, params),
     },
     runtime: {
       get lastError() {
@@ -468,7 +479,8 @@ export async function loadBackground({
     debuggerDetachListener,
     debuggerEventListener,
     debuggerGetTargets: chromeMock.debugger.getTargets,
-    debuggerSendCommand: chromeMock.debugger.sendCommand,
+    debuggerSendCommand,
+    debuggerGetTargetInfo,
     deferNextStorageGet: () => {
       let release = () => {};
       nextStorageGet = new Promise<void>((resolve) => {

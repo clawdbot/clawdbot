@@ -199,6 +199,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before provider I/O. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Report each completed platform sub-send before another fallible step. */
   onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
 };
@@ -340,7 +342,7 @@ export type ChannelMessageDeferredDeliveryAdmissionContext<TConfig = OpenClawCon
 };
 
 /** Optional hooks around adapter send attempts, platform success/failure, and commit. */
-export type ChannelMessageSendLifecycleAdapter<
+type ChannelMessageSendLifecycleAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = {

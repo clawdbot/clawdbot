@@ -134,5 +134,6 @@ if (commandExists("actionlint")) {
 
 runPreCommitHook("zizmor", workflows);
 
+run("node", ["scripts/generate-ci-git-owner.mts", "--check"]);
 run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
 run("node", ["scripts/check-no-conflict-markers.mjs"]);

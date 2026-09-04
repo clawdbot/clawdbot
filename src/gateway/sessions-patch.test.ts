@@ -370,26 +370,37 @@ describe("gateway sessions patch", () => {
     );
     expect(archived.archivedAt).toEqual(expect.any(Number));
     expect(archived.archivedBy).toEqual(archivedBy);
+    expect(archived.archiveReason).toBe("manual");
     expect(archived.pinnedAt).toBeUndefined();
 
     const idempotent = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
     expect(idempotent.archivedAt).toBe(archived.archivedAt);
     expect(idempotent.archivedBy).toEqual(archivedBy);
+    expect(idempotent.archiveReason).toBe("manual");
 
     const restored = expectPatchOk(
       await runPatch({
-        store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
         patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
+    expect(restored.archiveReason).toBeUndefined();
   });
 
   test.each([
@@ -647,6 +658,34 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(cleared.category).toBeUndefined();
+  });
+
+  test("persists, normalizes, and clears color", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "  Blue " },
+      }),
+    );
+    expect(entry.color).toBe("blue");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ color: "blue" }),
+        patch: { key: MAIN_SESSION_KEY, color: null },
+      }),
+    );
+    expect(cleared.color).toBeUndefined();
+  });
+
+  test("rejects unknown color names", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "crimson" },
+      }),
+      "color must be one of: red, blue, green, yellow, purple, orange, pink, cyan",
+    );
   });
 
   test("allows duplicate categories across sessions", async () => {
@@ -1660,8 +1699,6 @@ describe("gateway sessions patch", () => {
         patch: {
           key: MAIN_SESSION_KEY,
           execHost: " AUTO ",
-          execSecurity: " ALLOWLIST ",
-          execAsk: " ON-MISS ",
           execNode: " worker-1 ",
           sendPolicy: "DENY" as unknown as "allow",
           groupActivation: "Always" as unknown as "mention",
@@ -1669,8 +1706,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.execHost).toBe("auto");
-    expect(entry.execSecurity).toBe("allowlist");
-    expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.groupActivation).toBe("always");
@@ -1694,6 +1729,36 @@ describe("gateway sessions patch", () => {
     );
     expect(cleared.permissionMode).toBeUndefined();
     expect(cleared.sessionRoot).toBe("/workspace/project");
+  });
+
+  test.each([
+    { execSecurity: "deny" },
+    { execSecurity: null },
+    { execAsk: "always" },
+    { execAsk: null },
+  ])("rejects retired session policy patch %j without writing", async (retiredPatch) => {
+    for (const store of [{}, mainStoreEntry({ label: "Original", permissionMode: "read-only" })]) {
+      const before = structuredClone(store);
+      const result = await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          label: "Changed",
+          permissionMode: "guarded",
+          ...retiredPatch,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+        },
+      });
+      expect(store).toEqual(before);
+    }
   });
 
   test("stores and clears a session permission mode without a recorded root", async () => {

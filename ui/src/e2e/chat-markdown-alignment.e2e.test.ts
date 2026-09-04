@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -142,6 +144,78 @@ suite.define(() => {
             collapsedSummary.evaluate((summary) => getComputedStyle(summary, "::before").transform),
           )
           .not.toBe(geometry.chevronClosedTransform);
+      },
+    );
+  });
+
+  it("preserves inline code content and IPv6 links in assistant Markdown", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 800, width: 1180 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "## Markdown parser fidelity",
+                    "",
+                    "`   `",
+                    "",
+                    "[foo `bar` baz`",
+                    "",
+                    "[IPv6 destination](http://[2001:db8::1]:1896/a[b]?x=[y])",
+                  ].join("\n"),
+                },
+              ],
+              role: "assistant",
+              timestamp: Date.now(),
+            },
+          ],
+        });
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const markdown = page.locator(".chat-group.assistant .chat-text", {
+          hasText: "Markdown parser fidelity",
+        });
+        await markdown.waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(suite.artifactDir, "markdown-parser-fidelity.png"),
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "markdown-parser-fidelity.json"),
+            JSON.stringify(
+              await page.evaluate(() => ({
+                url: location.href,
+                scripts: Array.from(document.scripts, (script) => script.src).filter(Boolean),
+                resources: performance.getEntriesByType("resource").map((entry) => entry.name),
+              })),
+              null,
+              2,
+            ),
+          );
+        }
+
+        expect(
+          await markdown.evaluate((root) => ({
+            code: Array.from(root.querySelectorAll("code"), (node) => node.textContent),
+            paragraphs: Array.from(root.querySelectorAll("p"), (node) => node.textContent),
+            links: Array.from(root.querySelectorAll("a"), (node) => node.getAttribute("href")),
+          })),
+        ).toEqual({
+          code: ["   ", "bar"],
+          paragraphs: ["   ", "[foo bar baz`", "IPv6 destination"],
+          links: ["http://[2001:db8::1]:1896/a%5Bb%5D?x=%5By%5D"],
+        });
       },
     );
   });

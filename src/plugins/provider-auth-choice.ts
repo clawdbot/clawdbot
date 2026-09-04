@@ -5,7 +5,6 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -24,6 +23,7 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
+import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type {
@@ -246,12 +246,13 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   /** Force remote/manual browser presentation for a connected GUI client. */
   isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
-  agentDir: string;
-  workspaceDir: string;
+  agentDir?: string;
+  workspaceDir?: string;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
@@ -264,6 +265,7 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
@@ -383,10 +385,12 @@ async function prepareProviderPluginAuthMethod(
       return;
     }
     await params.beforePersistentEffect?.();
-    await persistAuthProfileBatch({
+    await persistProviderAuthProfileBatch({
       profiles,
+      config: nextConfig,
       agentDir,
-      stateDir: params.env?.OPENCLAW_STATE_DIR,
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.env?.OPENCLAW_STATE_DIR ? { stateDir: params.env.OPENCLAW_STATE_DIR } : {}),
     });
     profilesPersisted = true;
   };

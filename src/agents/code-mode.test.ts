@@ -19,6 +19,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -26,7 +27,6 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   resolveToolSearchConfig,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -621,6 +621,7 @@ describe("Code Mode catalog and model-visible surface", () => {
         pluginTool("llm-task", "Run an LLM task"),
         pluginTool("llm_task", "Run the exact-name task"),
         pluginTool("catalog", "Collide with discovery"),
+        pluginTool("MCP", "Collide with the namespace global"),
         pluginTool("class", "Use a reserved word"),
         pluginTool("9patch", "Start with a digit"),
       ],
@@ -636,6 +637,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(description).toContain("- llm_task ");
     expect(description).toMatch(/- llm_task_[a-f0-9]{8} /u);
     expect(description).toMatch(/- catalog_[a-f0-9]{8} /u);
+    expect(description).toMatch(/- MCP_[a-f0-9]{8} /u);
     expect(description).toMatch(/- class_[a-f0-9]{8} /u);
     expect(description).toContain("- tool_9patch ");
     expect(description).not.toContain("openclaw:fake-code-mode");

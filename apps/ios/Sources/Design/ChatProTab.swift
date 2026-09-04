@@ -149,6 +149,11 @@ struct ChatProTab: View {
                         }
                     }
                 } else {
+                    if let session = self.coloredHeaderSession {
+                        ToolbarItem(placement: .principal) {
+                            self.headerSessionTitle(session)
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         self.headerGatewayStatus
                     }
@@ -337,15 +342,36 @@ struct ChatProTab: View {
     private var headerAgentIdentityLabel: some View {
         HStack(spacing: 7) {
             self.headerIdentityBadge
-            if self.showsExpandedGatewayStatus {
-                self.expandedGatewayStatusLabel
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
-            } else {
-                Text(self.agentDisplayName)
-                    .font(OpenClawType.headline)
-                    .lineLimit(1)
-                    .transition(.opacity)
+            VStack(alignment: .leading, spacing: 2) {
+                if self.showsExpandedGatewayStatus {
+                    self.expandedGatewayStatusLabel
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                } else {
+                    Text(self.agentDisplayName)
+                        .font(OpenClawType.headline)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+                if let session = self.coloredHeaderSession {
+                    self.headerSessionTitle(session)
+                }
             }
+        }
+    }
+
+    private var coloredHeaderSession: OpenClawChatSessionEntry? {
+        guard let session = viewModel?.currentSessionEntry(),
+              OpenClawSessionColor(name: session.color) != nil
+        else { return nil }
+        return session
+    }
+
+    private func headerSessionTitle(_ session: OpenClawChatSessionEntry) -> some View {
+        HStack(spacing: 5) {
+            OpenClawSessionColorDot(color: session.color)
+            Text(verbatim: CommandCenterTab.sessionTitle(session))
+                .font(OpenClawType.captionMedium)
+                .lineLimit(1)
         }
     }
 
@@ -356,7 +382,9 @@ struct ChatProTab: View {
     }
 
     private var headerAgentAccessibilityLabel: String {
-        "\(self.voiceAvatarAccessibilityLabel). \(self.gatewayAccessibilityLabel)"
+        let identity = "\(voiceAvatarAccessibilityLabel). \(gatewayAccessibilityLabel)"
+        guard let session = coloredHeaderSession else { return identity }
+        return "\(identity). \(CommandCenterTab.sessionTitle(session))"
     }
 
     private func handleHeaderAgentIdentityTap() {
@@ -428,39 +456,31 @@ struct ChatProTab: View {
         let deliveryAgentID = self.appModel.chatDeliveryAgentId
         let transportAgentID = Self.transportAgentID(deliveryAgentID)
         let routingContract = self.appModel.chatSessionRoutingContract ?? ""
-        guard let viewModel else {
-            self.viewModelOwnerID = ownerID
-            self.viewModelTransportAgentID = transportAgentID
-            self.viewModelRoutingContract = routingContract
-            self.captureCurrentPresentationIdentity()
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
-            return
-        }
-        if Self.requiresViewModelRebuild(
+        if let viewModel, !Self.requiresViewModelRebuild(
             currentOwnerID: self.viewModelOwnerID,
             nextOwnerID: ownerID,
             currentTransportAgentID: self.viewModelTransportAgentID,
             nextTransportAgentID: transportAgentID)
         {
-            // Keep recording, staging, and delivery on their captured route.
-            // The pin-change observer replays this rebuild with latest state.
-            guard !viewModel.isAttachmentOwnerPinned else { return }
-            viewModel.endPendingToolActivities()
-            self.viewModelOwnerID = ownerID
-            self.viewModelTransportAgentID = transportAgentID
-            self.viewModelRoutingContract = routingContract
-            self.captureCurrentPresentationIdentity()
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
+            if self.viewModelRoutingContract != routingContract {
+                self.viewModelRoutingContract = routingContract
+                viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
+            }
+            viewModel.syncSession(to: sessionKey)
+            if !viewModel.isAttachmentOwnerPinned {
+                self.captureCurrentPresentationIdentity()
+            }
             return
         }
-        if self.viewModelRoutingContract != routingContract {
-            self.viewModelRoutingContract = routingContract
-            viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
-        }
-        viewModel.syncSession(to: sessionKey)
-        if !viewModel.isAttachmentOwnerPinned {
-            self.captureCurrentPresentationIdentity()
-        }
+        // Keep recording, staging, and delivery on their captured route.
+        // The pin-change observer replays this rebuild with latest state.
+        guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        self.viewModel?.detachTransport()
+        self.viewModelOwnerID = ownerID
+        self.viewModelTransportAgentID = transportAgentID
+        self.viewModelRoutingContract = routingContract
+        self.captureCurrentPresentationIdentity()
+        self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
     }
 
     private func handleNewChatRequest(_ requestID: Int) async {
@@ -478,6 +498,11 @@ struct ChatProTab: View {
     }
 
     private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
+        let appModel = self.appModel
+        // Tool activity belongs to this model's captured agent, including while attachment-pinned.
+        // Never relabel an old agent's tools with a newly selected agent's presentation.
+        let agentName = self.viewModelPresentationAgentName
+        let agentBadge = self.viewModelPresentationAgentBadge
         // One gateway facade backs both seams while routing cache and outbox
         // operations to their separate installation-wide databases.
         let offlineStore = self.appModel.makeChatOfflineStore()
@@ -493,15 +518,15 @@ struct ChatProTab: View {
             transcriptCache: offlineStore,
             outbox: offlineStore,
             onSessionChanged: { sessionKey in
-                self.appModel.focusChatSession(sessionKey)
+                appModel.focusChatSession(sessionKey)
             },
             onToolActivity: { id, name, isActive, toolSessionKey in
                 if isActive {
                     LiveActivityManager.shared.showTool(
                         id: id,
                         name: name,
-                        agentName: self.agentDisplayName,
-                        agentBadge: self.agentBadge,
+                        agentName: agentName,
+                        agentBadge: agentBadge,
                         sessionKey: toolSessionKey)
                 } else {
                     LiveActivityManager.shared.endTool(id: id, sessionKey: toolSessionKey)

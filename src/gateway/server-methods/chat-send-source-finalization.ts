@@ -22,6 +22,7 @@ import {
 } from "./chat-assistant-content.js";
 import { broadcastChatFinal, isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
 import { buildTranscriptReplyText } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
@@ -46,14 +47,10 @@ function selectChatSendAgentReplyPayloads(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const { payload } = entry;
-      if (isSourceReplyTranscriptMirrorPayload(payload)) {
-        return entry.kind === "final" && payload.isError !== true;
-      }
-      return (
-        !params.hasReturnedAgentErrorPayloads &&
-        (entry.kind === "block" || entry.kind === "final") &&
-        isReplyPayloadStatusNotice(payload)
-      );
+      return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
+        isSourceReplyTranscriptMirrorPayload(payload)
+        ? entry.kind === "final" && payload.isError !== true
+        : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);
     })
     .map((entry) => entry.payload);
 }
@@ -94,6 +91,16 @@ async function finalizeChatSendAgentReplyPayloads(
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
   const agentRunReplyPayloads = [...params.payloads];
   if (agentRunReplyPayloads.length === 0) {
+    return { kind: "dropped", reason: "no-visible-content" };
+  }
+  const deliveryAuthorized = () =>
+    agentRunReplyPayloads.every((payload) =>
+      isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
+    );
+  if (!deliveryAuthorized()) {
+    context.logGateway.warn(
+      "webchat settled final reply skipped: session writer changed before finalization",
+    );
     return { kind: "dropped", reason: "no-visible-content" };
   }
 
@@ -256,6 +263,12 @@ async function finalizeChatSendAgentReplyPayloads(
     storePath: latestStorePath,
     agentId,
   });
+  if (!deliveryAuthorized()) {
+    context.logGateway.warn(
+      "webchat settled final reply skipped: session writer changed before transcript finalization",
+    );
+    return { kind: "dropped", reason: "no-visible-content" };
+  }
   if (sourceReplyScope && sourceReplyPersistenceRequests.length > 0) {
     const rewritten = await rewriteSourceReplyTranscriptMirrors({
       candidates: sourceReplyMirrorCandidates,
@@ -303,6 +316,12 @@ async function finalizeChatSendAgentReplyPayloads(
   };
   // Failed turns retain source media/transcript finalization; chat.error carries no message.
   if (!params.suppressFinal) {
+    if (!deliveryAuthorized()) {
+      context.logGateway.warn(
+        "webchat settled final reply skipped: session writer changed before broadcast",
+      );
+      return { kind: "dropped", reason: "no-visible-content" };
+    }
     if (hasVisibleAssistantFinalMessage(message)) {
       emitFirstAssistantServerTiming();
     }

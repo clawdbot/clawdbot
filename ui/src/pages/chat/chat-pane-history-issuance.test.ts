@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
@@ -65,7 +66,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main:current",
-      limit: 100,
+      limit: 800,
     });
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
@@ -102,7 +103,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "chat.startup", {
       sessionKey: state.sessionKey,
-      limit: 100,
+      limit: 800,
     });
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([

@@ -12,7 +12,7 @@ describe("aux method handler parity", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
       channelManager: {
-        startChannel: async () => {},
+        startChannel: async () => new Map(),
         stopChannel: async () => {},
         isManuallyStopped: () => false,
         resolveRuntimeAccountId: (_channel: string, accountId: string) => accountId,

@@ -3,8 +3,10 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_record remote_head remote_head_ref remote_is_cross_repository
-  remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
+  if [ -z "$remote_record" ]; then
+    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
@@ -209,8 +211,8 @@ require_remote_testbox_gate_stamp() {
 
 require_active_org_admin_for_crabbox_gate() {
   local actor membership
-  actor=$(gh api user --jq .login)
-  membership=$(gh api "orgs/openclaw/memberships/$actor")
+  actor=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login) || return
+  membership=$(gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
   if [ "$(printf '%s\n' "$membership" | jq -r .state)" != "active" ] ||
     [ "$(printf '%s\n' "$membership" | jq -r .role)" != "admin" ]; then
     echo "OPENCLAW_PR_GATES_REMOTE=crabbox-aws requires an active openclaw organization admin." >&2
@@ -472,13 +474,17 @@ prepare_gates() {
     exit 1
   fi
 
+  local remote_record="" changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    if ! root_changelog_update_allowed_for_pr; then
+    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
       echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
-      echo "Set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 only for explicit release automation or maintainer release closeout."
+      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged version section, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    normalize_pr_changelog_entries "$pr"
+    # Published closeout text is immutable; normalizing PR references can move it
+    # into an Unreleased section and invalidate the tagged release copy.
+    if [ "$changelog_mode" = "override" ]; then normalize_pr_changelog_entries "$pr"; fi
     validate_changelog_attribution_policy
   fi
 
@@ -531,7 +537,7 @@ prepare_gates() {
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

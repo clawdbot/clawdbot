@@ -538,6 +538,7 @@ describe("install-cli.sh", () => {
       os_detect() { printf 'linux\n'; }
       arch_detect() { printf 'armv7l\n'; }
       install_node() {
+        printf 'target=%s/%s\n' "$@"
         printf 'selected=%s\n' "$NODE_VERSION"
         printf 'first-path=%s\n' "\${PATH%%:*}"
         return 17
@@ -546,6 +547,7 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(17);
+    expect(result.stdout).toContain("target=linux/armv7l");
     expect(result.stdout).toContain("selected=22.23.2");
     expect(result.stdout).toContain("first-path=");
     expect(result.stdout).toContain("/tools/node-v22.23.2/bin");
@@ -572,7 +574,7 @@ describe("install-cli.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       NODE_VERSION=24.14.1
-      install_node
+      install_node linux x64
     `);
 
     expect(result.status).toBe(1);
@@ -1322,7 +1324,9 @@ HOOK
       const repo = join(tmp, "repo");
       const outer = join(tmp, "outer");
       const temp = join(tmp, "temp");
-      for (const dir of [bin, repo, outer, temp]) mkdirSync(dir, { recursive: true });
+      for (const dir of [bin, repo, outer, temp]) {
+        mkdirSync(dir, { recursive: true });
+      }
       writeFileSync(
         join(repo, "package.json"),
         JSON.stringify({ packageManager: `pnpm@${version}` }),
@@ -1481,13 +1485,11 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `export PATH=${JSON.stringify(bin)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
           "is_root() { return 1; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           APK_LOG: apkLog,
@@ -1592,13 +1594,11 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `export PATH=${JSON.stringify(`${nodePrefixBin}:${oldBin}:${bin}`)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
           "is_root() { return 1; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           APK_LOG: apkLog,
@@ -1673,14 +1673,12 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `export PATH=${JSON.stringify(bin)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
           "is_root() { return 0; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           APK_LOG: apkLog,
@@ -1820,14 +1818,12 @@ HOOK
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           `export PATH=${JSON.stringify(bin)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
           "is_root() { return 0; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           APK_LOG: apkLog,
@@ -1899,8 +1895,6 @@ HOOK
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 1; }",
           "detect_downloader() { :; }",
           "require_bin() { :; }",
@@ -1922,7 +1916,7 @@ HOOK
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           NEW_NODE: newNode,
@@ -1970,8 +1964,6 @@ HOOK
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 1; }",
           "detect_downloader() { :; }",
           "require_bin() { :; }",
@@ -1993,7 +1985,7 @@ HOOK
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
         {
           NEW_NODE: newNode,
@@ -2022,8 +2014,6 @@ HOOK
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          "os_detect() { printf 'linux\\n'; }",
-          "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 1; }",
           "linked_node_is_usable() { return 1; }",
           "detect_downloader() { :; }",
@@ -2032,7 +2022,7 @@ HOOK
           "download_file() { return 42; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           "NODE_VERSION=22.22.3",
-          "install_node",
+          "install_node linux x64",
         ].join("\n"),
       );
 
@@ -2140,7 +2130,10 @@ HOOK
 
   it.each([
     ["openclaw@npm:@scope/candidate@1.0.0", "--allow-scripts=@scope/candidate"],
+    ["openclaw@npm:@scope/candidate.tgz@1.0.0", "--allow-scripts=@scope/candidate.tgz"],
     ["file:/tmp/openclaw.tgz", "--allow-scripts=file:/tmp/openclaw.tgz"],
+    ["vendor/repo.tgz", "--allow-scripts=vendor/repo.tgz"],
+    ["vendor/repo#release.tgz", "--allow-scripts=vendor/repo#release.tgz"],
     [
       "https://example.invalid/openclaw.tgz",
       "--allow-scripts=https://example.invalid/openclaw.tgz",
@@ -2165,11 +2158,73 @@ HOOK
     }
   });
 
-  it("relativizes absolute npm path identities against the command cwd", () => {
+  it.each(["absolute", "relative", "file:absolute", "file:relative"])(
+    "uses the absolute npm tarball identity for %s input",
+    (form) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-archive-identity-"));
+      const npm = join(tmp, "npm");
+      const commandCwd = join(tmp, "work");
+      const candidate = join(tmp, "candidate.tgz");
+      const protocol = form.startsWith("file:") ? "file:" : "";
+      const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
+      mkdirSync(commandCwd);
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `cd ${JSON.stringify(commandCwd)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: "12.0.0" },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe(`--allow-scripts=${protocol}${candidate}`);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { version: "11.16.0", advisory: true },
+    { version: "12.0.0", advisory: false },
+  ])(
+    "handles comma tarball identity under npm $version before mutation",
+    ({ version, advisory }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-archive-comma,"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+            `cd ${JSON.stringify(tmp)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(join(tmp, "candidate.tgz"))} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: version, NPM_FAKE_ARGS: args },
+        );
+        expect(result.status).toBe(advisory ? 0 : 1);
+        if (advisory) {
+          expect(result.stdout).toBe("--allow-scripts=./candidate.tgz");
+        } else {
+          expect(result.stderr).toContain("without commas");
+        }
+        expect(existsSync(args)).toBe(false);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("retains relative directory identities under comma ancestors", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-identity-comma,"));
     const npm = join(tmp, "npm");
     const commandCwd = join(tmp, "safe");
-    const candidate = join(tmp, "candidate.tgz");
+    const candidate = join(tmp, "candidate");
     mkdirSync(commandCwd);
     writeNpmLifecycleFixture(npm);
     try {
@@ -2183,7 +2238,7 @@ HOOK
         { NPM_FAKE_VERSION: "12.0.0" },
       );
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -1,15 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const sidebarProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-customization",
-);
 
 export function createSidebarCustomizationSuite(name: string) {
   return createControlUiE2eSuite({
@@ -20,29 +12,32 @@ export function createSidebarCustomizationSuite(name: string) {
   });
 }
 
-export async function captureSidebarUiProof(page: Page, fileName: string): Promise<void> {
+export async function captureSidebarUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  await mkdir(sidebarProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(sidebarProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }
 
 export async function captureSettingsSidebarUiProof(
+  owner: { readonly artifactDir: string },
   sidebar: Locator,
   fileName: string,
 ): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  await mkdir(sidebarProofArtifactDir, { recursive: true });
   await sidebar.screenshot({
     animations: "disabled",
-    path: path.join(sidebarProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }
 

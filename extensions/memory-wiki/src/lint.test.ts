@@ -220,7 +220,7 @@ describe("lintMemoryWikiVault", () => {
       "utf8",
     );
     await fs.writeFile(
-      path.join(rootDir, "sources", "unsafe-alpha.md"),
+      path.join(rootDir, "sources", "unsafe-local-source.md"),
       [
         "# Unsafe Local Import: alpha.md",
         "",
@@ -243,7 +243,7 @@ describe("lintMemoryWikiVault", () => {
     expect(issueCodesForPath(result, "sources/bridge-alpha.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
-    expect(issueCodesForPath(result, "sources/unsafe-alpha.md")).toEqual(
+    expect(issueCodesForPath(result, "sources/unsafe-local-source.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
   });

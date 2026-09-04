@@ -21,6 +21,7 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -136,7 +137,9 @@ function validateConfigObjectWithPluginMode(
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
   const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
-  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig).config as OpenClawConfig;
+  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
+    env: params?.env,
+  }).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults,
@@ -152,7 +155,8 @@ function validateConfigObjectWithPluginMode(
     },
   });
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
-  if (!result.ok || !legacyDefaultAgentId) {
+  // Core roster normalization already ran; ambient channel ownership belongs to Gateway discovery.
+  if (!result.ok || !legacyDefaultAgentId || params?.pluginValidation === "core-only") {
     return result;
   }
   // Carry the migration sidecar across Zod's fresh object.
@@ -172,7 +176,11 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   legacyDefaultAgentId: string,
   env?: NodeJS.ProcessEnv,
   manifestRecords?: PluginManifestRegistry["plugins"],
-  options?: { materializeSessionStore?: boolean; materializeWorkspace?: boolean },
+  options?: {
+    materializeSessionStore?: boolean;
+    materializeWorkspace?: boolean;
+    homedir?: () => string;
+  },
 ): ReturnType<typeof materializeLegacyDefaultAgentRoles> {
   const ambientChannelIds = listChannelIdsForOwnershipMigration({
     config,
@@ -182,6 +190,7 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
     env,
+    homedir: options?.homedir,
     materializeSessionStore: options?.materializeSessionStore,
     materializeWorkspace: options?.materializeWorkspace,
   });
@@ -351,7 +360,10 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      for (const entry of collectChannelSchemaMetadataWithOwnership(
+        info.registry,
+        resolveChannelSchemaSelection(info.registry, parsedConfig, opts.env),
+      )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
@@ -639,7 +651,7 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for AJV schema validation;
+        applyDefaults: true, // Always apply defaults for plugin schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
       if (!result.ok) {

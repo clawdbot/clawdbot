@@ -486,12 +486,14 @@ describe("runDoctorConfigPreflight", () => {
       });
       expect(inspectOnly.snapshot.valid).toBe(false);
 
-      const repaired = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      });
+      const repaired = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
 
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.mode).toBe("local");
@@ -531,6 +533,66 @@ describe("runDoctorConfigPreflight", () => {
       });
     },
   );
+
+  it("migrates readable active config after preserving its state locators", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "custom-cron", "jobs.json");
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", port: 19091 },
+      });
+      await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local", port: 19092 },
+            cron: { store: storePath },
+            session: { idleMinutes: 45 },
+            channels: {
+              discord: {
+                guilds: { "100": { channels: { general: { allow: true } } } },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const repaired = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: true,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
+
+      expect(repaired.snapshot.valid).toBe(true);
+      expect(repaired.snapshot.config.gateway?.port).toBe(19092);
+      expect(repaired.snapshot.config).toHaveProperty("session.reset.idleMinutes", 45);
+      expect(repaired.snapshot.config).toHaveProperty(
+        "channels.discord.guilds.100.channels.general.enabled",
+        true,
+      );
+      expect(readConfigMachineState("cron.store")).toBe(storePath);
+      const migratedRaw = await fs.readFile(configPath, "utf-8");
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);
+
+      const converged = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
+      expect(converged.snapshot.valid).toBe(true);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(migratedRaw);
+    });
+  });
 
   it("preserves the active config when last-known-good cannot converge", async () => {
     await withTempHome(async (home) => {
@@ -643,16 +705,40 @@ describe("runDoctorConfigPreflight", () => {
         "utf-8",
       );
 
-      const repaired = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      });
+      const repaired = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
 
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.port).toBe(19091);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
+      const entries = await fs.readdir(path.dirname(configPath));
+      const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
+      expect(clobbered).toHaveLength(1);
+      await expect(
+        fs.readFile(path.join(path.dirname(configPath), clobbered[0]!), "utf-8"),
+      ).resolves.toContain('"port": 19092');
+
+      const converged = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
+        runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        }),
+      );
+      expect(converged.snapshot.valid).toBe(true);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
+      expect(
+        (await fs.readdir(path.dirname(configPath))).filter((entry) =>
+          entry.startsWith("openclaw.json.clobbered."),
+        ),
+      ).toEqual(clobbered);
     });
   });
 });

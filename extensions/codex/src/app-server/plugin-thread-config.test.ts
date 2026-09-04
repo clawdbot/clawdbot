@@ -6,7 +6,10 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  resolveOwnedAppApprovalOverrideKeys,
+  resolveRecoverableCodexPluginConfigKeys,
+} from "./plugin-inventory.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
@@ -18,11 +21,144 @@ import {
   mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { CodexAppServerRequestParams, JsonObject, v2 } from "./protocol.js";
+import type {
+  CodexAppServerRequestParams,
+  CodexConfigReadResponse,
+  JsonObject,
+  v2,
+} from "./protocol.js";
+
+type NativeConfigLayerName = NonNullable<CodexConfigReadResponse["origins"][string]>["name"];
 
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
     defaultCodexAppInventoryCache.clear();
+  });
+
+  it("keeps approval checks conservative when tool metadata is absent", () => {
+    expect(resolveOwnedAppApprovalOverrideKeys(appInfo("linear", true))).toStrictEqual({});
+    expect(
+      resolveOwnedAppApprovalOverrideKeys({ ...appInfo("linear", true), toolSummaries: [] }),
+    ).toStrictEqual({ approvalOverrideToolConfigKeys: [] });
+  });
+
+  it("retains disabled writable tools in the approval boundary", () => {
+    expect(
+      resolveOwnedAppApprovalOverrideKeys({
+        ...appInfo("linear", true),
+        toolSummaries: [
+          {
+            name: "save_issue",
+            title: "Save issue",
+            description: "Create or update an issue.",
+            isEnabled: false,
+            disabledReason: "App policy",
+            isReadOnly: false,
+          },
+        ],
+      }),
+    ).toStrictEqual({
+      approvalOverrideToolConfigKeys: ["Save issue", "linear_save_issue", "save_issue"],
+    });
+  });
+
+  it("preserves writable approval checks for keys shared with read-only tools", () => {
+    const app: v2.AppInfo = {
+      ...appInfo("linear", true),
+      toolSummaries: [
+        {
+          name: "fetch",
+          title: "Fetch",
+          description: "Fetch a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: true,
+        },
+        {
+          name: "linear_fetch",
+          title: "Save issue",
+          description: "Create or update a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: false,
+        },
+      ],
+    };
+
+    expect(resolveOwnedAppApprovalOverrideKeys(app)).toStrictEqual({
+      approvalOverrideToolConfigKeys: ["Save issue", "linear_fetch", "linear_linear_fetch"],
+    });
+  });
+
+  it.each([
+    { name: "empty plugin selection", plugin: false, account: false, app: false },
+    { name: "plugin without apps", plugin: true, account: false, app: false },
+    { name: "blocked plugin app", plugin: true, account: false, app: true },
+    { name: "empty account inventory", plugin: false, account: true, app: false },
+  ])("starts with apps disabled for $name when native config is unavailable", async (testCase) => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) =>
+        codexAppInventoryResponse(
+          method,
+          testCase.app ? [appInfo("google-calendar-app", true)] : [],
+          params,
+          { callableByAppId: { "google-calendar-app": false } },
+        ),
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/installed") {
+        return pluginInstalled([
+          pluginSummary("google-calendar", { installed: true, enabled: true }),
+        ]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          testCase.app ? [appSummary("google-calendar-app")] : [],
+        );
+      }
+      if (method === "config/read") {
+        throw new Error("config unavailable");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: testCase.account,
+          allow_destructive_actions: "ask",
+          ...(testCase.plugin
+            ? {
+                plugins: {
+                  "google-calendar": {
+                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                    pluginName: "google-calendar",
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      "features.apps": false,
+      apps: {
+        _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+      },
+    });
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.provisionalAppIds).toBeUndefined();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/read");
   });
 
   it("defaults destructive app access on for accessible migrated plugin apps", async () => {
@@ -296,6 +432,9 @@ describe("Codex plugin thread config", () => {
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
           });
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -354,14 +493,20 @@ describe("Codex plugin thread config", () => {
             marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
           });
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(methods).toEqual(["plugin/installed", "plugin/read"]);
     expect(methods).not.toContain("plugin/install");
-    expect(config.configPatch?.apps).toEqual({
-      _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+    expect(config.configPatch).toEqual({
+      "features.apps": false,
+      apps: {
+        _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+      },
     });
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -465,126 +610,157 @@ describe("Codex plugin thread config", () => {
     });
   });
 
-  it("routes destructive approvals to the user while clearing durable overrides for always mode", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
-    });
-    let configReadCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail(
-          "google-calendar",
-          [appSummary("google-calendar-app")],
-          ["google-calendar"],
-        );
-      }
-      if (method === "config/read") {
-        configReadCount += 1;
-        if ((params as { includeLayers?: boolean } | undefined)?.includeLayers !== true) {
-          return {
-            config: {
-              apps: {
-                "google-calendar-app": {
-                  tools: {
-                    "calendar/read": {
-                      enabled: false,
-                    },
-                  },
-                },
+  it.each(["Calendar update", "__proto__"])(
+    "projects ask approvals without changing saved settings (%s)",
+    async (title) => {
+      const nativeConfig = {
+        apps: {
+          "google-calendar-app": {
+            links: {
+              [title]: {
+                approvals_reviewer: "auto_review",
+                default_tools_approval_mode: "approve",
               },
             },
-          };
+            tools: {
+              "calendar/create": { approval_mode: "approve", enabled: false },
+              "calendar/read": { approval_mode: "approve", enabled: false },
+              [title]: { approval_mode: "approve", enabled: true },
+            },
+          },
+        },
+      } satisfies JsonObject;
+      const savedConfig = structuredClone(nativeConfig);
+      const appCache = new CodexAppInventoryCache();
+      const calendarApp: v2.AppInfo = {
+        ...appInfo("google-calendar-app", true),
+        toolSummaries: [
+          {
+            name: "calendar/create",
+            title: null,
+            description: "Synthetic calendar action.",
+            isEnabled: false,
+            disabledReason: "App policy",
+            isReadOnly: false,
+          },
+          {
+            name: "calendar/read",
+            title: null,
+            description: "Synthetic calendar action.",
+            isEnabled: false,
+            disabledReason: "App policy",
+            isReadOnly: true,
+          },
+          {
+            name: "calendar/update",
+            title,
+            description: "Synthetic calendar action.",
+            isEnabled: true,
+            disabledReason: null,
+            isReadOnly: false,
+          },
+        ],
+      };
+      await appCache.refreshNow({
+        key: "runtime",
+        nowMs: 0,
+        request: async (method, params) => codexAppInventoryResponse(method, [calendarApp], params),
+      });
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "plugin/installed" || method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
         }
-        return {
-          config: {
-            apps: {
-              "google-calendar-app": {
-                tools: {
-                  "calendar/create": {
-                    approval_mode: "approve",
-                    enabled: false,
-                  },
-                  "calendar/read": {
-                    enabled: false,
-                  },
-                  "calendar/update": {
-                    approval_mode: "approve",
-                  },
+        if (method === "plugin/read") {
+          return pluginDetail(
+            "google-calendar",
+            [appSummary("google-calendar-app")],
+            ["google-calendar"],
+          );
+        }
+        if (method === "config/read") {
+          expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
+          return { config: nativeConfig, layers: [] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+
+      const build = () =>
+        buildCodexPluginThreadConfig({
+          pluginConfig: {
+            codexPlugins: {
+              enabled: true,
+              allow_destructive_actions: "ask",
+              plugins: {
+                "google-calendar": {
+                  marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                  pluginName: "google-calendar",
                 },
               },
             },
           },
-          layers: [],
-        };
-      }
-      if (method === "config/batchWrite") {
-        return {
-          status: "ok",
-          version: "version-1",
-          filePath: "/home/test/.codex/config.toml",
-          overriddenMetadata: null,
-        };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
+          appCache,
+          appCacheKey: "runtime",
+          configCwd: "/repo/project",
+          nowMs: 1,
+          request,
+        });
+      const config = await build();
+      expect(config.configPatch?.apps).toMatchObject({
+        "google-calendar-app": {
           enabled: true,
-          allow_destructive_actions: "ask",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
+          approvals_reviewer: "user",
+          destructive_enabled: true,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+          links: {
+            [title]: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
+          },
+          tools: {
+            "calendar/create": { approval_mode: "auto" },
+            [title]: { approval_mode: "auto" },
           },
         },
-      },
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request,
-    });
-
-    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
-    expect(apps?.["google-calendar-app"]).toEqual({
-      enabled: true,
-      approvals_reviewer: "user",
-      destructive_enabled: true,
-      open_world_enabled: true,
-      default_tools_approval_mode: "auto",
-    });
-    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
-    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
-      allowDestructiveActions: true,
-      destructiveApprovalMode: "ask",
-    });
-    expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
-    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
-    expect(request).toHaveBeenCalledWith("config/batchWrite", {
-      edits: [
-        {
-          keyPath: 'apps."google-calendar-app".tools."calendar/create".approval_mode',
-          value: null,
-          mergeStrategy: "replace",
+      });
+      expect(mergeCodexThreadConfigs(nativeConfig, config.configPatch)?.apps).toMatchObject({
+        "google-calendar-app": {
+          tools: {
+            "calendar/create": { approval_mode: "auto", enabled: false },
+            "calendar/read": { approval_mode: "approve", enabled: false },
+            [title]: { approval_mode: "auto" },
+          },
         },
-        {
-          keyPath: 'apps."google-calendar-app".tools."calendar/update".approval_mode',
-          value: null,
-          mergeStrategy: "replace",
+      });
+      expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
+      expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "ask",
+      });
+      expect(config.diagnostics).toEqual([]);
+      expect(nativeConfig).toEqual(savedConfig);
+      expect((await build()).fingerprint).toBe(config.fingerprint);
+      Object.assign(nativeConfig.apps["google-calendar-app"].links, {
+        second: { approvals_reviewer: "auto_review" },
+      });
+      const addedLink = await build();
+      expect(addedLink.fingerprint).not.toBe(config.fingerprint);
+      expect(addedLink.configPatch?.apps).toMatchObject({
+        "google-calendar-app": {
+          links: { second: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
         },
-      ],
-    });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/value/write");
-  });
+      });
+      Object.assign(nativeConfig.apps["google-calendar-app"].tools, {
+        "calendar/update": { approval_mode: "approve" },
+      });
+      const addedTool = await build();
+      expect(addedTool.fingerprint).not.toBe(addedLink.fingerprint);
+      expect(addedTool.configPatch?.apps).toMatchObject({
+        "google-calendar-app": { tools: { "calendar/update": { approval_mode: "auto" } } },
+      });
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(4);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/value/write");
+    },
+  );
 
   it.each([
     ["auto", "auto", undefined],
@@ -669,287 +845,191 @@ describe("Codex plugin thread config", () => {
     expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
-  it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
-    });
-    let configReadCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail(
-          "google-calendar",
-          [appSummary("google-calendar-app")],
-          ["google-calendar"],
-        );
-      }
-      if (method === "config/read") {
-        const includeLayers =
-          (params as { includeLayers?: boolean } | undefined)?.includeLayers === true;
-        configReadCount += 1;
-        return {
-          config: {
-            apps: {
-              "google-calendar-app": {
-                tools: {
-                  "calendar/create": {
-                    approval_mode: "approve",
-                    source: includeLayers ? "user" : "project",
-                  },
-                },
-              },
-            },
-          },
-          ...(includeLayers ? { layers: [] } : {}),
-        };
-      }
-      if (method === "config/batchWrite") {
-        return {
-          status: "ok",
-          version: "version-1",
-          filePath: "/home/test/.codex/config.toml",
-          overriddenMetadata: null,
-        };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "ask",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
+  it.each(
+    [false, true].flatMap((allowAllPlugins) =>
+      [
+        {
+          name: "read-only",
+          appConfig: { tools: { linear_fetch: { approval_mode: "approve" } } },
+        },
+        {
+          name: "cleared",
+          appConfig: {
+            tools: { linear_save_issue: { approval_mode: null } },
+            links: { account: { approvals_reviewer: null, default_tools_approval_mode: null } },
           },
         },
-      },
-      appCache,
-      appCacheKey: "runtime",
-      configCwd: "/repo/project",
-      nowMs: 1,
-      request,
-    });
-
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
+        {
+          name: "retired",
+          appConfig: { tools: { linear_retired_tool: { approval_mode: "approve" } } },
         },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(request).toHaveBeenCalledWith("config/read", {
-      includeLayers: false,
-      cwd: "/repo/project",
-    });
-    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
-    expect(config.diagnostics).toStrictEqual([
-      {
-        code: "approval_overrides_clear_failed",
-        plugin: {
-          configKey: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
-          enabled: true,
-          allowDestructiveActions: true,
-          destructiveApprovalMode: "ask",
-        },
-        message:
-          "Could not clear durable Codex app approval overrides for google-calendar-app: effective approval overrides remain for calendar/create",
-      },
-    ]);
-  });
-
-  it("omits ask policy apps when approval override writes are overridden", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
-    });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail(
-          "google-calendar",
-          [appSummary("google-calendar-app")],
-          ["google-calendar"],
-        );
-      }
-      if (method === "config/read") {
-        if ((params as { includeLayers?: boolean } | undefined)?.includeLayers === true) {
+      ].map(({ name, appConfig }) => ({ name, appConfig, allowAllPlugins })),
+    ),
+  )(
+    "keeps ask policy apps with $name overrides (account-wide: $allowAllPlugins)",
+    async ({ appConfig, allowAllPlugins }) => {
+      const appCache = new CodexAppInventoryCache();
+      const linearApp: v2.AppInfo = {
+        ...appInfo("linear", true),
+        toolSummaries: [
+          {
+            name: "fetch",
+            title: "Fetch",
+            description: "Fetch a Linear issue.",
+            isEnabled: true,
+            disabledReason: null,
+            isReadOnly: true,
+          },
+          {
+            name: "save_issue",
+            title: "linear/save_issue",
+            description: "Create or update a Linear issue.",
+            isEnabled: true,
+            disabledReason: null,
+            isReadOnly: false,
+          },
+        ],
+      };
+      await appCache.refreshNow({
+        key: "runtime",
+        nowMs: 0,
+        request: async (method, params) => codexAppInventoryResponse(method, [linearApp], params),
+      });
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(
+            method,
+            [linearApp],
+            // SAFETY: the dispatcher supplies the narrowed inventory method's parameters.
+            params as CodexAppServerRequestParams<typeof method>,
+          );
+        }
+        if (method === "plugin/installed" || method === "plugin/list") {
+          return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("linear", [appSummary("linear")], ["linear"]);
+        }
+        if (method === "config/read") {
+          expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
           return {
             config: {
               apps: {
-                "google-calendar-app": {
-                  tools: {
-                    "calendar/create": { approval_mode: "approve" },
-                  },
-                },
+                // Managed defaults can outlive a tool or remain after a local
+                // null/delete. Neither state may make the whole app disappear.
+                linear: appConfig,
               },
             },
             layers: [],
           };
         }
-        throw new Error("unexpected confirmation after an overridden batch");
-      }
-      if (method === "config/batchWrite") {
-        return {
-          status: "okOverridden",
-          version: "version-1",
-          filePath: "/home/test/.codex/config.toml",
-          overriddenMetadata: null,
-        };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+        throw new Error(`unexpected request ${method}`);
+      });
 
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "ask",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
-      appCache,
-      appCacheKey: "runtime",
-      configCwd: "/repo/project",
-      nowMs: 1,
-      request,
-    });
-
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.provisionalAppIds).toBeUndefined();
-    expect(config.diagnostics).toStrictEqual([
-      {
-        code: "approval_overrides_clear_failed",
-        plugin: {
-          configKey: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
-          enabled: true,
-          allowDestructiveActions: true,
-          destructiveApprovalMode: "ask",
-        },
-        message:
-          "Could not clear durable Codex app approval overrides for google-calendar-app: approval override for calendar/create is controlled by another config layer",
-      },
-    ]);
-  });
-
-  it("omits ask policy apps when durable approval override cleanup fails", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
-    });
-
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "ask",
-          plugins: {
-            "google-calendar": {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "google-calendar",
-            },
-          },
-        },
-      },
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request: async (method, params) => {
-        if (method === "plugin/installed" || method === "plugin/list") {
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail(
-            "google-calendar",
-            [appSummary("google-calendar-app")],
-            ["google-calendar"],
-          );
-        }
-        if (method === "config/read") {
-          if ((params as { includeLayers?: boolean } | undefined)?.includeLayers === true) {
-            return {
-              config: {
-                apps: {
-                  "google-calendar-app": {
-                    tools: { "calendar/create": { approval_mode: "approve" } },
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: allowAllPlugins,
+            allow_destructive_actions: "ask",
+            plugins: allowAllPlugins
+              ? {}
+              : {
+                  linear: {
+                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                    pluginName: "linear",
                   },
                 },
-              },
-              layers: [],
-            };
-          }
+          },
+        },
+        appCache,
+        appCacheKey: "runtime",
+        configCwd: "/repo/project",
+        nowMs: 1,
+        request,
+      });
+
+      expect(config.configPatch).toEqual({
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+          linear: {
+            enabled: true,
+            approvals_reviewer: "user",
+            destructive_enabled: true,
+            open_world_enabled: true,
+            default_tools_approval_mode: "auto",
+          },
+        },
+      });
+      expect(config.provisionalAppIds).toEqual(["linear"]);
+      expect(config.diagnostics).toStrictEqual([]);
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+    },
+  );
+
+  it.each(
+    [
+      { type: "legacyManagedConfigTomlFromFile", file: "/etc/codex/managed_config.toml" },
+      { type: "legacyManagedConfigTomlFromMdm" },
+      { type: "futureConfigSource" },
+    ].flatMap((name) => [
+      { name, hasApps: true, disabled: false },
+      { name, hasApps: true, disabled: true },
+      { name, hasApps: false, disabled: false },
+    ]),
+  )(
+    "contains $name.type app policy, apps=$hasApps disabled=$disabled",
+    async ({ name, hasApps, disabled }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(method, [appInfo("calendar-app", true)]);
         }
-        if (method === "config/batchWrite") {
-          throw new Error("readonly config");
+        if (method === "config/read") {
+          return {
+            config: {},
+            layers: [
+              {
+                name,
+                config: hasApps
+                  ? { apps: { "calendar-app": { approvals_reviewer: "auto_review" } } }
+                  : { model: "gpt-5.6-luna" },
+                disabledReason: disabled ? "inactive policy" : null,
+              },
+            ],
+          };
         }
         throw new Error(`unexpected request ${method}`);
-      },
-    });
+      });
+      const build = buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "ask",
+          },
+        },
+        appCacheKey: "runtime",
+        request,
+      });
 
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toStrictEqual([
-      {
-        code: "approval_overrides_clear_failed",
-        plugin: {
-          configKey: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
-          enabled: true,
-          allowDestructiveActions: true,
+      if (hasApps && !disabled) {
+        await expect(build).rejects.toThrow("Could not verify the Codex app allowlist");
+      } else {
+        const config = await build;
+        expect(config.policyContext.apps["calendar-app"]).toMatchObject({
           destructiveApprovalMode: "ask",
-        },
-        message:
-          "Could not clear durable Codex app approval overrides for google-calendar-app: readonly config",
-      },
-    ]);
-  });
+        });
+        expect(config.diagnostics).toEqual([]);
+      }
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/value/write");
+    },
+  );
 
   it("builds a restrictive app config when native plugin support is disabled", async () => {
     expect(
@@ -968,6 +1048,7 @@ describe("Codex plugin thread config", () => {
 
     expect(config.enabled).toBe(false);
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -1083,6 +1164,9 @@ describe("Codex plugin thread config", () => {
           callableByAppId: { "tool-blocked-account-app": false },
         });
       }
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       throw new Error(`unexpected request ${method}`);
     });
 
@@ -1095,6 +1179,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -1106,7 +1191,6 @@ describe("Codex plugin thread config", () => {
     expect(config.policyContext.apps).toStrictEqual({});
     expect(config.provisionalAppIds).toBeUndefined();
     expect(config.diagnostics).toStrictEqual([]);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/read");
   });
 
   it.each([
@@ -1114,7 +1198,7 @@ describe("Codex plugin thread config", () => {
       name: "excludes an account app explicitly disabled by project config",
       layers: [
         {
-          name: "project",
+          name: { type: "project", dotCodexFolder: "/repo/project/.codex" },
           config: { apps: { "chatgpt-meetings": { enabled: false } } },
           disabledReason: null,
         },
@@ -1126,12 +1210,12 @@ describe("Codex plugin thread config", () => {
       name: "uses the highest-precedence account app configuration",
       layers: [
         {
-          name: "project",
+          name: { type: "project", dotCodexFolder: "/repo/project/.codex" },
           config: { apps: { "chatgpt-meetings": { enabled: true } } },
           disabledReason: null,
         },
         {
-          name: "user",
+          name: { type: "user", file: "/home/test/.codex/config.toml", profile: null },
           config: { apps: { "chatgpt-meetings": { enabled: false } } },
           disabledReason: null,
         },
@@ -1143,7 +1227,7 @@ describe("Codex plugin thread config", () => {
       name: "ignores an inactive account app config layer",
       layers: [
         {
-          name: "untrusted-project",
+          name: { type: "project", dotCodexFolder: "/repo/untrusted/.codex" },
           config: { apps: { "chatgpt-meetings": { enabled: false } } },
           disabledReason: "untrusted project",
         },
@@ -1157,10 +1241,22 @@ describe("Codex plugin thread config", () => {
       meetingsExposed: false,
       slackExposed: false,
     },
+    {
+      name: "refuses ask account apps when config cannot be read",
+      ask: true,
+      configUnavailable: true,
+      meetingsExposed: false,
+      slackExposed: false,
+    },
   ] satisfies Array<{
     name: string;
-    layers?: Array<{ name: string; config: JsonObject; disabledReason: string | null }>;
+    layers?: Array<{
+      name: NativeConfigLayerName;
+      config: JsonObject;
+      disabledReason: string | null;
+    }>;
     configUnavailable?: boolean;
+    ask?: boolean;
     meetingsExposed: boolean;
     slackExposed: boolean;
   }>)(
@@ -1168,11 +1264,17 @@ describe("Codex plugin thread config", () => {
     async ({
       layers,
       configUnavailable,
+      ask,
       meetingsExposed,
       slackExposed,
     }: {
-      layers?: Array<{ name: string; config: JsonObject; disabledReason: string | null }>;
+      layers?: Array<{
+        name: NativeConfigLayerName;
+        config: JsonObject;
+        disabledReason: string | null;
+      }>;
       configUnavailable?: boolean;
+      ask?: boolean;
       meetingsExposed: boolean;
       slackExposed: boolean;
     }) => {
@@ -1191,18 +1293,36 @@ describe("Codex plugin thread config", () => {
         throw new Error(`unexpected request ${method}`);
       });
 
-      const config = await buildCodexPluginThreadConfig({
+      const build = buildCodexPluginThreadConfig({
         pluginConfig: {
-          codexPlugins: { enabled: true, allow_all_plugins: true },
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            ...(ask ? { allow_destructive_actions: "ask" } : {}),
+          },
         },
         configCwd: "/repo/project",
         appCacheKey: "runtime",
         request,
       });
 
+      if (configUnavailable) {
+        await expect(build).rejects.toThrow("Could not verify the Codex app allowlist");
+        expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+        return;
+      }
+      const config = await build;
+
       const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
-      expect(Object.hasOwn(apps ?? {}, "chatgpt-meetings")).toBe(meetingsExposed);
-      expect(Object.hasOwn(apps ?? {}, "slack")).toBe(slackExposed);
+      if (ask) {
+        expect(apps).toMatchObject({
+          "chatgpt-meetings": { enabled: false },
+          slack: { enabled: false },
+        });
+      } else {
+        expect(Object.hasOwn(apps ?? {}, "chatgpt-meetings")).toBe(meetingsExposed);
+        expect(Object.hasOwn(apps ?? {}, "slack")).toBe(slackExposed);
+      }
       expect(config.provisionalAppIds ?? []).toEqual(
         [meetingsExposed ? "chatgpt-meetings" : null, slackExposed ? "slack" : null]
           .filter((appId): appId is string => appId !== null)
@@ -1337,6 +1457,9 @@ describe("Codex plugin thread config", () => {
       }
       if (method === "plugin/installed") {
         return pluginInstalled([]);
+      }
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -1507,6 +1630,9 @@ describe("Codex plugin thread config", () => {
           path: "/company/marketplace.json",
         });
       }
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       throw new Error(`unexpected request ${method}`);
     });
 
@@ -1535,44 +1661,58 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
   });
 
-  it("fails closed when the account app inventory cannot be read", async () => {
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: false,
+  it.each(["ask", false] as const)(
+    "disables configured native apps when inventory fails under %s policy",
+    async (destructivePolicy) => {
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: destructivePolicy,
+          },
         },
-      },
-      appCacheKey: "runtime",
-      request: async (method) => {
-        if (method === "config/read") {
-          return { config: {}, layers: [] };
-        }
-        if (method === "app/installed") {
-          throw new Error("inventory unavailable");
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
+        appCacheKey: "runtime",
+        request: async (method) => {
+          if (method === "config/read") {
+            return {
+              config: {
+                apps: {
+                  "chatgpt-meetings": {
+                    enabled: true,
+                    links: { account: { default_tools_approval_mode: "approve" } },
+                  },
+                },
+              },
+              layers: [],
+            };
+          }
+          if (method === "app/installed") {
+            throw new Error("inventory unavailable");
+          }
+          throw new Error(`unexpected request ${method}`);
         },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual({
-      code: "account_app_inventory_unavailable",
-      message: "Codex account app inventory was unavailable; account apps were not exposed.",
-    });
-  });
+      });
 
-  it("reads shared account app configuration once when ask mode needs no writes", async () => {
+      expect(config.configPatch).toEqual({
+        "features.apps": false,
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      });
+      expect(config.policyContext.apps).toStrictEqual({});
+      expect(config.diagnostics).toContainEqual({
+        code: "account_app_inventory_unavailable",
+        message: "Codex account app inventory was unavailable; account apps were not exposed.",
+      });
+    },
+  );
+
+  it("reads shared account app configuration once for ask admission", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "app/installed" || method === "app/read") {
         return codexAppInventoryResponse(method, [
@@ -1610,139 +1750,63 @@ describe("Codex plugin thread config", () => {
     expect(config.diagnostics).toStrictEqual([]);
   });
 
-  it("clears durable approval overrides for account apps in ask mode", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, [
-          { ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" },
-        ]);
-      }
-      if (method === "config/read") {
-        const includeLayers =
-          (params as { includeLayers?: boolean } | undefined)?.includeLayers === true;
-        return {
-          config: {
-            apps: {
-              "chatgpt-meetings": {
-                tools: includeLayers ? { import_meeting: { approval_mode: "approve" } } : {},
-              },
-            },
-          },
-          ...(includeLayers ? { layers: [] } : {}),
-        };
-      }
-      if (method === "config/batchWrite") {
-        return {
-          status: "ok",
-          version: "version-1",
-          filePath: "/home/test/.codex/config.toml",
-          overriddenMetadata: null,
-        };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
+  it.each([
+    {
+      scope: "tool",
+      appConfig: { tools: { import_meeting: { approval_mode: "approve" } } },
+      expectedOverrides: { tools: { import_meeting: { approval_mode: "auto" } } },
+    },
+    {
+      scope: "account",
+      appConfig: { links: { account: { default_tools_approval_mode: "approve" } } },
+      expectedOverrides: {
+        links: { account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
       },
-      appCacheKey: "runtime",
-      request,
-    });
-
-    expect((config.configPatch?.apps as Record<string, unknown>)?.["chatgpt-meetings"]).toEqual({
-      enabled: true,
-      approvals_reviewer: "user",
-      destructive_enabled: true,
-      open_world_enabled: true,
-      default_tools_approval_mode: "auto",
-    });
-    expect(request).toHaveBeenCalledWith("config/batchWrite", {
-      edits: [
-        {
-          keyPath: 'apps."chatgpt-meetings".tools."import_meeting".approval_mode',
-          value: null,
-          mergeStrategy: "replace",
-        },
-      ],
-    });
-    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/value/write");
-  });
-
-  it("does not re-admit an excluded plugin-owned app through account-wide policy", async () => {
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "auto",
-          plugins: {
-            meetings: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "meetings",
-              allow_destructive_actions: "ask",
-            },
-          },
-        },
-      },
-      appCacheKey: "runtime",
-      request: async (method, params) => {
-        if (method === "plugin/installed" || method === "plugin/list") {
-          return pluginList([pluginSummary("meetings", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail("meetings", [appSummary("chatgpt-meetings")]);
-        }
+    },
+  ])(
+    "projects $scope approval overrides for account apps without writing native config",
+    async ({ appConfig, expectedOverrides }) => {
+      const savedAppConfig = structuredClone(appConfig);
+      const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "app/installed" || method === "app/read") {
           return codexAppInventoryResponse(method, [
             { ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" },
           ]);
         }
         if (method === "config/read") {
-          if ((params as { includeLayers?: boolean } | undefined)?.includeLayers === true) {
-            return {
-              config: {
-                apps: {
-                  "chatgpt-meetings": {
-                    tools: { import_meeting: { approval_mode: "approve" } },
-                  },
-                },
-              },
-              layers: [],
-            };
-          }
-        }
-        if (method === "config/batchWrite") {
-          throw new Error("approval policy unavailable");
+          expect(params).toEqual({ includeLayers: true });
+          return { config: { apps: { "chatgpt-meetings": appConfig } }, layers: [] };
         }
         throw new Error(`unexpected request ${method}`);
-      },
-    });
+      });
 
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "ask",
+          },
         },
-      },
-    });
-    expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.provisionalAppIds).toBeUndefined();
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({
-        code: "approval_overrides_clear_failed",
-        message:
-          "Could not clear durable Codex app approval overrides for chatgpt-meetings: approval policy unavailable",
-      }),
-    );
-  });
+        appCacheKey: "runtime",
+        request,
+      });
+
+      expect((config.configPatch?.apps as Record<string, unknown>)?.["chatgpt-meetings"]).toEqual({
+        enabled: true,
+        approvals_reviewer: "user",
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+        ...expectedOverrides,
+      });
+      expect(config.diagnostics).toEqual([]);
+      expect(appConfig).toEqual(savedAppConfig);
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/value/write");
+    },
+  );
 
   it("does not let per-plugin enablement override disabled native plugin support", async () => {
     expect(
@@ -1781,6 +1845,7 @@ describe("Codex plugin thread config", () => {
 
     expect(config.enabled).toBe(false);
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -1899,7 +1964,7 @@ describe("Codex plugin thread config", () => {
             config: {},
             layers: [
               {
-                name: "user",
+                name: { type: "user", file: "/home/test/.codex/config.toml", profile: null },
                 config: { apps: { _default: { enabled: false } } },
                 disabledReason: null,
               },
@@ -1936,15 +2001,20 @@ describe("Codex plugin thread config", () => {
 
   const appPolicyCases: Array<{
     name: string;
-    layers?: Array<{ name: string; config: JsonObject; disabledReason: string | null }>;
+    layers?: Array<{
+      name: NativeConfigLayerName;
+      config: JsonObject;
+      disabledReason: string | null;
+    }>;
     configUnavailable?: boolean;
+    ask?: boolean;
     exposed: boolean;
   }> = [
     {
       name: "blocks an explicit app-specific Codex disable",
       layers: [
         {
-          name: "project",
+          name: { type: "project", dotCodexFolder: "/repo/project/.codex" },
           config: { apps: { "google-calendar-app": { enabled: false } } },
           disabledReason: null,
         },
@@ -1955,12 +2025,12 @@ describe("Codex plugin thread config", () => {
       name: "honors the highest-precedence explicit app enablement",
       layers: [
         {
-          name: "project",
+          name: { type: "project", dotCodexFolder: "/repo/project/.codex" },
           config: { apps: { "google-calendar-app": { enabled: true } } },
           disabledReason: null,
         },
         {
-          name: "user",
+          name: { type: "user", file: "/home/test/.codex/config.toml", profile: null },
           config: { apps: { "google-calendar-app": { enabled: false } } },
           disabledReason: null,
         },
@@ -1971,12 +2041,12 @@ describe("Codex plugin thread config", () => {
       name: "ignores disabled config layers when deciding plugin admission",
       layers: [
         {
-          name: "untrusted-project",
+          name: { type: "project", dotCodexFolder: "/repo/untrusted/.codex" },
           config: { apps: { "google-calendar-app": { enabled: false } } },
           disabledReason: "untrusted project",
         },
         {
-          name: "user",
+          name: { type: "user", file: "/home/test/.codex/config.toml", profile: null },
           config: { apps: { _default: { enabled: false } } },
           disabledReason: null,
         },
@@ -1985,6 +2055,12 @@ describe("Codex plugin thread config", () => {
     },
     {
       name: "fails closed when Codex config layers cannot be inspected",
+      configUnavailable: true,
+      exposed: false,
+    },
+    {
+      name: "refuses ask plugin apps when config cannot be inspected",
+      ask: true,
       configUnavailable: true,
       exposed: false,
     },
@@ -2006,11 +2082,17 @@ describe("Codex plugin thread config", () => {
       configUnavailable,
       exposed,
       appEnabled,
+      ask,
     }: {
-      layers?: Array<{ name: string; config: JsonObject; disabledReason: string | null }>;
+      layers?: Array<{
+        name: NativeConfigLayerName;
+        config: JsonObject;
+        disabledReason: string | null;
+      }>;
       configUnavailable?: boolean;
       exposed: boolean;
       appEnabled: boolean;
+      ask?: boolean;
     }) => {
       const appCache = new CodexAppInventoryCache();
       const app = appInfo("google-calendar-app", true, appEnabled);
@@ -2039,10 +2121,11 @@ describe("Codex plugin thread config", () => {
         throw new Error(`unexpected request ${method}`);
       });
 
-      const config = await buildCodexPluginThreadConfig({
+      const build = buildCodexPluginThreadConfig({
         pluginConfig: {
           codexPlugins: {
             enabled: true,
+            ...(ask ? { allow_destructive_actions: "ask" } : {}),
             plugins: {
               "google-calendar": {
                 marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -2057,6 +2140,13 @@ describe("Codex plugin thread config", () => {
         request,
       });
 
+      if (configUnavailable) {
+        await expect(build).rejects.toThrow("Could not verify the Codex app allowlist");
+        expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+        return;
+      }
+      const config = await build;
+
       if (exposed) {
         expect(config.configPatch?.apps).toMatchObject({
           "google-calendar-app": { enabled: true },
@@ -2066,7 +2156,13 @@ describe("Codex plugin thread config", () => {
           expect.objectContaining({ code: "app_not_ready" }),
         );
       } else {
-        expect(config.configPatch?.apps).not.toHaveProperty("google-calendar-app");
+        if (ask) {
+          expect(config.configPatch?.apps).toMatchObject({
+            "google-calendar-app": { enabled: false },
+          });
+        } else {
+          expect(config.configPatch?.apps).not.toHaveProperty("google-calendar-app");
+        }
         expect(config.provisionalAppIds).toBeUndefined();
         expect(config.diagnostics).toContainEqual(
           expect.objectContaining({ code: "app_not_ready" }),
@@ -2093,6 +2189,9 @@ describe("Codex plugin thread config", () => {
       if (method === "plugin/read") {
         return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
       }
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       throw new Error(`unexpected request ${method}`);
     });
 
@@ -2117,7 +2216,6 @@ describe("Codex plugin thread config", () => {
     expect(config.configPatch?.apps).not.toHaveProperty("google-calendar-app");
     expect(config.provisionalAppIds).toBeUndefined();
     expect(config.diagnostics).toContainEqual(expect.objectContaining({ code: "app_not_ready" }));
-    expect(request).not.toHaveBeenCalledWith("config/read", expect.anything());
   });
 
   it("refreshes missing app inventory when plugin activation becomes unnecessary", async () => {
@@ -2204,11 +2302,15 @@ describe("Codex plugin thread config", () => {
         if (method === "plugin/read") {
           return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2263,11 +2365,15 @@ describe("Codex plugin thread config", () => {
         if (method === "plugin/installed" || method === "plugin/list") {
           return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2544,7 +2650,7 @@ describe("Codex plugin thread config", () => {
       ["app/installed", { forceRefresh: true }],
     ]);
     expect(request.mock.calls.filter(([method]) => method === "app/read")).toEqual([
-      ["app/read", { appIds: ["calendar-app", "meetings-app"] }],
+      ["app/read", { appIds: ["calendar-app", "meetings-app"], includeTools: true }],
     ]);
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
   });
@@ -2648,11 +2754,15 @@ describe("Codex plugin thread config", () => {
         if (method === "skills/list") {
           throw new Error("skills/list unavailable");
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2795,11 +2905,15 @@ describe("Codex plugin thread config", () => {
         if (method === "plugin/read") {
           return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2852,11 +2966,15 @@ describe("Codex plugin thread config", () => {
         if (method === "plugin/read") {
           return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
         }
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2966,6 +3084,22 @@ describe("Codex plugin thread config", () => {
     });
   });
 
+  it("preserves literal keys when merging native approval configuration", () => {
+    const config = mergeCodexThreadConfigs(
+      { apps: { calendar: { tools: { read: { enabled: true } } } } },
+      { apps: { calendar: { tools: { ["__proto__"]: { approval_mode: "auto" } } } } },
+    );
+    // Only own properties reach the native JSON request.
+    const wireConfig = JSON.stringify(config);
+    expect(JSON.parse(wireConfig)).toEqual({
+      apps: {
+        calendar: {
+          tools: { read: { enabled: true }, ["__proto__"]: { approval_mode: "auto" } },
+        },
+      },
+    });
+  });
+
   it("builds a diagnostic deny-all fallback after plugin config timeout", () => {
     const fallback = buildCodexPluginThreadConfigTimeoutFallback({
       pluginConfig: { codexPlugins: { enabled: true } },
@@ -3037,7 +3171,12 @@ describe("Codex plugin thread config", () => {
         method: string,
         _params: unknown,
         _options: { timeoutMs: number; signal: AbortSignal },
-      ) => (method === "plugin/installed" ? pluginInstalled([]) : pluginList([])),
+      ) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        return method === "plugin/installed" ? pluginInstalled([]) : pluginList([]);
+      },
     );
 
     await createCodexPluginThreadConfigStartupProvider({
@@ -3149,6 +3288,7 @@ describe("Codex plugin thread config", () => {
     });
     expect(request.mock.calls.find(([method]) => method === "app/read")?.[1]).toEqual({
       appIds: ["google-calendar-app"],
+      includeTools: true,
       threadId: "thread-149",
     });
     expect(request.mock.calls.find(([method]) => method === "config/read")?.[1]).toEqual({
@@ -3239,6 +3379,9 @@ describe("Codex plugin thread config", () => {
       },
     };
     const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method !== "plugin/installed" && method !== "plugin/list") {
         throw new Error(`unexpected request ${method}`);
       }

@@ -9,7 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -23,7 +23,7 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -33,7 +33,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -100,13 +100,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .join("");
 }
 
-function collectThinkingContent(content: Array<{ type?: string; thinking?: string }>): string {
-  return content
-    .filter((part): part is { type: "thinking"; thinking: string } => part.type === "thinking")
-    .map((part) => part.thinking)
-    .join("");
-}
-
 function buildBtwSystemPrompt(): string {
   return [
     "You are answering an ephemeral /btw side question about the current conversation.",
@@ -129,7 +122,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return resolveSessionAuthProfileOverrideSource(sessionEntry);
+  return resolveCollapsedSessionAuthPinSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -150,6 +143,7 @@ function resolveBtwAuthProfileStore(params: {
   if (isOpenAIProvider(params.provider)) {
     return {
       store: ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       }),
@@ -170,11 +164,13 @@ function resolveBtwAuthProfileStore(params: {
   let store: AuthProfileStore;
   if (externalCliAuthScope.providerIds) {
     store = ensureAuthProfileStore(params.agentDir, {
+      profileId: params.authProfileId,
       externalCliProviderIds: externalCliAuthScope.providerIds,
       allowKeychainPrompt: false,
     });
   } else {
     store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      profileId: params.authProfileId,
       allowKeychainPrompt: false,
     });
     externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
@@ -188,6 +184,7 @@ function resolveBtwAuthProfileStore(params: {
     });
     if (externalCliAuthScope.providerIds) {
       store = ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: externalCliAuthScope.providerIds,
         allowKeychainPrompt: false,
       });
@@ -577,6 +574,7 @@ async function resolveRuntimeModel(params: {
 
 type RunBtwSideQuestionParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -722,14 +720,10 @@ export async function runBtwSideQuestion(
     throw new Error("No active session transcript.");
   }
 
-  const requestedAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, requestedAgentId);
+  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
     config: params.cfg,
-    agentId: requestedAgentId,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: requestedWorkspaceDir,
     // Gateway-published owners are keyed with this flag, so a gateway-hosted
@@ -737,9 +731,7 @@ export async function runBtwSideQuestion(
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
   });
   return await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
-    const sessionAgentId =
-      preparedModelRuntime.agentId ??
-      resolveSessionAgentId({ sessionKey: params.sessionKey, config: preparedModelRuntime.config });
+    const sessionAgentId = preparedModelRuntime.agentId ?? params.agentId;
     const workspaceDir =
       preparedModelRuntime.workspaceDir ??
       resolveAgentWorkspaceDir(preparedModelRuntime.config, sessionAgentId);
@@ -992,6 +984,11 @@ export async function runBtwSideQuestion(
         })) ??
         (await resolveSandboxContext({
           config: params.cfg,
+          // An independent policy key keeps its own owner; global execution retains its prepared one.
+          agentId:
+            !params.sandboxSessionKey || params.sandboxSessionKey === params.sessionKey
+              ? sessionAgentId
+              : undefined,
           sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
           workspaceDir,
         }));
@@ -1274,7 +1271,7 @@ export async function runBtwSideQuestion(
       env: process.env,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       llmRuntime: modelRegistryRuntime.llmRuntime,
       currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
       providerStreamFn,
@@ -1376,8 +1373,8 @@ export async function runBtwSideQuestion(
       }
 
       if (event.type === "thinking_delta") {
-        reasoningText += event.delta;
         if (params.resolvedReasoningLevel !== "off") {
+          reasoningText += event.delta;
           await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
         }
         continue;
@@ -1399,13 +1396,8 @@ export async function runBtwSideQuestion(
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
-    if (finalMessage) {
-      if (!sawTextEvent) {
-        answerText = collectTextContent(finalMessage.content);
-      }
-      if (!reasoningText) {
-        collectThinkingContent(finalMessage.content);
-      }
+    if (finalMessage && !sawTextEvent) {
+      answerText = collectTextContent(finalMessage.content);
     }
 
     const answer = answerText.trim();

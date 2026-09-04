@@ -16,35 +16,35 @@ import {
 } from "./commands-registry.js";
 import type { CommandCategory } from "./commands-registry.types.js";
 
-const CATEGORY_LABELS: Record<CommandCategory, string> = {
+type DisplayCategory = Exclude<CommandCategory, "docks">;
+
+const CATEGORY_LABELS: Record<DisplayCategory, string> = {
   session: "Session",
   options: "Options",
   status: "Status",
   management: "Management",
   media: "Media",
   tools: "Tools",
-  docks: "Docks",
 };
 
-const CATEGORY_ORDER: CommandCategory[] = [
+const CATEGORY_ORDER: DisplayCategory[] = [
   "session",
   "options",
   "status",
   "management",
   "media",
   "tools",
-  "docks",
 ];
 
 function groupCommandsByCategory(
   commands: ChatCommandDefinition[],
-): Map<CommandCategory, ChatCommandDefinition[]> {
-  const grouped = new Map<CommandCategory, ChatCommandDefinition[]>();
+): Map<DisplayCategory, ChatCommandDefinition[]> {
+  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
   for (const category of CATEGORY_ORDER) {
     grouped.set(category, []);
   }
   for (const command of commands) {
-    const category = command.category ?? "tools";
+    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
     const list = grouped.get(category) ?? [];
     list.push(command);
     grouped.set(category, list);

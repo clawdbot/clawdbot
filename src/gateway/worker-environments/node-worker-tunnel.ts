@@ -13,7 +13,10 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorReceipt,
+} from "../../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -28,7 +31,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  measureNodeWorkerLaunchBytes,
+  type createNodeWorkerLaunchAdapter,
+} from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import {
@@ -39,6 +45,7 @@ import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-ser
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import {
+  joinWorkerTunnelStops,
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelStopReason,
   type WorkerTunnelStatus,
@@ -279,6 +286,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     entry: NodeTunnelEntry,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+    const buildLaunchInput = (
+      plan: NodeWorkerLaunchInput["descriptor"],
+      claim: WorkerSessionTurnClaim,
+    ): NodeWorkerLaunchInput => ({
+      environmentSession: 1,
+      launchId: plan.assignment.turnId,
+      gatewayNamespace,
+      expectedBundleHash: entry.expectedBuild.bundleHash,
+      placementGeneration: claim.placementGeneration,
+      descriptor: plan,
+    });
     const { validateRestoredWorkspace, ...workspaceActions } = createNodeWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
@@ -293,6 +311,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...workspaceActions,
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
+      measureLaunchTurn: (plan, claim) =>
+        measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
       launchTurn: async (request) => {
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
@@ -309,14 +329,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           options.validateWorkerTurn(claim);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
-          input: {
-            environmentSession: 1,
-            launchId: plan.assignment.turnId,
-            gatewayNamespace,
-            expectedBundleHash: entry.expectedBuild.bundleHash,
-            placementGeneration: claim.placementGeneration,
-            descriptor: plan,
-          },
+          input: buildLaunchInput(plan, claim),
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
@@ -406,9 +419,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           });
           const result = await raceNodeWorkerOperation(operation, signal);
           if (!result.ok) {
-            throw new Error(
-              `node worker environment stop failed (${result.error?.code ?? "UNAVAILABLE"})`,
-            );
+            const code = result.error?.code ?? "UNAVAILABLE";
+            const message = `node worker environment stop failed (${code})`;
+            throw RETRYABLE_TRANSPORT_CODES.has(code)
+              ? new WorkerTunnelOwnerDisconnectedError(message)
+              : new Error(message);
           }
         }
       } finally {
@@ -447,7 +462,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       // source of the retired scope; bundle metadata is not cleanup authority.
       const record = options.getEnvironment(environmentId);
       if (record?.nodeDeviceId && (ownerEpoch === undefined || record.ownerEpoch === ownerEpoch)) {
-        if (reason) {
+        if (reason === "provider-destroying" || reason === "provider-destroyed") {
           // Provider teardown owns the whole dedicated machine. No remote session tuple is
           // needed for local transfer cleanup; durable ownership remains until its proof.
           operations.push(options.workspaceTransfer.close(environmentId));
@@ -458,26 +473,25 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           const sessionId = record.attachedSessionIds[0];
           if (sessionId) {
             operations.push(
-              stopEnvironmentOwner({
-                deviceId: record.nodeDeviceId,
-                environmentId,
-                ownerEpoch: record.ownerEpoch,
-                sessionId,
-                executionMode:
-                  record.profileSnapshot.executionMode === "remote-exec"
-                    ? "remote-exec"
-                    : "worker-turn",
-              }),
+              stopEnvironmentOwner(
+                {
+                  deviceId: record.nodeDeviceId,
+                  environmentId,
+                  ownerEpoch: record.ownerEpoch,
+                  sessionId,
+                  executionMode:
+                    record.profileSnapshot.executionMode === "remote-exec"
+                      ? "remote-exec"
+                      : "worker-turn",
+                },
+                reason,
+              ),
             );
           }
         }
       }
     }
-    const outcomes = await Promise.allSettled(operations);
-    const failure = outcomes.find((outcome) => outcome.status === "rejected");
-    if (failure) {
-      throw failure.reason;
-    }
+    await joinWorkerTunnelStops(operations);
   }
 
   return {

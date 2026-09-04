@@ -68,6 +68,10 @@ describe("findCatalogSessionHovercardRow", () => {
               gitBranch: "feature/hovercard",
             },
             {
+              ...catalogSession("colored", "Colored CLI session"),
+              color: "cyan",
+            },
+            {
               ...catalogSession("workspace", "Workspace"),
               cwd: "/work/release-notes",
             },
@@ -81,6 +85,21 @@ describe("findCatalogSessionHovercardRow", () => {
       ],
     };
 
+    const colorInput = { catalogs: [catalog], sessionKey: "catalog:codex:gateway%3Acodex:colored" };
+    expect(findCatalogSessionHovercardRow(colorInput)?.color).toBe("cyan");
+    // An adopted session's cleared color must not fall back to stale CLI metadata.
+    expect(
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", hasAutomation: false },
+      })?.color,
+    ).toBeUndefined();
+    expect(
+      findCatalogSessionHovercardRow({
+        ...colorInput,
+        liveRow: { label: "Project", color: "red", hasAutomation: false },
+      })?.color,
+    ).toBe("red");
     expect(
       findCatalogSessionHovercardRow({
         catalogs: [catalog],

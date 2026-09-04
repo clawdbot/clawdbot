@@ -1,5 +1,7 @@
 /** Shared test fixtures for reply queue and typing-controller tests. */
-import { vi } from "vitest";
+import path from "node:path";
+import { onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
@@ -16,16 +18,18 @@ export function createMockReplyOperation(
   const failMock = vi.fn();
   const freezeAbortMock = vi.fn();
   const retainFailureUntilCompleteMock = vi.fn();
-  const updateSessionIdMock = vi.fn();
-  const sessionId = overrides.sessionId ?? "session";
+  let sessionId = overrides.sessionId ?? "session";
+  const updateSessionIdMock = vi.fn((nextSessionId: string) => {
+    sessionId = nextSessionId;
+  });
   let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
-  let toolAuthorityProjector:
-    | Parameters<ReplyOperation["bindToolAuthorityProjector"]>[0]
-    | undefined;
+  let toolAuthoritySnapshot: Parameters<ReplyOperation["bindToolAuthoritySnapshot"]>[0] | undefined;
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
   const replyOperation: ReplyOperation = {
     key: overrides.key ?? "main",
-    sessionId,
+    get sessionId() {
+      return sessionId;
+    },
     turnKind: "visible",
     abortSignal: overrides.abortSignal ?? new AbortController().signal,
     resetTriggered: false,
@@ -51,19 +55,38 @@ export function createMockReplyOperation(
     markGlobalLaneWaitEnded: vi.fn(),
     markTerminalRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
-    bindToolAuthorityFingerprint: vi.fn((fingerprint) => {
+    bindToolAuthoritySnapshot: vi.fn((snapshot) => {
+      if (replyOperation.result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
+        throw new Error("Reply operation cannot change tool authority after admission");
+      }
+      if (toolAuthoritySnapshot) {
+        return;
+      }
+      const fingerprint = snapshot.fingerprint();
+      if (!fingerprint) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      toolAuthoritySnapshot = snapshot;
       toolAuthorityFingerprint = fingerprint;
     }),
-    bindToolAuthorityProjector: vi.fn((projector) => {
-      toolAuthorityProjector = projector;
+    projectToolAuthorityFingerprint: vi.fn((overlay) => {
+      if (replyOperation.result || !toolAuthoritySnapshot || !toolAuthorityRoute) {
+        return undefined;
+      }
+      try {
+        return toolAuthoritySnapshot.project(overlay, toolAuthorityRoute);
+      } catch {
+        return undefined;
+      }
     }),
-    projectToolAuthorityFingerprint: vi.fn((overlay) =>
-      toolAuthorityProjector && toolAuthorityRoute
-        ? toolAuthorityProjector(overlay, toolAuthorityRoute)
-        : undefined,
-    ),
     bindToolAuthorityRoute: vi.fn((route) => {
-      toolAuthorityRoute = route;
+      if (replyOperation.result || !toolAuthoritySnapshot) {
+        throw new Error("Reply operation has no active tool authority snapshot");
+      }
+      const fingerprint = toolAuthoritySnapshot.fingerprint(route);
+      toolAuthorityRoute = { ...route };
+      toolAuthorityFingerprint = fingerprint;
+      return fingerprint;
     }),
     updateSessionId: updateSessionIdMock,
     updateSessionKey: vi.fn(),
@@ -109,6 +132,7 @@ export function createMockTypingController(
 export function createMockFollowupRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-mock-followup-");
   const skipProviderRuntimeHints = process.env.OPENCLAW_TEST_FAST === "1";
   const base: FollowupRun = {
     prompt: "hello",
@@ -117,13 +141,13 @@ export function createMockFollowupRun(
     originatingTo: "channel:C1",
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
       agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: {
         prompt: "",
@@ -131,6 +155,13 @@ export function createMockFollowupRun(
       },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        {
+          provider: overrides.run?.provider ?? "anthropic",
+          id: overrides.run?.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {

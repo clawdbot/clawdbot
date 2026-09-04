@@ -894,11 +894,11 @@ describe("deliverLineAutoReply", () => {
     );
   });
 
-  it("keeps the image route for generic media without LINE-specific options", async () => {
-    // A bare media URL stays on the image route, but shares validation with
-    // LINE-specific media. A .mp4 proves the explicit image fallback prevents
-    // extension-based video inference.
-    const { deps, replyMessageLine, buildMediaMessage } = createDeps({
+  it("leaves the media kind of a bare URL for the shared leaf to resolve", async () => {
+    // This path used to pin mediaKind to "image" for a bare media URL, so an
+    // audio or video URL reached LINE as an empty image bubble. The leaf reads
+    // the URL itself, so overriding the kind here is what hid the real one.
+    const { deps, buildMediaMessage } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
     });
@@ -906,7 +906,7 @@ describe("deliverLineAutoReply", () => {
     const result = await deliverLineAutoReply({
       ...baseDeliveryParams,
       payload: {
-        mediaUrls: ["https://example.com/clip.mp4"],
+        mediaUrls: ["https://example.com/voice.m4a"],
         channelData: { line: {} },
       },
       lineData: {},
@@ -915,19 +915,14 @@ describe("deliverLineAutoReply", () => {
 
     expect(result.status).toBe("delivered");
     expect(buildMediaMessage).toHaveBeenCalledWith(
-      "https://example.com/clip.mp4",
+      "https://example.com/voice.m4a",
       {
-        mediaKind: "image",
+        mediaKind: undefined,
         previewImageUrl: undefined,
         durationMs: undefined,
         trackingId: undefined,
       },
       "line:user:1",
-    );
-    expect(replyMessageLine).toHaveBeenCalledWith(
-      "token",
-      [createImageMessage("https://example.com/clip.mp4")],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
 

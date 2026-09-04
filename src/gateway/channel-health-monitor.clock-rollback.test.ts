@@ -20,9 +20,9 @@ function createChannelManager(running: boolean) {
   };
   const manager: ChannelManager = {
     getRuntimeSnapshot: vi.fn(() => snapshot),
-    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),

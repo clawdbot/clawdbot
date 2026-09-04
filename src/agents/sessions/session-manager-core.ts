@@ -479,9 +479,7 @@ export class SessionManagerCore {
   ): SessionLeafControl {
     return {
       type: "leaf",
-      id: generateSessionEntryId({
-        has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
-      }),
+      id: generateSessionEntryId(),
       parentId,
       timestamp: new Date().toISOString(),
       targetId: this.leafId,

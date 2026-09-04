@@ -1,5 +1,5 @@
 import { expect, vi } from "vitest";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
@@ -9,7 +9,7 @@ import {
   removeExpiredRuns,
   resumingRunIds,
 } from "./code-mode-state.js";
-import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
+import { normalizeCodeModeTimeoutResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
@@ -24,7 +24,7 @@ export const testing = {
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
-  normalizeCodeModeWorkerResult,
+  normalizeCodeModeTimeoutResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
 };
@@ -118,6 +118,39 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   expect(result.details).toBeDefined();
   expect(typeof result.details).toBe("object");
   return result.details as Record<string, unknown>;
+}
+
+/** Compare public summaries to independently constructed, normalized guest data. */
+export function expectOriginalCodeModeMarker(marker: unknown, original: unknown): void {
+  expect(marker).toMatchObject({
+    truncated: true,
+    guidance: "Output truncated; rerun with narrower args.",
+    prefix: expect.any(String),
+    omittedBytes: expect.any(Number),
+  });
+  const { prefix, omittedBytes } = marker as { prefix: string; omittedBytes: number };
+  const serialized = JSON.stringify(original);
+  expect(serialized.startsWith(prefix), "summary must retain the original JSON prefix").toBe(true);
+  expect(omittedBytes).toBe(Buffer.byteLength(serialized) - Buffer.byteLength(prefix));
+  expect(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(prefix))).toBe(prefix);
+}
+
+export function expectCodeModeSharedBudget(
+  result: { output?: unknown; value?: unknown; error?: unknown },
+  maxBytes: number,
+): void {
+  let bytes = 0;
+  for (const field of ["output", "value", "error"] as const) {
+    if (!Object.hasOwn(result, field)) {
+      continue;
+    }
+    const value = result[field];
+    if (field === "output" && Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+    bytes += Buffer.byteLength(JSON.stringify(value));
+  }
+  expect(bytes).toBeLessThanOrEqual(maxBytes);
 }
 
 export function createHeadlessCodeModeHarness(

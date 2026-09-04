@@ -135,7 +135,7 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
 
       if (process.platform !== "linux") {
         await expect(start(stateDir, unavailablePs)).rejects.toThrow(
-          "Cannot inspect registered Codex processes",
+          "Cannot inspect Codex processes. Process identity is unavailable or invalid.",
         );
         expect(isAlive(old.tree.child)).toBe(true);
       }

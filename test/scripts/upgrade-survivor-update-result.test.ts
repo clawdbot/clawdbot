@@ -88,6 +88,37 @@ function check(result: unknown, prefix = "") {
 }
 
 describe("published upgrade survivor consent recovery", () => {
+  it.each(
+    ["acpx", "feishu"].flatMap((pluginId) =>
+      ["error", "ok"].map((status) => ({ pluginId, status })),
+    ),
+  )("admits $pluginId fixture consent after a $status update", ({ pluginId, status }) => {
+    const update = deniedUpdate();
+    const reason = `Plugin "${pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`;
+    update.postUpdate.plugins.warnings.push({ reason, message: reason });
+    const result = check({
+      ...update,
+      status,
+      reason: status === "error" ? update.reason : undefined,
+      postUpdate: {
+        plugins: {
+          ...update.postUpdate.plugins,
+          status: status === "error" ? "error" : "warning",
+          reason: status === "error" ? update.postUpdate.plugins.reason : undefined,
+        },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["acpx", "feishu"])("rejects non-consent failures from reviewed %s", (pluginId) => {
+    const update = deferredUpdate();
+    const outcome = expectDefined(update.postUpdate.plugins.npm.outcomes[0], "plugin outcome");
+    outcome.pluginId = pluginId;
+    outcome.code = "INSTALL_FAILED";
+    expect(check(update).status).not.toBe(0);
+  });
+
   it("repairs capability deferrals even when retaining the old plugin makes core update successful", () => {
     const result = check(deferredUpdate());
     expect(result.status, result.stderr).toBe(0);

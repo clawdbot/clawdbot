@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 describe("tool-card source highlighting", () => {
@@ -40,10 +40,18 @@ describe("tool-card source highlighting", () => {
     },
   ])("highlights $name previews using their file languages", async (card) => {
     const container = document.createElement("div");
+    onTestFinished(async () => {
+      await vi.dynamicImportSettled();
+      render(null, container);
+    });
     render(
-      renderToolCard({ id: "highlight", ...card }, { expanded: true, onToggleExpanded: vi.fn() }),
+      renderToolCard(
+        { id: "highlight", ...card },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
+      ),
       container,
     );
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(container.querySelector(".tok-keyword")?.textContent).toBe("const"),
     );
@@ -54,7 +62,6 @@ describe("tool-card source highlighting", () => {
       ).toContain("def");
       expect(container.querySelector(".chat-diff__row--file .tok-keyword")).toBeNull();
     }
-    render(null, container);
   });
 
   it.each([
@@ -102,6 +109,10 @@ describe("tool-card source highlighting", () => {
               ],
             };
       const container = document.createElement("div");
+      onTestFinished(async () => {
+        await vi.dynamicImportSettled();
+        render(null, container);
+      });
       render(
         renderToolCard(
           {
@@ -110,11 +121,12 @@ describe("tool-card source highlighting", () => {
             args,
             ...(format === "structured" && !multiple ? { outputText: "Applied patch" } : {}),
           },
-          { expanded: true, onToggleExpanded: vi.fn() },
+          { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
         ),
         container,
       );
 
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(container.querySelector(".chat-diff__row--del .tok-propertyName")?.textContent).toBe(
           "data-mode",
@@ -134,7 +146,6 @@ describe("tool-card source highlighting", () => {
           [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
         ).toContain("def");
       }
-      render(null, container);
     },
   );
 });

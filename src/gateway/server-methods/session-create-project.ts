@@ -12,7 +12,11 @@ import { materializeProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { githubApiToken } from "../control-ui-github-api.js";
-import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
+import {
+  generateWorktreeSessionTitle,
+  hasExplicitSessionName,
+  resolveExplicitSessionName,
+} from "../dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
@@ -161,19 +165,26 @@ export async function prepareSessionWorkspace(params: {
       assertRunOwnership();
       emitAgentRunStatusEvent({ runId: clientRunId, sessionKey, agentId, phase });
     };
-    const needsTitle = pending && !pending.name && !saved.label && !saved.displayName;
+    const needsTitle = pending && !pending.name && !hasExplicitSessionName(saved);
     if (needsTitle) {
       status("naming_worktree");
     }
-    const title = needsTitle
-      ? prepareWorktreeSessionTitle({
-          cfg,
-          agentId,
-          entry: saved,
-          userMessage: pending.titleSource,
-          onError: (error) => context.logGateway.warn(`worktree title failed: ${String(error)}`),
-        })
-      : undefined;
+    const title =
+      pending && !pending.name
+        ? await generateWorktreeSessionTitle({
+            cfg,
+            agentId,
+            entry: saved,
+            sessionId: saved.sessionId,
+            sessionKey,
+            storePath,
+            userMessage: pending.titleSource,
+            commitGuard: assertRunOwnership,
+            onPersisted: () =>
+              emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.title" }),
+            onError: (error) => context.logGateway.warn(`worktree title failed: ${String(error)}`),
+          })
+        : undefined;
     let prepared: PreparedGatewaySessionLifecycle = {
       spawnedCwd: root.value.sessionCwd,
       sessionRoot: root.value.sessionRoot,
@@ -185,8 +196,7 @@ export async function prepareSessionWorkspace(params: {
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
-        label: saved.label ?? saved.displayName,
-        title,
+        label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
@@ -240,9 +250,6 @@ export async function prepareSessionWorkspace(params: {
     delete entry.pendingWorktree;
     assertRunOwnership();
     emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
-    if (await title?.persist(agentId, entry, sessionKey, storePath)) {
-      emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.title" });
-    }
   });
   assertRunOwnership();
   return assertRunOwnership;

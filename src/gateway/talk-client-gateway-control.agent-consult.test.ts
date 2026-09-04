@@ -43,10 +43,8 @@ vi.mock("../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import {
-  createTalkClientAgentConsultRunner,
-  type TalkAgentConsultAuthority,
-} from "./talk-client-gateway-control.js";
+import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
+import type { TalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {
@@ -71,8 +69,12 @@ function createRunner(
   return createTalkClientAgentConsultRunner({
     config,
     context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
-    agentId: "researcher",
-    sessionKey: "agent:researcher:talk",
+    sessionTarget: {
+      agentId: "researcher",
+      sessionKey: "main",
+      canonicalKey: "agent:researcher:talk",
+      storePath: "/tmp/sessions",
+    },
     authority,
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
@@ -124,7 +126,13 @@ describe("Talk client agent consult admission", () => {
       }),
     );
     expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: false, toolsAllow: ["read"] }),
+      expect.objectContaining({
+        agentId: "researcher",
+        sessionKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+        senderIsOwner: false,
+        toolsAllow: ["read"],
+      }),
     );
     expect(mocks.close).toHaveBeenCalledOnce();
   });

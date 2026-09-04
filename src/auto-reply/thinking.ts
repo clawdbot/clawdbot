@@ -204,7 +204,7 @@ function appendCatalogAdvancedThinkingLevels(
   }
   const runtime = normalizeOptionalLowercaseString(agentRuntime);
   if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
-    // Ultra is OpenClaw's orchestration tier; provider requests use Max.
+    // Max-only catalogs synthesize Ultra only for OpenClaw; other runtimes must advertise it.
     appendProfileLevel(profile, "ultra");
   }
 }

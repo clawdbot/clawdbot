@@ -176,49 +176,7 @@ describe("plugin runtime session creation", () => {
     });
   });
 
-  it("creates a plugin-owned locked CLI session with a seeded fork binding", async () => {
-    await withOpenClawTestState({ label: "plugin-runtime-cli-session-create" }, async () => {
-      const runtime = createRuntimeAgent();
-      const key = "agent:main:catalog-adopt:claude:source";
-      const created = await runtime.session.createSessionEntry({
-        cfg: {},
-        key,
-        execNode: "node-a",
-        execCwd: "/work/on-node",
-        initialEntry: {
-          cliBackendId: "claude-cli",
-          model: "claude-opus-4-8",
-          modelSelectionLocked: true,
-          pluginOwnerId: "anthropic",
-          cliSessionBinding: {
-            sessionId: "claude-source",
-            forceReuse: true,
-            forkNextResume: true,
-          },
-        },
-      });
-      expect(created.entry).toMatchObject({
-        createdVia: "plugin",
-        createdActor: { type: "system", id: "anthropic" },
-        createdAt: expect.any(Number),
-        pluginOwnerId: "anthropic",
-        providerOverride: "claude-cli",
-        modelOverride: "claude-opus-4-8",
-        modelOverrideRouteResolution: "resolved",
-        modelSelectionLocked: true,
-        execHost: "node",
-        execNode: "node-a",
-        execCwd: "/work/on-node",
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "claude-source",
-            forceReuse: true,
-            forkNextResume: true,
-          },
-        },
-      });
-    });
-  });
+  // Plugin-owned CLI fork creation with colors lives in runtime-agent.session-color.test.ts.
 
   it("rolls back the exact created entry and transcript when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
@@ -1008,6 +966,34 @@ describe("plugin runtime session work admission", () => {
     await mutation;
 
     await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
+  });
+
+  it("rejects a session replaced while work waits for lifecycle admission", async () => {
+    const runtime = createRuntimeAgent();
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {
+        await runtime.session.upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      },
+    });
+    await mutationStarted.promise;
+
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("admits fresh work and protects session creation inside the callback", async () => {

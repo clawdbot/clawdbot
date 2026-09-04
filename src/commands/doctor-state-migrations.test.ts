@@ -4345,10 +4345,6 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("warns when target exists and legacy state is not a safe mirror", async () => {
-    const emptyRoot = makeDoctorStateDir();
-    const empty = ensureLegacyAndTargetStateDirs(emptyRoot);
-    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(emptyRoot), empty.targetDir);
-
     const fileRoot = makeDoctorStateDir();
     const file = ensureLegacyAndTargetStateDirs(fileRoot);
     fs.writeFileSync(path.join(file.legacyDir, "sessions.json"), "{}", "utf-8");

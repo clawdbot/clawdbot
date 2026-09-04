@@ -2,9 +2,8 @@ import { html } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
-
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
-let attachmentIconStyles: Promise<unknown> | undefined;
+import "../../../styles/chat/attachments.css";
 
 type AttachmentFileIconFamily =
   | "unknown"
@@ -271,34 +270,35 @@ export function renderAttachmentFileIcon(options: {
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
 }) {
-  attachmentIconStyles ??= import("../../../styles/chat/attachments.css");
-  void attachmentIconStyles;
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
-  const compactLight = resolved.compact
-    ? fileIconAssetPath(`compact/light/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-light");
-  const compactDark = resolved.compact
-    ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-dark");
+  const large = options.mode === "large-placeholder";
+  const size = large ? "44px" : "20px";
+  const light = large
+    ? fileIconAssetPath("large/shell-light")
+    : resolved.compact
+      ? fileIconAssetPath(`compact/light/${resolved.compact}`)
+      : fileIconAssetPath("compact/unknown-light");
+  const dark = large
+    ? fileIconAssetPath("large/shell-dark")
+    : resolved.compact
+      ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
+      : fileIconAssetPath("compact/unknown-dark");
   return html`<span
-    class="chat-attachment-file-icon ${options.unavailable
-      ? "chat-attachment-file-icon--unavailable"
-      : ""}"
+    class="chat-attachment-file-icon ${
+      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
+    }"
     data-family=${resolved.family}
     data-mode=${options.mode}
     aria-hidden="true"
     style=${styleMap({
-      "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
-      "--chat-file-icon-shell-dark": `url("${fileIconAssetPath("large/shell-dark")}")`,
+      width: size,
+      height: size,
+      "--chat-file-icon-light": `url("${light}")`,
+      "--chat-file-icon-dark": `url("${dark}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
-      "--chat-file-icon-compact-light": `url("${compactLight}")`,
-      "--chat-file-icon-compact-dark": `url("${compactDark}")`,
     })}
   >
-    <span class="chat-attachment-file-icon__large">
-      <span class="chat-attachment-file-icon__overlay"></span>
-    </span>
-    <span class="chat-attachment-file-icon__compact"></span>
+    ${large ? html`<span class="chat-attachment-file-icon__overlay"></span>` : null}
   </span>`;
 }

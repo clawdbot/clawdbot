@@ -81,21 +81,25 @@ describe("buildQaGatewayConfig", () => {
     );
   });
 
-  it("stamps fresh QA configs with the current OpenClaw version", () => {
-    const cfg = buildQaGatewayConfig({
-      bind: "loopback",
-      gatewayPort: 18789,
-      gatewayToken: "token",
-      workspaceDir: "/tmp/qa-workspace",
-      ...createQaChannelTransportParams(),
-    });
+  it.each(["/tmp/qa-first/workspace", "/tmp/qa-second/workspace"])(
+    "stamps fresh QA configs and confines rolling logs (%s)",
+    (workspaceDir) => {
+      const cfg = buildQaGatewayConfig({
+        bind: "loopback",
+        gatewayPort: 18789,
+        gatewayToken: "token",
+        workspaceDir,
+        ...createQaChannelTransportParams(),
+      });
 
-    expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
-    expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
-    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
-    expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
-    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
-  });
+      expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
+      expect(cfg.logging?.file).toBe(`${workspaceDir}/logs/openclaw-YYYY-MM-DD.log`);
+      expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-lab", "qa-channel"]);
+      expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
+      expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
+      expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+    },
+  );
 
   it("keeps mock-openai as the default provider lane", () => {
     const cfg = buildQaGatewayConfig({
@@ -111,6 +115,9 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
+    expect(cfg.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
     expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual([
       "mock-openai/gpt-5.6-luna-alt",
     ]);
@@ -546,6 +553,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
+    expect(cfg.agents?.defaults?.modelPolicy).toEqual({ allow: ["openai/gpt-5.4"] });
   });
 
   it("can disable control ui for suite-only gateway children", () => {

@@ -23,7 +23,7 @@ import {
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitChannelEntries } from "./legacy-config-record-shared.js";
+import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -52,6 +52,48 @@ function moveKey(
     changes.push(`Removed ${path}.${legacyKey} (${path}.${canonicalKey} already set).`);
   }
   delete owner[legacyKey];
+}
+
+function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
+  const globalMessage = getRecord(getRecord(raw.tools)?.message);
+  const globalBypass = globalMessage?.allowCrossContextSend;
+  const globalCrossContext = getRecord(globalMessage?.crossContext);
+  const migrate = (message: Record<string, unknown> | null, path: string, agent: boolean) => {
+    if (!message) {
+      return;
+    }
+    const legacy = message.allowCrossContextSend;
+    const inheritedBypass = agent && globalBypass === true;
+    if (legacy === undefined && !inheritedBypass) {
+      return;
+    }
+    const crossContext = getRecord(message.crossContext) ?? {};
+    // The shipped legacy flag bypassed both checks. An agent's false masked the
+    // root bypass, so preserve that effective policy before changing the root.
+    if ((legacy ?? (agent ? globalBypass : undefined)) === true) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      };
+    } else if (inheritedBypass) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider:
+          (crossContext.allowWithinProvider ?? globalCrossContext?.allowWithinProvider) !== false,
+        allowAcrossProviders:
+          (crossContext.allowAcrossProviders ?? globalCrossContext?.allowAcrossProviders) === true,
+      };
+    }
+    delete message.allowCrossContextSend;
+    changes.push(`Moved ${path}.allowCrossContextSend → ${path}.crossContext.`);
+  };
+  visitAgentConfigScopes(raw, (scope, path) => {
+    if (path !== "agents.defaults") {
+      migrate(getRecord(getRecord(scope.tools)?.message), `${path}.tools.message`, true);
+    }
+  });
+  migrate(globalMessage, "tools.message", false);
 }
 
 function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
@@ -101,28 +143,22 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
+  visitAgentConfigScopes(raw, (scope, path) => {
     moveKey(
-      getRecord(getRecord(scope?.tools)?.exec),
+      getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
     moveKey(
-      getRecord(getRecord(getRecord(scope?.sandbox)?.browser)),
+      getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
       `${path}.sandbox.browser`,
       changes,
     );
-  };
-  migrateAgentScope(defaults, "agents.defaults");
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((entry, index) =>
-      migrateAgentScope(getRecord(entry), `agents.list[${index}]`),
-    );
-  }
+  });
   moveKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",
@@ -324,7 +360,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     }
   });
 
-  let messages = getRecord(raw.messages);
+  const messages = getRecord(raw.messages);
   const statusReactions = getRecord(messages?.statusReactions);
   if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
     delete statusReactions.emojis;
@@ -337,49 +373,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
-    const ack = getRecord(entry.ackReaction);
-    if (!ack) {
-      return;
-    }
-    messages ??= ensureRecord(raw, "messages");
-    if (messages.ackReaction === undefined) {
-      const legacyAgents = getRecord(raw.agents)?.list;
-      const agentEntries = Array.isArray(legacyAgents)
-        ? legacyAgents.filter((value): value is Record<string, unknown> =>
-            Boolean(getRecord(value)),
-          )
-        : [];
-      const defaultAgent =
-        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
-      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
-      messages.ackReaction =
-        typeof ack.emoji === "string"
-          ? ack.emoji
-          : typeof identityEmoji === "string"
-            ? identityEmoji
-            : "👀";
-    }
-    if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
-      if (scope) {
-        messages.ackReactionScope = scope;
-      }
-    }
-    delete entry.ackReaction;
-    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
@@ -453,6 +446,26 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
@@ -593,6 +606,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["tools", "message", "allowCrossContextSend"],
         "tools.message.allowCrossContextSend moved to tools.message.crossContext.",
       ),
+      rule(
+        ["agents"],
+        "Per-agent tools.message.allowCrossContextSend moved to tools.message.crossContext on the same agent.",
+        (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (scope, path) => {
+            found ||=
+              path !== "agents.defaults" &&
+              Object.hasOwn(
+                getRecord(getRecord(scope.tools)?.message) ?? {},
+                "allowCrossContextSend",
+              );
+          });
+          return found;
+        },
+      ),
       rule(["tools", "experimental"], "tools.experimental.planTool moved to tools.updatePlan."),
       rule(
         ["talk", "realtime", "voice"],
@@ -642,24 +671,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete media.asyncCompletion;
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
-      const messageTool = getRecord(getRecord(raw.tools)?.message);
-      if (messageTool && Object.hasOwn(messageTool, "allowCrossContextSend")) {
-        const enabled = messageTool.allowCrossContextSend === true;
-        if (enabled) {
-          const crossContext = getRecord(messageTool.crossContext) ?? {};
-          if (crossContext.allowWithinProvider === undefined) {
-            crossContext.allowWithinProvider = true;
-          }
-          if (crossContext.allowAcrossProviders === undefined) {
-            crossContext.allowAcrossProviders = true;
-          }
-          messageTool.crossContext = crossContext;
-          changes.push("Moved tools.message.allowCrossContextSend → tools.message.crossContext.");
-        } else {
-          changes.push("Removed tools.message.allowCrossContextSend.");
-        }
-        delete messageTool.allowCrossContextSend;
-      }
+      migrateMessageCrossContext(raw, changes);
       // planTool was the only tools.experimental member, so the strict schema now
       // rejects the whole container; lift the value, then drop the empty parent.
       const tools = getRecord(raw.tools);
