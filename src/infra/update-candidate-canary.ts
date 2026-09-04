@@ -126,17 +126,30 @@ function isolatedConfig(
   return copied;
 }
 
-async function waitBounded(promise: Promise<unknown>, milliseconds: number): Promise<void> {
+async function waitBounded(
+  promise: Promise<unknown>,
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
   try {
     await Promise.race([
       promise,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.max(0, milliseconds));
+        abort = resolve;
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) {
+          resolve();
+        }
       }),
     ]);
   } finally {
     clearTimeout(timer);
+    if (abort) {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 }
 
@@ -170,6 +183,7 @@ export async function validateUpdateCandidateCanary(params: {
   config: OpenClawConfig;
   stateDir: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
@@ -180,6 +194,7 @@ export async function validateUpdateCandidateCanary(params: {
   const deadline = started + budget;
   const workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
   const remaining = () => {
+    params.signal?.throwIfAborted();
     const milliseconds = workDeadline - Date.now();
     if (milliseconds <= 0) {
       throw new Error("Candidate validation deadline exceeded");
@@ -412,6 +427,7 @@ export async function validateUpdateCandidateCanary(params: {
         }),
         baseEnv: env,
         timeoutMs: remaining(),
+        signal: params.signal,
         killGraceMs: 500,
         maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
       },
@@ -476,6 +492,7 @@ export async function validateUpdateCandidateCanary(params: {
             code = value;
           }),
           remaining(),
+          params.signal,
         );
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
@@ -552,7 +569,10 @@ export async function validateUpdateCandidateCanary(params: {
           }
           try {
             const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, {
-              signal: AbortSignal.timeout(Math.min(1_000, remaining())),
+              signal: AbortSignal.any([
+                AbortSignal.timeout(Math.min(1_000, remaining())),
+                ...(params.signal ? [params.signal] : []),
+              ]),
             });
             const payload: unknown = await response.json();
             if (
@@ -567,7 +587,7 @@ export async function validateUpdateCandidateCanary(params: {
           } catch {
             // The listener may not exist yet; only the common deadline permits another probe.
           }
-          await sleep(Math.min(100, remaining()));
+          await sleep(Math.min(100, remaining()), undefined, { signal: params.signal });
         }
       }
       const step: UpdateStepResult = {
@@ -596,7 +616,10 @@ export async function validateUpdateCandidateCanary(params: {
     );
     if (!steps.length || steps.at(-1)?.exitCode === 0 || steps.at(-1)?.advisory) {
       steps.push({
-        name: `candidate ${phase}`,
+        name:
+          phase === "startup" || phase === "readiness"
+            ? "candidate gateway canary"
+            : `candidate ${phase}`,
         command: "candidate validation",
         cwd: params.root,
         durationMs: Date.now() - started,

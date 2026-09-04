@@ -52,10 +52,13 @@ export async function waitForGatewayHttpReadiness(params: {
   deadlineAt: number;
   delayMs: number;
   port: number;
+  signal?: AbortSignal;
 }): Promise<GatewayHttpReadiness> {
+  params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
   let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
     const remainingMs = params.deadlineAt - Date.now();
     if (remainingMs <= 0) {
       return latest;
@@ -67,6 +70,7 @@ export async function waitForGatewayHttpReadiness(params: {
           pathname: "/healthz",
           port: params.port,
           timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
       probe
@@ -75,9 +79,11 @@ export async function waitForGatewayHttpReadiness(params: {
           pathname: "/readyz",
           port: params.port,
           timeoutMs: Math.min(remainingMs, 3_000),
+          ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
     ]);
+    params.signal?.throwIfAborted();
     latest = { healthz, readyz };
     if (healthz === 200 && readyz === 200) {
       return latest;
@@ -87,7 +93,7 @@ export async function waitForGatewayHttpReadiness(params: {
       if (remainingDelayMs <= 0) {
         return latest;
       }
-      await sleep(Math.min(params.delayMs, remainingDelayMs));
+      await sleep(Math.min(params.delayMs, remainingDelayMs), params.signal);
     }
   }
   return latest;
@@ -215,7 +221,9 @@ export async function confirmGatewayReachable(params: {
   configuredProbe?: ConfiguredGatewayLocalProbe;
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
+  signal?: AbortSignal;
 }): Promise<GatewayReachability> {
+  params.signal?.throwIfAborted();
   const result: GatewayReachability = {
     reachable: false,
     gatewayVersion: null,
@@ -237,6 +245,7 @@ export async function confirmGatewayReachable(params: {
     const authNone = context.config.gateway?.auth?.mode === "none";
     // Readiness is first-party local control. CLI shared auth preserves read scopes;
     // auth-none uses the existing loopback backend contract without pairing a device.
+    params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
       localPortOverride: params.port,
@@ -252,6 +261,7 @@ export async function confirmGatewayReachable(params: {
       deviceIdentity: null,
       sharedStateMode: "read-only",
       timeoutMs: 3_000,
+      ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
         result.gatewayBuildId = hello.server.buildId ?? null;
@@ -261,6 +271,7 @@ export async function confirmGatewayReachable(params: {
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
+    params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket
     // closes (including foreign listeners) must never satisfy restart health.
     result.reachable =
@@ -275,6 +286,7 @@ export async function confirmGatewayReachable(params: {
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }
+  params.signal?.throwIfAborted();
   return result;
 }
 

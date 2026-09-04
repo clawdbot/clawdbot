@@ -12,6 +12,7 @@ import {
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
 import type { UpdateRepairTarget } from "./update-repair-agent.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const repairRuntime = {
   log: () => {},
@@ -35,6 +36,11 @@ export async function withUpdateRepairEnvironment<T>(
       stateDir: target.stateDir,
       configPath: target.configPath,
       defaultWorkspaceDir: target.workspaceDir,
+    }),
+    buildUpdateDoctorEnv({
+      allowGatewayServiceRepair: false,
+      allowGatewayActivation: false,
+      serviceRepairPolicy: "external",
     }),
   );
   io.clearRuntimeConfigSnapshot();

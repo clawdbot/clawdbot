@@ -494,8 +494,11 @@ async function testPreflightCandidate(params: {
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     await candidateCommand.restoreWorkspace?.();
+    await params.validateCandidate?.(params.worktreeDir);
+    // Activation checks out candidateSha and promotes only generated runtime paths.
+    // Check after repair so validated source edits cannot disappear at activation.
     const cleanCheck = await runCandidateCheck(
-      "build clean check",
+      "candidate clean check",
       gitCleanCheckArgs(params.worktreeDir),
     );
     const status = params.steps.at(-1);
@@ -505,7 +508,20 @@ async function testPreflightCandidate(params: {
       }
       return { status: "failed" };
     }
-    await params.validateCandidate?.(params.worktreeDir);
+    const sourceCheck = await runCandidateCheck("candidate source check", [
+      "git",
+      "-C",
+      params.worktreeDir,
+      "diff",
+      "--quiet",
+      candidateSha,
+      "--",
+    ]);
+    if (sourceCheck) {
+      sourceCheck.stderrTail =
+        "Candidate source differs from the selected commit. Repair the source revision before retrying the update.";
+      return { status: "failed" };
+    }
     await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
   } finally {

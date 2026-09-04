@@ -126,12 +126,13 @@ describe("managed service update handoff", () => {
       [false, true].map((recover) => ({ kind, recover })),
     ),
   )(
-    "transfers $kind update ownership before CLI disconnect and preserves relative inputs (recovery=$recover)",
+    "keeps $kind serving through ten minutes of validation before activation and preserves relative inputs (recovery=$recover)",
     async ({ kind, recover }) => {
       const { commands, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
         kind,
         {
           controlDisconnect: "transferred",
+          validationClockAdvanceMs: 10 * 60_000,
           relativeInput: true,
           updaterExitCode: recover ? 7 : 0,
           helperExitCode: recover ? 7 : 0,
@@ -189,6 +190,7 @@ describe("managed service update handoff", () => {
       const { commands, parentSignal, log } = await runManagedServiceManagerBoundary("systemd", {
         controlDisconnect: "transferred",
         validationResult,
+        validationClockAdvanceMs: 10 * 60_000,
         helperExitCode: validationResult === "failed" ? 1 : 0,
       });
       expect(commands).toEqual([]);

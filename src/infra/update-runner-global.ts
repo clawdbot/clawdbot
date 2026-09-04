@@ -151,9 +151,11 @@ export async function runGlobalUpdate(params: {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: globalManager,
     root: packageUpdate.activePackageRoot ?? undefined,
-    reason: packageUpdate.failedStep
-      ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
-      : undefined,
+    reason:
+      packageUpdate.reason ??
+      (packageUpdate.failedStep
+        ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+        : undefined),
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,

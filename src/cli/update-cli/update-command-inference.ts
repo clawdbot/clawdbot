@@ -14,7 +14,9 @@ export async function runUpdateInferenceProbe(params: {
   root: string | undefined;
   env: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   if (!params.root) {
     return false;
   }
@@ -41,6 +43,7 @@ export async function runUpdateInferenceProbe(params: {
             TEMP: scratchDir,
           },
           timeoutMs: 15_000,
+          signal: params.signal,
           killProcessTree: true,
           killGraceMs: 0,
           input: "",
@@ -48,6 +51,7 @@ export async function runUpdateInferenceProbe(params: {
           terminateOnOutputLimit: true,
         },
       );
+      params.signal?.throwIfAborted();
       return result.code === 0 && result.termination === "exit";
     } finally {
       // A deadline kills the worker before its own finally can remove copied
@@ -55,6 +59,7 @@ export async function runUpdateInferenceProbe(params: {
       await fs.rm(scratchDir, { recursive: true, force: true });
     }
   } catch {
+    params.signal?.throwIfAborted();
     // Older targets may not ship this advisory worker; provider outages and
     // missing probe support never authorize package rollback.
     return false;

@@ -262,6 +262,9 @@ describe("update candidate canary", () => {
       });
       expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
+      if (failure === "readiness") {
+        expect(result.steps.at(-1)?.name).toBe("candidate gateway canary");
+      }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);
       expect(result.durationMs).toBeLessThan(1_000);
@@ -290,6 +293,29 @@ describe("update candidate canary", () => {
     expect(result.status).toBe("error");
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("drains a cancelled validation child before deleting its private state", async () => {
+    const controller = new AbortController();
+    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      childEnv = options.env;
+      queueMicrotask(() => controller.abort(new Error("repair deadline")));
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+      signal: controller.signal,
+    });
+    expect(result.status).toBe("error");
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(mocks.signal.mock.calls.map(([, signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a zero-exit continuation worker without its compiled schema contract before boot", async () => {

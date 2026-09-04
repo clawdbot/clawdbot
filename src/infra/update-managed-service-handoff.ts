@@ -1,10 +1,7 @@
-// Generation timeline: the serving Gateway transfers to a detached helper; its
-// orchestrator stages and validates while that Gateway stays available. Only the
-// orchestrator's park request waits any requested restart delay while still
-// serving, then starts the parent-exit deadline and supervisor stop.
-// After the exact parent generation exits, parked acknowledges activation; the
-// orchestrator swaps, migrates, starts and verifies the successor. Transfer alone
-// (including an updater no-op or validation failure) never authorizes a stop.
+// Readiness/transfer timeouts finish before online staging, validation and ten-minute repair.
+// Only park waits the restart delay, then starts the parent-exit deadline and supervisor stop.
+// After the exact parent exits, parked permits activation, migration and successor verification.
+// No-op updates and failed validation leave the serving parent untouched.
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -51,8 +48,7 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { looksLikeGitCheckout } from "./update-runner-install-surface.js";
 
-// Once activation starts, the deadline covers Gateway drain plus the bounded
-// parent-exit shutdown reserve. Candidate validation and requested delay stay online.
+// The activation deadline covers Gateway drain plus this shutdown reserve.
 const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";

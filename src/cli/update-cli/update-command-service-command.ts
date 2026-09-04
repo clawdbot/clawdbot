@@ -36,14 +36,19 @@ export async function runUpdatedInstallGatewayCommand(
     nodeRunner?: string;
     timeoutMs?: number;
     invocationCwd?: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
   },
   action: "install" | "restart",
   preserveDefinition = false,
 ): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const installing = action === "install";
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
     if (installing && !isPackageManagerUpdateMode(params.result.mode ?? "unknown")) {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       await runDaemonInstall({ force: true, json: params.opts.json || undefined });
       return true;
     }
@@ -61,20 +66,25 @@ export async function runUpdatedInstallGatewayCommand(
     args.push("--json");
   }
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
+  const commandEnv = resolveUpdatedInstallCommandEnv({
+    processEnv: installing
+      ? (params.serviceInstallEnv ?? params.invocationEnv)
+      : params.invocationEnv,
+    serviceEnv: installing ? undefined : params.serviceEnv,
+    invocationCwd: params.invocationCwd,
+  });
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const res = await runCommandWithTimeout([nodeRunner, entrypoint, ...args], {
     // The complete owned env must not regain selectors removed during capture.
     baseEnv: {},
     cwd: params.result.root,
-    env: resolveUpdatedInstallCommandEnv({
-      processEnv: installing
-        ? (params.serviceInstallEnv ?? params.invocationEnv)
-        : params.invocationEnv,
-      serviceEnv: installing ? undefined : params.serviceEnv,
-      invocationCwd: params.invocationCwd,
-    }),
+    env: commandEnv,
     // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
     timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
+    ...(params.signal ? { signal: params.signal, killProcessTree: true } : {}),
   });
+  params.signal?.throwIfAborted();
   if (res.code === 0) {
     return true;
   }

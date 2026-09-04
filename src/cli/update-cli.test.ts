@@ -14,6 +14,7 @@ import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/pa
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -80,6 +81,9 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   activate: vi.fn(async () => false),
 }));
 const candidateValidation = vi.hoisted(() => vi.fn());
+const unattendedRepair = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/update-repair-agent.js").prepareUnattendedUpdateRepair>(),
+);
 const httpReadiness = vi.hoisted(() => vi.fn());
 const inferenceVerification = vi.hoisted(() => vi.fn());
 const stateSchemaVersions = vi.hoisted(() => vi.fn());
@@ -160,6 +164,9 @@ vi.mock("../infra/update-managed-service-handoff.js", () => ({
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
   activateManagedServiceUpdateHandoff: managedUpdateHandoff.activate,
+}));
+vi.mock("../infra/update-repair-agent.js", () => ({
+  prepareUnattendedUpdateRepair: unattendedRepair,
 }));
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
@@ -1846,6 +1853,11 @@ describe("update-cli", () => {
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
     managedUpdateHandoff.activate.mockResolvedValue(false);
+    unattendedRepair.mockResolvedValue({
+      status: "unavailable",
+      attempts: [],
+      finalValidation: { ok: false, score: 0, summary: "No fixture repair route." },
+    });
     candidateValidation.mockImplementation(async (options) =>
       reportCandidateSteps(options, {
         status: "ok",
@@ -6547,6 +6559,7 @@ describe("update-cli", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     const logs = getLogOutput();
     expect(logs).toContain("global install verify");
+    expect(logs).toContain("global-install-failed");
     expect(logs).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
   });
 
@@ -6859,8 +6872,6 @@ describe("update-cli", () => {
         startedAt: Date.now(),
         progress: {},
         jsonMode: true,
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
         managedServiceEnv: { OPENCLAW_CONFIG_PATH: managedConfig },
         validateCandidate: async () => [],
         beforeActivate: async () => {},
@@ -7117,9 +7128,11 @@ describe("update-cli", () => {
     },
   );
 
-  it.each([true, false])(
-    "validates the staged candidate while the previous gateway serves (valid=%s)",
-    async (valid) => {
+  it.each(["valid", "repaired", "unrepaired", "improved", "unavailable", "aborted"] as const)(
+    "validates and repairs the staged candidate while the previous gateway serves (%s)",
+    async (outcome) => {
+      const valid = outcome === "valid";
+      const succeeds = valid || outcome === "repaired";
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
         path.join(tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
         "1.0.0",
@@ -7163,8 +7176,41 @@ describe("update-cli", () => {
         });
         return child;
       });
-      candidateValidation.mockImplementationOnce(async (options) => {
+      let repairApplied = false;
+      let candidateRoot: string | undefined;
+      unattendedRepair.mockImplementationOnce(async (repair) => {
+        events.push("repair");
+        expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
+        expect(repair.target.installRoot).toBe(pkgRoot);
+        expect(repair.target.candidateRoot).toBe(candidateRoot);
+        expect(repair.target.stateDir).toBe(resolveStateDir());
+        expect(repair.context.phase).toBe("validating");
+        expect(repair.context).toMatchObject({ result: { reason: "runtime-verification-failed" } });
+        repair.onEvent?.({
+          type: "turn-started",
+          turn: 1,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+        });
+        repairApplied = outcome === "repaired";
+        const validation = await repair.validate(new AbortController().signal);
+        const attempt = {
+          turn: 1,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          durationMs: 1,
+          toolCalls: 1,
+          summary: "Checked the candidate.",
+          validation,
+        };
+        repair.onEvent?.({ type: "turn-finished", ...attempt });
+        const repairStatus = outcome === "valid" ? "repaired" : outcome;
+        repair.onEvent?.({ type: "stopped", status: repairStatus });
+        return { status: repairStatus, attempts: [attempt], finalValidation: validation };
+      });
+      candidateValidation.mockImplementation(async (options) => {
         const { root } = options;
+        candidateRoot = root;
         events.push("validate");
         expect(serviceStop).not.toHaveBeenCalled();
         expect(await serviceReadRuntime()).toMatchObject({ status: "running" });
@@ -7180,7 +7226,10 @@ describe("update-cli", () => {
           version: "1.0.0",
         });
         return reportCandidateSteps(options, {
-          status: valid ? "ok" : "error",
+          status: valid || repairApplied ? "ok" : "error",
+          durationMs: 1,
+          logTail: ["candidate readiness failed"],
+          reason: "runtime-verification-failed",
           candidateSchemaVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION,
             agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -7191,7 +7240,7 @@ describe("update-cli", () => {
               command: "openclaw gateway",
               cwd: root,
               durationMs: 1,
-              exitCode: valid ? 0 : 1,
+              exitCode: valid || repairApplied ? 0 : 1,
               ...(!valid ? { stderrTail: "candidate readiness failed" } : {}),
             },
           ],
@@ -7212,11 +7261,15 @@ describe("update-cli", () => {
         return pluginSyncResult(config);
       });
 
-      if (valid) {
+      if (succeeds) {
         await updateCommand({ yes: true, json: true }).catch((cause: unknown) => {
           throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, { cause });
         });
-        expect(events).toEqual(["validate", "stop", "plugins"]);
+        expect(events).toEqual(
+          valid
+            ? ["validate", "stop", "plugins"]
+            : ["validate", "repair", "validate", "stop", "plugins"],
+        );
         expect(spawn).toHaveBeenCalledOnce();
         expect(runExec).toHaveBeenCalledWith(
           expect.any(String),
@@ -7233,7 +7286,7 @@ describe("update-cli", () => {
         });
       } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
-        expect(events).toEqual(["validate"]);
+        expect(events).toEqual(["validate", "repair", "validate"]);
         expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
         expect(
           JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
@@ -7242,8 +7295,27 @@ describe("update-cli", () => {
         });
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
-          reason: "candidate gateway canary",
+          reason: "runtime-verification-failed",
         });
+        await expect(
+          fs.access(requireValue(candidateRoot, "candidate root")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      const result = lastWriteJsonCall() as UpdateRunResult;
+      const record = getUpdateRun(requireValue(result.runId, "run id"));
+      if (!valid) {
+        expect(unattendedRepair).toHaveBeenCalledOnce();
+        expect(record?.steps).toContainEqual(
+          expect.objectContaining({ step: "repairing", status: succeeds ? "completed" : "failed" }),
+        );
+        expect(record?.repair).toContainEqual(
+          expect.objectContaining({
+            attempt: 1,
+            summary: expect.stringContaining("openai/gpt-5.6-luna"),
+          }),
+        );
+      } else {
+        expect(unattendedRepair).not.toHaveBeenCalled();
       }
     },
   );
@@ -7356,6 +7428,7 @@ describe("update-cli", () => {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       }),
+      expect.objectContaining({ beforeMutation: expect.any(Function) }),
     );
     expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -7901,6 +7974,134 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    "verification",
+    "enable-committed",
+    "disable-committed",
+    "disable-denied",
+    "none",
+  ] as const)(
+    "settles native Windows task enabled state after update finalization (%s)",
+    async (fault) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const root = process.cwd();
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
+      prepareRestartScript.mockResolvedValue(null);
+      mockGitUpdateAfterMutation(
+        makeOkUpdateResult({
+          mode: "git",
+          root,
+          after: { version: "1.0.0", buildId: "candidate-build" },
+        }),
+      );
+      restartHealthTestControl.snapshot = {
+        runtime: { status: "running", pid: gatewayFixturePid },
+        portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+        healthy: fault === "none",
+        staleGatewayPids: [],
+        gatewayVersion: "1.0.0",
+        gatewayBuildId: "candidate-build",
+        expectedVersion: "1.0.0",
+        probeError: fault === "none" ? undefined : "candidate readiness failed",
+      };
+      const nativeTaskControl = await vi.importActual<
+        typeof import("../daemon/schtasks-control.js")
+      >("../daemon/schtasks-control.js");
+      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
+        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
+      );
+      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
+      );
+      const configuredRunCommand = requireValue(
+        vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        "native update command fixture",
+      );
+      let taskEnabled = true;
+      let disables = 0;
+      const nativeActions: string[] = [];
+      const activateTask = () => {
+        nativeActions.push("/Run");
+        if (!taskEnabled) {
+          throw new Error("Scheduled Task is disabled");
+        }
+      };
+      serviceRestart.mockImplementation(async () => {
+        activateTask();
+        return { outcome: "completed" };
+      });
+      vi.mocked(runDaemonRestart).mockImplementation(async () => {
+        activateTask();
+        return true;
+      });
+      vi.mocked(runDaemonInstall).mockImplementation(async () => {
+        activateTask();
+      });
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[0] !== "schtasks") {
+          if (argv[2] === "gateway" && ["install", "start", "restart"].includes(argv[3] ?? "")) {
+            activateTask();
+          }
+          return configuredRunCommand(argv, options);
+        }
+        const action = argv.at(-1);
+        if (argv[1] === "/Query") {
+          return commandResult({
+            stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
+          });
+        }
+        nativeActions.push(action ?? "");
+        if (action === "/DISABLE") {
+          disables += 1;
+          if (disables > 1 && fault === "disable-denied") {
+            return commandResult({ code: 1, stderr: "suspension denied" });
+          }
+          taskEnabled = false;
+          return disables > 1 && fault === "disable-committed"
+            ? commandResult({ code: 124, stderr: "disable timed out after commit" })
+            : commandResult();
+        }
+        taskEnabled = true;
+        return fault === "enable-committed"
+          ? commandResult({ code: 124, stderr: "enable timed out after commit" })
+          : commandResult();
+      });
+
+      if (fault === "none") {
+        await updateCommand({ yes: true, json: true });
+        expect(nativeActions).toEqual(["/DISABLE", "/ENABLE", "/Run"]);
+      } else {
+        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+        expect(disables).toBe(2);
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason:
+            fault === "enable-committed"
+              ? "windows-task-autostart-restore-failed"
+              : "restart-unhealthy",
+        });
+        if (fault === "disable-committed" || fault === "disable-denied") {
+          expect(lastWriteJsonCall()).toMatchObject({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                stderrTail: expect.stringContaining(
+                  fault === "disable-committed"
+                    ? "disable timed out after commit"
+                    : "suspension denied",
+                ),
+              }),
+            ]),
+          });
+        }
+      }
+      expect(taskEnabled).toBe(fault === "none" || fault === "disable-denied");
+      expect(nativeActions.slice(0, 2)).toEqual(["/DISABLE", "/ENABLE"]);
+      if (fault === "enable-committed") {
+        expect(nativeActions).not.toContain("/Run");
+      }
+    },
+  );
+
   it("keeps Windows Scheduled Task autostart disabled after unverified lifecycle failure", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const root = await mockPackageInstallAtCaseDir("openclaw-update-recovery-failure");
@@ -8137,6 +8338,12 @@ describe("update-cli", () => {
     }
     expectedService.serviceUpdateVerdict.refreshDefinition = false;
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+    const nativeTaskControl = await vi.importActual<typeof import("../daemon/schtasks-control.js")>(
+      "../daemon/schtasks-control.js",
+    );
+    resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+      nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
+    );
     serviceStop.mockImplementationOnce(async () => {
       primeServiceCommand(["node", "/another-install/openclaw.mjs", "gateway", "run"]);
       throw new Error("stop failed after task replacement");
@@ -8149,7 +8356,11 @@ describe("update-cli", () => {
       platformSpy.mockRestore();
     }
     expect(serviceStop).toHaveBeenCalledOnce();
-    expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(runCommandWithTimeout)
+        .mock.calls.some(([argv]) => argv[0] === "schtasks" && argv.includes("/ENABLE")),
+    ).toBe(false);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
 

@@ -33,6 +33,13 @@ The archive's config summary counts agent, plugin, and channel entries declared 
 
 ## Failed update recovery
 
+Before a failed update reaches triage, the updater may run
+[bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
+for candidate validation failures or failed post-activation verification when
+rollback is unsafe or fails. Those attempts use configured inference and appear
+in the update run report. The updater owns any service restart and decides
+success from validation; triage remains the handoff when recovery cannot finish.
+
 Interactive update recovery uses this same handoff after the updater releases its maintenance state. It starts from the captured update failure and defers fresh Doctor checks and archive collection to the repair agent, so checks against the broken installation do not delay the handoff. The agent starts in the operator's captured working directory, or their OS home if that directory was removed or became inaccessible. Absolute installation selectors still identify the state, config, and default workspace to repair, even when the state directory cannot be accessed or created.
 
 The prompt preserves the original error, before and after versions, and recorded recovery state ahead of current Doctor findings. It includes up to three failed or interrupted steps, excluding advisory Doctor results, with bounded excerpts from both stderr and stdout. It also retains bounded plugin failures and the terminal Doctor warning. The failure record is limited to 4 KiB and the whole prompt to 8 KiB. A healthy Doctor check does not erase the failed attempt, and an absent restart-safety verdict remains unknown.

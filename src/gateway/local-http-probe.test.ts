@@ -1,6 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -76,4 +77,35 @@ test("probes configured local TLS readiness with its exact certificate pin", asy
       });
     }
   });
+});
+
+test("cancels pending readiness requests when the repair budget expires", async () => {
+  const server = createHttpServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected an ephemeral TCP listener");
+  }
+  const controller = new AbortController();
+  const aborted = new Error("repair-budget");
+  try {
+    const received = once(server, "request");
+    const pending = waitForGatewayHttpReadiness({
+      attempts: 3,
+      deadlineAt: Date.now() + 60_000,
+      delayMs: 500,
+      port: address.port,
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toBe(aborted);
+    await received;
+    controller.abort(aborted);
+    await rejected;
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
 });

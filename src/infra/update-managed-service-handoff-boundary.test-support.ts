@@ -70,6 +70,7 @@ export function createManagedServiceManagerBoundary({
       controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
       relativeInput?: boolean;
       validationResult?: "failed" | "skipped";
+      validationClockAdvanceMs?: number;
       cancelDuringValidation?: boolean;
       cancelAtActivation?: "requester" | "inspection";
       runnerFallback?: boolean;
@@ -319,7 +320,9 @@ export function createManagedServiceManagerBoundary({
             : `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${updaterScript} }); process.stdout.write("park\\n");`;
         updaterScript = `
         const validationFs = require("node:fs");
+        const validationStartedAt = Date.now();
         validationFs.writeFileSync(${JSON.stringify(validationStartedPath)}, "validating");
+        validationFs.writeFileSync(${JSON.stringify(validationStartedPath)}, String(Date.now() - validationStartedAt));
         const gate = setInterval(() => {
           if (!validationFs.existsSync(${JSON.stringify(validationReleasePath)})) return;
           clearInterval(gate);
@@ -385,6 +388,18 @@ export function createManagedServiceManagerBoundary({
         const preloadPath = path.join(root, "spawn-fallback-preload.cjs");
         await fs.writeFile(preloadPath, "process.execve = undefined;\n");
         helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
+      }
+      if (options?.validationClockAdvanceMs) {
+        const preloadPath = path.join(root, "validation-clock-preload.cjs");
+        await fs.writeFile(
+          preloadPath,
+          `const fs = require("node:fs"); const now = Date.now;
+          Date.now = () => now() + (fs.existsSync(${JSON.stringify(validationStartedPath)}) ? ${options.validationClockAdvanceMs} : 0);`,
+        );
+        helperEnv = {
+          ...helperEnv,
+          NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
+        };
       }
       if (options?.cancelAtActivation) {
         const preloadPath = path.join(root, "cancel-activation-preload.cjs");
@@ -466,6 +481,14 @@ export function createManagedServiceManagerBoundary({
           await waitForFile(validationStartedPath, DEFAULT_VITEST_TEST_TIMEOUT_MS);
           await expect(pathExists(commandsPath)).resolves.toBe(false);
           await expect(pathExists(validationStartedPath)).resolves.toBe(true);
+          const validationClockAdvanceMs = options.validationClockAdvanceMs;
+          if (validationClockAdvanceMs) {
+            await vi.waitFor(async () => {
+              expect(
+                Number(await fs.readFile(validationStartedPath, "utf8")),
+              ).toBeGreaterThanOrEqual(validationClockAdvanceMs);
+            });
+          }
           // A real updater child is now validating, but the service has received no stop.
           expect(parent.exitCode).toBeNull();
           expect(parent.signalCode).toBeNull();

@@ -51,6 +51,7 @@ import {
   withOwnedManagedUpdateEnv,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
+import { runUpdateCommandRepair } from "./update-command-repair.js";
 import {
   GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
@@ -363,31 +364,74 @@ export async function executeMutableUpdate(params: {
   let packageActivationStarted = false;
   const validateCandidate = async (root: string) => {
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
-    const snapshot = await withOwnedManagedUpdateEnv(env, () =>
-      readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-    );
-    validatedConfigHash = snapshot.hash;
-    const config = snapshot.config;
     if (params.opts.run) {
       recordUpdateRunPhase(params.opts.run.runId, "validating", undefined, {
         env: params.opts.run.env,
       });
     }
-    const validation = await validateUpdateCandidateCanary({
-      root,
-      config,
-      stateDir: resolveStateDir(env),
-      env,
-      nodeRunner: params.packageUpdateNodeRunner,
-      timeoutMs: Math.min(params.updateStepTimeoutMs, 5 * 60_000),
-      onStep: (step) => {
-        params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
-      },
-    });
+    const validate = async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
+      const snapshot = await withOwnedManagedUpdateEnv(env, () =>
+        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+      );
+      const validation = await validateUpdateCandidateCanary({
+        root,
+        config: snapshot.config,
+        stateDir: resolveStateDir(env),
+        env,
+        signal,
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: Math.min(params.updateStepTimeoutMs, 5 * 60_000),
+        onStep: (step) => {
+          params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
+        },
+      });
+      if (validation.status === "ok") {
+        validatedConfigHash = snapshot.hash;
+        candidateSchemaVersions = validation.candidateSchemaVersions;
+      }
+      return validation;
+    };
+    let validation = await validate();
     if (validation.status === "error") {
       candidateFailureReason = validation.reason;
-    } else {
-      candidateSchemaVersions = validation.candidateSchemaVersions;
+      const failedValidation = validation;
+      const repair = await runUpdateCommandRepair({
+        root: params.root,
+        candidateRoot: root,
+        env,
+        run: params.opts.run,
+        phase: "validating",
+        nodeRunner: params.packageUpdateNodeRunner,
+        result: {
+          status: "error",
+          mode:
+            params.updateInstallKind === "git"
+              ? "git"
+              : (params.packageInstallTarget?.manager ?? "unknown"),
+          root,
+          reason: failedValidation.reason,
+          before: { version: await readPackageVersion(params.root) },
+          after: { version: await readPackageVersion(root) },
+          steps: failedValidation.steps,
+          durationMs: failedValidation.durationMs,
+        },
+        validate: async (signal) => {
+          validation = await validate(signal);
+          return {
+            ok: validation.status === "ok",
+            score: validation.steps.filter((step) => step.exitCode === 0).length,
+            summary:
+              validation.status === "ok"
+                ? "Candidate validation passed."
+                : validation.logTail.join("\n"),
+          };
+        },
+      });
+      if (repair.status !== "repaired") {
+        return failedValidation.steps;
+      }
+      candidateFailureReason = undefined;
     }
     return validation.steps;
   };

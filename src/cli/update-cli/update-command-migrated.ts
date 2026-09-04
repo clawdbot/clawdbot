@@ -18,11 +18,12 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { resolveCliName } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import { maybeResumeWindowsTaskAutoStartAfterPackageUpdate } from "./update-command-service.js";
+import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -96,6 +97,7 @@ export type MigratedUpdateFinalizationInput = {
     >;
   };
   bufferedSteps: UpdateRunStep[];
+  windowsTaskAutoStartSuspended?: true;
   resultPath: string;
 };
 
@@ -115,33 +117,17 @@ export async function continueMigratedUpdateInFreshProcess(
     throw new Error("Migrated update continuation requires its admitted run.");
   }
   const windowsRecovery = params.preManagedServiceStop?.windowsTaskAutoStartRecovery;
-  let result = params.result;
-  try {
-    if (result.status === "ok") {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop, true);
-    } else {
-      await windowsRecovery?.complete(false);
-    }
-  } catch (error) {
-    await windowsRecovery?.complete(false);
-    // Compensation still belongs to the parent closure, but only candidate
-    // code can persist its failure after migration.
-    result = {
-      ...result,
-      status: "error",
-      reason: "windows-task-autostart-restore-failed",
-      steps: [
-        ...result.steps,
-        {
-          name: "Windows task autostart restoration",
-          command: "openclaw update",
-          cwd: result.root ?? params.root,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: formatErrorMessage(error),
-        },
-      ],
-    };
+  const result = params.result;
+  if (windowsRecovery && params.preManagedServiceStop) {
+    // The parent retains its original definition-refresh grant for compensation.
+    // Only the fresh finalizer may restore autostart at activation after migration.
+    windowsRecovery.handoff(
+      createWindowsTaskAutoStartGuard({
+        root: result.root ?? params.root,
+        before: params.preManagedServiceStop,
+        timeoutMs: params.updateStepTimeoutMs,
+      }),
+    );
   }
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
   try {
@@ -164,6 +150,7 @@ export async function continueMigratedUpdateInFreshProcess(
         ...(preManagedServiceStop ? { preManagedServiceStop: stopState } : {}),
       },
       bufferedSteps,
+      ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
     const child = await runUtf8CommandWithTimeout(
@@ -214,8 +201,15 @@ export async function continueMigratedUpdateInFreshProcess(
         "Candidate finalization did not confirm the admitted run's terminal outcome.",
       );
     }
-    if (response.result.status !== "ok") {
-      await windowsRecovery?.complete(false);
+    try {
+      await windowsRecovery?.complete(response.result.status === "ok");
+    } catch (cause) {
+      throw new UpdateCommandFailure(
+        response.result,
+        response.exitCode || 1,
+        `${response.result.reason ?? "Update failed"}; Windows task autostart compensation failed: ${formatErrorMessage(cause)}`,
+        { cause },
+      );
     }
     const retained = await params.packageTransaction
       ?.complete({ activationVerified: response.result.status === "ok" })
@@ -228,7 +222,15 @@ export async function continueMigratedUpdateInFreshProcess(
     }
     return { result: response.result, exitCode: response.exitCode };
   } catch (error) {
-    await windowsRecovery?.complete(false);
+    try {
+      await windowsRecovery?.complete(false);
+    } catch (cause) {
+      throw new AggregateError(
+        [error, cause],
+        `Candidate finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
+        { cause },
+      );
+    }
     throw error;
   } finally {
     await fs.rm(scratchDir, { recursive: true, force: true });

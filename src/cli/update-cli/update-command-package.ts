@@ -20,6 +20,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
@@ -148,7 +149,10 @@ export async function prepareGitPackageExposure(
   if (outcome) {
     const failure = outcome.failedStep;
     throw new UpdatePreMutationError(
-      failure?.name ?? "source-exposure-preparation-failed",
+      outcome.reason ??
+        (failure
+          ? normalizeFallbackFailureReason(failure.name)
+          : "source-exposure-preparation-failed"),
       failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
     );
   }
@@ -185,8 +189,6 @@ export type PackageInstallUpdateParams = {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   honorPackageRoot?: boolean;
@@ -274,7 +276,11 @@ export async function runPackageInstallUpdate(
           : "ok",
     mode: installTarget.manager,
     root: packageUpdate.activePackageRoot ?? undefined,
-    reason: packageUpdate.failedStep?.name ?? packageUpdate.reason,
+    reason:
+      packageUpdate.reason ??
+      (packageUpdate.failedStep
+        ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+        : undefined),
     before,
     after: {
       version: packageUpdate.afterVersion,
