@@ -46,7 +46,6 @@ type SidebarPanelDefinitionParams = {
   dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
-  detailOpen: boolean;
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -190,11 +189,11 @@ export function sidebarPanelDefinitions(
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
   const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
+  // The region owns mounting and visibility. Hidden Review tabs must keep the
+  // same cached diff loader so their live content and selection survive.
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen && !detailLoading
-      ? resolveSessionDiffSidebarContent(state)
-      : null);
+    (state && !detailLoading ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
@@ -247,9 +246,11 @@ export function sidebarPanelDefinitions(
               ?disabled=${!params.connected || params.tasksLoading}
               @click=${params.onRefreshTasks}
             >
-              ${params.tasksLoading
-                ? html`<span class="btn__spinner" aria-hidden="true"></span>`
-                : icons.refresh}
+              ${
+                params.tasksLoading
+                  ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+                  : icons.refresh
+              }
             </button>
           </openclaw-tooltip>`
         : undefined,

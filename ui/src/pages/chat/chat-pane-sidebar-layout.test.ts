@@ -34,14 +34,12 @@ const requestUpdate = vi.fn();
 
 function callbacks() {
   return {
-    makeMain: vi.fn(),
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
-    setDock: vi.fn(),
     setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };

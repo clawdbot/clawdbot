@@ -20,14 +20,6 @@
   height: 16px;
 }
 
-.rail-header__action.side-panel__make-main {
-  width: auto;
-  padding: 0 6px;
-  gap: 5px;
-  white-space: nowrap;
-  font-size: var(--control-ui-text-sm);
-}
-
 .side-panel__header {
   --rail-header-action-glyph-size: 15px;
   margin-bottom: 0;
@@ -339,7 +331,7 @@
   gap: var(--rail-header-action-gap);
 }
 
-.side-panel__action-group--close {
+.side-panel__action-group + .side-panel__action-group--close {
   padding-left: 5px;
   border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
 }

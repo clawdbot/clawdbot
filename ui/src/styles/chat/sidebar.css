@@ -165,8 +165,15 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region--bottom.sidebar-region--open:not(.sidebar-region--expanded),
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
+  /* Fit saved heights to short task panes without consuming the main content row. */
+  --side-panel-max-height: calc(
+    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
+  );
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, var(--side-panel-height));
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
+      0,
+      min(var(--side-panel-height), var(--side-panel-max-height))
+    );
   grid-template-areas: "main-header" "main" "divider" "side-header" "side";
 }
 

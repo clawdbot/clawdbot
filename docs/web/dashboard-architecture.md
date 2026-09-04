@@ -60,12 +60,15 @@ Principles:
   channel presenter can instead make the same core document visible on the
   current transport.
 - **Board view:** the first pinned widget opens a resizable dashboard side panel
-  beside chat. **Make main** swaps the active side-panel content with the main
-  view, including Chat, Dashboard, Browser, Terminal, Files, and Review.
-  **Layout** positions the side panel left, right, or below. **Focus** hides the
-  side panel temporarily; **Restore split** restores it. Later board updates
-  preserve the user's current layout. Closing the Dashboard tab removes only
-  its view; closing the whole side panel hides it without changing the main view.
+  beside chat. The task toolbar's **Swap** button exchanges the main view and
+  active side-panel content, including Chat, Dashboard, Browser, Terminal,
+  Files, and Review. Its tooltip names the two views. The same toolbar's
+  **Layout** menu positions the side panel left, right, or below. **Focus** in
+  the main pane header gives that view the full task area; **Restore split**
+  restores the side panel.
+  Later board updates preserve the user's current layout. Closing the Dashboard
+  tab removes only its view; closing the whole side panel hides it without
+  changing the main view.
 - **Layout ownership:** the browser stores the arrangement per session, including
   the main view, active side tab, dock position, dimensions, and focus state.
   Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly

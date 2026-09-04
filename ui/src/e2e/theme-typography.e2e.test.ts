@@ -349,7 +349,7 @@ suite.define(() => {
 
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
-      await page.locator(".side-panel").screenshot({
+      await panelSelector.screenshot({
         path: path.join(
           path.join(suite.artifactDir, "theme-typography"),
           "phosphor-panel-shortcuts.png",

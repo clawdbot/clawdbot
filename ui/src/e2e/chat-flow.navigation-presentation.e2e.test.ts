@@ -373,7 +373,7 @@ suite.define(() => {
           targetHeader.evaluate((header) => {
             const owner = header.closest("openclaw-chat-pane");
             return (
-              header.parentElement?.classList.contains("chat-main__conversation-column") === true &&
+              header.parentElement?.classList.contains("chat-pane-layout") === true &&
               owner?.classList.contains("chat-split-view__pane") === true
             );
           }),

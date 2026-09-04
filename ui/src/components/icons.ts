@@ -41,6 +41,10 @@ export const icons = {
   circleX: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <path d="m15 9-6 6" />
     <path d="m9 9 6 6" />`),
+  arrowLeftRight: strokeIcon(svg`<path d="m8 3-4 4 4 4" />
+    <path d="M4 7h16" />
+    <path d="m16 21 4-4-4-4" />
+    <path d="M20 17H4" />`),
   arrowUpRight: strokeIcon(svg` <path d="M7 17 17 7" />
     <path d="M7 7h10v10" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />

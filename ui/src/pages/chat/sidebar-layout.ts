@@ -240,7 +240,8 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
 }
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {
-  return { ...cloneLayout(layout), expanded };
+  // Restore split must reveal the side even when focus began with that panel closed.
+  return { ...cloneLayout(layout), expanded, ...(expanded ? { open: true } : {}) };
 }
 
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {

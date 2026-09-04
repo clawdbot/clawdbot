@@ -23,9 +23,7 @@ import {
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   openSlot,
-  promoteSidebarPanel,
   reorderPanel,
-  setSidebarDock,
   setSidebarExpanded,
   sidebarDock,
   sidebarMainPanel,
@@ -119,7 +117,6 @@ export function sidebarRegionCallbacks(params: {
 }): SidebarRegionCallbacks {
   const { layout, state } = params;
   return {
-    makeMain: (panelId) => state.updateSidebarLayout(promoteSidebarPanel(layout, panelId)),
     activatePanel: (panelId) => {
       state.updateSidebarLayout(activatePanel(layout, panelId));
       state.updateSidebarActivePanel(panelId);
@@ -139,7 +136,6 @@ export function sidebarRegionCallbacks(params: {
     reorderPanel: (panelId, targetPanelId, placement) =>
       state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(layout, dock)),
     setExpanded: (expanded) =>
       state.updateSidebarLayout(setSidebarExpanded(ensureSidebarConversation(layout), expanded)),
     setOpen: params.setPanelOpen,
@@ -185,30 +181,30 @@ export function renderSidebarRegion(params: {
     (definition) => definition.slot === activePanelSlot,
   )?.loading;
   return html`<div
-    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${params.layout.expanded
-      ? "sidebar-region--expanded"
-      : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen
-      ? "sidebar-region--open"
-      : ""}"
+    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+      params.layout.expanded ? "sidebar-region--expanded" : ""
+    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
     style=${styleMap({
       "--side-panel-width": `${column?.width ?? 480}px`,
       "--side-panel-height": `${column?.height ?? 360}px`,
     })}
   >
-    ${regionError !== undefined
-      ? regionError === null
-        ? (regionLoading ?? null)
-        : null
-      : html`<openclaw-chat-sidebar-region
-          .layout=${params.layout}
-          .panelDefinitions=${panelDefinitions}
-          .panelTemplates=${panelTemplates ?? params.panelTemplates}
-          .panelActions=${params.panelActions}
-          .availableSlots=${params.availableSlots}
-          .callbacks=${params.callbacks}
-          .narrow=${params.narrow}
-          .availableWidth=${params.availableWidth}
-        ></openclaw-chat-sidebar-region>`}
+    ${
+      regionError !== undefined
+        ? regionError === null
+          ? (regionLoading ?? null)
+          : null
+        : html`<openclaw-chat-sidebar-region
+            .layout=${params.layout}
+            .panelDefinitions=${panelDefinitions}
+            .panelTemplates=${panelTemplates ?? params.panelTemplates}
+            .panelActions=${params.panelActions}
+            .availableSlots=${params.availableSlots}
+            .callbacks=${params.callbacks}
+            .narrow=${params.narrow}
+            .availableWidth=${params.availableWidth}
+          ></openclaw-chat-sidebar-region>`
+    }
     <div
       class="sidebar-region__primary"
       data-region=${chatMain ? "main" : "side"}

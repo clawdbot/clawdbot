@@ -5896,7 +5896,7 @@ export const en: TranslationMap & {
       addTab: "Add side panel tab",
       expand: "Focus",
       restore: "Restore split",
-      makeMain: "Make main",
+      swap: "Swap {main} and {side}",
       layout: "Layout",
       dockLeft: "Move side panel left",
       dockRight: "Move side panel right",

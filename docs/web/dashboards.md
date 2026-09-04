@@ -9,9 +9,9 @@ title: "Session Dashboards"
 Every thread in the Control UI can own a **dashboard** — a grid of live widgets
 your agent builds for you. A thread with no widgets is just chat. When its first
 widget is pinned, the dashboard opens beside the conversation in a resizable
-side panel. Choose **Make main** to swap the dashboard and chat, or use **Layout**
-to move the side panel left, right, or below the main area. Later widget updates
-leave your current panel layout unchanged.
+side panel. Use the task toolbar's **Swap** button to exchange the dashboard and
+chat, or its **Layout** menu to move the side panel left, right, or below the
+main area. Later widget updates leave your current panel layout unchanged.
 Closing and reopening the panel does not restart loaded widgets or discard their
 unsaved input. Reloading the page starts fresh widget views.
 
@@ -41,13 +41,16 @@ dashboard.
 The main area and side panel can show either the dashboard or chat. Browser,
 Terminal, Files, and Review use the same layout controls:
 
-- **Make main** swaps the active side-panel tab with the main view. The previous
-  main view becomes the active side-panel tab; other tabs stay available.
-- **Layout** moves the side panel left, right, or below the main area. Drag the
-  divider to resize it. Narrow panes use a bottom panel until there is room for
-  a side-by-side layout again.
-- **Focus** gives the main view the full task area. **Restore split** brings
-  back the side panel with its previous placement and size.
+- **Swap** in the task toolbar exchanges the main view and active side-panel
+  tab. Its tooltip names both views, for example **Swap Chat and Dashboard**.
+  The previous main view becomes the active side-panel tab; other tabs stay
+  available.
+- **Layout** in the task toolbar moves the side panel left, right, or below the
+  main area. Drag the divider to resize it. Narrow panes use a bottom panel
+  until there is room for a side-by-side layout again.
+- **Focus** in the main pane header gives that view the full task area.
+  **Restore split** brings back the side panel with its previous placement and
+  size.
 
 Swapping, moving, and focusing preserve the live views, including chat drafts
 and widget interactions. Closing the whole side panel hides its tabs and leaves
@@ -101,8 +104,9 @@ never needs the agent.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
 - **Dashboard view.** The board can occupy the main area or a resizable side
-  panel. Choose **Make main** on Dashboard, then **Focus** for a dashboard-only
-  view; **Restore split** brings the side panel back.
+  panel. With Dashboard active in the side panel, choose **Swap** in the task
+  toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
+  the side panel back.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with

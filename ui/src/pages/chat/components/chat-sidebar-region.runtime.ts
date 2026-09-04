@@ -53,11 +53,13 @@ function renderPanelTypeOption(type: SidebarPanelDefinition, slotted = false) {
       >${type.icon}</span
     >
     <span class="side-panel-type-option__label">${type.label}</span>
-    ${type.shortcut
-      ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
-          >${type.shortcut}</kbd
-        >`
-      : nothing}
+    ${
+      type.shortcut
+        ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
+            >${type.shortcut}</kbd
+          >`
+        : nothing
+    }
   `;
 }
 
@@ -182,89 +184,41 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           })}
           ${this.renderTypeMenu()}
         </div>
-        ${this.renderHeaderActions(activeActions, false, active?.id)}
+        ${this.renderHeaderActions(activeActions)}
       </header>
     `;
   }
 
-  private renderDockControls() {
-    if (this.narrow) {
-      return nothing;
-    }
-    return html`<wa-dropdown
-      placement="bottom-end"
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const dock = event.detail.item.value;
-        if (dock === "left" || dock === "right" || dock === "bottom") {
-          this.callbacks?.setDock(dock);
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        class="rail-header__action"
-        type="button"
-        aria-label=${t("chat.sidePanel.layout")}
-        title=${t("chat.sidePanel.layout")}
-      >
-        ${icons.columns2}
-      </button>
-      ${(
-        [
-          ["left", "dockLeft", icons.panelLeftOpen],
-          ["right", "dockRight", icons.panelRightOpen],
-          ["bottom", "dockBottom", icons.panelBottomOpen],
-        ] as const
-      ).map(
-        ([dock, label, icon]) => html`<wa-dropdown-item
-          value=${dock}
-          type="checkbox"
-          ?checked=${sidebarDock(this.layout) === dock}
-          ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
-        >`,
-      )}
-    </wa-dropdown>`;
-  }
-
-  private renderHeaderActions(
-    panelActions: TemplateResult | typeof nothing | null,
-    main = false,
-    panelId?: string,
-  ) {
+  private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null, main = false) {
     const expandLabel = t(
       this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
     );
     const sideVisible = this.layout.open === true && !this.layout.expanded;
     return html`<div class="rail-header__actions side-panel__actions">
-      ${panelActions
-        ? html`<span class="side-panel__action-group side-panel__action-group--content">
-            ${panelActions}
-          </span>`
-        : nothing}
-      ${this.renderDockControls()}
-      <span class="side-panel__action-group side-panel__action-group--layout">
-        ${main
-          ? html`<openclaw-tooltip .content=${expandLabel}>
-              <button
-                class="rail-header__action side-panel__expand"
-                type="button"
-                aria-pressed=${String(this.layout.expanded === true)}
-                aria-label=${expandLabel}
-                @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
-              >
-                ${this.layout.expanded ? icons.minimize : icons.maximize}
-              </button>
-            </openclaw-tooltip>`
-          : panelId
-            ? html`<button
-                class="rail-header__action side-panel__make-main"
-                type="button"
-                @click=${() => this.callbacks?.makeMain(panelId)}
-              >
-                ${icons.columns2}<span>${t("chat.sidePanel.makeMain")}</span>
-              </button>`
-            : nothing}
-      </span>
+      ${
+        panelActions
+          ? html`<span class="side-panel__action-group side-panel__action-group--content">
+              ${panelActions}
+            </span>`
+          : nothing
+      }
+      ${
+        main
+          ? html`<span class="side-panel__action-group">
+              <openclaw-tooltip .content=${expandLabel}>
+                <button
+                  class="rail-header__action side-panel__expand"
+                  type="button"
+                  aria-pressed=${String(this.layout.expanded === true)}
+                  aria-label=${expandLabel}
+                  @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
+                >
+                  ${this.layout.expanded ? icons.minimize : icons.maximize}
+                </button>
+              </openclaw-tooltip>
+            </span>`
+          : nothing
+      }
       <span class="side-panel__action-group side-panel__action-group--close">
         <openclaw-tooltip .content=${t(main ? "chat.sidePanel.label" : "common.close")}>
           <button
@@ -350,9 +304,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${this.panelTemplates[panel.slot] ?? this.renderEmpty(panel)}
         </div>`,
       )}
-      ${sidebarSidePanels(this.layout).length === 0
-        ? html`<div class="side-panel__empty-body" data-region="side">${this.renderEmpty()}</div>`
-        : nothing}
+      ${
+        sidebarSidePanels(this.layout).length === 0
+          ? html`<div class="side-panel__empty-body" data-region="side">${this.renderEmpty()}</div>`
+          : nothing
+      }
     </div>`;
   }
 
@@ -413,20 +369,24 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.contentMounted ||=
       (this.layout.open === true && !this.layout.expanded) ||
       (sidebarMainPanel(this.layout)?.slot ?? "conversation") !== "conversation";
-    return html`${!this.narrow && this.layout.open && !this.layout.expanded && column
-        ? this.renderDivider(column)
-        : nothing}
+    return html`${
+        !this.narrow && this.layout.open && !this.layout.expanded && column
+          ? this.renderDivider(column)
+          : nothing
+      }
       <section class="side-panel" aria-label=${t("chat.sidePanel.label")}>
         ${this.renderMainHeader()}
-        ${column && sidebarSidePanels(this.layout).length > 0
-          ? this.renderHeader(column)
-          : html`<header
-              class="rail-header side-panel__header side-panel__header--empty"
-              data-region-header="side"
-            >
-              <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
-              ${this.renderHeaderActions(null)}
-            </header>`}
+        ${
+          column && sidebarSidePanels(this.layout).length > 0
+            ? this.renderHeader(column)
+            : html`<header
+                class="rail-header side-panel__header side-panel__header--empty"
+                data-region-header="side"
+              >
+                <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
+                ${this.renderHeaderActions(null)}
+              </header>`
+        }
         ${this.contentMounted ? this.renderBody(column) : nothing}
       </section>`;
   }
@@ -436,16 +396,16 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     if (root) {
       renderTemplate(this.renderPanel(), root);
       const panel = root.querySelector<HTMLElement>(".side-panel");
-      const geometry = ["main", "side"]
-        .map(
-          (region) =>
-            this.parentElement
-              ?.querySelector<HTMLElement>(`[data-region="${region}"]:not([hidden])`)
-              ?.getBoundingClientRect().width ?? 0,
-        )
-        .join(":");
+      const geometry = Array.from(
+        this.parentElement!.querySelectorAll<HTMLElement>(
+          ".sidebar-region__primary, .side-panel__panel",
+        ),
+        (content) =>
+          `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
+      ).join(":");
       // The manual panel render is the commit boundary for its transcript.
-      // Width changes additionally invalidate every transcript row measurement.
+      // Track content, not region roles: swapping can keep the same main/side
+      // widths while changing the transcript width and its row measurements.
       panel?.dispatchEvent(
         new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
           bubbles: true,

@@ -37,6 +37,7 @@ import {
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
@@ -61,7 +62,14 @@ import {
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import {
+  promoteSidebarPanel,
+  setSidebarDock,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -88,6 +96,71 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
+  }
+
+  private renderPanelLayoutActions(layout: SidebarLayout | undefined) {
+    if (!layout?.open || layout.expanded) {
+      return nothing;
+    }
+    const side = sidebarActivePanel(layout);
+    const definitions = sidebarPanelDefinitions();
+    const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+    const swapLabel = t("chat.sidePanel.swap", {
+      main: definitions.find((definition) => definition.slot === mainSlot)!.label,
+      side: side ? definitions.find((definition) => definition.slot === side.slot)!.label : "",
+    });
+    return html`${
+      side
+        ? html`<openclaw-tooltip .content=${swapLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+              type="button"
+              aria-label=${swapLabel}
+              @click=${() => this.state?.updateSidebarLayout(promoteSidebarPanel(layout, side.id))}
+            >
+              ${icons.arrowLeftRight}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      this.narrow
+        ? nothing
+        : html`<wa-dropdown
+            class="chat-panel-layout-menu"
+            placement="bottom-end"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const dock = event.detail.item.value;
+              if (dock === "left" || dock === "right" || dock === "bottom") {
+                this.state?.updateSidebarLayout(setSidebarDock(layout, dock));
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              class="btn btn--ghost btn--icon chat-icon-btn"
+              type="button"
+              aria-label=${t("chat.sidePanel.layout")}
+              title=${t("chat.sidePanel.layout")}
+            >
+              ${icons.columns2}
+            </button>
+            ${(
+              [
+                ["left", "dockLeft", icons.panelLeftOpen],
+                ["right", "dockRight", icons.panelRightOpen],
+                ["bottom", "dockBottom", icons.panelBottomOpen],
+              ] as const
+            ).map(
+              ([dock, label, icon]) => html`<wa-dropdown-item
+                value=${dock}
+                type="checkbox"
+                ?checked=${sidebarDock(layout) === dock}
+                ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+              >`,
+            )}
+          </wa-dropdown>`
+    }`;
   }
 
   protected renderPaneHeader(
@@ -435,6 +508,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelLayoutActions: this.renderPanelLayoutActions(currentLayout),
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -488,8 +562,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               }}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
-              .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
-              this.context.runtimeConfig.canPatch === false}
+              .preferencesBrowserOnly=${
+                this.context.runtimeConfig?.state.connected &&
+                this.context.runtimeConfig.canPatch === false
+              }
               .compact=${this.narrow}
               .navigationAllowed=${true}
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
@@ -553,11 +629,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return html`${header}${continueCommand
-      ? renderContinueInTerminalDialog({
-          command: continueCommand,
-          onClose: () => this.closeContinueInTerminalDialog(),
-        })
-      : nothing}`;
+    return html`${header}${
+      continueCommand
+        ? renderContinueInTerminalDialog({
+            command: continueCommand,
+            onClose: () => this.closeContinueInTerminalDialog(),
+          })
+        : nothing
+    }`;
   }
 }

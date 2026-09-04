@@ -32,14 +32,12 @@ async function createRegion(layout: SidebarLayout = openSlot({ columns: [] }, "d
   };
   region.availableSlots = ["detail", "terminal", "workspace", "companion"];
   region.callbacks = {
-    makeMain: vi.fn(),
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
-    setDock: vi.fn(),
     setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
@@ -311,14 +309,12 @@ describe("chat sidebar region", () => {
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
-  it("promotes the side tab and focuses or restores main through separate controls", async () => {
+  it("focuses or restores main and dismisses the side panel independently", async () => {
     const region = await createRegion();
-    root(region).querySelector<HTMLButtonElement>(".side-panel__make-main")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region)
       .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
       ?.click();
-    expect(region.callbacks?.makeMain).toHaveBeenCalledWith("detail");
     expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);
     expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
 
@@ -390,20 +386,6 @@ describe("chat sidebar region", () => {
       new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.5 } }),
     );
     expect(region.callbacks?.resizePanel).toHaveBeenCalledWith(region.layout.columns[0]!.id, 400);
-    const layoutMenu = root(region).querySelector('[data-region-header="main"] wa-dropdown');
-    expect(
-      layoutMenu?.querySelector('wa-dropdown-item[value="bottom"]')?.hasAttribute("checked"),
-    ).toBe(true);
-    for (const dock of ["left", "right", "bottom"] as const) {
-      layoutMenu?.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: dock } },
-        }),
-      );
-      expect(region.callbacks?.setDock).toHaveBeenLastCalledWith(dock);
-    }
-
     region.layout = setSidebarDock(region.layout, "left");
     await region.updateComplete;
     primary.getBoundingClientRect = () => ({ width: 800 }) as DOMRect;

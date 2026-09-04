@@ -233,26 +233,35 @@ describe("chat pane board shell", () => {
     expect(pane.onFaceChange).toHaveBeenCalledOnce();
   });
 
-  it("applies an explicit focused dashboard link over a saved main panel only once", () => {
-    const pane = createTestPane();
-    pane.boardProvider = mockBoardProvider("agent:main:expanded-route");
-    pane.state.sessionKey = "agent:main:expanded-route";
-    pane.sessionKey = "agent:main:expanded-route";
-    pane.routeFace = "dashboard";
-    pane.dashboardExpanded = true;
-    const savedLayout = promoteSidebarPanel(openSlot({ columns: [] }, "terminal"), "terminal");
-    pane.state.sidebarLayout = savedLayout;
-    patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+  it.each(["terminal", "dashboard"] as const)(
+    "applies a focused dashboard link over saved %s main only once",
+    (slot) => {
+      const pane = createTestPane();
+      pane.boardProvider = mockBoardProvider("agent:main:expanded-route");
+      pane.state.sessionKey = "agent:main:expanded-route";
+      pane.sessionKey = "agent:main:expanded-route";
+      pane.routeFace = "dashboard";
+      pane.dashboardExpanded = true;
+      const savedLayout = {
+        ...promoteSidebarPanel(openSlot({ columns: [] }, slot), slot),
+        open: false,
+      };
+      pane.state.sidebarLayout = savedLayout;
+      patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(pane.state.sidebarLayout.expanded).toBe(true);
-    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
-    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("terminal");
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      expect(pane.state.sidebarLayout.expanded).toBe(true);
+      expect(pane.state.sidebarLayout.open).toBe(true);
+      expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+      expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe(
+        slot === "dashboard" ? "conversation" : "terminal",
+      );
 
-    pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(pane.state.sidebarLayout.expanded).toBe(false);
-  });
+      pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      expect(pane.state.sidebarLayout.expanded).toBe(false);
+    },
+  );
 
   it.each([true, false])(
     "restores saved task layout with side panel open=%s on an ordinary dashboard revisit",

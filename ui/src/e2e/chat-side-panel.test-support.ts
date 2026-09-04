@@ -42,10 +42,7 @@ export async function openChatSidePanelType(page: Page, label: string): Promise<
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
-  await page
-    .locator('[data-region-header="side"]')
-    .getByRole("button", { name: "Make main", exact: true })
-    .click();
+  await page.locator(".chat-panel-swap").click();
   await page
     .locator('[data-region-header="main"]')
     .getByRole("button", { name: "Focus", exact: true })
@@ -56,7 +53,7 @@ export async function focusChatSidePanel(page: Page): Promise<void> {
 export async function restoreChatAsMain(page: Page): Promise<void> {
   const side = page.locator('[data-region-header="side"]');
   await side.getByRole("tab", { name: "Chat", exact: true }).click();
-  await side.getByRole("button", { name: "Make main", exact: true }).click();
+  await page.locator(".chat-panel-swap").click();
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }
 
@@ -64,9 +61,9 @@ export async function dockChatSidePanel(
   page: Page,
   dock: "left" | "right" | "bottom",
 ): Promise<void> {
-  const header = page.locator('[data-region-header="main"]');
-  await header.getByRole("button", { name: "Layout", exact: true }).click();
-  await header.locator(`wa-dropdown-item[value="${dock}"]`).click();
+  const menu = page.locator(".chat-panel-layout-menu");
+  await menu.getByRole("button", { name: "Layout", exact: true }).click();
+  await menu.locator(`wa-dropdown-item[value="${dock}"]`).click();
   await page.locator(`.sidebar-region--${dock}`).waitFor();
 }
 
