@@ -191,12 +191,12 @@ describe("Claude Agent SDK user input adapter", () => {
       },
       error: "questions[0].options[1].description must be a string",
     },
-  ])("names the failing constraint when $name", async ({ input, error }) => {
+  ])("names the failing constraint when $name", async ({ input: malformedInput, error }) => {
     const requestUserInput = vi.fn();
     const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
 
     await expect(
-      authorizer.authorize({ input, signal: new AbortController().signal }),
+      authorizer.authorize({ input: malformedInput, signal: new AbortController().signal }),
     ).resolves.toEqual({
       behavior: "deny",
       message: `OpenClaw rejected malformed Claude user questions: ${error}.`,
