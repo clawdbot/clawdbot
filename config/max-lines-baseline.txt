@@ -547,7 +547,6 @@ src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
 src/config/plugin-auto-enable.core.test.ts
-src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
