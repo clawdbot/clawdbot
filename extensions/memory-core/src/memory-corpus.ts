@@ -32,6 +32,8 @@ export type MemoryCorpusAttempt<T> =
   | UnavailableMemoryCorpus<T>
   | { corpus: MemoryCorpus; outcome: "not-registered" };
 
+type ExecutedMemoryCorpus<T> = Exclude<MemoryCorpusAttempt<T>, { outcome: "not-registered" }>;
+
 /**
  * Flattening the failure to a string is where provenance would be lost: a
  * provider is free to emit the very text this tool uses for its own timeout, so
@@ -78,7 +80,7 @@ export async function attemptMemoryCorpus<T>(params: {
   signal: AbortSignal;
   unavailableValue: T;
   run: () => Promise<T>;
-}): Promise<MemoryCorpusAttempt<T>> {
+}): Promise<ExecutedMemoryCorpus<T>> {
   try {
     return {
       corpus: params.corpus,
