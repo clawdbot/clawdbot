@@ -959,7 +959,7 @@ describe("server-runtime-services", () => {
       errorMessage: "idle task failed",
     });
 
-    handle.stop();
+    await handle.stop();
     await vi.advanceTimersByTimeAsync(25);
 
     expect(run).not.toHaveBeenCalled();
