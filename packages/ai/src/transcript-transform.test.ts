@@ -30,8 +30,35 @@ describe("transformMessages with malformed persisted transcript ids", () => {
     ] as unknown as Message[];
 
     const transformed = transformMessages(messages, model);
-    const block = (transformed[0].content as Array<{ type: string; id?: string }>)[0];
+    const [message] = transformed;
+    if (!message) {
+      throw new Error("expected transformMessages to return the assistant message");
+    }
+    const [block] = message.content as Array<{ type: string; id?: string }>;
+    if (!block) {
+      throw new Error("expected the assistant message to keep its tool-call block");
+    }
     expect(block.id).toBe("");
+  });
+
+  it("drops malformed non-tool assistant blocks instead of forwarding them as tool calls", () => {
+    const messages = [
+      {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [{ type: "attachment", path: "/tmp/poison.bin" }],
+        timestamp: 4,
+      },
+    ] as unknown as Message[];
+
+    const transformed = transformMessages(messages, model);
+    const [message] = transformed;
+    if (!message) {
+      throw new Error("expected transformMessages to return the assistant message");
+    }
+    expect(message.content).toEqual([]);
   });
 
   it("normalizes tool-result messages missing toolCallId instead of crashing", () => {
@@ -47,7 +74,11 @@ describe("transformMessages with malformed persisted transcript ids", () => {
     ] as unknown as Message[];
 
     const transformed = transformMessages(messages, model);
-    expect((transformed[0] as { toolCallId?: string }).toolCallId).toBe("");
+    const [message] = transformed;
+    if (!message) {
+      throw new Error("expected transformMessages to return the tool result message");
+    }
+    expect((message as { toolCallId?: string }).toolCallId).toBe("");
   });
 
   it("still trims well-formed tool-result ids", () => {
@@ -63,6 +94,10 @@ describe("transformMessages with malformed persisted transcript ids", () => {
     ] as unknown as Message[];
 
     const transformed = transformMessages(messages, model);
-    expect((transformed[0] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    const [message] = transformed;
+    if (!message) {
+      throw new Error("expected transformMessages to return the tool result message");
+    }
+    expect((message as { toolCallId?: string }).toolCallId).toBe("call_1");
   });
 });
