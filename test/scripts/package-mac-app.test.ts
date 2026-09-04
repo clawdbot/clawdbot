@@ -745,7 +745,7 @@ function getStopPackagedAppBlock(): string {
 function getSwiftCompatibilityBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Copying app icon"');
+  const end = script.indexOf('echo "🖼  Compiling app icon"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);

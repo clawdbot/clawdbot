@@ -9,6 +9,23 @@ title: "Menu bar icon"
 
 Scope: macOS app (`apps/macos`). Rendering: `CritterIconRenderer.makeIcon(...)`. Animation/state wiring: `CritterStatusLabel` + `CritterStatusLabel+Behavior.swift`.
 
+## Dock icon
+
+Choose a Dock icon in **Settings → General → Dock icon**:
+
+- **Automatic** (default): Paper in light appearance, Ink in dark appearance. It
+  follows macOS appearance changes while OpenClaw is running.
+- **Paper**, **Ink**, or **Sea Glass**: keep that icon in either appearance.
+
+The selection is saved separately for each OpenClaw profile and applies immediately.
+It changes the running app's Dock icon; Finder and the Dock tile after quitting
+use the bundled app icon. The menu bar critter and its animations are independent.
+
+The shared mascot source is `apps/macos/Icon.icon`. After editing it, regenerate
+the selectable artwork with `bash scripts/generate-mac-app-icons.sh` and verify
+it with `bash scripts/generate-mac-app-icons.sh --check`. Packaging compiles the
+primary app icon with Apple's asset compiler.
+
 ## States
 
 | State                 | Trigger                                   | Visual                                                                                              |

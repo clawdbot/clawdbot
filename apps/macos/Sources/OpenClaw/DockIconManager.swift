@@ -1,11 +1,13 @@
 import AppKit
 
-/// Central manager for Dock icon visibility.
+/// Central manager for Dock icon appearance and visibility.
 /// Shows the Dock icon while any windows are visible, regardless of user preference.
 final class DockIconManager: NSObject, @unchecked Sendable {
     static let shared = DockIconManager()
 
     private var windowsObservation: NSKeyValueObservation?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var appliedIconStyle: AppIconStyle?
     private let logger = Logger(subsystem: "ai.openclaw", category: "DockIconManager")
 
     override private init() {
@@ -18,6 +20,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     deinit {
         self.windowsObservation?.invalidate()
+        self.appearanceObservation?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -78,6 +81,15 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
+            self.appearanceObservation = app.observe(\.effectiveAppearance, options: [
+                .initial,
+                .new,
+            ]) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.updateIconImage()
+                }
+            }
+
             self.windowsObservation = app.observe(\.windows, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(50))
@@ -123,6 +135,21 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
         Task { @MainActor in
             self.updateDockVisibility()
+            self.updateIconImage()
         }
+    }
+
+    @MainActor
+    private func updateIconImage() {
+        guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
+        let selection = AppIconStyle(rawValue: AppDefaults.standard.string(forKey: appIconStyleKey) ?? "") ?? .automatic
+        let style = selection.resolved(for: NSApp.effectiveAppearance)
+        guard style != self.appliedIconStyle else { return }
+        guard let image = AppIconArtwork.image(for: style) else {
+            self.logger.error("Bundled Dock icon is missing: \(style.rawValue)")
+            return
+        }
+        NSApp.applicationIconImage = image
+        self.appliedIconStyle = style
     }
 }
