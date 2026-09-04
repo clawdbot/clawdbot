@@ -11,6 +11,7 @@ import {
   refreshChatAvatar,
   refreshSenderAgentAvatars,
   renderChatAvatar,
+  renderForwardedAvatar,
 } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
@@ -128,15 +129,14 @@ describe("renderChatAvatar", () => {
     expect(textAvatar?.textContent?.trim()).toBe("AB");
     expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
-    const container = document.createElement("div");
-    const dataUrl = "data:image/png;base64,YQ==";
-    const part = render(
-      renderChatAvatar("user", undefined, { name: "Buns", avatar: dataUrl }),
-      container,
-    );
-    part.setConnected(false);
-    part.setConnected(true);
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(dataUrl);
+    for (const avatar of ["data:image/png;base64,YQ==", "/custom.svg"]) {
+      const container = document.createElement("div");
+      const part = render(renderChatAvatar("user", undefined, { name: "Buns", avatar }), container);
+      part.setConnected(false);
+      part.setConnected(true);
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(avatar);
+      render(nothing, container);
+    }
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {
@@ -503,6 +503,56 @@ describe("refreshSenderAgentAvatars", () => {
       senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
     };
   }
+
+  it.each([200, 404])(
+    "keeps forwarded identity visible through pending and HTTP %s",
+    async (status) => {
+      const host = senderHost();
+      const response = createDeferred<Response>();
+      const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:forwarded-avatar");
+      host.chatMessages = forwardedMessages("research");
+      const pending = refreshSenderAgentAvatars(host);
+      await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+      const container = document.createElement("div");
+      const renderSender = () =>
+        render(
+          renderForwardedAvatar("research", {
+            agentId: "main",
+            agents: host.agentsList.agents,
+            senderAgentAvatars: host.senderAgentAvatars,
+          }),
+          container,
+        );
+      renderSender();
+      expect(container.querySelector("img")).toBeNull();
+      expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe(
+        "R",
+      );
+      expect(fetchAvatar).toHaveBeenCalledWith(
+        "https://gateway.example.test/avatar/research?v=1",
+        expect.objectContaining({ headers: { Authorization: "Bearer test-token" } }),
+      );
+      response.resolve(
+        status === 200
+          ? new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } })
+          : new Response(null, { status }),
+      );
+      await pending;
+      renderSender();
+      if (status === 200) {
+        expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:forwarded-avatar");
+        expect(container.querySelector(".chat-avatar--sender-initials")).toBeNull();
+      } else {
+        expect(container.querySelector("img")).toBeNull();
+        expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe(
+          "R",
+        );
+      }
+      render(nothing, container);
+      invalidateChatAvatarCache(host);
+    },
+  );
 
   it("shares sender snapshots with the current-agent cache and skips unknown agents", async () => {
     const host = senderHost();

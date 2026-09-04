@@ -3,10 +3,12 @@ import { directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { live } from "lit/directives/live.js";
 import { UntilDirective } from "lit/directives/until.js";
+import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
   resolveAvatar,
   resolveAvatarInitials,
+  resolveTrustedAvatarUrl,
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
@@ -61,10 +63,14 @@ class IdentityAvatarImageDirective extends UntilDirective<unknown> {
   }
 
   override update(part: Part, [value, sourceUrl]: [IdentityAvatarView["imageUrl"], string?]) {
-    const localUrl = typeof value === "string" && value.startsWith("/") ? value : undefined;
-    const imageUrl = localUrl ? resolveAvatarImageUrl(localUrl) : value;
+    // Only Gateway avatars need reacquisition; public image URLs stay on the page.
+    const inputUrl = sourceUrl ?? (typeof value === "string" ? value : undefined);
+    const avatarUrl = inputUrl
+      ? resolveTrustedAvatarUrl(inputUrl, readAvatarGatewayContext().origin)
+      : null;
+    const imageUrl = avatarUrl && value === inputUrl ? resolveAvatarImageUrl(avatarUrl) : value;
     this.part = part;
-    this.sourceUrl = localUrl ?? sourceUrl;
+    this.sourceUrl = avatarUrl ?? undefined;
     if (imageUrl !== this.imageUrl || !this.release) {
       const release = this.isConnected ? retainAvatarImageUrl(imageUrl) : undefined;
       this.release?.();

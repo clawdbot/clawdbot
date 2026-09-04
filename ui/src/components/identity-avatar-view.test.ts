@@ -8,6 +8,7 @@ import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   identityAvatarClass,
+  identityAvatarImage,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
@@ -35,6 +36,22 @@ afterEach(() => {
 });
 
 describe("shared identity avatar view", () => {
+  it.each(["/favicon.svg", "/control/assets/mascot.svg?v=build-1"])(
+    "preserves the public image %s through reconnect without authenticated fetching",
+    (url) => {
+      setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"], "/control");
+      const fetchAvatar = vi.spyOn(globalThis, "fetch");
+      const container = document.createElement("div");
+      const part = render(html`<img src=${identityAvatarImage(url)} />`, container);
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(url);
+      part.setConnected(false);
+      part.setConnected(true);
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(url);
+      expect(fetchAvatar).not.toHaveBeenCalled();
+      render(nothing, container);
+    },
+  );
+
   it("derives fallback initials and colors from the canonical user identity", () => {
     const identity = {
       id: "profile-riley",
@@ -64,6 +81,35 @@ describe("shared identity avatar view", () => {
     expect(view.imageUrl).toBeNull();
     expect(view.pending).toBe(false);
     expect(fetchAvatar).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a retired Gateway's image when its view reconnects", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["old-token"]);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:old-gateway");
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const container = document.createElement("div");
+    const part = renderAvatar(
+      resolveIdentityAvatarView({
+        id: "profile-ada",
+        name: "Ada",
+        profileAvatarUrl: "/api/users/profile-ada/avatar?v=1",
+      }),
+      container,
+    );
+    const source = () => container.querySelector("img")?.getAttribute("src");
+    await vi.waitFor(() => expect(source()).toBe("blob:old-gateway"));
+    part.setConnected(false);
+    setAvatarGatewayOrigin("https://replacement.example.test", ["new-token"]);
+    part.setConnected(true);
+    expect(source()).toBeNull();
+    expect(revoke).toHaveBeenCalledWith("blob:old-gateway");
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    render(nothing, container);
   });
 
   it("shares authenticated loading and reconciles image fallback events", async () => {
