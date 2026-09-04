@@ -802,7 +802,9 @@ describe("models.authStatus", () => {
       const boundProfile = profiles.find((profile) => profile.profileId === boundProfileId);
       expect(boundProfile).toMatchObject({ source: "config" });
       expect(boundProfile).not.toHaveProperty("logoutSupported");
-      for (const profile of profiles.filter((profile) => profile.profileId !== boundProfileId)) {
+      for (const profile of profiles.filter(
+        (candidate) => candidate.profileId !== boundProfileId,
+      )) {
         expect(profile).toMatchObject({ source: "saved", logoutSupported: true });
       }
 
