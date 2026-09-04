@@ -8,6 +8,7 @@ import uiNodeConfig from "../ui/vitest.node.config.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
+import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 type ExpectedTestConfig = {
@@ -70,6 +71,32 @@ describe("ui package vitest config", () => {
     ]);
   });
 
+  it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
+    vi.resetModules();
+    const config = (await import("../ui/vitest.config.ts")).default;
+    const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
+    const packageIsolated = projects.find((project) => project.name === "unit-mock-registry");
+    const rootIsolated = requireTestConfig(createUiIsolatedVitestConfig({}));
+    expect(packageIsolated?.isolate).toBe(true);
+    expect(rootIsolated.isolate).toBe(true);
+    const packageFiles = globSync(packageIsolated?.include ?? [], {
+      cwd: path.join(process.cwd(), "ui"),
+      exclude: packageIsolated?.exclude,
+    }).map((file) => path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`));
+    expect(packageFiles.length).toBeGreaterThan(0);
+    const rootFiles = globSync(rootIsolated.include ?? [], { exclude: rootIsolated.exclude }).map(
+      (file) => file.replaceAll("\\", "/"),
+    );
+    expect(rootFiles.toSorted()).toEqual(packageFiles.toSorted());
+    const rootShared = requireTestConfig(createUiVitestConfig({}));
+    expect(
+      globSync(rootShared.include ?? [], { exclude: rootShared.exclude }).filter((file) =>
+        packageFiles.includes(file.replaceAll("\\", "/")),
+      ),
+    ).toEqual([]);
+  });
+
   it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {
     const includeFile = path.join(tempDirs.make("ui-node-selection-"), "include.json");
     writeFileSync(includeFile, JSON.stringify(["ui/src/**/*.test.ts"]));
@@ -124,6 +151,10 @@ describe("ui package vitest config", () => {
         "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
       ],
     ],
+    [
+      ["extensions/workboard/browser/catalog.test.ts"],
+      ["extensions/workboard/browser/catalog.test.ts"],
+    ],
     [[], []],
   ])("intersects a repository include list with every project: %j", async (requested, expected) => {
     const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");
@@ -135,8 +166,8 @@ describe("ui package vitest config", () => {
     expect(config.root).toBe(uiRoot);
     const selected = (requireTestConfig(config).projects ?? []).flatMap((project) => {
       const test = requireTestConfig(project);
-      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map(
-        (file) => `ui/${file.replaceAll("\\", "/")}`,
+      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map((file) =>
+        path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`),
       );
     });
     expect(new Set(selected).size).toBe(selected.length);
@@ -212,16 +243,19 @@ describe("ui package vitest config", () => {
     expect(testConfig.clearMocks).toBe(false);
   });
 
-  it("aliases the scope-upgrade workspace subpath for clean browser test checkouts", () => {
-    expect(requireAlias(uiConfig, "@openclaw/gateway-client/scope-upgrade")).toEqual({
-      find: "@openclaw/gateway-client/scope-upgrade",
-      replacement: path.join(
-        process.cwd(),
-        "packages",
-        "gateway-client",
-        "src",
-        "scope-upgrade.ts",
-      ),
-    });
+  it.each([
+    ["@openclaw/gateway-client/scope-upgrade", "packages/gateway-client/src/scope-upgrade.ts"],
+    ["openclaw/plugin-sdk/control-ui", "src/plugin-sdk/control-ui.ts"],
+    ["openclaw/plugin-sdk/extension-shared", "src/plugin-sdk/extension-shared.ts"],
+    ["openclaw/plugin-sdk/string-coerce-runtime", "src/plugin-sdk/string-coerce-runtime.ts"],
+    ["openclaw/plugin-sdk/test-fixtures", "src/plugin-sdk/test-fixtures.ts"],
+  ])("aliases %s from source in every standalone UI project", (specifier, source) => {
+    const projects = requireTestConfig(uiConfig).projects ?? [];
+    for (const config of [uiConfig, ...projects]) {
+      expect(requireAlias(config, specifier)).toEqual({
+        find: specifier,
+        replacement: path.join(process.cwd(), source),
+      });
+    }
   });
 });

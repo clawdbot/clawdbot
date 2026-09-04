@@ -3387,9 +3387,9 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes isolated ui test targets to the isolated project", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"]), {
+    expectSingleVitestRunPlan(buildVitestRunPlans(["ui/src/pages/chat/chat-pane.test.ts"]), {
       config: "test/vitest/vitest.ui-isolated.config.ts",
-      includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+      includePatterns: ["ui/src/pages/chat/chat-pane.test.ts"],
     });
   });
 
@@ -3401,7 +3401,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.ui-browser.config.ts",
     ]);
-    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/chat/chat-pane.test.ts");
     expect(plans[2]?.includePatterns).toContain(
       "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
     );

@@ -7,22 +7,22 @@ import {
 } from "./index.ts";
 
 describe("plugin board widget registry", () => {
-  it("resolves only advertised first-party kinds", () => {
+  it("resolves built-in kinds only when their owner advertises them", () => {
     const active = [
+      { pluginId: "session", kind: "session:progress", label: "Progress" },
       { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
-      { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
     ];
-    expect(getPluginWidgetKindContribution("workboard:board", active)).toMatchObject({
-      kind: "workboard:board",
-      label: "Workboard board",
+    expect(getPluginWidgetKindContribution("session:progress", active)).toMatchObject({
+      kind: "session:progress",
       loader: expect.any(Function),
     });
-    expect(getPluginWidgetKindContribution("workboard:card", active)).toMatchObject({
-      kind: "workboard:card",
-      label: "Workboard card",
-      loader: expect.any(Function),
-    });
-    expect(getPluginWidgetKindContribution("workboard:mini", active)).toBeNull();
+    expect(getPluginWidgetKindContribution("session:progress", [])).toBeNull();
+    expect(
+      getPluginWidgetKindContribution("session:progress", [
+        { pluginId: "other", kind: "session:progress", label: "Progress" },
+      ]),
+    ).toBeNull();
+    expect(getPluginWidgetKindContribution("workboard:board", active)).toBeNull();
     expect(getPluginWidgetKindContribution("unknown:card", active)).toBeNull();
     expect(pluginIdForWidgetKind("workboard:card")).toBe("workboard");
   });

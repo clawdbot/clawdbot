@@ -65,7 +65,7 @@ import {
 } from "./install-shared.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
@@ -646,7 +646,7 @@ export async function installPluginFromManagedNpmRoot(
     preparedDependency = dependencyResult;
     const result = await runManagedNpmInstall(preparedDependency);
     installSucceeded = result.ok;
-    if (!result.ok || !isPluginInstallCommitDeferred(params)) {
+    if (!result.ok || !resolvePluginInstallTransactionRequest(params)) {
       return result;
     }
     deferredTransaction = true;

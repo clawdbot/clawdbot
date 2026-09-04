@@ -1208,6 +1208,18 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
 ## Gateway service events
 
+Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
+already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
+`removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Use the service's `start()` and `stop()` methods to own recurring reconciliation.
+They run for plugin replacement as well as Gateway startup and shutdown;
+`gateway_start` and `gateway_stop` do not replay on plugin-only reload.
+Each returned scheduler handle belongs to one service lifetime and one scheduler
+instance. Calls, including queued writes, reject once service shutdown begins or
+that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
+scheduler while the service remains active.
+
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
 field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
