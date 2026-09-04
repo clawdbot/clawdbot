@@ -100,10 +100,23 @@ export function isToolAllowedByPolicies(
 
 // Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a policy entry
 // can cover a witness only through a wildcard, never by a literal that happens
-// to spell the placeholder while missing the server's real tools. It stands for
-// one safe letter when the witness is checked against the name grammar.
+// to spell the placeholder while missing the server's real tools.
 const NAMESPACE_WITNESS = "~";
-const NAMESPACE_WITNESS_LETTER = "a";
+
+/**
+ * The shortest name a witness stands for: wildcards match nothing, except that
+ * a wildcard opening the suffix supplies the letter every generated tool name
+ * begins with. A suffix that opens with a literal non-letter names no tool at
+ * all. Length and alphabet are then judged on that realization.
+ */
+function shortestWitnessRealization(witness: string, namespace: string): string | undefined {
+  const suffix = witness.slice(namespace.length);
+  const literal = suffix.replaceAll(NAMESPACE_WITNESS, "");
+  if (/^[a-z]/.test(literal)) {
+    return namespace + literal;
+  }
+  return suffix.startsWith(NAMESPACE_WITNESS) ? `${namespace}a${literal}` : undefined;
+}
 // Entries a provider-safe tool name could ever match once `expandToolGroups`
 // has trimmed and lowercased them; anything else (including one spelling the
 // placeholder) authorizes or denies no real tool.
@@ -217,13 +230,12 @@ export function policiesAdmitToolNamespace(
       globLayers.push(shapes);
     }
   }
-  // Each placeholder counts as one letter, so `memos__1*` (no tool starts with a
-  // digit) and literals past the name budget yield no witness and fall closed.
-  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)].filter((name) =>
-    couldMaterializeToolName(
-      name.replaceAll(NAMESPACE_WITNESS, NAMESPACE_WITNESS_LETTER),
-      namespace,
-    ),
-  );
+  // `memos__1*` (no tool starts with a digit) and literals past the name budget
+  // yield no witness and fall closed; a trailing wildcard on a full-length name
+  // still passes because it may match nothing.
+  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)].filter((name) => {
+    const shortest = shortestWitnessRealization(name, namespace);
+    return shortest !== undefined && couldMaterializeToolName(shortest, namespace);
+  });
   return witnesses.some((name) => isToolAllowedByPolicies(name, judged));
 }

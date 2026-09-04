@@ -372,6 +372,8 @@ describe("failed MCP server outages follow the same policy as that server's tool
     label: string;
     tools?: OpenClawConfig["tools"];
     toolsAllow?: string[];
+    /** Healthy memos tool names for this row (defaults to `read_note`, `write_note`). */
+    toolNames?: string[];
     visible: boolean;
   }> = [
     { label: "the coding profile", tools: { profile: "coding" }, visible: true },
@@ -494,6 +496,18 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "an allow glob whose literal already fills the 64-character name budget",
+      tools: { allow: [`memos__${"n".repeat(57)}*`] },
+      toolNames: ["n".repeat(57)],
+      visible: true,
+    },
+    {
+      label: "an allow glob that needs a letter before a digit-led suffix",
+      tools: { allow: ["memos__*1"] },
+      toolNames: ["v1"],
+      visible: true,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
@@ -525,7 +539,7 @@ describe("failed MCP server outages follow the same policy as that server's tool
     const namesWhenHealthy = await buildConfiguredMcpToolNamesAtRequestBoundary({
       cfg: config,
       serverName: "memos",
-      toolNames: ["read_note", "write_note"],
+      toolNames: testCase.toolNames ?? ["read_note", "write_note"],
       toolsAllow: testCase.toolsAllow,
     });
 
