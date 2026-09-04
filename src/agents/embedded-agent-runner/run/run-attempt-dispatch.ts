@@ -458,6 +458,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
