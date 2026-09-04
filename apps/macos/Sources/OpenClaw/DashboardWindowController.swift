@@ -18,6 +18,7 @@ private final class DashboardWindowContentView: NSView {
 private final class DashboardWindow: NSWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
+    var lifetimeRevision: UInt64 = 0
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
 
     override func toggleToolbarShown(_: Any?) {}
@@ -907,15 +908,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.refreshNativeCommandReadiness()
             return
         }
-        self.hasLiveContent = false
-        self.nativeCommandsReady = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // A failed document retires its actions. A pending picker already owns its successor's commands.
-        if self.pendingGatewaySwitch == nil {
-            self.pendingNativeCommands = []
-            self.pendingNativeNavigation = nil
-        }
+        self.prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
             """
@@ -1069,6 +1062,18 @@ extension DashboardWindowController {
 }
 
 extension DashboardWindowController {
+    private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.hasLiveContent = false
+        self.nativeCommandsReady = false
+        self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
+        // A pending picker owns its successor's actions, independent of the failing document.
+        guard self.pendingGatewaySwitch == nil else { return }
+        // Transient reconnects retain generic commands; route-specific navigation expires.
+        if !preservingPendingCommands { self.pendingNativeCommands = [] }
+        self.pendingNativeNavigation = nil
+    }
+
     func showFailure(
         title: String,
         message: String,
@@ -1076,14 +1081,7 @@ extension DashboardWindowController {
         present: Bool = true,
         preservingPendingCommands: Bool = false)
     {
-        self.hasLiveContent = false
-        self.nativeCommandsReady = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // Terminal failure drops moment-bound actions. A transient reconnect keeps generic commands
-        // for its successor document; route-specific session navigation always expires here.
-        if !preservingPendingCommands { self.pendingNativeCommands = [] }
-        self.pendingNativeNavigation = nil
+        self.prepareForFailure(preservingPendingCommands: preservingPendingCommands)
         self.currentURL = URL(string: "about:blank")!
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         self.setUpdateBridgeEnabled(false)
@@ -1213,6 +1211,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
         self.hasLiveContent = false
@@ -1388,6 +1387,10 @@ extension DashboardWindowController {
 
     var windowIntentGeneration: UInt64? {
         (self.window as? DashboardWindow)?.userIntentGeneration
+    }
+
+    var windowLifetimeRevision: UInt64? {
+        (self.window as? DashboardWindow)?.lifetimeRevision
     }
 
     private func advanceWindowIntent() {

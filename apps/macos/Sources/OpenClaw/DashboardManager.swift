@@ -221,6 +221,16 @@ final class DashboardManager {
             }
             return
         }
+        let windows = controllers.map { ($0, $0.windowLifetimeRevision) }
+        // A reopened shell starts a new lifetime even when it retains its controller.
+        // Other primary windows still receive this endpoint's result.
+        let currentControllers = {
+            windows.compactMap { controller, lifetime -> DashboardWindowController? in
+                guard self.target(for: controller) == .primary, controller.isWindowOpen,
+                      controller.windowLifetimeRevision == lifetime else { return nil }
+                return controller
+            }
+        }
         let config: GatewayConnection.Config = (url, token, password)
         let endpoint = GatewayConnection.EndpointSnapshot(
             config: config,
@@ -246,7 +256,7 @@ final class DashboardManager {
                 endpoint: endpoint, mode: mode, target: .primary, token: authToken)
         } catch {
             guard self.endpointGeneration == generation else { return }
-            for controller in controllers {
+            for controller in currentControllers() {
                 controller.showFailure(
                     title: "Dashboard unavailable",
                     message: error.localizedDescription,
@@ -258,7 +268,7 @@ final class DashboardManager {
         guard self.endpointGeneration == generation else { return }
         let dashboardURL = configuration.url
         let auth = configuration.auth
-        for controller in controllers where self.target(for: controller) == .primary && controller.isWindowOpen {
+        for controller in currentControllers() {
             let key = ObjectIdentifier(controller)
             let previousRoute = self.displayedPrimaryRoutes[key]
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
