@@ -238,12 +238,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Setup trusted pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 12.1.0
-          run_install: false
-
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -265,10 +259,11 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install selected-tag dependencies
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline
-          --config.ignore-scripts=false --config.engine-strict=false
-          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Stage AppImage GStreamer plugins
         run: | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
@@ -378,12 +373,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Setup trusted pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 12.1.0
-          run_install: false
-
       - name: Install trusted signature verifier
         run: |
           sudo apt-get update
@@ -412,7 +401,8 @@ jobs:
             exit 1
           fi
           before=$(sha256sum "$appimage")
-          pnpm dlx @tauri-apps/cli@2.11.4 signer sign "$appimage"
+          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
+            tauri signer sign "$appimage"
           after=$(sha256sum "$appimage")
           verify_dir=$(mktemp -d)
           trap 'rm -rf "$verify_dir"' EXIT
@@ -462,12 +452,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Setup trusted pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 12.1.0
-          run_install: false
-
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -475,10 +459,11 @@ jobs:
           persist-credentials: false
 
       - name: Install selected-tag dependencies
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline
-          --config.ignore-scripts=false --config.engine-strict=false
-          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
@@ -554,12 +539,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Setup trusted pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 12.1.0
-          run_install: false
-
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -568,10 +547,11 @@ jobs:
 
       - name: Install selected-tag dependencies
         shell: bash
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline
-          --config.ignore-scripts=false --config.engine-strict=false
-          --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Build Windows test bundle
         working-directory: apps/linux/src-tauri
@@ -634,12 +614,6 @@ jobs:
         with:
           node-version: 24
 
-      - name: Setup trusted pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        with:
-          version: 12.1.0
-          run_install: false
-
       - name: Install trusted signature verifier
         run: |
           sudo apt-get update
@@ -677,8 +651,10 @@ jobs:
           fi
           macos_before=$(sha256sum "$macos")
           windows_before=$(sha256sum "$windows")
-          pnpm dlx @tauri-apps/cli@2.11.4 signer sign "$macos"
-          pnpm dlx @tauri-apps/cli@2.11.4 signer sign "$windows"
+          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
+            tauri signer sign "$macos"
+          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
+            tauri signer sign "$windows"
           macos_after=$(sha256sum "$macos")
           windows_after=$(sha256sum "$windows")
           verify_dir=$(mktemp -d)

@@ -15996,6 +15996,7 @@ it("pins simple release admission owners before selected checkout and preserves 
       `${jobName} dependency install`,
     );
     expect(steps.indexOf(install), `${jobName} install order`).toBeGreaterThan(checkoutIndex);
+    expect(install.run).toContain("corepack enable");
     expect(install.run).toContain("pnpm install --frozen-lockfile");
   }
   const linuxBuildSteps = linux.jobs.build_linux.steps as WorkflowStep[];
@@ -16077,7 +16078,6 @@ it("pins simple release admission owners before selected checkout and preserves 
     signingSteps.map(({ uses }) => uses).filter((uses): uses is string => uses !== undefined),
   ).toEqual([
     "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093",
     DOWNLOAD_ARTIFACT_V8,
     UPLOAD_ARTIFACT_V7,
   ]);
@@ -16104,7 +16104,10 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(
     signingSteps.find(({ name }) => name === "Install trusted signature verifier")?.run,
   ).toContain("sudo apt-get install -y --no-install-recommends minisign");
-  expect(signAppImage.run).toContain('pnpm dlx @tauri-apps/cli@2.11.4 signer sign "$appimage"');
+  expect(signAppImage.run).toContain(
+    "npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4",
+  );
+  expect(signAppImage.run).toContain('tauri signer sign "$appimage"');
   expect(signAppImage.run).toContain('before=$(sha256sum "$appimage")');
   expect(signAppImage.run).toContain('after=$(sha256sum "$appimage")');
   expect(signAppImage.run).toContain('base64 --decode < "${appimage}.sig"');
@@ -16180,7 +16183,6 @@ it("pins simple release admission owners before selected checkout and preserves 
       .filter((uses): uses is string => uses !== undefined),
   ).toEqual([
     "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093",
     DOWNLOAD_ARTIFACT_V8,
     DOWNLOAD_ARTIFACT_V8,
     UPLOAD_ARTIFACT_V7,
@@ -16218,6 +16220,9 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(
     desktopSigningSteps.find(({ name }) => name === "Install trusted signature verifier")?.run,
   ).toContain("sudo apt-get install -y --no-install-recommends minisign");
+  expect(signDesktop.run).toContain(
+    "npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4",
+  );
   expect(signDesktop.run).toContain('signer sign "$macos"');
   expect(signDesktop.run).toContain('signer sign "$windows"');
   expect(signDesktop.run).toContain('macos_before=$(sha256sum "$macos")');
@@ -16366,15 +16371,15 @@ it("pins simple release admission owners before selected checkout and preserves 
     mkdirSync(signingBin, { recursive: true });
     writeFileSync(finalizedArtifact, "trusted-finalized-bytes");
     writeFileSync(
-      path.join(signingBin, "pnpm"),
+      path.join(signingBin, "npm"),
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        '[[ "$#" -eq 5 ]]',
-        '[[ "$1" == "dlx" ]]',
-        '[[ "$2" == "@tauri-apps/cli@2.11.4" ]]',
-        '[[ "$3" == "signer" && "$4" == "sign" ]]',
-        'printf "ephemeral-signature" | base64 > "$5.sig"',
+        '[[ "$#" -eq 9 ]]',
+        '[[ "$1" == "exec" && "$2" == "--yes" && "$3" == "--audit=false" ]]',
+        '[[ "$4" == "--package=@tauri-apps/cli@2.11.4" && "$5" == "--" ]]',
+        '[[ "$6" == "tauri" && "$7" == "signer" && "$8" == "sign" ]]',
+        'printf "ephemeral-signature" | base64 > "${9}.sig"',
         "",
       ].join("\n"),
       { mode: 0o755 },
@@ -16441,15 +16446,15 @@ it("pins simple release admission owners before selected checkout and preserves 
     writeFileSync(macosInput, "finalized-macos-updater-bytes");
     writeFileSync(windowsInput, "finalized-windows-updater-bytes");
     writeFileSync(
-      path.join(desktopSigningBin, "pnpm"),
+      path.join(desktopSigningBin, "npm"),
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        '[[ "$#" -eq 5 ]]',
-        '[[ "$1" == "dlx" ]]',
-        '[[ "$2" == "@tauri-apps/cli@2.11.4" ]]',
-        '[[ "$3" == "signer" && "$4" == "sign" ]]',
-        'printf "ephemeral-signature:%s" "$(basename "$5")" | base64 > "$5.sig"',
+        '[[ "$#" -eq 9 ]]',
+        '[[ "$1" == "exec" && "$2" == "--yes" && "$3" == "--audit=false" ]]',
+        '[[ "$4" == "--package=@tauri-apps/cli@2.11.4" && "$5" == "--" ]]',
+        '[[ "$6" == "tauri" && "$7" == "signer" && "$8" == "sign" ]]',
+        'printf "ephemeral-signature:%s" "$(basename "${9}")" | base64 > "${9}.sig"',
         "",
       ].join("\n"),
       { mode: 0o755 },
