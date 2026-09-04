@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -48,8 +49,6 @@ import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-  DEFAULT_LLAMA_CPP_MODEL_ID,
-  DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
 } from "./src/defaults.js";
@@ -196,6 +195,34 @@ describe("llama.cpp provider plugin", () => {
       }),
     ).resolves.toBeUndefined();
     expect(mocks.discoverServer).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("honors thinking off for managed=%s requests", async (managed) => {
+    const provider = registerTextProvider();
+    const { config } = configuredOptions();
+    const configured = config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    const model = { ...configured.models[0], provider: LLAMA_CPP_PROVIDER_ID };
+    const payload = { chat_template_kwargs: { enable_thinking: true } };
+    const inner = vi.fn<StreamFn>(async (requestModel, _context, options) => {
+      await options?.onPayload?.(payload, requestModel);
+      return {} as never;
+    });
+    const wrapped = expectDefined(
+      provider.wrapStreamFn?.({
+        config: managed ? config : {},
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: model.id,
+        model,
+        thinkingLevel: "off",
+        streamFn: inner,
+      } as never),
+      "llama.cpp stream wrapper",
+    );
+
+    await wrapped(model as never, { messages: [] }, {});
+
+    expect(payload.chat_template_kwargs.enable_thinking).toBe(false);
+    expect(mocks.ensureChat).toHaveBeenCalledTimes(managed ? 1 : 0);
   });
 
   it("keeps an embedding-only managed model inventory empty", async () => {
@@ -375,9 +402,7 @@ describe("llama.cpp provider plugin", () => {
       if (!download) {
         throw new Error("not cached");
       }
-      return source === DEFAULT_LLAMA_CPP_MODEL_URI
-        ? "/models/chat.gguf"
-        : "/models/embedding.gguf";
+      return source.includes("Qwen3.5-9B-GGUF") ? "/models/chat.gguf" : "/models/embedding.gguf";
     });
 
     try {
@@ -391,12 +416,12 @@ describe("llama.cpp provider plugin", () => {
         runtime: {},
       } as never);
 
-      expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`);
+      expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`);
       expect(mocks.prepareServer).toHaveBeenCalledWith(
         expect.objectContaining({
           chatModel: expect.objectContaining({
             mode: "configure",
-            id: DEFAULT_LLAMA_CPP_MODEL_ID,
+            id: "qwen3.5-9b-q4_k_m",
             path: "/models/chat.gguf",
           }),
           embeddingModelPath: "/models/embedding.gguf",

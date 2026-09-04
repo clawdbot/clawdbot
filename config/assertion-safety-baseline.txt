@@ -3696,7 +3696,7 @@ src/system-agent/rescue-message.ts	2
 src/system-agent/setup-apply.ts	1
 src/system-agent/setup-inference-activate-persist.ts	1
 src/system-agent/setup-inference-detection.ts	3
-src/system-agent/setup-inference-persist.ts	3
+src/system-agent/setup-inference-persist.ts	1
 src/system-agent/setup-inference-plan-helpers.ts	1
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
