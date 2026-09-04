@@ -139,7 +139,6 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     const promotedByPreLaunchOwner =
       runtime !== null &&
       runtime.status === "running" &&
-      runtime.state !== "Running" &&
       runtime.pid !== undefined &&
       params.preLaunchGatewayPids.has(runtime.pid);
     const status = promotedByPreLaunchOwner ? "stopped" : runtime?.status;
