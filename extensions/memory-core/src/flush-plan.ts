@@ -10,6 +10,15 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryCoreNowMs } from "./time.js";
 
+/** Keep only usable refs; an all-blank list behaves like no list at all. */
+function normalizeFlushFallbacks(fallbacks: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(fallbacks)) {
+    return undefined;
+  }
+  const refs = fallbacks.map((ref) => ref.trim()).filter((ref) => ref.length > 0);
+  return refs.length > 0 ? refs : undefined;
+}
+
 const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
@@ -142,6 +151,7 @@ export function buildMemoryFlushPlan(
     forceFlushTranscriptBytes,
     reserveTokensFloor,
     model: defaults?.model?.trim() || undefined,
+    fallbacks: normalizeFlushFallbacks(defaults?.fallbacks),
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
