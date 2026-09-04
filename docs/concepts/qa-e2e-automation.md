@@ -1472,6 +1472,85 @@ When no candidate `--model` is passed, the character eval defaults to
 `openai/gpt-5.6-sol,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-8,thinking=high`.
 
+### Portable confidence evidence
+
+Use `qa confidence-export` to capture a confidence manifest and every lane input
+in one evidence bundle. Use `qa confidence-replay` to verify that bundle against
+a separately received SHA-256 digest and rerun the existing classification
+without the original artifact directory, provider credentials, or a live harness.
+Replay does not execute commands from the artifacts.
+
+For example, given an artifact directory containing `profile.json`:
+
+```json
+{
+  "version": 1,
+  "profile": "portable-check",
+  "lanes": [
+    {
+      "id": "checks",
+      "title": "Deterministic checks",
+      "kind": "generic-pass-summary",
+      "artifact": "checks.json",
+      "required": true,
+      "failureVerdict": "product-bug"
+    }
+  ]
+}
+```
+
+With `checks.json` containing `{"pass":true}`, export the inputs:
+
+```bash
+pnpm openclaw qa confidence-export \
+  --artifact-root ./proof-inputs \
+  --manifest profile.json \
+  --strict-global-pass \
+  --output ./confidence-bundle.json
+```
+
+The command prints the output path, artifact count, and `sha256`. Share the
+digest through a trusted channel separately from the bundle. The recipient runs:
+
+```bash
+pnpm openclaw qa confidence-replay \
+  --bundle ./confidence-bundle.json \
+  --expected-sha256 <digest-from-export>
+```
+
+Replay prints JSON with separate `integrity` and `report` fields. A valid bundle
+can still produce a failing confidence report; the command exits with status 1
+when `report.pass` is false. `--strict-global-pass` and `--strict-zero-unknowns`
+are captured at export and cannot be changed at replay. Without strict flags,
+the existing confidence-report semantics still allow classified failures, so
+use `--strict-global-pass` when every required lane must pass.
+
+The bundle preserves exact input bytes, the manifest, export time, and missing
+artifact entries. Replay uses portable artifact paths and the captured time;
+repeated replay with the same OpenClaw build produces the same report. Different
+OpenClaw versions may classify the same evidence differently. An omitted lane
+entry is rejected rather than treated as missing. Invalid artifact JSON remains
+an unknown lane instead of becoming a pass.
+
+Export paths must be portable paths relative to `--artifact-root`, with no
+absolute paths, `..`, symlink components, or hard-linked files. Export captures
+only the declared files; it does not recursively include logs or follow artifact
+references inside a summary. The format allows at most 256 entries, including
+the manifest and replay descriptor, 8 MiB per file, 16 MiB of decoded content,
+and 24 MiB of serialized input. The output file is created with owner-only
+permissions where supported and never overwrites an existing file.
+
+Stop artifact producers before exporting: individual files are guarded reads,
+not an atomic snapshot of a running suite. Review selected inputs before sharing;
+the bundle preserves their contents and does not automatically redact secrets.
+Re-export after redaction and share the new digest.
+
+**Integrity is not attestation.** Matching a trusted digest proves which bytes
+were received, not who produced them, whether a producer told the truth, or
+whether candidate code was independently tested. A digest received only alongside
+an untrusted bundle does not establish authenticity. Replay neither reruns model
+work nor changes Workboard completion state.
+
 ## Related docs
 
 - [Maturity scorecard](/maturity/scorecard)
