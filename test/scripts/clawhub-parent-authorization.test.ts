@@ -147,6 +147,7 @@ describe("ClawHub parent publication authorization", () => {
         "approve_plugins_clawhub_release" | "validate_release_publish_approval",
         {
           environment?: string;
+          if?: string;
           needs: string[];
           outputs?: Record<string, string>;
           steps: {
