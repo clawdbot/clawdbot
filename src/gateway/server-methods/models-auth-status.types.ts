@@ -51,6 +51,13 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  /** Provider-owned guided setup routes exposed without loading runtime code. */
+  setupActions?: Array<{
+    choiceId: string;
+    label: string;
+    hint?: string;
+    actionLabel?: string;
+  }>;
 };
 
 export type ModelAuthStatusResult = {

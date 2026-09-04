@@ -29,6 +29,7 @@ const profileId = `${providerId}:default`;
 const originalModel = "existing-fixture/preserved-model";
 const fixtureModel = `${providerId}/demo-model`;
 const syntheticKey = "synthetic-ui-provider-key";
+const reconnectedSyntheticKey = "synthetic-ui-provider-key-reconnected";
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
@@ -90,6 +91,8 @@ suite.define(() => {
               choiceLabel: "Project API key",
               groupId: providerId,
               groupLabel: "Catalog Fixture",
+              appGuidedDiscovery: true,
+              appGuidedActionLabel: "Reconnect",
               appGuidedSecret: true,
               onboardingScopes: ["text-inference"],
             },
@@ -311,6 +314,14 @@ suite.define(() => {
             0,
           );
           expect(bootIds.size).toBeGreaterThan(1);
+          await card.getByRole("button", { name: "Reconnect", exact: true }).click();
+          const reconnectKeyInput = wizard.getByLabel("Catalog fixture project key");
+          await reconnectKeyInput.waitFor();
+          await reconnectKeyInput.fill(reconnectedSyntheticKey);
+          expect(await reconnectKeyInput.getAttribute("type")).toBe("password");
+          await capture("05-provider-card-reconnect.png");
+          await wizard.getByRole("button", { name: "Submit", exact: true }).click();
+          await card.getByText(`Provider ${providerId} configured.`, { exact: true }).waitFor();
           const saved = await readConfigFileSnapshot();
           expect(saved.valid).toBe(true);
           expect(saved.sourceConfig.agents?.defaults?.model).toBe(originalModel);
@@ -324,20 +335,20 @@ suite.define(() => {
           expect(
             credential?.type === "api_key" &&
               credential.provider === providerId &&
-              credential.key === syntheticKey,
+              credential.key === reconnectedSyntheticKey,
           ).toBe(true);
           const records = await loadInstalledPluginIndexInstallRecords({ env: state.env });
           expect(records[pluginId]?.acceptedSurface?.providers).toContain(providerId);
           expect(inferenceRequests).toBe(0);
           expect(
             methods.filter((method) => method === "openclaw.setup.prepare.start"),
-          ).toHaveLength(1);
+          ).toHaveLength(2);
           expect(methods).not.toContain("openclaw.setup.activate.start");
           expect(methods).not.toContain("openclaw.setup.auth.start");
           expect(methods).not.toContain("config.patch");
           expect(await page.getByRole("heading", { name: "Connection verified" }).count()).toBe(0);
           await add.scrollIntoViewIfNeeded();
-          await capture("05-provider-configured-primary-preserved.png");
+          await capture("06-provider-configured-primary-preserved.png");
           if (artifactDir) {
             const feed = await createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
               env: state.env,
@@ -351,6 +362,7 @@ suite.define(() => {
                   providerId,
                   primaryPreserved: true,
                   persistedCredentialMatchesSyntheticInput: true,
+                  providerCardReconnectCompleted: true,
                   capabilityConsentPersisted: true,
                   inferenceRequests,
                   authStatus,
@@ -374,6 +386,7 @@ suite.define(() => {
           gateway
             .logs()
             .replaceAll(syntheticKey, "[REDACTED]")
+            .replaceAll(reconnectedSyntheticKey, "[REDACTED]")
             .replaceAll(gateway.gatewayToken, "[REDACTED]")
             .replaceAll(gateway.hookToken, "[REDACTED]"),
         );

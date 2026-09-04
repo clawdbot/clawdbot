@@ -67,7 +67,7 @@ suite.define(() => {
               "chat.metadata",
               "chat.startup",
               "openclaw.setup.detect",
-              "openclaw.setup.activate.start",
+              "openclaw.setup.auth.start",
               "wizard.next",
               "openclaw.setup.verify",
               "openclaw.chat",
@@ -80,15 +80,40 @@ suite.define(() => {
                 setupComplete: false,
                 manualProviders: [{ id: "openai", label: "OpenAI" }],
               },
-              "openclaw.setup.activate.start": {
-                sessionId: "activation-session",
+              "openclaw.setup.auth.start": {
+                sessionId: "auth-session",
                 done: false,
                 status: "running",
               },
               "wizard.next": {
-                done: true,
-                status: "error",
-                error: "401: invalid test API key",
+                sequence: [
+                  {
+                    done: false,
+                    status: "running",
+                    step: {
+                      id: "api-key",
+                      type: "text",
+                      message: "OpenAI API key",
+                      sensitive: true,
+                    },
+                  },
+                  { done: true, status: "error", error: "401: invalid test API key" },
+                  {
+                    done: false,
+                    status: "running",
+                    step: {
+                      id: "api-key",
+                      type: "text",
+                      message: "OpenAI API key",
+                      sensitive: true,
+                    },
+                  },
+                  {
+                    done: true,
+                    status: "done",
+                    modelActivation: { modelRef, gatewayRestartRequired: true },
+                  },
+                ],
               },
               "openclaw.setup.verify": pendingVerification,
             },
@@ -99,26 +124,24 @@ suite.define(() => {
           );
           const firstConnect = connectParams((await gateway.waitForRequest("connect")).params);
           expect(firstConnect.auth).toMatchObject({ bootstrapToken: "e2e-first-grant" });
-          const apiKey = page.locator('.model-setup__manual input[type="password"]');
-          await apiKey.fill("invalid-test-key");
           await page.getByRole("button", { name: "Connect & verify" }).click();
+          const dialog = page.locator("openclaw-modal-dialog");
+          const apiKey = dialog.getByLabel("OpenAI API key");
+          await apiKey.fill("invalid-test-key");
+          await dialog.getByRole("button", { name: "Submit" }).click();
           await page.getByText("401: invalid test API key").waitFor();
           expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
           expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
 
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByRole("button", { name: "Close", exact: true })
-            .click();
-          await gateway.setMethodResponse("wizard.next", {
-            done: true,
-            status: "done",
-            modelActivation: { modelRef, gatewayRestartRequired: true },
-          });
+          await dialog.getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => dialog.count()).toBe(0);
+          await page.getByRole("button", { name: "Connect & verify" }).click();
+          await apiKey.waitFor();
+          await expect.poll(() => apiKey.isEnabled()).toBe(true);
+          await apiKey.fill("accepted-test-key");
           const initialRefreshes = (await gateway.getRequests("config.get")).length;
           await gateway.deferNext("config.get");
-          await apiKey.fill("accepted-test-key");
-          await page.getByRole("button", { name: "Connect & verify" }).click();
+          await dialog.getByRole("button", { name: "Submit" }).click();
           // The activation response has arrived, but its refresh has not. A
           // restart here must retain the confirmed model without reactivating it.
           await expect
@@ -169,7 +192,7 @@ suite.define(() => {
           await destination.getByRole("button", { name: "Verify & use selected model" }).click();
           await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
           if (restart === "reconnect") {
-            expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(2);
+            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
             const connections = await gateway.getRequests("connect");
             expect(connectParams(connections.at(-1)?.params).auth).toMatchObject({
               deviceToken: "e2e-device-token",

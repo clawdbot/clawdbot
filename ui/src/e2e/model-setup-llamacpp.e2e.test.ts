@@ -155,7 +155,7 @@ suite.define(() => {
         await llamaCppRow.getByRole("button", { name: "Set up model" }).click();
         const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
         expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
-        await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
+        await page.getByRole("heading", { name: "Set up a provider" }).waitFor();
         await page.getByText("OpenClaw will install a verified llama.cpp server").waitFor();
 
         if (artifactDir) {

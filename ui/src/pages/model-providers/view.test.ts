@@ -74,6 +74,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onAddProviderReload: () => undefined,
     onAddProviderIdChange: () => undefined,
     onAddProvider: () => undefined,
+    onSetupProvider: () => undefined,
     onPrimaryChange: () => undefined,
     onFallbackChange: () => undefined,
     onUtilityChange: () => undefined,
@@ -1040,5 +1041,40 @@ describe("renderModelProviders", () => {
       }),
     );
     expect(button(container, "Set API key")).toBeUndefined();
+  });
+
+  it("runs a provider-owned setup action from its provider card", () => {
+    const onSetupProvider = vi.fn();
+    const container = mount(
+      props({
+        cards: [
+          card({
+            id: "local-cli",
+            displayName: "Local CLI",
+            apiKeySupported: false,
+            setupActions: [
+              {
+                choiceId: "local-cli-reconnect",
+                label: "Local CLI",
+                hint: "Validate the CLI-owned session",
+                actionLabel: "Reconnect",
+              },
+            ],
+          }),
+        ],
+        onSetupProvider,
+      }),
+    );
+    const provider = container.querySelector('[data-provider-id="local-cli"]')!;
+    const reconnect = button(provider, "Reconnect");
+
+    expect(reconnect?.title).toBe("Validate the CLI-owned session");
+    reconnect?.click();
+    expect(onSetupProvider).toHaveBeenCalledWith("local-cli", "Local CLI", {
+      choiceId: "local-cli-reconnect",
+      label: "Local CLI",
+      hint: "Validate the CLI-owned session",
+      actionLabel: "Reconnect",
+    });
   });
 });

@@ -84,6 +84,11 @@ type ModelProvidersViewProps = {
   onAddProviderReload: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProvider: () => void;
+  onSetupProvider: (
+    providerId: string,
+    providerName: string,
+    action: NonNullable<ModelProviderCard["setupActions"]>[number],
+  ) => void;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
@@ -268,6 +273,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
   const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
+  const setupBusy = Boolean(props.busy[`setup:${card.id}`]);
+  const providerSetupBusy = Boolean(props.busy.add);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -327,6 +334,20 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             </button>
           `
         : nothing}
+      ${(card.setupActions ?? []).map(
+        (action) => html`
+          <button
+            class="btn btn--sm"
+            ?disabled=${providerSetupBusy || mutationDisabled}
+            title=${mutationDisabled ? blocked : (action.hint ?? "")}
+            @click=${() => props.onSetupProvider(card.id, card.displayName, action)}
+          >
+            ${setupBusy
+              ? t("modelProviders.saving")
+              : (action.actionLabel ?? t("modelProviders.setup.action"))}
+          </button>
+        `,
+      )}
     </div>
     ${props.pendingLogoutProvider === card.id
       ? html`

@@ -598,6 +598,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       ...data,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
+      selectedProviderIds: config.selectedProviderIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
     });
@@ -607,6 +608,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
         .map((provider) => provider.provider) ?? []),
     ]);
+    const handledSetupChoiceIds = new Set(
+      cards.flatMap((card) => card.setupActions?.map((action) => action.choiceId) ?? []),
+    );
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
@@ -630,14 +634,21 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         this.providerSetup.inventory,
         configuredProviderIds,
+        handledSetupChoiceIds,
       ),
       canMutate: this.canMutate(),
       mutationBlockedReason: this.mutationBlockedReason(),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
-      busy: { ...this.busy, add: this.providerSetup.busy },
+      busy: {
+        ...this.busy,
+        add: this.providerSetup.busy,
+        ...(this.providerSetup.targetProviderId
+          ? { [`setup:${this.providerSetup.targetProviderId}`]: this.providerSetup.busy }
+          : {}),
+      },
       messages: this.providerSetup.message
-        ? { ...this.messages, add: this.providerSetup.message }
+        ? { ...this.messages, [this.providerSetup.messageTarget]: this.providerSetup.message }
         : this.messages,
       probeResults: this.probeResults,
       keyEditorProvider: this.keyEditorProvider,
@@ -667,6 +678,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onAddProviderReload: () => void this.providerSetup.load(),
       onAddProviderIdChange: (choice) => this.providerSetup.select(choice),
       onAddProvider: () => void this.providerSetup.start(),
+      onSetupProvider: (providerId, providerName, action) =>
+        void this.providerSetup.startChoice(providerId, providerName, action),
       onPrimaryChange: (model) => {
         const current = this.defaultsDraft ?? configuredDefaults;
         stageDefaults({

@@ -48,6 +48,7 @@ export type ModelProviderCard = {
   configKey?: string;
   configAuthMode?: string;
   apiKeySupported?: boolean;
+  setupActions?: NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["setupActions"];
   /** Provider ids that own credentials merged into this card. */
   credentialProviderIds: string[];
   /** Saved OAuth/token profiles eligible for targeted logout. */
@@ -71,6 +72,7 @@ type ModelProviderCardsInput = {
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
   configProviderIds?: string[] | null;
+  selectedProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
   providerUsage: UsageSummary | null;
@@ -166,18 +168,28 @@ function addLogoutTarget(
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
+  const setupActionsByProvider = new Map<string, NonNullable<ModelProviderCard["setupActions"]>>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
     if (!id) {
       continue;
     }
     apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
+    if (capability.setupActions?.length) {
+      setupActionsByProvider.set(id, capability.setupActions);
+    }
   }
 
   for (const provider of input.configProviderIds ?? []) {
     const id = canonicalProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.configKey ??= provider;
+    }
+  }
+  for (const provider of input.selectedProviderIds ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id));
     }
   }
   for (const provider of input.configApiKeyProviderIds ?? []) {
@@ -322,6 +334,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       (draft) =>
         draft.hasModelAuth ||
         (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
+        (input.selectedProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.card.catalogStatus) ||
@@ -329,10 +342,12 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const setupActions = setupActionsByProvider.get(draft.card.id);
       return Object.assign(
         {},
         draft.card,
         apiKeySupported === undefined ? {} : { apiKeySupported },
+        setupActions?.length ? { setupActions } : {},
       );
     })
     .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
@@ -398,6 +413,7 @@ export function buildSelectableDefaultModels(
 
 export function readModelProviderConfig(config: Record<string, unknown> | null): {
   providerIds: string[];
+  selectedProviderIds: string[];
   apiKeyProviderIds: string[];
   providerAuthModes: Record<string, string>;
   defaults: DefaultModelSelection;
@@ -417,8 +433,26 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const fallbacks = Array.isArray(modelObject?.fallbacks)
     ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
     : [];
+  const providerIds = Object.keys(providers ?? {});
+  const selectedProviderIds: string[] = [];
+  for (const ref of [
+    primary,
+    ...fallbacks,
+    typeof defaults?.utilityModel === "string" ? defaults.utilityModel : "",
+  ]) {
+    const slash = ref.indexOf("/");
+    const provider = slash > 0 ? ref.slice(0, slash).trim() : "";
+    if (
+      provider &&
+      !providerIds.some((id) => canonicalProviderId(id) === canonicalProviderId(provider)) &&
+      !selectedProviderIds.some((id) => canonicalProviderId(id) === canonicalProviderId(provider))
+    ) {
+      selectedProviderIds.push(provider);
+    }
+  }
   return {
-    providerIds: Object.keys(providers ?? {}),
+    providerIds,
+    selectedProviderIds,
     apiKeyProviderIds: Object.entries(providers ?? {})
       .filter(([, value]) => {
         const provider = asRecord(value);
@@ -452,8 +486,10 @@ export function buildUnconfiguredProviderOptions(
     "manualProviders" | "authOptions" | "prepareOptions"
   > | null,
   configuredProviderIds: Iterable<string>,
+  handledChoiceIds: Iterable<string> = [],
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
+  const handledChoices = new Set(handledChoiceIds);
   const options = new Map<string, ProviderOption>();
   const choices: SystemAgentSetupDetectResult["manualProviders"] = [
     ...(inventory?.manualProviders ?? []),
@@ -464,6 +500,7 @@ export function buildUnconfiguredProviderOptions(
     // Auth choices are opaque. Only declared provider identity can exclude a configured family.
     if (
       options.has(choice.id) ||
+      handledChoices.has(choice.id) ||
       (choice.brandId && configured.has(canonicalProviderId(choice.brandId)))
     ) {
       continue;

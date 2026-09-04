@@ -149,14 +149,32 @@ suite.define(() => {
             featureMethods: [
               "openclaw.setup.detect",
               "openclaw.setup.activate.start",
+              "openclaw.setup.auth.start",
               "wizard.next",
             ],
             methodResponses: {
-              "wizard.next": {
-                done: true,
-                status: "error",
-                error: "Authentication failed (provider returned HTTP 401).",
+              "openclaw.setup.auth.start": {
+                sessionId: "auth-session",
+                done: false,
+                status: "running",
               },
+              "wizard.next":
+                entry === "manual"
+                  ? {
+                      done: false,
+                      status: "running",
+                      step: {
+                        id: "api-key",
+                        type: "text",
+                        message: "OpenAI API key",
+                        sensitive: true,
+                      },
+                    }
+                  : {
+                      done: true,
+                      status: "error",
+                      error: "Authentication failed (provider returned HTTP 401).",
+                    },
               "openclaw.setup.detect": {
                 candidates:
                   entry === "candidate"
@@ -185,30 +203,42 @@ suite.define(() => {
             `${suite.server.baseUrl}settings/model-setup${entry === "manual" ? "?firstRun=1" : ""}`,
           );
           const setup = page.locator(".model-setup");
-          const input = setup.locator('input[type="password"]');
           const scrollToBottom = () =>
             page.locator(".content").evaluate((element) => {
               element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
             });
-          await input.fill("invalid-test-key");
           const activate =
             entry === "manual"
               ? setup.getByRole("button", { name: "Connect & verify" })
               : setup.locator("[data-candidate-kind]").last().getByRole("button");
           await activate.scrollIntoViewIfNeeded();
-          expect(await viewportIntersection(setup.locator(".model-setup__intro"))).toBe(0);
+          await scrollToBottom();
+          expect(await viewportIntersection(setup.locator(".model-setup__intro"))).toBeLessThan(1);
           expect(
             await page.locator(".content").evaluate((element) => element.scrollTop),
           ).toBeGreaterThan(0);
-          await gateway.deferNext("openclaw.setup.activate.start");
+          if (entry !== "manual") {
+            await gateway.deferNext("openclaw.setup.activate.start");
+          }
           await activate.click();
-          const request = await gateway.waitForRequest("openclaw.setup.activate.start");
-          expect(request.params).toMatchObject(
-            entry === "manual"
-              ? { kind: "api-key", authChoice: "openai", apiKey: "invalid-test-key" }
-              : { kind: "provider-auto:local", modelRef: "local/model-5" },
-          );
           const dialog = page.locator("openclaw-modal-dialog");
+          if (entry === "manual") {
+            expect(
+              (await gateway.waitForRequest("openclaw.setup.auth.start")).params,
+            ).toMatchObject({ authChoice: "openai" });
+            await dialog.getByLabel("OpenAI API key").fill("invalid-test-key");
+            await gateway.deferNext("wizard.next");
+            await dialog.getByRole("button", { name: "Submit" }).click();
+            expect(
+              (await gateway.waitForRequest("wizard.next", { after: 1 })).params,
+            ).toMatchObject({
+              answer: { stepId: "api-key", value: "invalid-test-key" },
+            });
+          } else {
+            expect(
+              (await gateway.waitForRequest("openclaw.setup.activate.start")).params,
+            ).toMatchObject({ kind: "provider-auto:local", modelRef: "local/model-5" });
+          }
           const progress = dialog.getByRole("status");
           await progress.waitFor();
           expect(await progress.count()).toBe(1);
@@ -219,11 +249,19 @@ suite.define(() => {
             });
           }
 
-          await gateway.resolveDeferred("openclaw.setup.activate.start", {
-            sessionId: "activation-session",
-            done: false,
-            status: "running",
-          });
+          if (entry === "manual") {
+            await gateway.resolveDeferred("wizard.next", {
+              done: true,
+              status: "error",
+              error: "Authentication failed (provider returned HTTP 401).",
+            });
+          } else {
+            await gateway.resolveDeferred("openclaw.setup.activate.start", {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            });
+          }
           const failure = dialog.getByRole("alert");
           await failure.waitFor();
           expect(await failure.count()).toBe(1);
@@ -238,10 +276,19 @@ suite.define(() => {
           await expect
             .poll(() => activate.evaluate((element) => document.activeElement === element))
             .toBe(true);
-          await scrollToBottom();
-          await input.fill("another-invalid-test-key");
-          expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
-          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
+          if (entry === "manual") {
+            await activate.click();
+            const input = dialog.getByLabel("OpenAI API key");
+            await input.fill("another-invalid-test-key");
+            expect(await input.evaluate((element) => document.activeElement === element)).toBe(
+              true,
+            );
+            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
+            expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+          } else {
+            await scrollToBottom();
+            expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
+          }
         },
       );
     },

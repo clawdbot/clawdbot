@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
+  listSetupInferencePrepareOptions,
   supportsSetupManualSecret,
   supportsSetupTextInference,
 } from "../../system-agent/setup-inference-auth-options.js";
@@ -37,10 +38,21 @@ export function resolveModelProviderCapabilities(params: {
     const current = capabilities.get(provider);
     const apiKeySupported = choice.methodId === "api-key";
     const quickApiKeySetup = apiKeySupported && supportsSetupManualSecret(choice);
+    const prepareOption = listSetupInferencePrepareOptions([choice])[0];
+    const setupActions = [...(current?.setupActions ?? [])];
+    if (prepareOption && !setupActions.some((action) => action.choiceId === prepareOption.id)) {
+      setupActions.push({
+        choiceId: prepareOption.id,
+        label: prepareOption.label,
+        ...(prepareOption.hint ? { hint: prepareOption.hint } : {}),
+        ...(prepareOption.actionLabel ? { actionLabel: prepareOption.actionLabel } : {}),
+      });
+    }
     capabilities.set(provider, {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
+      ...(setupActions.length > 0 ? { setupActions } : {}),
     });
   }
   return {
