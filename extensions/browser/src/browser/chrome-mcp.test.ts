@@ -150,16 +150,18 @@ function createFakeSession(): ChromeMcpSession {
     throw new Error(`unexpected tool ${name}`);
   });
 
+  const client = {
+    callTool,
+    listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+    close: vi.fn().mockResolvedValue(undefined),
+    connect: vi.fn().mockResolvedValue(undefined),
+  };
   return {
-    client: {
-      callTool,
-      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
-      close: vi.fn().mockResolvedValue(undefined),
-      connect: vi.fn().mockResolvedValue(undefined),
-    },
+    client,
     transport: {
       pid: 123,
     },
+    closeTransport: () => client.close(),
     ready: Promise.resolve(),
     // Legacy cases exercise unrelated call plumbing. Seed one real-shaped
     // process-scoped routing generation so they stay terse.
@@ -183,16 +185,18 @@ function createToolErrorSession(message: string): ChromeMcpSession {
     isError: true,
     content: [{ type: "text", text: message }],
   }));
+  const client = {
+    callTool,
+    listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+    close: vi.fn().mockResolvedValue(undefined),
+    connect: vi.fn().mockResolvedValue(undefined),
+  };
   return {
-    client: {
-      callTool,
-      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
-      close: vi.fn().mockResolvedValue(undefined),
-      connect: vi.fn().mockResolvedValue(undefined),
-    },
+    client,
     transport: {
       pid: 123,
     },
+    closeTransport: () => client.close(),
     ready: Promise.resolve(),
   } as unknown as ChromeMcpSession;
 }
@@ -221,14 +225,16 @@ function createPageSession(params: {
     }
     throw new Error(`unexpected tool ${call.name}`);
   });
+  const client = {
+    callTool,
+    listTools: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+    connect: vi.fn(),
+  };
   return {
-    client: {
-      callTool,
-      listTools: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-      connect: vi.fn(),
-    },
+    client,
     transport: { pid: params.pid },
+    closeTransport: () => client.close(),
     ready: Promise.resolve(),
   } as unknown as ChromeMcpSession;
 }
@@ -3245,6 +3251,7 @@ describe("chrome MCP page parsing", () => {
         transport: {
           pid: 123,
         },
+        closeTransport: closeMock,
         ready: new Promise<void>(() => {}),
       }) as unknown as ChromeMcpSession;
     setChromeMcpSessionFactoryForTest(factory);
@@ -3275,6 +3282,7 @@ describe("chrome MCP page parsing", () => {
         transport: {
           pid: 123,
         },
+        closeTransport: closeMock,
         ready: new Promise<void>(() => {}),
       }) as unknown as ChromeMcpSession;
     setChromeMcpSessionFactoryForTest(factory);
@@ -3309,6 +3317,7 @@ describe("chrome MCP page parsing", () => {
           transport: {
             pid: 123,
           },
+          closeTransport: closeMock,
           ready: new Promise<void>(() => {}),
         }) as unknown as ChromeMcpSession,
     );
