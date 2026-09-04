@@ -239,12 +239,10 @@ function listReloadRules(): ReloadRule[] {
         return rule;
       })
       .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
+        (plugin.reload?.noopPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        })),
       );
   });
   const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
