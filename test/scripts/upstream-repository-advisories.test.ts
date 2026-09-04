@@ -27,7 +27,9 @@ function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = 
     vulnerabilities: [vulnerability(range)],
     ...fields,
   };
-  if (!publishedRows.has(row.ghsa_id)) publishedRows.set(row.ghsa_id, row);
+  if (!publishedRows.has(row.ghsa_id)) {
+    publishedRows.set(row.ghsa_id, row);
+  }
   return row;
 }
 
@@ -46,7 +48,7 @@ function createSourceFetch(
 ) {
   const calls: Array<{ url: URL; init: RequestInit | undefined }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
+    const url = new URL(input instanceof Request ? input.url : input);
     calls.push({ url, init });
     if (url.origin === REGISTRY) {
       return handlers.manifest ? handlers.manifest(url, init) : manifest(url);
@@ -55,7 +57,9 @@ function createSourceFetch(
       throw new Error(`Unexpected request origin: ${url.origin}`);
     }
     if (url.pathname.startsWith("/advisories/")) {
-      if (handlers.reviewed) return handlers.reviewed(url, init);
+      if (handlers.reviewed) {
+        return handlers.reviewed(url, init);
+      }
       const row = publishedRows.get(url.pathname.split("/").at(-1) ?? "");
       return Response.json({
         ...row,
@@ -730,7 +734,9 @@ describe("published upstream repository advisories", () => {
       );
       active += 1;
       peak = Math.max(peak, active);
-      if (active === 4) wave.started.resolve();
+      if (active === 4) {
+        wave.started.resolve();
+      }
       try {
         await wave.release.promise;
         return await source.fetchImpl(input, init);
@@ -762,7 +768,9 @@ describe("published upstream repository advisories", () => {
       expect(report.coverage.status).toBe("checked");
       expect(report.coverage.checkedRepositories).toBe(8);
     } finally {
-      for (const wave of waves) wave.release.resolve();
+      for (const wave of waves) {
+        wave.release.resolve();
+      }
       await scanning;
     }
   });
