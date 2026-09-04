@@ -187,6 +187,60 @@ Editing files on the host outside OpenClaw after the initial seed is invisible t
 | **Local edits visible?** | Yes, on next exec          | No, until recreate        |
 | **Best for**             | Development workflows      | Long-running agents, CI   |
 
+## Environment-owned skills
+
+In `remote` mode, the built-in agent runtime discovers `SKILL.md` files inside
+the configured remote workspace at attempt preparation. For example, place a
+skill at `/sandbox/catalog/reporting/SKILL.md` (adjust `/sandbox` to your
+`remoteWorkspaceDir`):
+
+```markdown
+---
+name: remote-reporting
+description: Generate reports with the tools installed in this sandbox.
+---
+
+Run the reporting script from this skill's directory.
+```
+
+On the next turn, eligible skills appear in the normal available-skills catalog.
+The agent reads the complete instructions through the sandbox filesystem bridge;
+relative resources stay inside that environment, not on the Gateway host. In
+Code Mode, the same catalog is available through `skills.list()` and
+`skills.read(name)`. No additional configuration option is needed.
+
+Normal skill enablement, agent/session filters, invocation policy, and prompt
+budgets still apply. OS, binary, and environment-variable requirements are
+checked inside the sandbox. Gateway-local binaries or configured skill secrets
+do not satisfy remote requirements, and discovery does not install packages or
+copy secrets. Existing native or explicitly selected skills win name collisions.
+
+Host-projected skill mounts and materialized skill copies are not rediscovered
+as environment-owned skills. `mirror` mode keeps its existing local-canonical
+skill behavior. These discoveries are attempt-local; they do not enter the
+global skill library or persist in a session skill snapshot.
+
+Discovery shares one workspace snapshot with environment-owned MCP. It accepts
+at most eight roots, scans at most 2,048 directory entries per root through six
+directory levels, and returns at most 64 skills per root. Reads are limited to
+256 KiB per file and 1 MiB per root before allocation. Skill integration accepts
+at most 64 skills and 1 MiB of instruction text per attempt, with a stricter
+64 KiB limit per instruction file and subsequent skill read. The merged catalog
+adds at most 4,096 characters while still respecting the existing overall skill
+prompt budget.
+
+Symlinks, hardlinked files, `.git`, `node_modules`, and excluded host projections
+are skipped. Unavailable roots and unreadable, malformed, or oversized files
+produce bounded diagnostics without blocking unrelated capabilities. Inspect
+`openclaw logs --follow` if a remote skill is missing; check its frontmatter, requirements,
+location, size, and name collisions. Optional `agents/openai.yaml` text is carried
+by discovery but does not add OpenClaw policy or dependency behavior; use the
+existing OpenClaw `SKILL.md` frontmatter contract.
+
+This feature does not load remote plugin code, hooks, global configuration, or
+HTTP/SSE MCP transports, and it does not give workspace instructions additional
+authority.
+
 ## Configuration reference
 
 All OpenShell config lives under `plugins.entries.openshell.config`:
@@ -482,8 +536,8 @@ filesystem must permit the writes. `sandbox.docker.network`,
   apply only to the Docker backend.
 - Native plugin code, Gateway RPC, web tools, and Gateway-configured MCP servers
   stay on the Gateway host. The built-in agent runtime additionally discovers
-  workspace `.mcp.json` declarations and runs their stdio MCP servers inside
-  OpenShell. Both sets of tools remain subject to normal and sandbox tool policy.
+  workspace `.mcp.json` declarations in `remote` mode and runs their stdio MCP
+  servers inside OpenShell. Both sets of tools remain subject to normal and sandbox tool policy.
 - HTTP/SSE MCP transports are not environment-owned yet.
 
 ## Troubleshooting

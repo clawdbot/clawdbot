@@ -49,6 +49,8 @@ export type SandboxEnvironmentCapabilities = {
 export type SandboxCapabilityRootRequest = {
   id: string;
   path: string;
+  /** Host-projected resources are not environment-owned discoveries. */
+  excludePaths?: readonly string[];
 };
 
 export type SandboxCapabilityTextFile = {
@@ -60,6 +62,11 @@ export type SandboxCapabilityRootDiscovery = {
   id: string;
   path: string;
   mcpConfig?: SandboxCapabilityTextFile;
+  /** Raw executor-local files; parsing and skill policy remain with core. */
+  skills?: Array<{
+    instructions: SandboxCapabilityTextFile;
+    metadata?: SandboxCapabilityTextFile;
+  }>;
   warnings?: string[];
   error?: string;
 };

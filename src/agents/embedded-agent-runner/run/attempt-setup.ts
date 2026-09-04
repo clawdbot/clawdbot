@@ -42,6 +42,12 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
+import type { SandboxCapabilityRootDiscovery } from "../../sandbox/backend-handle.types.js";
+import {
+  MAX_ENVIRONMENT_SKILL_BYTES,
+  mergeSandboxEnvironmentSkillCatalog,
+  prepareSandboxEnvironmentSkills,
+} from "../../sandbox/environment-skills.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
@@ -497,7 +503,8 @@ export function installEmbeddedAttemptContextGuards(input: {
 
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
-export function prepareEmbeddedAttemptSkills(params: {
+export async function prepareEmbeddedAttemptSkills(params: {
+  environmentCapabilities?: readonly SandboxCapabilityRootDiscovery[];
   attempt: EmbeddedRunAttemptParams;
   effectiveWorkspace: string;
   sandbox: AttemptSetup["sandbox"];
@@ -518,6 +525,17 @@ export function prepareEmbeddedAttemptSkills(params: {
       codeModeSkills: [],
     };
   }
+  const environmentSkillByteLimit = Math.min(
+    MAX_ENVIRONMENT_SKILL_BYTES,
+    params.attempt.config?.skills?.limits?.maxSkillFileBytes ?? MAX_ENVIRONMENT_SKILL_BYTES,
+  );
+  const environmentEntries = await prepareSandboxEnvironmentSkills({
+    sandbox: params.sandbox,
+    discoveries: params.environmentCapabilities,
+    maxSkillFileBytes: environmentSkillByteLimit,
+    signal: params.attempt.abortSignal,
+    warn: (message) => log.warn(message),
+  });
   const {
     skillsEligibility,
     skillsPromptWorkspaceDir,
@@ -563,7 +581,7 @@ export function prepareEmbeddedAttemptSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = resolveSkillsPrompt({
+    const nativeSkillsPrompt = resolveSkillsPrompt({
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
@@ -578,6 +596,20 @@ export function prepareEmbeddedAttemptSkills(params: {
       eligibility: skillsEligibility,
       preserveEntryOrder,
     });
+    const { skillsPrompt, candidates } = mergeSandboxEnvironmentSkillCatalog({
+      skillsPrompt: nativeSkillsPrompt,
+      candidates:
+        skillsSnapshot?.resolvedSkills ??
+        (promptSkillEntries ?? skillEntries).map((entry) => entry.skill),
+      environmentEntries,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      workspaceDir: skillsPromptWorkspaceDir,
+      snapshot: params.attempt.skillsSnapshot,
+      remoteNote: skillsEligibility?.remote?.note,
+      warn: (message) => log.warn(message),
+    });
+    const environmentPaths = new Set(environmentEntries.map((entry) => entry.skill.filePath));
     const sandbox = params.sandbox;
     const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
       ? async ({ location, signal }) => {
@@ -589,6 +621,7 @@ export function prepareEmbeddedAttemptSkills(params: {
             await bridge.readFile({
               filePath: location,
               cwd: sandbox.containerWorkdir,
+              ...(environmentPaths.has(location) ? { maxBytes: environmentSkillByteLimit } : {}),
               signal,
             })
           ).toString("utf8");
@@ -596,7 +629,7 @@ export function prepareEmbeddedAttemptSkills(params: {
       : undefined;
     const codeModeSkills = resolveCodeModeSkills({
       skillsPrompt,
-      candidates: skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill),
+      candidates,
       reader: sandboxSkillReader,
     });
     return {
