@@ -200,7 +200,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => props.onSend(),
-    canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
+    canRun: (inline) => state.slashCommandDispatchConnected && !(inline && !props.onSlashCommand),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),
