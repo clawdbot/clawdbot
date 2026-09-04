@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -510,6 +511,104 @@ function parseToolCallArguments(toolCall: ResponsesInputItem) {
   }
 }
 
+function readProgressCommandOutput(input: ResponsesInputItem[], isPoll = false) {
+  const text = extractToolOutput(input);
+  const json = parseToolOutputJson(text);
+  const details = asNullableRecord(json?.details) ?? json;
+  const sessionId =
+    details?.sessionId ??
+    /Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)/u.exec(text)?.[1];
+  const status = details?.status;
+  // Running footers win over exit-like stdout. A failed poll is not a failed command.
+  const running =
+    status === "running" || (!status && (sessionId || text.endsWith("\n\nProcess still running.")));
+  const exit =
+    /(?:^|\n)(?:Process exited with (code -?\d+|signal \S+|unknown exit code)\.|\(Command exited with (code -?\d+)\))(?:\n\nThe command was terminated,[\s\S]*)?$/u.exec(
+      text,
+    );
+  const exitLabel = exit?.[1] ?? exit?.[2];
+  const hasExit =
+    typeof details?.exitCode === "number" || details?.exitSignal != null || exitLabel !== undefined;
+  let state: "running" | "completed" | "failed" | "unconfirmed";
+  if (
+    extractToolOutputStructuredError(input) === true ||
+    status === "error" ||
+    details?.reason === "outcome-unknown"
+  ) {
+    state = "unconfirmed";
+  } else if (running) {
+    state = "running";
+  } else if (status && status !== "completed" && status !== "failed") {
+    state = "unconfirmed";
+  } else if (status === "failed") {
+    state = isPoll && !hasExit ? "unconfirmed" : "failed";
+  } else if (status === "completed" || hasExit) {
+    state =
+      (typeof details?.exitCode === "number" && details.exitCode !== 0) ||
+      details?.exitSignal != null ||
+      (exitLabel !== undefined && exitLabel !== "code 0")
+        ? "failed"
+        : "completed";
+  } else {
+    // Foreground success can be empty; a poll needs an explicit terminal result.
+    state =
+      isPoll || /Approval required|approval-pending|approval-unavailable/u.test(text)
+        ? "unconfirmed"
+        : "completed";
+  }
+  return { state, sessionId: typeof sessionId === "string" ? sessionId : undefined };
+}
+
+function readProgressCommand(input: ResponsesInputItem[], command: string) {
+  const execCalls = input.filter((item) => item.type === "function_call" && item.name === "exec");
+  const exec = execCalls[0];
+  if (execCalls.length !== 1 || !exec || parseToolCallArguments(exec)?.command !== command) {
+    return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+  }
+  const execResultIndex = input.findIndex(
+    (item) => item.type === "function_call_output" && item.call_id === exec.call_id,
+  );
+  if (execResultIndex < 0) {
+    return { error: "BUG-TOOL-PROGRESS-RESULT-MISSING" };
+  }
+  let current = readProgressCommandOutput(input.slice(0, execResultIndex + 1));
+  const sessionId = current.sessionId;
+  let pendingCall: ResponsesInputItem | undefined;
+  // Validate every follow-up so a later valid poll cannot hide a foreign session.
+  for (const item of input.slice(execResultIndex + 1)) {
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      const args = parseToolCallArguments(item);
+      if (
+        pendingCall ||
+        current.state !== "running" ||
+        !sessionId ||
+        item.name !== "process" ||
+        args?.action !== "poll" ||
+        args.sessionId !== sessionId
+      ) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      pendingCall = item;
+    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+      if (!pendingCall || item.call_id !== pendingCall.call_id) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      current = readProgressCommandOutput([item], true);
+      if (current.sessionId && current.sessionId !== sessionId) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      pendingCall = undefined;
+    }
+  }
+  if (pendingCall || current.state === "unconfirmed") {
+    return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
+  }
+  if (current.state === "running") {
+    return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
+  }
+  return { failed: current.state === "failed" };
+}
+
 function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
   if (toolCall?.type === "custom_tool_call" && typeof toolCall.input === "string") {
     return toolCall.input;
@@ -872,6 +971,24 @@ async function buildResponsesPayload(
   })();
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
+  const pendingCommandProgress = (
+    progressInput: ResponsesInputItem[],
+    command: string,
+    allowsFailure = false,
+  ) => {
+    const progress = readProgressCommand(progressInput, command);
+    if (progress.error) {
+      return buildAssistantEvents(progress.error);
+    }
+    if (progress.sessionId) {
+      return buildToolCallEventsWithArgs("process", {
+        action: "poll",
+        sessionId: progress.sessionId,
+        timeout: 30_000,
+      });
+    }
+    return progress.failed && !allowsFailure ? buildAssistantEvents("BUG-TOOL-FAILED") : null;
+  };
   const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
@@ -1089,9 +1206,7 @@ async function buildResponsesPayload(
   const slackProgressDirectives = slackProgressTurn
     ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
     : null;
-  const hasSlackProgressToolOutput = slackProgressTurn
-    ? hasToolOutput(input.slice(slackProgressTurn.index))
-    : false;
+  const slackProgressInput = slackProgressTurn ? input.slice(slackProgressTurn.index) : [];
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -1643,7 +1758,14 @@ async function buildResponsesPayload(
     return buildStreamingFinalAnswerEvents("msg_mock_quiet_stream", scenarioFamilyReplyDirective);
   }
   if (slackProgressDirectives) {
-    if (hasSlackProgressToolOutput) {
+    if (hasToolOutput(slackProgressInput)) {
+      const pending = pendingCommandProgress(
+        slackProgressInput,
+        slackProgressDirectives.execCommand,
+      );
+      if (pending) {
+        return pending;
+      }
       return buildStreamingFinalAnswerEvents(
         "msg_mock_slack_progress_final",
         slackProgressDirectives.finalMarker,
@@ -1668,12 +1790,22 @@ async function buildResponsesPayload(
     const turn = extractLastMatchingUserTurn(input, QA_TOOL_PROGRESS_PROMPT_RE);
     // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
     const progressInput = turn ? input.slice(turn.index) : [];
+    const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     if (!hasToolOutput(progressInput)) {
-      const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
       return buildToolCallEventsWithArgs(
         command ? "exec" : "read",
         command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
       );
+    }
+    if (command) {
+      const pending = pendingCommandProgress(
+        progressInput,
+        command,
+        /completes or fails/iu.test(scenarioFamilyPrompt),
+      );
+      if (pending) {
+        return pending;
+      }
     }
     const output = extractToolOutput(progressInput);
     const reply =

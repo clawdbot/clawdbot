@@ -1226,6 +1226,7 @@ describe("qa mock openai server", () => {
         makeUserInput(stalePrompt),
         makeToolOutputWithCallId("call_stale_slack_progress", ""),
         makeUserInput(currentEnvelope),
+        exec,
         makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), ""),
       ],
     });
