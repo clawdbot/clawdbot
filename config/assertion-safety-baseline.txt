@@ -835,7 +835,7 @@ extensions/msteams/src/probe.ts	1
 extensions/msteams/src/qa/adapter.runtime.ts	2
 extensions/msteams/src/qa/bot-framework-server.ts	3
 extensions/msteams/src/qa/private-runtime.ts	3
-extensions/msteams/src/reply-dispatcher.ts	4
+extensions/msteams/src/reply-dispatcher.ts	3
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10

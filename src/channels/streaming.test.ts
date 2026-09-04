@@ -339,6 +339,19 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it("preserves the shipped plain checklist option", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80, plain: true },
+      ),
+    ).toEqual(["Completed: Inspect", "In progress: Patch", "Pending: Verify"]);
+  });
+
   it("renders plan markers and keeps the checklist under narration", () => {
     const plan = [
       { step: "Inspect", status: "completed" as const },

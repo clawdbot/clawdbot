@@ -294,6 +294,7 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
+/** Lines that need the operator's attention even when routine tool rows are hidden. */
 export function isChannelProgressAttentionLine(line: string | ChannelProgressDraftLine): boolean {
   if (typeof line === "string") {
     return false;
@@ -822,9 +823,15 @@ export function resolveChannelStreamingPreviewChunk(
   return (chunk as BlockStreamingChunkConfig | null) ?? undefined;
 }
 
+/**
+ * Whether tool calls become visible progress rows. `progress` drafts are quiet
+ * unless the operator opts into the rolling tool log; `partial` and `block`
+ * previews show tool updates by default.
+ */
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue = true,
+  /** Shipped SDK argument; bundled channels use the mode-aware default. */
+  defaultValue?: boolean,
   /**
    * The channel's resolved stream mode. Only the caller knows it: channels pick
    * their own default when `streaming.mode` is unset (Telegram uses "progress",
@@ -840,10 +847,11 @@ export function resolveChannelStreamingPreviewToolProgress(
     return (
       asBoolean(config?.progress?.toolProgress) ??
       asBoolean(config?.preview?.toolProgress) ??
-      defaultValue
+      defaultValue ??
+      false
     );
   }
-  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
+  return asBoolean(config?.preview?.toolProgress) ?? defaultValue ?? true;
 }
 
 export function resolveChannelStreamingProgressCommentary(
@@ -1080,7 +1088,12 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
 
 export function formatPlanChecklistLines(
   steps: readonly AgentPlanStep[],
-  options: { maxLines: number; maxLineChars: number; plain?: boolean },
+  options: {
+    maxLines: number;
+    maxLineChars: number;
+    /** @deprecated v2026.9.1 SDK option; retain until a breaking SDK release. */
+    plain?: boolean;
+  },
 ): string[] {
   const normalizedSteps = steps
     .map((entry, index) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim(), index }))
@@ -1224,7 +1237,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       }
       const next = [...lines];
       next[existingIndex] = replacement;
-      return next.slice(-maxLines);
+      return limitProgressDraftLines(next, maxLines);
     }
   } else {
     const previous = lines.at(-1);
@@ -1232,7 +1245,22 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return lines;
     }
   }
-  return [...lines, line].slice(-maxLines);
+  return limitProgressDraftLines([...lines, line], maxLines);
+}
+
+function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  maxLines: number,
+): TLine[] {
+  let attentionSlots = maxLines;
+  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressAttentionLine).length);
+  // Keep attention through tool/commentary bursts without changing arrival order.
+  return lines
+    .toReversed()
+    .filter((line) =>
+      isChannelProgressAttentionLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
+    )
+    .toReversed();
 }
 
 function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
@@ -1280,7 +1308,7 @@ function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLi
 }
 
 export function formatChannelProgressDraftText(params: {
-  /** Summary presentation omits routine tool telemetry and generated emoji. */
+  /** @deprecated v2026.9.1 SDK presentation; retain until a breaking SDK release. */
   presentation?: "summary";
   /** Channel streaming config source for progress label and bounds. */
   entry?: StreamingCompatEntry | null;
@@ -1304,10 +1332,9 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
-  const attention =
-    params.presentation === "summary" ? params.lines.filter(isChannelProgressAttentionLine) : [];
+  const attention = params.lines.filter(isChannelProgressAttentionLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
-    maxLines: Math.max(0, maxLines - attention.length),
+    maxLines: maxLines - attention.length,
     maxLineChars,
     plain: params.presentation === "summary",
   }).map(formatLine);
@@ -1325,11 +1352,11 @@ export function formatChannelProgressDraftText(params: {
   const statusHeadline = narration ? formatLine(narration) : "";
   const bullet = params.bullet ?? "•";
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
-  // Attention cannot disappear behind a full plan or a burst of commentary.
-  const visibleLines =
-    params.presentation === "summary"
-      ? [...params.lines.filter((line) => !isChannelProgressAttentionLine(line)), ...attention]
-      : params.lines;
+  // Attention owns capacity before plans and routine progress consume the window.
+  const visibleLines = [
+    ...params.lines.filter((line) => !isChannelProgressAttentionLine(line)),
+    ...attention,
+  ];
   const renderedToolLines = visibleLines
     .map((line) => {
       if (params.presentation === "summary") {

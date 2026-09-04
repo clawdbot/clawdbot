@@ -260,7 +260,9 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("sends an informative status update once work expands in personal chats", async () => {
     vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
+    const dispatcher = createDispatcher("personal", {
+      streaming: { mode: "progress", progress: { toolProgress: true } },
+    });
     const options = dispatcherOptions();
 
     // onReplyStart renders the initial informative line. Tool/item events
@@ -408,19 +410,47 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("delays the informative status update until the progress-draft gate fires", async () => {
-    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
+  it("keeps quiet Teams progress useful without exposing routine tool rows", async () => {
+    vi.useFakeTimers();
+    const dispatcher = createDispatcher("personal", {
+      streaming: { mode: "progress", progress: { label: "Working" } },
+    });
     const stream = getStreamMock();
 
-    // The progress-draft gate (createChannelProgressDraftGate) gates updates
-    // by waiting for a configured initial-delay before the first onStart fires.
-    // Until then, work-noting calls don't render the informative line.
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
-    // Note: pre-rebase tests asserted exact call counts at specific gate
-    // boundaries. The new gate timing is shape-equivalent but driven by the
-    // plugin-sdk default, so we just assert that work events flow through to
-    // the controller without throwing.
-    expect(stream.update).toBeDefined();
+    expect(stream.update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(stream.update).toHaveBeenLastCalledWith("Working");
+
+    await dispatcher.replyOptions.onApprovalEvent?.({
+      phase: "requested",
+      approvalId: "approval-1",
+      command: "confirm-operation",
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("confirm-operation"));
+
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 1,
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("exit 1"));
+
+    await dispatcher.replyOptions.onApprovalEvent?.({
+      phase: "resolved",
+      approvalId: "approval-1",
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(
+      expect.not.stringContaining("confirm-operation"),
+    );
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+    expect(stream.update).toHaveBeenLastCalledWith("Working");
   });
 
   it("forwards partial replies into the Teams stream via emit()", async () => {
@@ -443,7 +473,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     vi.useFakeTimers();
     const progressDispatcher = createDispatcher("personal", {
-      streaming: { mode: "progress" },
+      streaming: { mode: "progress", progress: { toolProgress: true } },
     });
     await progressDispatcher.replyOptions.onToolStart?.({ name: "exec" });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -582,6 +612,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
         },
       },
@@ -604,6 +635,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
           commandText: "raw",
         },
@@ -637,6 +669,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
           commandText: "raw",
         },
@@ -662,6 +695,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
         },
       },
@@ -689,6 +723,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
         },
       },
@@ -714,21 +749,21 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
   });
 
-  it("does not set suppressDefaultToolProgressMessages when toolProgress=false", async () => {
-    const dispatcher = createDispatcher("personal", {
-      streaming: {
-        mode: "progress",
-        progress: {
-          toolProgress: false,
+  it.each([undefined, false, true])(
+    "suppresses standalone Teams progress with toolProgress=%s",
+    (toolProgress) => {
+      const dispatcher = createDispatcher("personal", {
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress,
+          },
         },
-      },
-    });
+      });
 
-    // With toolProgress disabled, the previewToolProgressEnabled gate flips
-    // false so we don't claim to suppress the agent's default messages —
-    // they should flow through openclaw's normal block delivery instead.
-    expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
-  });
+      expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
+    },
+  );
 
   it("does not create a stream for channel conversations", () => {
     createDispatcher("channel");

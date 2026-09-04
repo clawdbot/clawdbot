@@ -19,7 +19,11 @@ describe("resolveTelegramStreamMode", () => {
   });
 
   it("preserves unified progress mode on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: { mode: "progress" } })).toBe("progress");
+    expect(
+      resolveTelegramStreamMode({
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+      }),
+    ).toBe("progress");
   });
 });
 

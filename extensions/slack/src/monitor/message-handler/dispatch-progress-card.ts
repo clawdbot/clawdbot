@@ -1,4 +1,5 @@
 import {
+  type createChannelProgressWorkCounter,
   formatChannelProgressDraftText,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -23,6 +24,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
+  progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter> | undefined;
   progressSeed: string;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -62,7 +64,6 @@ export function createSlackDraftProgressCardRuntime(params: {
   const resolveText = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
     latestFallbackText ||
     formatChannelProgressDraftText({
-      presentation: "summary",
       entry: account.config,
       lines: [...snapshot.lines],
       seed: params.progressSeed,
@@ -81,6 +82,8 @@ export function createSlackDraftProgressCardRuntime(params: {
       : snapshot.planExplanation && snapshot.planExplanation !== title
         ? snapshot.planExplanation
         : undefined;
+    const workCounter = state === "working" ? params.progressWorkCounter : undefined;
+    const sessionUrl = state === "working" ? undefined : resolveSessionUrl();
     return buildSlackProgressCardBlocks({
       state,
       title,
@@ -88,7 +91,10 @@ export function createSlackDraftProgressCardRuntime(params: {
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
       maxLineChars: params.maxLineChars,
-      ...(state !== "working" ? { sessionUrl: resolveSessionUrl() } : {}),
+      diffStat: snapshot.diffStat,
+      toolCalls: workCounter?.toolCalls,
+      elapsedSeconds: workCounter?.elapsedSeconds,
+      sessionUrl,
     });
   };
 

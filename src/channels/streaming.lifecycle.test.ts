@@ -79,6 +79,15 @@ describe("channel-streaming", () => {
     ).toBe("raw");
   });
 
+  it("preserves SDK caller defaults while bundled callers use the resolved mode", () => {
+    expect(resolveChannelStreamingPreviewToolProgress(undefined, false, "partial")).toBe(false);
+    expect(resolveChannelStreamingPreviewToolProgress(undefined, true, "progress")).toBe(true);
+    expect(resolveChannelStreamingPreviewToolProgress(undefined, undefined, "progress")).toBe(
+      false,
+    );
+    expect(resolveChannelStreamingPreviewToolProgress(undefined, undefined, "partial")).toBe(true);
+  });
+
   it("keeps progress-only tool progress config out of normal preview modes", () => {
     expect(
       resolveChannelStreamingPreviewToolProgress({

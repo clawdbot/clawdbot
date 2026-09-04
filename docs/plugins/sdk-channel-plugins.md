@@ -93,11 +93,24 @@ an explicit boolean.
 
 ### Quiet progress presentation
 
-`createChannelProgressDraftCompositor({ presentation: "summary", ... })` keeps
-routine tool activity out of the visible draft while retaining authored status,
-reasoning, commentary, milestones, and actionable approval/failure lines. Pass
-`approvalId` on requested and resolved approval events so the compositor can
-clear the matching attention line. The default presentation remains unchanged.
+Native progress renderers must retain approval and failure lines when ordinary
+tool rows are disabled. The shared progress compositor retains those lines in
+its snapshots; native renderers must preserve them alongside plan rows and
+ordinary activity.
+
+`resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
+its optional boolean default as the second argument. Bundled channels pass
+`undefined` there and their resolved streaming mode as the third argument, so
+unconfigured `progress` drafts hide ordinary tool rows while `partial` and
+`block` previews show them.
+
+The compositor and formatter's `presentation: "summary"` option and the
+checklist formatter's `plain: true` option are deprecated but retain their
+explicit output until the next breaking SDK release. New callers should omit
+them and use `streaming.progress.toolProgress` to control tool rows with the
+standard progress markers.
+
+### Quiet acknowledgement and coalesced progress
 
 `createStatusReactionController({ presentation: "acknowledgement", ... })`
 keeps the initial reaction through work and success, skips inactivity warnings,

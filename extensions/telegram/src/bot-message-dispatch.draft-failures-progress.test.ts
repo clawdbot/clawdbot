@@ -455,7 +455,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       },
     );
 
-    await dispatchWithContext({ context: createContext(), streamMode: "progress" });
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+    });
 
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(compactionFlushCounts).toEqual([1, 2, 3, 4]);
@@ -658,7 +662,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     // #121600: default command progress is status-only — raw command text stays
@@ -693,7 +699,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Terminal block answer");
@@ -716,7 +724,9 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Cracking" } },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
@@ -740,7 +750,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expectDeliveredReply(0, { text: "All done" });
@@ -772,7 +782,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       await dispatchWithContext({
         context: createContext(),
         streamMode: "progress",
-        telegramCfg: { streaming: { mode: "progress" } },
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       });
 
       expectDeliveredReply(0, {
@@ -797,7 +807,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -813,7 +823,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(allDeliveredReplyTexts()).toEqual(["Just an answer"]);
@@ -835,7 +845,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     expect(allDeliveredReplyTexts()).toEqual(["Something went wrong"]);

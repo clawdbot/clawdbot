@@ -352,13 +352,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `progress`); set `mode: "partial"` to stream answer text into the preview instead of a status draft
     - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active
-    - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
-    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
+    - `progress` keeps one editable status draft, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message. By default the draft is quiet: status headline, commentary, plan milestones, and approval or failure lines. `streaming.progress.toolProgress: true` adds the rolling tool log.
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message in `partial` and `block` modes (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those lines: `status` (default, tool label only) or `raw` (explicit command text)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 
-    Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). Telegram keeps these on by default (matches released behavior from `v2026.4.22`+).
+    Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`.
 
     Keep answer-preview edits but hide tool-progress lines:
 
@@ -390,7 +390,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
-    `progress` mode shows tool progress without editing the final answer into that message. Put the command-text policy under `streaming.progress`:
+    `progress` mode can show the tool log without editing the final answer into that message. Opt in with `toolProgress: true` and put the command-text policy under `streaming.progress`:
 
     ```json
     {
@@ -411,7 +411,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     `streaming.mode: "off"` disables preview edits and suppresses generic tool/progress chatter instead of sending it as standalone status messages; approval prompts, media, and errors still route through normal final delivery. `streaming.preview.toolProgress: false` keeps only answer-preview edits.
 
     <Note>
-      Selected quote replies are the exception. When `replyToMode` is `first`, `all`, or `batched` and the inbound message has selected quote text, OpenClaw sends the final answer through Telegram's native quote-reply path instead of editing the answer preview, so `streaming.preview.toolProgress` cannot show status lines that turn. Current-message replies without selected quote text still stream. Set `replyToMode: "off"` when tool-progress visibility matters more than native quote replies, or `streaming.preview.toolProgress: false` to accept that trade-off.
+      Selected quote replies are the exception. When `replyToMode` is `first`, `all`, or `batched` and the inbound message has selected quote text, OpenClaw sends the final answer through Telegram's native quote-reply path and skips draft previews for that turn. Current-message replies without selected quote text still stream. Set `replyToMode: "off"` when tool-progress visibility matters more than native quote replies. To keep native quote replies and hide tool-progress lines, use `streaming.progress.toolProgress: false` in `progress` mode or `streaming.preview.toolProgress: false` in `partial` and `block` modes.
     </Note>
 
     For text-only replies: short previews get the final edit in place; long finals that split into multiple messages reuse the preview as the first chunk, then send only the remainder; progress-mode finals clear the status draft and use normal final delivery; if the final edit fails before completion is confirmed, OpenClaw falls back to normal final delivery and cleans up the stale preview. For complex replies (media payloads), OpenClaw always falls back to normal final delivery and cleans up the preview.

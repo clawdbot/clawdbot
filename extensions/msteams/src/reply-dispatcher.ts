@@ -10,8 +10,6 @@ import {
   normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingPreviewToolProgress,
-  resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -547,18 +545,8 @@ export function createMSTeamsReplyDispatcher(params: {
   // tools fire (instead of the rotating "Thinking..." label sitting unchanged
   // for the duration of a long tool chain). In other modes these calls are
   // no-ops on the controller side.
-  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(
-    msteamsCfg,
-    true,
-    teamsStreamMode,
-  );
-  const suppressDefaultToolProgressMessages =
-    resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =
-    streamController.hasStream() &&
-    teamsStreamMode === "progress" &&
-    suppressDefaultToolProgressMessages &&
-    previewToolProgressEnabled;
+    streamController.hasStream() && teamsStreamMode === "progress";
 
   // Forward the rich pipeline event payload through to the channel-streaming
   // formatters. The formatters accept the canonical union shape; the pipeline
@@ -645,19 +633,14 @@ export function createMSTeamsReplyDispatcher(params: {
           return false;
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
-          if (payload?.phase !== "requested") {
-            return false;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "approval",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.command === "string" ? { command: payload.command } : {}),
-              ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
-              ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
-            }),
-          );
+          await streamController.pushApprovalEvent({
+            ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
+            ...(typeof payload?.approvalId === "string" ? { approvalId: payload.approvalId } : {}),
+            ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+            ...(typeof payload?.command === "string" ? { command: payload.command } : {}),
+            ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
+            ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
+          });
           return false;
         },
         onCommandOutput: async (payload: PipelinePayload) => {

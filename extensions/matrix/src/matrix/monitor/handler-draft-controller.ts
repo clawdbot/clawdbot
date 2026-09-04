@@ -1,8 +1,6 @@
 import {
   type AgentPlanStep,
-  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
-  formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -97,10 +95,6 @@ export async function createMatrixDraftController(params: {
     active: Boolean(draftStream),
     seed: progressSeed,
     formatLine: formatMatrixToolProgressMarkdownCode,
-    buildProgressEventLine: (input, options) =>
-      input.event === "approval"
-        ? formatChannelProgressDraftLine(input, options)
-        : buildChannelProgressDraftLineForEntry(progressConfigEntry, input, options),
     update: async (text, options) => {
       const previewText =
         !progressDraftStreaming && (previewPlan || previewPlanExplanation)
@@ -129,14 +123,8 @@ export async function createMatrixDraftController(params: {
     if (!shouldSuppressDefaultToolProgressMessages) {
       return {};
     }
-    const options: Partial<GetReplyOptions> = {
-      suppressDefaultToolProgressMessages: true,
-    };
-    if (!shouldStreamPreviewToolProgress) {
-      return options;
-    }
     return {
-      ...options,
+      suppressDefaultToolProgressMessages: true,
       onToolStart: async (payload) => {
         return await progressDraft.pushToolEvent(payload);
       },
