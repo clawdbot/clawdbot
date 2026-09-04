@@ -378,9 +378,9 @@ export function createSessionsSpawnTool(
     }),
     parameters,
     execute: async (_toolCallId, args, signal) => {
-      const assertSourceActive = captureAgentToolSourceExecutionGuard(
-        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal),
-      );
+      const executionSignal =
+        signal && opts?.signal ? AbortSignal.any([signal, opts.signal]) : (signal ?? opts?.signal);
+      const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
       const params = args as Record<PropertyKey, unknown>;
       if (opts?.swarmCollector && params.collect !== true) {
         throw new ToolInputError(
@@ -488,7 +488,7 @@ export function createSessionsSpawnTool(
         ? await runWithScopedSessionAccess({
             cfg: visibilityCfg,
             expectedSessionId: opts.expectedParentSessionId,
-            ...(opts.signal ? { signal: opts.signal } : {}),
+            ...(executionSignal ? { signal: executionSignal } : {}),
             targetSessionKey: expectedParentSessionKey!,
             run: spawnVisible,
           })
@@ -593,6 +593,7 @@ export function createSessionsSpawnTool(
               agentGroupId: opts?.agentGroupId ?? undefined,
               agentGroupSpace: opts?.agentGroupSpace,
               agentMemberRoleIds: opts?.agentMemberRoleIds,
+              signal: executionSignal,
               sandboxed: opts?.sandboxed,
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,

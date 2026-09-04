@@ -829,7 +829,11 @@ describe("spawnAcpDirect", () => {
       return new Proxy(store, {
         get(_target, prop) {
           if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
-            return { sessionId: "sess-123", updatedAt: Date.now() };
+            return {
+              sessionId: "sess-123",
+              lifecycleRevision: "lifecycle-123",
+              updatedAt: Date.now(),
+            };
           }
           return undefined;
         },
@@ -3814,6 +3818,139 @@ describe("spawnAcpDirect", () => {
         }),
       }),
     );
+  });
+
+  it("does not dispatch an ACP child after the requester already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expectGatewayMethodNotCalled("agent");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the accepted Gateway run before cleanup when the requester aborts during dispatch", async () => {
+    const controller = new AbortController();
+    let releaseDispatch!: () => void;
+    const pendingDispatch = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const lifecycle: string[] = [];
+    let abortAttempts = 0;
+    let dispatchStarted = false;
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string; params?: { runId?: string } };
+      if (args.method === "agent") {
+        dispatchStarted = true;
+        await pendingDispatch;
+        lifecycle.push("accepted");
+        return { runId: "run-after-abort" };
+      }
+      if (args.method === "chat.abort") {
+        abortAttempts += 1;
+        lifecycle.push(abortAttempts === 1 ? "abort-unconfirmed" : "abort-confirmed");
+        return {
+          ok: true,
+          aborted: true,
+          runIds: [abortAttempts === 1 ? "different-run" : args.params?.runId],
+        };
+      }
+      if (args.method === "sessions.delete") {
+        lifecycle.push("deleted");
+        return { deleted: true };
+      }
+      return { ok: true };
+    });
+    hoisted.cleanupFailedAcpSpawnMock.mockImplementationOnce(async () => {
+      lifecycle.push("cleaned");
+    });
+
+    const spawn = spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(dispatchStarted).toBe(true));
+    controller.abort();
+    releaseDispatch();
+    const result = await spawn;
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expect(gatewayRequest("chat.abort")).toEqual(
+      expect.objectContaining({
+        params: {
+          sessionKey: result.childSessionKey,
+          runId: "run-after-abort",
+        },
+      }),
+    );
+    expect(gatewayRequest("sessions.delete")).toMatchObject({
+      method: "sessions.delete",
+      params: {
+        key: result.childSessionKey,
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+        expectedSessionId: "sess-123",
+        expectedLifecycleRevision: "lifecycle-123",
+      },
+      timeoutMs: 60_000,
+    });
+    expect(lifecycle).toEqual(["accepted", "abort-unconfirmed", "deleted"]);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.cleanupFailedAcpSpawnMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a successor lifecycle after matching abort loses cleanup ownership", async () => {
+    const controller = new AbortController();
+    let releaseDispatch!: () => void;
+    const pendingDispatch = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let dispatchStarted = false;
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string; params?: { runId?: string } };
+      if (args.method === "agent") {
+        dispatchStarted = true;
+        await pendingDispatch;
+        return { runId: "accepted-before-successor" };
+      }
+      if (args.method === "chat.abort") {
+        return { ok: true, aborted: true, runIds: [args.params?.runId] };
+      }
+      if (args.method === "sessions.delete") {
+        throw Object.assign(new Error("session changed"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+        });
+      }
+      return { ok: true };
+    });
+
+    const spawn = spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(dispatchStarted).toBe(true));
+    controller.abort();
+    releaseDispatch();
+    const result = await spawn;
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expect(gatewayRequest("sessions.delete")).toMatchObject({
+      params: {
+        expectedSessionId: "sess-123",
+        expectedLifecycleRevision: "lifecycle-123",
+      },
+    });
+    expect(hoisted.cleanupFailedAcpSpawnMock).not.toHaveBeenCalled();
+    expect(hoisted.closeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("preserves the ACP failure code when run registration fails", async () => {

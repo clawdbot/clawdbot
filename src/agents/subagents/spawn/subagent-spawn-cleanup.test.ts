@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  getActiveGatewayRootWorkHolders,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import {
   cleanupProvisionalSession,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
@@ -53,28 +59,39 @@ describe("subagent spawn cleanup identity", () => {
     });
   });
 
-  it("does not delete after chat.abort confirms the matching run", async () => {
-    const callGateway = vi.fn(async () => ({
-      ok: true,
-      aborted: true,
-      runIds: ["gateway-run"],
-    }));
+  it("guards session deletion after chat.abort confirms the matching run", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockResolvedValueOnce({ deleted: true });
 
     await terminateAcceptedCollectorRun({
       childSessionKey: "agent:main:subagent:child",
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
       expectedLifecycleRevision: "session-revision",
+      releaseSessionAfterAbort: true,
       callGateway,
     });
 
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(callGateway).toHaveBeenNthCalledWith(2, {
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:child",
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+      },
+      timeoutMs: 60_000,
+    });
   });
 
-  it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {
+  it("transfers guarded deletion after a matching abort already stopped the run", async () => {
     const callGateway = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["different-run"] })
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
       .mockRejectedValueOnce(sessionChangedError());
 
     await expect(
@@ -83,9 +100,107 @@ describe("subagent spawn cleanup identity", () => {
         gatewayRunId: "gateway-run",
         expectedSessionId: "session-id",
         expectedLifecycleRevision: "session-revision",
+        releaseSessionAfterAbort: true,
         callGateway,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("released");
+
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(3));
+    expect(callGateway).toHaveBeenNthCalledWith(3, {
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:child",
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+      },
+      timeoutMs: 60_000,
+    });
+  });
+
+  it("releases transferred cleanup root work when the Gateway starts draining", async () => {
+    let finishDelete: (value: unknown) => void = () => {};
+    const stalledDelete = new Promise<unknown>((resolve) => {
+      finishDelete = resolve;
+    });
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockReturnValueOnce(stalledDelete);
+    const root = tryBeginGatewayRootWorkAdmission("test:accepted-run");
+
+    try {
+      await root?.run(async () => {
+        await terminateAcceptedCollectorRun({
+          childSessionKey: "agent:main:subagent:child",
+          gatewayRunId: "gateway-run",
+          expectedSessionId: "session-id",
+          expectedLifecycleRevision: "session-revision",
+          releaseSessionAfterAbort: true,
+          callGateway,
+        });
+      });
+      root?.release();
+      expect(getActiveGatewayRootWorkHolders()).toEqual(["subagents:accepted-run-cleanup"]);
+
+      markGatewayRestartDraining();
+
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkHolders()).toEqual([]));
+    } finally {
+      finishDelete({ deleted: true });
+      root?.release();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("bounds transferred cleanup after persistent guarded deletion failure", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockRejectedValue(new Error("gateway unavailable"));
+    const root = tryBeginGatewayRootWorkAdmission("test:accepted-run");
+
+    try {
+      await root?.run(async () => {
+        await terminateAcceptedCollectorRun({
+          childSessionKey: "agent:main:subagent:child",
+          gatewayRunId: "gateway-run",
+          expectedSessionId: "session-id",
+          expectedLifecycleRevision: "session-revision",
+          releaseSessionAfterAbort: true,
+          callGateway,
+          timeoutMs: 20,
+        });
+      });
+      root?.release();
+      expect(getActiveGatewayRootWorkHolders()).toEqual(["subagents:accepted-run-cleanup"]);
+
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkHolders()).toEqual([]));
+      expect(callGateway.mock.calls.length).toBeGreaterThan(2);
+    } finally {
+      root?.release();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockRejectedValueOnce(sessionChangedError());
+
+    await expect(
+      terminateAcceptedCollectorRun({
+        childSessionKey: "agent:main:subagent:child",
+        gatewayRunId: "gateway-run",
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+        releaseSessionAfterAbort: true,
+        callGateway,
+      }),
+    ).resolves.toBe("changed");
 
     expect(callGateway).toHaveBeenCalledTimes(2);
   });

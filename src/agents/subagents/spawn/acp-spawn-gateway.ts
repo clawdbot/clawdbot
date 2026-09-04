@@ -2,25 +2,32 @@ import type { ExecutionIdentityAdmissionToken } from "../../../audit/execution-i
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import type { AcpSpawnBootstrapDeliveryPlan } from "./acp-spawn-bootstrap-delivery.js";
+import type { AcpSpawnInitializedRuntime } from "./acp-spawn-runtime.js";
+import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
+
+type AcceptedRunCleanupOwnership = Awaited<ReturnType<typeof terminateAcceptedCollectorRun>>;
 
 export async function launchAcpChildThroughGateway(params: {
   attachments?: unknown[];
   childIdem: string;
   deliveryPlan: AcpSpawnBootstrapDeliveryPlan;
+  initializedSession: AcpSpawnInitializedRuntime;
   label?: string;
   lineage: Parameters<typeof buildSubagentExecutionSessionSpawnContext>[0];
+  onAcceptedRunTermination: (ownership: AcceptedRunCleanupOwnership) => void;
   parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
-  participantStorePath: string;
   runTimeoutSeconds: number;
   sessionKey: string;
+  signal?: AbortSignal;
   task: string;
 }) {
   const promptedAt = Date.now();
+  params.signal?.throwIfAborted();
   const response = await callSubagentGateway(
     withSubagentGatewayExecutionIdentity(
       {
@@ -48,12 +55,23 @@ export async function launchAcpChildThroughGateway(params: {
       },
     ),
   );
+  if (params.signal?.aborted) {
+    const ownership = await terminateAcceptedCollectorRun({
+      childSessionKey: params.sessionKey,
+      gatewayRunId: readGatewayRunId(response) ?? params.childIdem,
+      expectedSessionId: params.initializedSession.sessionId,
+      expectedLifecycleRevision: params.initializedSession.sessionEntry?.lifecycleRevision,
+      releaseSessionAfterAbort: true,
+    });
+    params.onAcceptedRunTermination(ownership);
+    params.signal.throwIfAborted();
+  }
   recordSessionParticipantBestEffort({
     promptedAt,
     identity: { type: "agent", id: params.lineage.parentAgentId },
     agentId: params.lineage.targetAgentId,
     sessionKey: params.sessionKey,
-    storePath: params.participantStorePath,
+    storePath: params.initializedSession.storePath,
   });
   return response;
 }

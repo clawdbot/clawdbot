@@ -1,6 +1,11 @@
 import { promises as fs } from "node:fs";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
@@ -72,14 +77,45 @@ export async function cleanupProvisionalSession(
 async function waitForProvisionalSessionDeletion(
   childSessionKey: string,
   options?: SessionCleanupOptions,
+  shouldRetry?: () => boolean,
 ): Promise<boolean> {
   let deleted = false;
-  await retrySubagentCleanup(async () => {
-    const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
-    deleted = outcome === "deleted";
-    return outcome !== "failed";
-  });
+  await retrySubagentCleanup(
+    async () => {
+      const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
+      deleted = outcome === "deleted";
+      return outcome !== "failed";
+    },
+    { shouldRetry },
+  );
   return deleted;
+}
+
+function transferProvisionalSessionDeletion(
+  childSessionKey: string,
+  options: SessionCleanupOptions,
+): void {
+  // A transferred deletion may outlive its caller, but it must not retain root work
+  // across a Gateway restart or beyond one control-call deadline.
+  const stopSignal = AbortSignal.any([
+    getGatewayRestartDrainSignal(),
+    AbortSignal.timeout(options.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS),
+  ]);
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    const stopped = new Promise<void>((resolve) => {
+      if (stopSignal.aborted) {
+        resolve();
+        return;
+      }
+      stopSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await Promise.race([
+      waitForProvisionalSessionDeletion(childSessionKey, options, () => !stopSignal.aborted),
+      stopped,
+    ]);
+  }, "subagents:accepted-run-cleanup").catch((error: unknown) => {
+    defaultRuntime.log(`[warn] accepted subagent cleanup continuation failed: ${String(error)}`);
+  });
 }
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
@@ -109,28 +145,36 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   };
 }
 
+export type AcceptedRunCleanupOwnership = "released" | "changed";
+
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  releaseSessionAfterAbort?: boolean;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-}): Promise<void> {
+}): Promise<AcceptedRunCleanupOwnership> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
+  let ownership: AcceptedRunCleanupOwnership = "released";
+  let runAborted = false;
   await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-        timeoutMs,
-      });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
+    if (!runAborted) {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        runAborted = isMatchingAbortResponse(response, params.gatewayRunId);
+      } catch {
+        // Fall through to exact-session deletion.
       }
-    } catch {
-      // Fall through to exact-session deletion.
+    }
+    if (runAborted && params.releaseSessionAfterAbort !== true) {
+      return true;
     }
     const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
       deleteTranscript: true,
@@ -140,6 +184,19 @@ export async function terminateAcceptedCollectorRun(params: {
       timeoutMs,
     });
     // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
+    ownership = cleanup === "changed" ? "changed" : ownership;
+    if (runAborted && cleanup === "failed") {
+      // The caller can return after the run stops, but exact-session deletion still needs an owner.
+      transferProvisionalSessionDeletion(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
+        timeoutMs,
+      });
+      return true;
+    }
+    return runAborted || cleanup !== "failed";
   });
+  return ownership;
 }
