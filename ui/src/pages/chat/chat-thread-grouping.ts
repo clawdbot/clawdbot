@@ -5,7 +5,7 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
+import { isProjectedCanvasAssistantMessage, userTurnRunId } from "./chat-thread-items.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
   transcriptRunId,
@@ -98,6 +98,13 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup?.role === "assistant" &&
       assistantMessageKind(currentGroup.messages[0]?.message, currentGroup.visibleContent) !==
         assistantMessageKind(item.message, visibleContent);
+    const splitsProjectedCanvas =
+      role === "assistant" &&
+      currentGroup?.role === "assistant" &&
+      // Tool-result Canvas projections own transcript rows. Ordinary assistant
+      // messages that happen to contain Canvas blocks keep their existing grouping.
+      (isProjectedCanvasAssistantMessage(currentGroup.messages.at(-1)?.message) ||
+        isProjectedCanvasAssistantMessage(item.message));
 
     if (
       !currentGroup ||
@@ -106,6 +113,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
       splitsAssistantKind ||
+      splitsProjectedCanvas ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||

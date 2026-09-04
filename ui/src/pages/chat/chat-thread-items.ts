@@ -1,7 +1,10 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
@@ -95,6 +98,8 @@ type ChatMessagePreview = {
   timestamp: number | null;
 };
 
+const projectedCanvasAssistantMessages = new WeakSet<object>();
+
 export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
@@ -130,15 +135,26 @@ export function canvasPreviewBaseIdentity(
   source: ChatMessagePreview,
 ): string | null {
   const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
-  const previewId = source.preview.viewId ?? source.preview.url;
+  const previewId = canvasPreviewArtifactIdentity(source.preview);
   return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
+}
+
+export function canvasPreviewArtifactIdentity(preview: unknown): string | null {
+  const record = asRecord(preview);
+  return normalizeOptionalString(record?.viewId) ?? normalizeOptionalString(record?.url) ?? null;
+}
+
+export function isProjectedCanvasAssistantMessage(message: unknown): boolean {
+  return typeof message === "object" && message !== null
+    ? projectedCanvasAssistantMessages.has(message)
+    : false;
 }
 
 export function createCanvasAssistantMessage(
   source: ChatMessagePreview,
   timestamp = source.timestamp,
 ): unknown {
-  return appendCanvasBlockToAssistantMessage(
+  const message = appendCanvasBlockToAssistantMessage(
     {
       role: "assistant",
       content: [],
@@ -147,6 +163,10 @@ export function createCanvasAssistantMessage(
     source.preview,
     source.text,
   );
+  if (typeof message === "object" && message !== null) {
+    projectedCanvasAssistantMessages.add(message);
+  }
+  return message;
 }
 
 export function transcriptPositionTimestamp(

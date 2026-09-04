@@ -4498,6 +4498,66 @@ describe("buildCachedChatItems", () => {
     expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
   });
 
+  it("renders Gateway-embedded App previews once at their tool positions", () => {
+    const first = mcpAppResult("mcp-app-first", "call-first", 1_001);
+    const second = mcpAppResult("mcp-app-second", "call-second", 1_002);
+    const groups = messageGroups({
+      messages: [
+        userMessage("Show both Apps", 1_000),
+        first,
+        second,
+        assistantMessage(
+          [
+            { type: "text", text: "Both Apps are ready." },
+            mcpAppCanvasBlock("mcp-app-first", "call-first"),
+            mcpAppCanvasBlock("mcp-app-second", "call-second"),
+            mcpAppCanvasBlock("mcp-app-assistant-only", "call-assistant-only"),
+          ],
+          1_003,
+        ),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "assistant",
+    ]);
+    expect(groups.map((group) => canvasBlocksAcross(group).length)).toEqual([0, 1, 1, 1]);
+    expect(messageRecord(groupAt(groups, 3)).content).toStrictEqual([
+      { type: "text", text: "Both Apps are ready." },
+      mcpAppCanvasBlock("mcp-app-assistant-only", "call-assistant-only"),
+    ]);
+  });
+
+  it("keeps an App preview row stable when live state becomes persisted history", () => {
+    const paneId = "canvas-live-to-history";
+    const liveGroups = messageGroups({
+      paneId,
+      messages: [userMessage("Show the App", 1_000)],
+      toolMessages: [mcpAppLiveResult("mcp-app-stable", "call-stable", 1_001)],
+      showToolCalls: false,
+    });
+    const liveCanvas = liveGroups.find((group) => canvasBlocksAcross(group).length > 0);
+
+    const persistedGroups = messageGroups({
+      paneId,
+      messages: [
+        userMessage("Show the App", 1_000),
+        mcpAppResult("mcp-app-stable", "call-stable", 1_001),
+      ],
+      toolMessages: [],
+      showToolCalls: false,
+    });
+    const persistedCanvas = persistedGroups.find((group) => canvasBlocksAcross(group).length > 0);
+
+    expect(liveCanvas).toBeDefined();
+    expect(persistedCanvas).toBeDefined();
+    expect(persistedCanvas?.key).toBe(liveCanvas?.key);
+  });
+
   it("deduplicates timestamp-less persisted and live copies in the same turn", () => {
     const persisted = {
       ...mcpAppResult("mcp-app-untimestamped", "call-untimestamped", 1_001),
@@ -5273,6 +5333,13 @@ function canvasBlocksIn(group: MessageGroup): unknown[] {
   return firstMessageContent(group).filter((block) => isCanvasBlock(block));
 }
 
+function canvasBlocksAcross(group: MessageGroup): unknown[] {
+  return group.messages.flatMap(({ message }) => {
+    const content = (message as { content?: unknown }).content;
+    return Array.isArray(content) ? content.filter((block) => isCanvasBlock(block)) : [];
+  });
+}
+
 function isCanvasBlock(block: unknown): boolean {
   return (
     Boolean(block) &&
@@ -5294,6 +5361,28 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
       title: "Inline demo",
       url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
       preferredHeight: 360,
+    },
+  };
+}
+
+function mcpAppCanvasBlock(viewId: string, toolCallId: string) {
+  return {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId,
+      title: "Demo App",
+      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      sandbox: "scripts",
+      mcpApp: {
+        viewId,
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app.html",
+        toolCallId,
+      },
     },
   };
 }
