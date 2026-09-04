@@ -1,9 +1,43 @@
 // PR #137834: iMessage reply_to_guid echo cache proof.
 // Exercises the real production inbound decision path with a real
 // createSentMessageCache — no mocks — to prove paired mirror suppression
-// and legitimate inline-reply delivery.
+// and legitimate inline-reply delivery. Also exercises the persisted
+// echo cache layer to verify requireMessageIdTextMatch behavior.
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createSentMessageCache } from "../extensions/imessage/src/monitor/echo-cache.js";
 import { resolveIMessageInboundDecision } from "../extensions/imessage/src/monitor/inbound-processing.js";
+import {
+  hasPersistedIMessageEcho,
+  rememberPersistedIMessageEcho,
+} from "../extensions/imessage/src/monitor/persisted-echo-cache.js";
+import { setIMessageRuntime } from "../extensions/imessage/src/runtime.js";
+
+const headSha = execSync("git rev-parse --short HEAD").toString().trim();
+const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-"));
+setIMessageRuntime({
+  state: {
+    resolveStateDir: () => stateDir,
+    openChannelIngressQueue: () => ({
+      enqueue: () => {},
+      dequeue: () => undefined,
+      close: () => {},
+    }),
+    openKeyedStore: (options) =>
+      createPluginStateSyncKeyedStoreForTests("imessage", {
+        ...options,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    openSyncKeyedStore: (options) =>
+      createPluginStateSyncKeyedStoreForTests("imessage", {
+        ...options,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+  },
+});
 
 const cfg = {};
 const scope = "default:imessage:+15555550123";
@@ -125,21 +159,58 @@ const results = [];
   });
 }
 
+// Scenario 5: persisted cache requireMessageIdTextMatch — same text
+{
+  const pscope = "persisted-test-same";
+  rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
+  const hit = hasPersistedIMessageEcho({
+    scope: pscope,
+    text: "Hello",
+    messageId: "GUID-A",
+    requireMessageIdTextMatch: true,
+  });
+  results.push({
+    scenario: "persisted cache: same GUID + same text (requireMessageIdTextMatch=true)",
+    expected: "true",
+    actual: String(hit),
+    pass: hit === true,
+  });
+}
+
+// Scenario 6: persisted cache requireMessageIdTextMatch — different text
+{
+  const pscope = "persisted-test-diff";
+  rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
+  const hit = hasPersistedIMessageEcho({
+    scope: pscope,
+    text: "Goodbye",
+    messageId: "GUID-A",
+    requireMessageIdTextMatch: true,
+  });
+  results.push({
+    scenario: "persisted cache: same GUID + different text (requireMessageIdTextMatch=true)",
+    expected: "false",
+    actual: String(hit),
+    pass: hit === false,
+  });
+}
+
 const allPass = results.every((r) => r.pass);
 
 const verdict = {
   kind: "real-production-path",
   channel: "imessage",
-  head: "836018e1fef",
+  head: headSha,
   status: allPass ? "pass" : "fail",
-  function: "resolveIMessageInboundDecision",
-  cache: "createSentMessageCache (real, no mocks)",
+  function: "resolveIMessageInboundDecision + hasPersistedIMessageEcho",
+  cache: "createSentMessageCache + persisted echo cache (real, no mocks)",
   results,
 };
 
 console.log("=== PR #137834: iMessage reply_to_guid echo cache proof ===");
 console.log();
 console.log(`Verdict: ${verdict.status.toUpperCase()}`);
+console.log(`Head: ${verdict.head}`);
 console.log(`Function: ${verdict.function}`);
 console.log(`Cache: ${verdict.cache}`);
 console.log();

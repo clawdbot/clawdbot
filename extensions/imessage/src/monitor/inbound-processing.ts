@@ -573,6 +573,35 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group without chat_id" };
   }
 
+  // Early reply_to_guid echo probe: paired mirror rows carry a distinct GUID
+  // but reference the outbound GUID via reply_to_guid. Check this before
+  // access/pairing so a mirror from an unpaired or blocked sender is still
+  // suppressed as an echo rather than triggering pairing or access handling.
+  if (params.echoCache && replyToGuid && bodyText) {
+    const earlyEchoScope = buildIMessageEchoScope({
+      accountId: params.accountId,
+      isGroup,
+      chatId,
+      chatGuid,
+      chatIdentifier,
+      sender,
+    });
+    if (
+      hasIMessageEchoMatch({
+        echoCache: params.echoCache,
+        scope: earlyEchoScope,
+        text: bodyText,
+        messageIds: inboundMessageIds,
+        replyToGuid,
+      })
+    ) {
+      params.logVerbose?.(
+        describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
+      );
+      return { kind: "drop", reason: "echo" };
+    }
+  }
+
   const groupId = isGroup ? groupIdCandidate : undefined;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
   const groupAllowFromForAccess = isGroup
