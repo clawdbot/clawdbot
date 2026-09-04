@@ -111,7 +111,8 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "3-reloaded.png") });
           return page.video();
         } finally {
-          // Context closure disposes fetched bodies; finish these page-owned routes first.
+          // Release a pending bootstrap even on failure, then drain proxy fetches
+          // before withPage closes the context and disposes their response bodies.
           releaseHandoff();
           await page.unrouteAll({ behavior: "wait" });
         }
