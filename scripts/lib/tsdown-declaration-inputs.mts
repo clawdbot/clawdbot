@@ -1,21 +1,18 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BuildContext } from "tsdown";
 import type ts from "typescript";
 import { portableRelativePath } from "./build-artifact-cache.mts";
+import {
+  assertDeclarationInput,
+  resolveDeclarationInputCaptureModule,
+} from "./tsdown-declaration-boundary.mts";
 
 const stagePrefix = (root: string) =>
   path.join(fs.realpathSync(root), ".artifacts/plugin-sdk-staging-");
 const receiptPath = (output: string, name: string) =>
   path.join(output, "..", "compiler-inputs", `${name}.json`);
-
-export function resolveDeclarationInputCaptureModule() {
-  const require = createRequire(import.meta.url);
-  const fromTsdown = createRequire(require.resolve("tsdown"));
-  return fromTsdown.resolve("rolldown-plugin-dts/tsc-context");
-}
 
 export function createDeclarationStage(root: string) {
   return fs.mkdtempSync(stagePrefix(root));
@@ -68,6 +65,9 @@ export function createDeclarationInputCapture(name: string) {
         ),
       ),
     ].toSorted();
+    for (const input of inputs) {
+      assertDeclarationInput(fs.realpathSync(options.cwd), input);
+    }
     fs.writeFileSync(file, JSON.stringify({ ...request, inputs }));
   };
 }

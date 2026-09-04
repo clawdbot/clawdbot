@@ -122,6 +122,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
   "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
 export const TSDOWN_PACKAGES_CACHE_INPUT = {

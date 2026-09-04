@@ -397,6 +397,16 @@ validates consumed bytes, inherited configuration, generator and manifest inputs
 and resolution topology without starting a compiler on hits. Cache hits restore
 into fresh staging and pass the same entry and relative declaration closure checks
 before publication.
+All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
+and the AI package) resolve source and dependency realpaths within their checkout.
+Ancestor installs are invisible to TypeScript lookup; selected declaration paths
+that escape through symlinks or bundler resolution fail the build. Each checkout
+needs its own installed declaration inputs, including compiler libraries. Local
+pnpm links are supported when their targets remain inside the checkout; shared
+external installs are not. Actual compiler receipts remain unfiltered, and input
+changes still prevent publication. Runtime module resolution and the separate
+native tsgo typecheck and package-boundary owners retain their existing contracts.
+
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.
 
