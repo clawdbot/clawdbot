@@ -30,7 +30,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    dispatcher,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
