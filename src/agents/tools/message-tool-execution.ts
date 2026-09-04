@@ -38,6 +38,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { withAbortTimeout } from "../../utils/with-abort-timeout.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   attachEmbeddedMessageDeliveryFact,
@@ -606,48 +607,53 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       let result: MessageActionResult;
       try {
-        result = await runMessageActionForTool({
-          cfg,
-          action,
-          params: actionParams,
-          actionOrigin: "message-tool",
-          defaultAccountId: accountId ?? undefined,
-          ...messageActionTurnCapability.selectMessageActionRequesterIdentity(trustedTurnContext),
-          messageActionAuthorization: {
-            requesterAccountId: trustedTurnContext?.requesterAccountId,
-            requesterSenderId: trustedTurnContext?.requesterSenderId,
-            toolContext: trustedTurnContext?.toolContext,
-          },
-          senderIsOwner: options?.senderIsOwner,
-          conversationReadOrigin: options?.conversationReadOrigin,
-          workspaceDir: options?.workspaceDir,
-          broadcastAccountPlan,
-          gateway,
-          toolContext,
-          sessionKey: options?.agentSessionKey,
-          sourceReplySessionKey: options?.runSessionKey,
-          sessionId: options?.sessionId,
-          runId: deliveryRunId,
-          executionIdentityToken,
-          agentId: resolvedAgentId,
-          workspaceMediaAccess: sandboxWorkspaceMediaAccess,
-          sandboxRoot: options?.sandboxRoot,
-          sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
-          sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-          // Only an admitted channel source can arm terminal restart reconciliation.
-          // Source-less scheduled and ambient sends remain ordinary message actions.
-          sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
-          sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
-          onActionDenied: (error, channel, receiptDiscriminator) =>
-            decisions.recordTypedDenial(
-              error,
-              resolveTrustedDecisionChannel(channel, preparedMessageToolCatalog),
-              receiptDiscriminator,
-            ),
-          inboundEventKind: options?.inboundEventKind,
-          inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
-          abortSignal: signal,
-        });
+        result = await withAbortTimeout(
+          (abortSignal) =>
+            runMessageActionForTool({
+            cfg,
+            action,
+            params: actionParams,
+            actionOrigin: "message-tool",
+            defaultAccountId: accountId ?? undefined,
+            ...messageActionTurnCapability.selectMessageActionRequesterIdentity(trustedTurnContext),
+            messageActionAuthorization: {
+              requesterAccountId: trustedTurnContext?.requesterAccountId,
+              requesterSenderId: trustedTurnContext?.requesterSenderId,
+              toolContext: trustedTurnContext?.toolContext,
+            },
+            senderIsOwner: options?.senderIsOwner,
+            conversationReadOrigin: options?.conversationReadOrigin,
+            workspaceDir: options?.workspaceDir,
+            broadcastAccountPlan,
+            gateway,
+            toolContext,
+            sessionKey: options?.agentSessionKey,
+            sourceReplySessionKey: options?.runSessionKey,
+            sessionId: options?.sessionId,
+            runId: deliveryRunId,
+            executionIdentityToken,
+            agentId: resolvedAgentId,
+            workspaceMediaAccess: sandboxWorkspaceMediaAccess,
+            sandboxRoot: options?.sandboxRoot,
+            sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+            sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+            // Only an admitted channel source can arm terminal restart reconciliation.
+            // Source-less scheduled and ambient sends remain ordinary message actions.
+            sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
+            sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
+            onActionDenied: (error, channel, receiptDiscriminator) =>
+              decisions.recordTypedDenial(
+                error,
+                resolveTrustedDecisionChannel(channel, preparedMessageToolCatalog),
+                receiptDiscriminator,
+              ),
+            inboundEventKind: options?.inboundEventKind,
+            inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
+            abortSignal,
+            }),
+            gatewayResolved.timeoutMs,
+            signal,
+        );
       } catch (error) {
         if (autogeneratedDeliveryFingerprint && actionIdempotencyKey) {
           failedAutogeneratedIdempotencyKeys.set(
