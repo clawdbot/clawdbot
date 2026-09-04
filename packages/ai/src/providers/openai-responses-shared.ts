@@ -194,7 +194,8 @@ export function applyCommonResponsesParams<TApi extends Api>(
   config?: { setDefaultReasoningOff?: boolean },
 ): void {
   if (options?.maxTokens) {
-    params.max_output_tokens = Math.max(options.maxTokens, 16);
+    // The established 16-token minimum stays; the model catalog owns the cap.
+    params.max_output_tokens = Math.min(Math.max(options.maxTokens, 16), model.maxTokens);
   }
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
