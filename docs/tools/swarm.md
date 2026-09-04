@@ -22,7 +22,9 @@ bounded concurrency, and progress reporting to that program.
 
 Swarm needs no enablement setting. Omitted `tools.swarm`, an empty object, or
 an object that sets only limits all leave Swarm enabled. Code Mode remains
-separately opt-in, and normal tool policy still applies.
+separately opt-in, and normal tool policy still applies. Existing Codex sessions
+can retain an older tool catalog; see the
+[fresh-session guidance](/tools/swarm#use-swarm-from-other-harnesses) below.
 
 To opt out, turn off **Settings → Agents & Tools → Labs → Swarm** in the
 Control UI. The switch saves `tools.swarm.enabled: false` immediately and
@@ -387,6 +389,16 @@ Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
 `tools.*`. It does not use OpenClaw's QuickJS guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
+
+Codex records its dynamic tool catalog when a native thread starts. A thread
+created without `agents_wait` cannot gain that reader just by enabling Swarm or
+upgrading OpenClaw, so collector spawn fields remain unavailable on that thread.
+For an ordinary unlocked chat, use `/new` or `/reset` to start with current tools.
+For a [supervised, model-locked Chat](/plugins/codex-supervision#branch-from-a-local-session),
+open the Control UI's global **New Session** page and select a concrete
+Codex-backed model to start a separate ordinary session. Keep the supervised
+Chat intact: `/new`, `/reset`, and parent-linked **New chat** are blocked there.
+The new session still needs a tool policy that permits both collector tools.
 
 With the currently supported Codex runtime, dynamic OpenClaw tool results reach
 Code Mode as JSON text. Parse each result before reading fields. Codex also
