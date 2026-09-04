@@ -26,11 +26,18 @@ export type UpdateLedgerCompareAndSwapResult =
   | { status: "stored" | "replayed"; snapshot: UpdateLedgerSnapshot }
   | { status: "conflict"; snapshot: UpdateLedgerSnapshot | null };
 
-type UpdateLedgerRow = {
-  payload_json: string;
-  receipt_id: string;
-  revision: number;
-};
+type ParsedReceiptRow = Readonly<{
+  expectedRevision: number | null;
+  snapshot: UpdateLedgerSnapshot;
+}>;
+
+function isObject(value: unknown): value is object {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readErrorCode(error: unknown): unknown {
+  return isObject(error) ? Reflect.get(error, "code") : undefined;
+}
 
 function assertAbsolutePath(value: unknown, label: string): string {
   if (typeof value !== "string" || !path.isAbsolute(value)) {
@@ -55,13 +62,14 @@ export function resolveUpdateLedgerLocator(params: {
 }
 
 export function parseUpdateLedgerLocator(value: unknown): UpdateLedgerLocator {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isObject(value)) {
     throw new Error("Invalid update ledger locator");
   }
-  const locator = value as Record<string, unknown>;
   return {
-    databasePath: assertAbsolutePath(locator.databasePath, "database path"),
-    installRoot: resolveUpdateInstallRoot(assertAbsolutePath(locator.installRoot, "install root")),
+    databasePath: assertAbsolutePath(Reflect.get(value, "databasePath"), "database path"),
+    installRoot: resolveUpdateInstallRoot(
+      assertAbsolutePath(Reflect.get(value, "installRoot"), "install root"),
+    ),
   };
 }
 
@@ -123,7 +131,7 @@ async function assertSafeDatabaseAncestry(targetPath: string): Promise<void> {
         }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (readErrorCode(error) === "ENOENT") {
         return;
       }
       throw error;
@@ -167,7 +175,7 @@ async function inspectPrivateDatabaseFile(databasePath: string): Promise<fs.Stat
   try {
     databaseStat = fs.lstatSync(databasePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (readErrorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
@@ -215,7 +223,7 @@ async function ensurePrivateDatabaseFile(databasePath: string): Promise<void> {
       );
       created = true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      if (readErrorCode(error) !== "EEXIST") {
         throw error;
       }
       await inspectPrivateDatabaseFile(databasePath);
@@ -254,8 +262,7 @@ async function openLedger(
   const database = openNodeSqliteDatabase(locator.databasePath);
   try {
     database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`); // sqlite-allow-raw -- fixed lock wait.
-    let currentVersion = (database.prepare("PRAGMA user_version").get() as { user_version: number })
-      .user_version;
+    let currentVersion = parseUserVersion(database.prepare("PRAGMA user_version").get());
     if (currentVersion === 0 && !create) {
       database.close();
       return null;
@@ -263,8 +270,7 @@ async function openLedger(
     if (currentVersion === 0) {
       database.exec("BEGIN IMMEDIATE"); // sqlite-allow-raw -- serialize first-use schema ownership.
       try {
-        currentVersion = (database.prepare("PRAGMA user_version").get() as { user_version: number })
-          .user_version;
+        currentVersion = parseUserVersion(database.prepare("PRAGMA user_version").get());
         if (currentVersion === 0) {
           const existingObject = database
             .prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
@@ -310,18 +316,55 @@ async function openLedger(
   }
 }
 
-function parseRow(row: UpdateLedgerRow | undefined): UpdateLedgerSnapshot | null {
-  if (!row) {
+function parseUserVersion(row: unknown): number {
+  if (!isObject(row)) {
+    throw new Error("Invalid update ledger schema version");
+  }
+  const userVersion = Reflect.get(row, "user_version");
+  if (!Number.isSafeInteger(userVersion) || typeof userVersion !== "number" || userVersion < 0) {
+    throw new Error("Invalid update ledger schema version");
+  }
+  return userVersion;
+}
+
+function parseRow(row: unknown): UpdateLedgerSnapshot | null {
+  if (row === undefined) {
     return null;
   }
-  if (!Number.isSafeInteger(row.revision) || row.revision < 1) {
+  if (!isObject(row)) {
+    throw new Error("Invalid update ledger row");
+  }
+  const revision = Reflect.get(row, "revision");
+  const receiptId = Reflect.get(row, "receipt_id");
+  const payloadJson = Reflect.get(row, "payload_json");
+  if (!Number.isSafeInteger(revision) || typeof revision !== "number" || revision < 1) {
     throw new Error("Invalid update ledger revision");
   }
+  if (typeof receiptId !== "string" || typeof payloadJson !== "string") {
+    throw new Error("Invalid update ledger row");
+  }
   return {
-    payloadJson: assertPayloadJson(row.payload_json),
-    receiptId: assertReceiptId(row.receipt_id),
-    revision: row.revision,
+    payloadJson: assertPayloadJson(payloadJson),
+    receiptId: assertReceiptId(receiptId),
+    revision,
   };
+}
+
+function parseReceiptRow(row: unknown): ParsedReceiptRow | null {
+  const snapshot = parseRow(row);
+  if (!snapshot || !isObject(row)) {
+    return null;
+  }
+  const expectedRevision = Reflect.get(row, "expected_revision");
+  if (
+    expectedRevision !== null &&
+    (!Number.isSafeInteger(expectedRevision) ||
+      typeof expectedRevision !== "number" ||
+      expectedRevision < 1)
+  ) {
+    throw new Error("Invalid expected update ledger revision");
+  }
+  return { expectedRevision, snapshot };
 }
 
 function readHead(database: DatabaseSync, installRoot: string): UpdateLedgerSnapshot | null {
@@ -330,7 +373,7 @@ function readHead(database: DatabaseSync, installRoot: string): UpdateLedgerSnap
       .prepare(
         "SELECT revision, receipt_id, payload_json FROM update_ledger_heads WHERE install_root = ?",
       )
-      .get(installRoot) as UpdateLedgerRow | undefined,
+      .get(installRoot),
   );
 }
 
@@ -359,9 +402,7 @@ export async function readUpdateLedgerReceipt(params: {
             .prepare(
               "SELECT revision, receipt_id, payload_json FROM update_ledger_receipts WHERE install_root = ? AND receipt_id = ?",
             )
-            .get(locator.installRoot, assertReceiptId(params.receiptId)) as
-            | UpdateLedgerRow
-            | undefined,
+            .get(locator.installRoot, assertReceiptId(params.receiptId)),
         )
       : null;
   } finally {
@@ -392,21 +433,21 @@ export async function compareAndSwapUpdateLedger(params: {
     return runSqliteImmediateTransactionSync(
       database,
       () => {
-        const receipt = database
-          .prepare(
-            "SELECT expected_revision, revision, receipt_id, payload_json FROM update_ledger_receipts WHERE install_root = ? AND receipt_id = ?",
-          )
-          .get(locator.installRoot, receiptId) as
-          | (UpdateLedgerRow & { expected_revision: number | null })
-          | undefined;
+        const receipt = parseReceiptRow(
+          database
+            .prepare(
+              "SELECT expected_revision, revision, receipt_id, payload_json FROM update_ledger_receipts WHERE install_root = ? AND receipt_id = ?",
+            )
+            .get(locator.installRoot, receiptId),
+        );
         if (receipt) {
           if (
-            receipt.expected_revision !== params.expectedRevision ||
-            receipt.payload_json !== payloadJson
+            receipt.expectedRevision !== params.expectedRevision ||
+            receipt.snapshot.payloadJson !== payloadJson
           ) {
             throw new Error("Update ledger receipt was replayed with different content");
           }
-          return { status: "replayed", snapshot: parseRow(receipt)! };
+          return { status: "replayed", snapshot: receipt.snapshot };
         }
         const current = readHead(database, locator.installRoot);
         if ((current?.revision ?? null) !== params.expectedRevision) {
