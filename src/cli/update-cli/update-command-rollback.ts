@@ -10,6 +10,7 @@ import {
   updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
+import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
@@ -152,6 +153,7 @@ export async function rollbackFailedUpdate(params: {
       await stopIfUnreachable();
       return failed("state-migrated-no-rollback");
     }
+    await packageTransaction?.assertRollbackSafe?.();
     const stopped = before?.stopped ? await stop() : undefined;
     // Recheck after stop so a final startup migration cannot race the first read.
     failureReason = "rollback-state-unverified";
@@ -182,12 +184,13 @@ export async function rollbackFailedUpdate(params: {
           step: "package rollback",
           status: restored.exitCode === 0 ? "completed" : "failed",
           endedAtMs: Date.now(),
+          ...(restored.reason ? { detail: restored.stderrTail ?? restored.reason } : {}),
         },
         { env: opts.run.env },
       );
     }
     if (restored.exitCode !== 0) {
-      return failed("source-rollback-failed");
+      return failed(restored.reason ?? "source-rollback-failed");
     }
     failureReason = "rollback-state-unverified";
     await withOwnedManagedUpdateEnv(env, async () => {
@@ -304,10 +307,17 @@ export async function rollbackFailedUpdate(params: {
     };
   } catch (error) {
     let detail = formatErrorMessage(error);
-    if (failureReason === "rollback-state-unverified") {
+    if (error instanceof NativePackageRollbackError) {
+      failureReason = error.reason;
+    }
+    if (
+      failureReason === "rollback-state-unverified" ||
+      error instanceof NativePackageRollbackError
+    ) {
+      const reason = failureReason;
       try {
         await stopIfUnreachable();
-        failureReason = "rollback-state-unverified";
+        failureReason = reason;
       } catch (stopError) {
         detail += `; ${formatErrorMessage(stopError)}`;
       }

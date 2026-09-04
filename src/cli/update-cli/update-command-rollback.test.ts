@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -29,6 +32,8 @@ vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   confirmGatewayReachable: mocks.reachable,
 }));
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -65,6 +70,91 @@ describe("verified package rollback", () => {
       return true;
     });
   });
+  it.each([
+    { reachable: true, duringStop: false },
+    { reachable: false, duringStop: false },
+    { reachable: true, duringStop: true },
+  ])(
+    "records refused project rollback (reachable=$reachable, during stop=$duringStop)",
+    async ({ reachable, duringStop }) => {
+      const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-project-changed-") };
+      const config = await readPreviousConfig(env);
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const schemaVersions = await readUpdateStateSchemaVersions({
+        stateDir: env.OPENCLAW_STATE_DIR,
+        config,
+        env,
+      });
+      const rollback = vi.fn(async () => ({
+        name: "global install rollback",
+        command: "restore",
+        cwd: "/candidate",
+        durationMs: 1,
+        exitCode: 1,
+        reason: "rollback-project-changed" as const,
+        stderrTail: detail,
+      }));
+      mocks.reachable.mockResolvedValue({ reachable });
+      const detail = "Global project changed since staging: sibling";
+      const outcome = await rollbackFailedUpdate({
+        result: {
+          status: "error",
+          mode: "pnpm",
+          root: "/candidate",
+          reason: "readyz-unhealthy",
+          steps: [],
+          durationMs: 1,
+        },
+        previousRoot: "/previous",
+        schemaVersions,
+        config,
+        opts: { json: true, run },
+        timeoutMs: 1_000,
+        preManagedServiceStop: {
+          stopped: true,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceEnv: env,
+        },
+        packageTransaction: {
+          backupRoot: "/backup",
+          assertRollbackSafe: async () => {
+            if (!duringStop) {
+              throw new NativePackageRollbackError(detail);
+            }
+          },
+          rollback,
+          complete: vi.fn(),
+        },
+      });
+      expect(outcome.result).toMatchObject({
+        status: "error",
+        reason: "rollback-project-changed",
+        root: "/candidate",
+      });
+      expect(rollback).toHaveBeenCalledTimes(duringStop ? 1 : 0);
+      expect(mocks.stop).toHaveBeenCalledTimes(!reachable || duringStop ? 1 : 0);
+      expect(mocks.restart).not.toHaveBeenCalled();
+      completeUpdateCommandRun(outcome.result, run);
+      const row = getUpdateRun(run.runId, { env })!;
+      expect(row).toMatchObject({
+        status: "failed",
+        reason: "rollback-project-changed",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "package rollback", status: "failed", detail }),
+        ]),
+      });
+      const nextAction = resolveUpdateResultNextAction({
+        result: outcome.result,
+        managedGatewayStopped: !reachable,
+        env,
+      });
+      expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
+        "Keep the candidate installed if its gateway is reachable; otherwise keep the gateway stopped.",
+      );
+    },
+  );
   it.each([
     { change: "none", previousVerified: true, restored: true, service: "stopped" },
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },

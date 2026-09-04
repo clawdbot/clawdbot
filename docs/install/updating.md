@@ -682,6 +682,8 @@ If the schema comparison cannot be completed, automatic rollback is refused
 verification and reporting after migration,
 preserving the same run ID and recorded activation steps.
 
+For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable candidate installed, otherwise keep the Gateway stopped and follow the report’s repair command.
+
 ### Before updating: create a verified backup
 
 `openclaw update` preserves an automatic pre-update config copy, but it does not

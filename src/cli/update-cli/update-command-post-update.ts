@@ -58,7 +58,6 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
-
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
@@ -228,7 +227,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (!restoreFailure) {
       try {
         if (finalResult.status !== "ok" && finalResult.recovery?.serviceRestartSafe !== true) {
-          await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(false);
+          await (
+            rollbackStopState ?? params.preManagedServiceStop
+          )?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
             rollbackStopState ?? params.preManagedServiceStop,
@@ -246,7 +247,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       finalResult.status = "error";
       finalResult.reason = "windows-task-autostart-restore-failed";
       finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-      await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(false);
+      await (
+        rollbackStopState ?? params.preManagedServiceStop
+      )?.windowsTaskAutoStartRecovery?.complete(false);
     }
     recordNextAction(finalResult);
     if (notify) {
@@ -280,7 +283,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         }
       }
     }
-    await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(
+    await (
+      rollbackStopState ?? params.preManagedServiceStop
+    )?.windowsTaskAutoStartRecovery?.complete(
       finalResult.status === "ok" || finalResult.recovery?.service === "healthy",
     );
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.

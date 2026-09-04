@@ -12,6 +12,7 @@ import {
 } from "./update-global.js";
 import {
   finalizeNativePackageStage,
+  NativePackageRollbackError,
   type NativePackageStage,
 } from "./update-native-package-stage.js";
 
@@ -38,7 +39,8 @@ export type PackageUpdateStepResult = {
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
-  rollback: () => Promise<PackageUpdateStepResult>;
+  assertRollbackSafe?: () => Promise<void>;
+  rollback: () => Promise<PackageUpdateStepResult & { reason?: "rollback-project-changed" }>;
   complete: () => Promise<void>;
 };
 
@@ -258,6 +260,7 @@ export async function swapStagedPackageInstall(params: {
   const rollback: Array<() => Promise<void>> = [];
   let packageRollbackVerified = false;
   let retained = false;
+  let projectActivated = false;
   const restoreSwap = async (): Promise<string[]> => {
     const messages: string[] = [];
     for (const restore of rollback.toReversed()) {
@@ -352,20 +355,39 @@ export async function swapStagedPackageInstall(params: {
     }
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
-    if (native) {
-      await finalizeNativePackageStage(native);
-    }
+    const assertProjectUnchanged = native
+      ? await finalizeNativePackageStage(native, params.packageName)
+      : undefined;
     try {
       await params.beforeActivate?.();
     } catch (error) {
       throw new PackageUpdateActivationError(error);
     }
+    if (native) {
+      // Service preparation can wait for drain; revalidate the project copied before that wait.
+      await native.assertUnchanged();
+    }
     if (params.onTransaction) {
       retained = true;
       let completed = false;
-      let rollbackResult: Promise<PackageUpdateStepResult> | undefined;
+      let rollbackRefused = false;
+      let rollbackResult: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
+      const assertRollbackSafe = assertProjectUnchanged
+        ? async () => {
+            if (!projectActivated) {
+              return;
+            }
+            try {
+              await assertProjectUnchanged();
+            } catch (error) {
+              rollbackRefused = true;
+              throw error;
+            }
+          }
+        : undefined;
       params.onTransaction({
         backupRoot,
+        ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
         rollback: () => {
           if (completed) {
             return Promise.resolve({
@@ -380,6 +402,17 @@ export async function swapStagedPackageInstall(params: {
           // Repeated completion paths must never remove an already-restored package.
           rollbackResult ??= (async () => {
             const rollbackStartedAt = Date.now();
+            // Late verification can outlive another global install. Check before
+            // restoring any launcher or project bytes, or we'd erase sibling changes.
+            try {
+              await assertRollbackSafe?.();
+            } catch (error) {
+              return {
+                ...step(1, null, formatErrorMessage(error)),
+                name: "global install rollback",
+                ...(error instanceof NativePackageRollbackError ? { reason: error.reason } : {}),
+              };
+            }
             const messages = await restoreSwap();
             return {
               ...step(
@@ -397,7 +430,11 @@ export async function swapStagedPackageInstall(params: {
           return rollbackResult;
         },
         complete: async () => {
-          if (completed || (rollbackResult && (await rollbackResult).exitCode !== 0)) {
+          if (
+            completed ||
+            rollbackRefused ||
+            (rollbackResult && (await rollbackResult).exitCode !== 0)
+          ) {
             return;
           }
           completed = true;
@@ -432,6 +469,7 @@ export async function swapStagedPackageInstall(params: {
       }
     });
     await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
+    projectActivated = true;
     for (const shim of shims) {
       // Register before copying: replacing an entry can fail after removing it.
       rollback.push(async () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   runGlobalPackageUpdateSteps,
@@ -10,9 +11,16 @@ import { writePackageRoot } from "./package-update-steps.test-support.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
 describe.runIf(process.platform !== "win32")("native package transactions", () => {
-  it.each(["pnpm10", "pnpm11", "bun"] as const)(
-    "validates %s in its native project and restores package, sibling, metadata, and launcher",
-    async (layout) => {
+  it.each(
+    (["pnpm10", "pnpm11", "bun"] as const).flatMap((layout) =>
+      (["none", "before", "after", "upgrade", "remove"] as const).map((siblingChange) => ({
+        layout,
+        siblingChange,
+      })),
+    ),
+  )(
+    "preserves $layout native project ownership (sibling change=$siblingChange)",
+    async ({ layout, siblingChange }) => {
       await withTestDir({ prefix: "openclaw-native-update-" }, async (base) => {
         const manager = layout === "bun" ? "bun" : "pnpm";
         const project = path.join(base, manager, "global");
@@ -34,6 +42,12 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         const metadata = path.join(project, "manager-metadata");
         const sibling = path.join(project, "sibling-package");
         await writePackageRoot(packageRoot, "1.0.0");
+        const existingSibling = path.join(path.dirname(packageRoot), "existing-sibling");
+        await fs.mkdir(existingSibling, { recursive: true });
+        await fs.writeFile(
+          path.join(existingSibling, "package.json"),
+          '{"name":"existing-sibling","version":"1.0.0"}',
+        );
         await fs.mkdir(binDir, { recursive: true });
         await fs.writeFile(launcher, "old launcher\n");
         await fs.writeFile(metadata, "original metadata\n");
@@ -54,8 +68,10 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           ...(layout === "pnpm11" ? { pnpmIsolated: { layoutVersion: 11 } } : {}),
         };
         let retained: PackageUpdateTransaction | undefined;
+        const preparationStarted = createDeferred();
+        const finishPreparation = createDeferred();
         const phases: string[] = [];
-        const result = await runGlobalPackageUpdateSteps({
+        const update = runGlobalPackageUpdateSteps({
           installTarget: target,
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
@@ -129,12 +145,56 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           },
           beforeActivate: async () => {
             phases.push("stop");
+            preparationStarted.resolve();
+            if (siblingChange === "before") {
+              await finishPreparation.promise;
+            }
           },
           onTransaction: (transaction) => {
             retained = transaction;
           },
           timeoutMs: 1000,
         });
+        const siblingOwner =
+          layout === "pnpm11" ? path.join(globalRoot, "sibling-owner") : oldOwner;
+        const siblingManifest = path.join(siblingOwner, "package.json");
+        const siblingEntry = path.join(siblingOwner, "node_modules", "sibling", "index.js");
+        const concurrentManifest = JSON.stringify({
+          dependencies: { openclaw: "1.0.0", sibling: "2.0.0" },
+        });
+        if (siblingChange === "before") {
+          await preparationStarted.promise;
+          try {
+            await fs.mkdir(path.dirname(siblingEntry), { recursive: true });
+            await fs.writeFile(siblingEntry, "concurrent sibling package\n");
+            await fs.writeFile(siblingManifest, concurrentManifest);
+            if (layout === "pnpm11") {
+              await fs.symlink("sibling-owner", path.join(globalRoot, "hash-sibling"));
+            }
+          } finally {
+            finishPreparation.resolve();
+          }
+        }
+        const result = await update;
+        if (siblingChange === "before") {
+          // Exercise normal confirmation too: a stale project swap must not hide
+          // the sibling in a backup that successful cleanup subsequently deletes.
+          await retained?.complete();
+          await expect(fs.readFile(siblingEntry, "utf8")).resolves.toBe(
+            "concurrent sibling package\n",
+          );
+          await expect(fs.readFile(siblingManifest, "utf8")).resolves.toBe(concurrentManifest);
+          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.failedStep?.stderrTail).toContain("native global installation changed");
+          expect(result.afterVersion).toBe("1.0.0");
+          expect(retained).toBeUndefined();
+          expect(phases).toEqual(["validate", "stop"]);
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+          expect(
+            (await fs.readdir(path.dirname(project))).filter((entry) => entry.startsWith(".")),
+          ).toEqual([]);
+          return;
+        }
         expect(result.failedStep).toBeNull();
         expect(phases).toEqual(["validate", "stop"]);
         expect(result.afterVersion).toBe("2.0.0");
@@ -146,6 +206,53 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         if (!retained) {
           throw new Error("transaction missing");
         }
+        if (["after", "upgrade", "remove"].includes(siblingChange)) {
+          const lateSiblingEntry = path.join(
+            path.dirname(result.verifiedPackageRoot!),
+            "sibling",
+            "index.js",
+          );
+          if (siblingChange === "after") {
+            await fs.mkdir(path.dirname(lateSiblingEntry), { recursive: true });
+            await fs.writeFile(lateSiblingEntry, "late sibling package\n");
+          } else if (siblingChange === "upgrade") {
+            await fs.writeFile(
+              path.join(existingSibling, "package.json"),
+              '{"name":"existing-sibling","version":"2.0.0"}',
+            );
+          } else {
+            await fs.rm(existingSibling, { recursive: true });
+          }
+          const candidateLauncher = await fs.readlink(launcher);
+          const rollback = await retained.rollback();
+          expect(rollback).toMatchObject({ exitCode: 1, reason: "rollback-project-changed" });
+          expect(rollback.stderrTail).toContain("sibling");
+          expect(rollback.stderrTail).not.toContain(base);
+          await retained.complete();
+          if (siblingChange === "after") {
+            await expect(fs.readFile(lateSiblingEntry, "utf8")).resolves.toBe(
+              "late sibling package\n",
+            );
+          } else if (siblingChange === "upgrade") {
+            await expect(
+              fs.readFile(path.join(existingSibling, "package.json"), "utf8"),
+            ).resolves.toContain('"version":"2.0.0"');
+          } else {
+            await expect(fs.stat(existingSibling)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          await expect(fs.readFile(metadata, "utf8")).resolves.toBe("candidate metadata\n");
+          await expect(fs.readlink(launcher)).resolves.toBe(candidateLauncher);
+          await expect(
+            fs.readFile(path.join(result.verifiedPackageRoot!, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"2.0.0"');
+          await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+          return;
+        }
+        // Verification may repair only the candidate payload without changing sibling ownership.
+        await fs.writeFile(
+          path.join(result.verifiedPackageRoot!, "package.json"),
+          '{"name":"openclaw","version":"2.0.1"}',
+        );
         expect((await retained.rollback()).exitCode).toBe(0);
         await retained.complete();
         await expect(

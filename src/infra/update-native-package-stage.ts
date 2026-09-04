@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import {
@@ -19,7 +21,7 @@ export type NativePackageStage = {
   liveBinDir: string;
   globalRoot: string;
   env: NodeJS.ProcessEnv;
-  fingerprint: string;
+  assertUnchanged: () => Promise<void>;
 };
 
 type Relocation = {
@@ -28,8 +30,18 @@ type Relocation = {
   sourceAliases?: string[];
 };
 
-async function nativeProjectFingerprint(root: string): Promise<string> {
-  const hash = createHash("sha256");
+export class NativePackageRollbackError extends Error {
+  readonly reason = "rollback-project-changed";
+}
+
+async function nativeProjectFingerprint(
+  root: string,
+  excludePackage?: string,
+): Promise<Map<string, string>> {
+  const fingerprint = new Map<string, string>();
+  const record = (file: string, value: string) => {
+    fingerprint.set(path.relative(root, file), createHash("sha256").update(value).digest("hex"));
+  };
   const manifests = new Set([
     "package.json",
     "pnpm-lock.yaml",
@@ -43,14 +55,15 @@ async function nativeProjectFingerprint(root: string): Promise<string> {
   async function visit(directory: string, depth: number): Promise<void> {
     const entries = await fs.readdir(directory, { withFileTypes: true });
     for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name === "node_modules") {
-        continue;
-      }
       const file = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
-        hash.update(JSON.stringify([path.relative(root, file), await fs.readlink(file)]));
+      if (entry.name === "node_modules") {
+        if (excludePackage) {
+          await packages(file);
+        }
+      } else if (entry.isSymbolicLink()) {
+        record(file, await fs.readlink(file));
       } else if (entry.isFile() && manifests.has(entry.name)) {
-        hash.update(JSON.stringify([path.relative(root, file), await fs.readFile(file, "base64")]));
+        record(file, await fs.readFile(file, "base64"));
       } else if (
         entry.isDirectory() &&
         (depth === 1 || (depth === 0 && /^v?\d+$/u.test(entry.name)))
@@ -59,10 +72,34 @@ async function nativeProjectFingerprint(root: string): Promise<string> {
       }
     }
   }
-  // Only owner manifests, pnpm layout/group metadata and active links participate;
-  // package contents and transient/shared stores are not owner mutation signals.
+  async function packages(directory: string, scope = ""): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const name = `${scope}${entry.name}`;
+      if (entry.name.startsWith(".") || name === excludePackage) {
+        continue;
+      }
+      const file = path.join(directory, entry.name);
+      if (!scope && entry.name.startsWith("@") && entry.isDirectory()) {
+        await packages(file, `${entry.name}/`);
+      } else if (entry.isSymbolicLink()) {
+        record(file, await fs.readlink(file));
+      } else {
+        const manifest = await fs
+          .readFile(path.join(file, "package.json"), "base64")
+          .catch((error: unknown) => {
+            if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+              return "";
+            }
+            throw error;
+          });
+        record(file, manifest);
+      }
+    }
+  }
+  // Owner manifests, pnpm group metadata and active links track manager mutations.
+  // Rollback also tracks direct sibling entries, never payloads or shared stores.
   await visit(root, 0);
-  return hash.digest("hex");
+  return fingerprint;
 }
 
 function relocatePath(value: string, relocation: Relocation): string {
@@ -264,7 +301,13 @@ export async function prepareNativePackageStage(params: {
       liveBinDir: path.resolve(liveBinDir),
       globalRoot: path.join(projectRoot, path.relative(ownerRoot, installTarget.globalRoot)),
       env,
-      fingerprint,
+      assertUnchanged: async () => {
+        if (!isDeepStrictEqual(await nativeProjectFingerprint(liveProjectRoot), fingerprint)) {
+          throw new Error(
+            "The native global installation changed before activation; retry the update.",
+          );
+        }
+      },
     };
   } catch (error) {
     await fs.rm(prefix, { recursive: true, force: true });
@@ -276,10 +319,11 @@ export async function prepareNativePackageStage(params: {
 }
 
 /** Prepare copied paths for the live location after candidate validation, before service stop. */
-export async function finalizeNativePackageStage(stage: NativePackageStage): Promise<void> {
-  if ((await nativeProjectFingerprint(stage.liveProjectRoot)) !== stage.fingerprint) {
-    throw new Error("The native global installation changed during validation; retry the update.");
-  }
+export async function finalizeNativePackageStage(
+  stage: NativePackageStage,
+  packageName: string,
+): Promise<() => Promise<void>> {
+  await stage.assertUnchanged();
   const relocation = { sourceRoot: stage.projectRoot, destinationRoot: stage.liveProjectRoot };
   await relocateProjectTree(stage.projectRoot, relocation);
   for (const entry of await fs.readdir(stage.binDir, { withFileTypes: true })) {
@@ -291,4 +335,23 @@ export async function finalizeNativePackageStage(stage: NativePackageStage): Pro
       await relocateLauncher(file, file, destinationFile, relocation);
     }
   }
+  // Candidate installation rewrites shared locks and pnpm group links. Capture their
+  // finalized staged form, excluding the package payload that verification may repair.
+  const fingerprint = await nativeProjectFingerprint(stage.projectRoot, packageName);
+  return async () => {
+    const current = await nativeProjectFingerprint(stage.liveProjectRoot, packageName);
+    const changed = [...new Set([...fingerprint.keys(), ...current.keys()])].filter(
+      (name) => fingerprint.get(name) !== current.get(name),
+    );
+    if (changed.length) {
+      const names = [...new Set(changed.map((name) => path.basename(name)))].toSorted();
+      const summary = names
+        .slice(0, 20)
+        .map((name) => name.slice(0, 80))
+        .join(", ");
+      throw new NativePackageRollbackError(
+        `Global project changed since staging: ${summary}${names.length > 20 ? ", …" : ""}`,
+      );
+    }
+  };
 }

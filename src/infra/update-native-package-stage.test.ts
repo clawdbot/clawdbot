@@ -102,7 +102,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           );
         }
         expect((await runFile(launcher, [], { timeout: 5000 })).stdout.trim()).toBe("candidate");
-        await finalizeNativePackageStage(stage);
+        await finalizeNativePackageStage(stage, "openclaw");
         expect(
           (
             await runFile(process.execPath, [path.join(packageRoot, "openclaw.mjs")], {
@@ -152,7 +152,9 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
       }
       const concurrentManifest = '{"dependencies":{"openclaw":"1.0.0","sibling":"2.0.0"}}';
       await fs.writeFile(manifest, concurrentManifest);
-      await expect(finalizeNativePackageStage(stage)).rejects.toThrow("changed during validation");
+      await expect(finalizeNativePackageStage(stage, "openclaw")).rejects.toThrow(
+        "changed before activation",
+      );
       expect(await fs.readFile(manifest, "utf8")).toBe(concurrentManifest);
       expect(await fs.readdir(stage.binDir)).toEqual([]);
     });
