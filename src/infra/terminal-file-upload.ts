@@ -105,6 +105,9 @@ async function readDirectoryBytes(directory: string): Promise<number> {
   try {
     entries = await readdir(directory, { withFileTypes: true });
   } catch (error) {
+    // SAFETY: Node readdir rejects with ErrnoException; missing dirs contribute 0 bytes.
+    // SAFETY: fs errors from readdir are ErrnoException; only ENOENT means the
+    // staging directory is gone and counts as zero retained bytes.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return 0;
     }
@@ -119,6 +122,9 @@ async function readDirectoryBytes(directory: string): Promise<number> {
       const stats = await lstat(path.join(directory, entry.name));
       totalBytes += stats.isFile() ? stats.size : 0;
     } catch (error) {
+      // SAFETY: Node lstat rejects with ErrnoException; a vanished file contributes 0 bytes.
+      // SAFETY: lstat of a just-listed file can race with unlink; ENOENT is the
+      // only code that means the file is already gone.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
@@ -132,6 +138,9 @@ async function readOwnedStagedUploads(tempRoot: string): Promise<OwnedStagedUplo
   try {
     entries = await readdir(tempRoot, { withFileTypes: true });
   } catch (error) {
+    // SAFETY: Node readdir rejects with ErrnoException; a missing temp root has no uploads.
+    // SAFETY: fs errors from readdir are ErrnoException; ENOENT means the
+    // staging root does not exist yet, so there are no owned uploads.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
     }
@@ -156,6 +165,9 @@ async function readOwnedStagedUploads(tempRoot: string): Promise<OwnedStagedUplo
             mtimeMs: stats.mtimeMs,
           };
         } catch (error) {
+          // SAFETY: Node lstat rejects with ErrnoException; a vanished staging dir is not owned.
+          // SAFETY: lstat/readdir of a just-listed staging dir can race with
+          // prune; ENOENT means that upload is already gone.
           if ((error as NodeJS.ErrnoException).code === "ENOENT") {
             return null;
           }
