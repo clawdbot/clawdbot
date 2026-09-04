@@ -8,6 +8,7 @@ import {
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
+  isFixedUserCapFile,
 } from "../agents/bootstrap-budget.js";
 import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
@@ -40,14 +41,6 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   }
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
-
-// USER.md carries a deliberate fixed cap: tuning bootstrapMaxChars can only
-// lower it, so per-file tips must never suggest raising that setting for it.
-// The fixed-cap note itself covers every branch where that limit is relevant —
-// truncated or merely near-limit — because it is the only actionable guidance
-// those branches get.
-const isFixedUserCapFile = (file: { name: string; effectiveFileLimit: number }) =>
-  file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS;
 
 /**
  * Analyzes configured bootstrap files and emits warnings when injection will truncate content.

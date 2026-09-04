@@ -154,4 +154,56 @@ describe("core/doctor/bootstrap-size", () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it("names the fixed USER.md cap instead of ineffective bootstrapMaxChars tuning", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-cap-"));
+    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
+
+    const findings = await getBootstrapSizeCheck().detect({
+      mode: "lint",
+      runtime,
+      cfg: { agents: { defaults: { workspace: tmp } } },
+      cwd: tmp,
+    });
+
+    const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
+    expect(userFinding).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
+      }),
+    );
+    expect(userFinding?.fixHint).not.toContain("tune");
+  });
+
+  it("keeps tuning advice for other files while USER.md near-limit names the fixed cap", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-near-"));
+    await fs.writeFile(join(tmp, "USER.md"), "u".repeat(3_900), "utf-8");
+    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(18_000), "utf-8");
+
+    const findings = await getBootstrapSizeCheck().detect({
+      mode: "lint",
+      runtime,
+      cfg: { agents: { defaults: { workspace: tmp } } },
+      cwd: tmp,
+    });
+
+    const userFinding = findings.find((finding) => finding.message.includes("USER.md"));
+    expect(userFinding).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "info",
+        fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
+      }),
+    );
+    expect(userFinding?.fixHint).not.toContain("tune");
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        message: expect.stringContaining("AGENTS.md"),
+        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
+      }),
+    );
+  });
 });

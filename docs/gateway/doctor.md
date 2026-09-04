@@ -606,7 +606,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
-    Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`.
+    Doctor checks whether workspace bootstrap files (for example `AGENTS.md`, `CLAUDE.md`, or other injected context files) are near or over the configured character budget. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`. `USER.md` is the exception: it has a fixed 4,000-character cap that these settings cannot raise, so doctor names the cap and recommends compacting the file instead. See [User model](/concepts/user-model).
 
     This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 

@@ -137,7 +137,7 @@ describe("noteBootstrapFileSize", () => {
   });
 
   it("explains the fixed cap for a near-limit, untruncated USER.md", async () => {
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "USER.md",
@@ -160,7 +160,7 @@ describe("noteBootstrapFileSize", () => {
   });
 
   it("points to the fixed USER.md cap instead of an ineffective tuning tip", async () => {
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "USER.md",
@@ -181,7 +181,7 @@ describe("noteBootstrapFileSize", () => {
   });
 
   it("keeps the tuning tip when another file hits a configurable per-file limit", async () => {
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "USER.md",
@@ -212,7 +212,7 @@ describe("noteBootstrapFileSize", () => {
 
   it("keeps the tuning tip when USER.md sits under an explicitly lower configured cap", async () => {
     resolveBootstrapMaxChars.mockReturnValueOnce(2_000);
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "USER.md",

@@ -49,6 +49,18 @@ function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): n
     : bootstrapMaxChars;
 }
 
+/**
+ * USER.md carries a deliberate fixed cap: tuning bootstrapMaxChars can only
+ * lower it, so per-file remediation must never suggest raising that setting
+ * for it. The effective limit equals the fixed cap exactly when the cap (not
+ * the configured limit) is the binding constraint.
+ */
+export function isFixedUserCapFile(file: { name: string; effectiveFileLimit: number }): boolean {
+  return (
+    file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS
+  );
+}
+
 /** Restores prompt-warning dedupe state from a previous bootstrap report. */
 export function resolveBootstrapWarningSignaturesSeen(report?: {
   bootstrapTruncation?: {
