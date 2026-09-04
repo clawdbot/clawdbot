@@ -745,6 +745,81 @@ describe("models.authStatus", () => {
     expect(provider?.profiles[0]?.source).toBe("external");
   });
 
+  it.each(["minimax:cn", "minimax:global"])(
+    "reports provider-owned priority for aliases when %s is pinned",
+    async (boundProfileId) => {
+      const config = {
+        auth: {
+          order: {
+            minimax: ["minimax:global", "minimax:cn"],
+            anthropic: ["anthropic:saved"],
+          },
+        },
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: boundProfileId,
+              models: [],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          "minimax:global": { type: "token", provider: "minimax", token: "global-token" },
+          "minimax:cn": { type: "token", provider: "minimax-cn", token: "cn-token" },
+          "anthropic:saved": { type: "token", provider: "anthropic", token: "other-token" },
+        },
+      });
+      setPreparedMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "minimax",
+              origin: "bundled",
+              providers: ["minimax"],
+              providerAuthAliases: { "minimax-cn": "minimax" },
+            },
+          ],
+        }),
+      );
+      const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+        "../../agents/auth-health.js",
+      );
+      mocks.buildAuthHealthSummary.mockImplementation(actualAuthHealth.buildAuthHealthSummary);
+
+      const result = await readAuthStatus();
+
+      expect(result.providers).toMatchObject([
+        { provider: "anthropic", authProvider: "anthropic", profileOrderLocked: "auth-config" },
+        { provider: "minimax", authProvider: "minimax", profileOrderLocked: "provider-config" },
+        { provider: "minimax-cn", authProvider: "minimax", profileOrderLocked: "provider-config" },
+      ]);
+      const profiles = result.providers.flatMap((provider) => provider.profiles);
+      const boundProfile = profiles.find((profile) => profile.profileId === boundProfileId);
+      expect(boundProfile).toMatchObject({ source: "config" });
+      expect(boundProfile).not.toHaveProperty("logoutSupported");
+      for (const profile of profiles.filter((profile) => profile.profileId !== boundProfileId)) {
+        expect(profile).toMatchObject({ source: "saved", logoutSupported: true });
+      }
+
+      mocks.getRuntimeConfig.mockReturnValue({ ...config, auth: {} });
+      for (const provider of ["minimax", "minimax-cn"]) {
+        const opts = createOrderOptions({
+          provider,
+          profileIds: ["minimax:cn", "minimax:global"],
+        });
+        await orderHandler(opts);
+        expect(firstRespondCall(opts)?.[0]).toBe(false);
+        expect(firstRespondCall(opts)?.[2]?.message).toContain("provider configuration");
+      }
+      expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    },
+  );
+
   it("projects provider capabilities from the published lifecycle metadata", async () => {
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [

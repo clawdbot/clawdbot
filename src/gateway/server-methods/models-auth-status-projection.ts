@@ -180,6 +180,7 @@ export function mapAuthStatusProvider(params: {
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>;
   logoutProfileIds: ReadonlySet<string>;
   configBoundProfileIds: ReadonlySet<string>;
+  configBoundAuthProviders: ReadonlySet<string>;
   externalProfileIds: ReadonlySet<string>;
   externalCliProfileIds: ReadonlySet<string>;
   includeProfileDetails: boolean;
@@ -204,9 +205,7 @@ export function mapAuthStatusProvider(params: {
     runtimeStore.runtimeLocalProfileIds ??
       Object.keys(store.profiles).filter((profileId) => !params.externalProfileIds.has(profileId)),
   );
-  const providerOrderLocked = provider.profiles.some((profile) =>
-    params.configBoundProfileIds.has(profile.profileId),
-  );
+  const providerOrderLocked = params.configBoundAuthProviders.has(authProviderKey);
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const effectiveProfiles = provider.effectiveProfiles ?? provider.profiles;
   // Auth health already resolved credential priority. Missing or pending quota for

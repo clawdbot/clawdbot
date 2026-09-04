@@ -488,6 +488,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
+      // Priority mutations cover the whole auth owner, including profiles under aliases.
+      // Every alias must advertise that same lock while profile source/logout stays individual.
+      const configBoundAuthProviders = new Set(
+        Object.entries(store.profiles)
+          .filter(([profileId]) => configBoundProfileIds.has(profileId))
+          .map(([, profile]) => resolveProviderIdForAuth(profile.provider, authAliasLookupParams)),
+      );
       const providers = authHealth.providers.map((provider) =>
         mapAuthStatusProvider({
           provider,
@@ -502,6 +509,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
+          configBoundAuthProviders,
           externalProfileIds,
           externalCliProfileIds,
           includeProfileDetails,
