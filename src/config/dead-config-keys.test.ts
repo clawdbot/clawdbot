@@ -59,7 +59,6 @@ describe("dead config keys", () => {
     "agents.defaults.heartbeat.includeReasoning",
     "agents.defaults.heartbeat.includeSystemPromptSection",
     "agents.defaults.heartbeat.skipWhenBusy",
-    "agents.defaults.heartbeat.suppressToolErrorWarnings",
     "agents.entries.test.groupChat.visibleReplies",
     "agents.defaults.envelopeTimestamp",
     "agents.defaults.envelopeElapsed",
