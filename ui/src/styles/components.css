@@ -5698,11 +5698,7 @@ td.data-table-key-col {
   line-height: 0;
 }
 
-/* Recovery stays outside a plugin-owned workspace so the built-in UI remains reachable. */
+/* Keep the recovery control mounted, but hide it until the customization flow is ready. */
 .plugin-ui-recovery {
-  position: fixed;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(12px, env(safe-area-inset-bottom));
-  z-index: 110;
-  box-shadow: var(--shadow-md);
+  display: none;
 }
