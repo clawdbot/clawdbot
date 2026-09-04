@@ -258,6 +258,17 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
           reason: "tls_certificate",
         };
   }
+  if (params.failoverFailure && params.failoverReason === "model_not_found") {
+    return params.fallbackConfigured
+      ? {
+          action: "fallback_model",
+          reason: "model_not_found",
+        }
+      : {
+          action: "surface_error",
+          reason: "model_not_found",
+        };
+  }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {
     return {

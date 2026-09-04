@@ -18,13 +18,23 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
+import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(),
 }));
+const backoffMocks = vi.hoisted(() => ({
+  sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
+}));
 
 vi.mock("../../../plugins/provider-failover.js", () => providerRuntimeMocks);
+vi.mock("../../../infra/backoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../infra/backoff.js")>(
+    "../../../infra/backoff.js",
+  );
+  return { ...actual, sleepWithAbort: backoffMocks.sleepWithAbort };
+});
 
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
@@ -119,6 +129,26 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     maybeMarkAuthProfileFailure,
     traceAttempts,
   };
+}
+
+function createRealFailoverRetryController() {
+  return createEmbeddedRunFailoverRetryController({
+    runParams: {
+      runId: "run:idle-timeout-same-model-retry",
+    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
+    provider: "anthropic",
+    modelId: "mock-1",
+    globalLane: "test",
+    agentDir: "/tmp/openclaw-idle-timeout-same-model-retry",
+    fallbackConfigured: true,
+    profileFailureStore: { version: 1, profiles: {} },
+    getLastProfileId: () => "anthropic:p1",
+    getSessionId: () => "session:idle-timeout-same-model-retry",
+    harnessOwnsTransport: () => false,
+    getRuntimeAuthOwnerId: () => "embedded",
+    getApiKeyInfo: () => null,
+    advanceAuthProfile: vi.fn(async () => false),
+  });
 }
 
 function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
@@ -256,6 +286,7 @@ async function streamIncompleteMistralResponseOverLoopback() {
 describe("handleEmbeddedAssistantFailure", () => {
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
+    backoffMocks.sleepWithAbort.mockClear();
   });
 
   it.each(["auth", "auth_permanent"] as const)(
@@ -670,6 +701,81 @@ describe("handleEmbeddedAssistantFailure", () => {
       ).toBe("hard_timeout");
     },
   );
+
+  it("retries a replay-safe idle timeout on the same model before any timeout payload", async () => {
+    const controller = createRealFailoverRetryController();
+    const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
+    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+    fixture.input.maybeRetryTransient = controller.maybeRetryTransient;
+    fixture.input.getTransientRetryCount = () => controller.transientRetryCount;
+    const advanceAuthProfile = vi.fn(async () => false);
+    fixture.input.advanceAuthProfile = advanceAuthProfile;
+    fixture.advanceAuthProfile = advanceAuthProfile;
+    fixture.input.terminalState = {
+      ...fixture.input.terminalState,
+      outcome: {
+        ...fixture.input.terminalState.outcome,
+        providerStarted: true,
+      },
+    };
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome).toMatchObject({
+      action: "retry",
+      lastRetryFailoverReason: "timeout",
+    });
+    expect(controller.transientRetryCount).toBe(1);
+    expect(backoffMocks.sleepWithAbort).toHaveBeenCalledOnce();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider: "anthropic",
+        model: "mock-1",
+        result: "same_model_transient",
+        stage: "assistant",
+      },
+    ]);
+  });
+
+  it("does not treat a genuine model-not-found as an idle-timeout same-model retry", async () => {
+    const controller = createRealFailoverRetryController();
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage: "404 model not found",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.emptyErrorRetries = 0;
+    fixture.input.maybeRetryTransient = controller.maybeRetryTransient;
+    fixture.input.getTransientRetryCount = () => controller.transientRetryCount;
+    const advanceAuthProfile = vi.fn(async () => false);
+    fixture.input.advanceAuthProfile = advanceAuthProfile;
+    fixture.advanceAuthProfile = advanceAuthProfile;
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValueOnce(
+      "model_not_found",
+    );
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+      provider: "anthropic",
+      model: "mock-1",
+    });
+
+    expect(controller.transientRetryCount).toBe(0);
+    expect(backoffMocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+  });
 
   it.each(["HTTP 429 Too Many Requests", INCOMPLETE_TERMINAL_STREAM_MESSAGE])(
     "does not route a caller timeout with %s through failover",
