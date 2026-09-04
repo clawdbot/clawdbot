@@ -1025,7 +1025,9 @@ describe("Gateway steer FIFO", () => {
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
       const currentSteer = currentUserInput(fixture.modelServer.requests[1]);
       expect(currentSteer).toContain("QUEUED_STEER_DOCUMENT");
-      expect(currentSteer).toContain('<file name="notes.txt" mime="text/plain">');
+      // The media store persists uploads as `<original>---<mediaId><ext>`, so
+      // the extracted block carries the stored name, matching reply dispatch.
+      expect(currentSteer).toMatch(/<file name="notes---[0-9a-f-]+\.txt" mime="text\/plain">/);
       expect(currentSteer).toContain("steered document body");
       await waitForRunTerminal(fixture, first.runId);
     },
