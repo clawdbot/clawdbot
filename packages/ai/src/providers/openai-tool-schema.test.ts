@@ -1,4 +1,5 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
+import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
@@ -60,6 +61,45 @@ describe("OpenAI strict tool schema normalization", () => {
       ...schema,
       properties: { ["__proto__"]: { type: "object", properties: {}, required: [] } },
     });
+  });
+
+  it.each(["anyOf", "oneOf"])(
+    "preserves variant-only literal properties when flattening %s",
+    (unionKey) => {
+      const properties = {
+        ["__proto__"]: { type: "string", minLength: 1 },
+        constructor: { type: "integer" },
+        toString: { type: "boolean" },
+      };
+      const required = ["__proto__", "constructor", "toString"];
+      const schema = {
+        [unionKey]: [
+          { type: "object", properties, required },
+          { type: "object", properties: { ["__proto__"]: { type: "string" } }, required },
+        ],
+        additionalProperties: false,
+      };
+
+      deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), {
+        type: "object",
+        properties,
+        required,
+        additionalProperties: false,
+      });
+      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+    },
+  );
+
+  it("preserves literal metadata when removing OpenAPI annotations", () => {
+    const schema = {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+      ["__proto__"]: { type: "array" },
+    };
+
+    expect(normalizeStrictOpenAIJsonSchema({ ...schema, nullable: false })).toStrictEqual(schema);
   });
 
   it("repairs top-level object schemas with missing or invalid properties", () => {
