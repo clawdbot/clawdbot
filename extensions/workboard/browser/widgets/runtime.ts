@@ -4,7 +4,13 @@ import { formatUiError } from "../lib/format-error.ts";
 import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../lib/workboard/card-state.ts";
 import { moveWorkboardCard } from "../lib/workboard/mutations.ts";
 import { normalizeCardsPayload } from "../lib/workboard/normalization.ts";
-import { getWorkboardState } from "../lib/workboard/runtime.ts";
+import {
+  getWorkboardRuntime,
+  getWorkboardState,
+  isCurrentWorkboardLoadGeneration,
+  nextWorkboardLoadGeneration,
+  workboardHasActiveWrites,
+} from "../lib/workboard/runtime.ts";
 import {
   WORKBOARD_CHANGED_EVENT,
   type WorkboardCard,
@@ -28,9 +34,76 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
   let runtime = runtimes.get(host);
   if (!runtime) {
     let disposed = false;
-    let generation = 0;
-    let pending = false;
+    let pending: { error: string | null } | null = null;
     let load: Promise<void> | null = null;
+    async function runPendingRefresh(): Promise<void> {
+      if (!pending || disposed || !current.connected) {
+        return;
+      }
+      if (load) {
+        return load;
+      }
+      const owner = current.owner;
+      const state = getWorkboardState(owner);
+      const workboardRuntime = getWorkboardRuntime(owner);
+      if (workboardHasActiveWrites(state)) {
+        return;
+      }
+      const isCurrent = () => !disposed && current.owner === owner;
+      const run = (async () => {
+        while (pending && isCurrent() && current.connected && !workboardHasActiveWrites(state)) {
+          const request = pending;
+          pending = null;
+          current.loading = true;
+          // Mutations invalidate this owner generation before writing, fencing older snapshots.
+          const loadGeneration = nextWorkboardLoadGeneration(owner);
+          const isCurrentLoad = () =>
+            isCurrent() && isCurrentWorkboardLoadGeneration(owner, loadGeneration);
+          // A deferred request must preserve newer write failures; read failures can recover.
+          if (state.error === request.error || state.error === workboardRuntime.loadError) {
+            state.error = null;
+          }
+          delete workboardRuntime.loadError;
+          current.notify();
+          try {
+            const snapshot = normalizeCardsPayload(
+              await current.client.request("workboard.cards.list", {}),
+            );
+            if (!isCurrentLoad()) {
+              continue;
+            }
+            state.cards = snapshot.cards;
+            state.statuses = snapshot.statuses;
+            state.loaded = true;
+            state.loadAttempted = true;
+            state.mutationReadiness = "ready";
+          } catch (error) {
+            if (isCurrentLoad() && state.error === null) {
+              workboardRuntime.loadError = formatUiError(error);
+              state.error = workboardRuntime.loadError;
+            }
+          } finally {
+            if (isCurrent()) {
+              current.loading = false;
+              current.notify();
+            }
+          }
+        }
+      })();
+      load = run;
+      try {
+        await run;
+      } finally {
+        if (load === run) {
+          load = null;
+          // A write can settle after the loop defers but before this promise detaches.
+          // Its notification still saw the old load; resume the retained request here too.
+          if (pending) {
+            void runPendingRefresh();
+          }
+        }
+      }
+    }
     const current: WorkboardWidgetRuntime = {
       owner: {},
       client: createWorkboardClient(host),
@@ -41,62 +114,19 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         for (const notify of current.listeners) {
           notify();
         }
+        if (pending && !load) {
+          void runPendingRefresh();
+        }
       },
       async refresh() {
         if (disposed || !current.connected) {
           return;
         }
-        pending = true;
-        if (load) {
-          return load;
-        }
-        const epoch = generation;
-        const isCurrent = () => !disposed && epoch === generation;
-        const run = (async () => {
-          while (pending && isCurrent() && current.connected) {
-            pending = false;
-            current.loading = true;
-            const state = getWorkboardState(current.owner);
-            // Clear the previous outcome before loading; completion must preserve newer failures.
-            state.error = null;
-            current.notify();
-            try {
-              const snapshot = normalizeCardsPayload(
-                await current.client.request("workboard.cards.list", {}),
-              );
-              if (!isCurrent()) {
-                return;
-              }
-              state.cards = snapshot.cards;
-              state.statuses = snapshot.statuses;
-              state.loaded = true;
-              state.loadAttempted = true;
-              state.mutationReadiness = "ready";
-            } catch (error) {
-              if (!isCurrent()) {
-                return;
-              }
-              state.error = formatUiError(error);
-            } finally {
-              if (isCurrent()) {
-                current.loading = false;
-                current.notify();
-              }
-            }
-          }
-        })();
-        load = run;
-        try {
-          await run;
-        } finally {
-          if (load === run) {
-            load = null;
-          }
-        }
+        pending = { error: getWorkboardState(current.owner).error };
+        return runPendingRefresh();
       },
       dispose() {
         disposed = true;
-        generation += 1;
         stopHost();
         stopEvents();
         current.listeners.clear();
@@ -105,9 +135,8 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
     const stopHost = host.subscribe(() => {
       if (current.connected !== host.connection.connected) {
         current.connected = host.connection.connected;
-        generation += 1;
         load = null;
-        pending = false;
+        pending = null;
         current.owner = {};
         current.loading = false;
         if (current.connected) {

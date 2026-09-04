@@ -624,11 +624,19 @@ describe("selection reconciliation", () => {
         page.container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value;
       const pendingNotes =
         page.container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value;
+      const pendingBusy = form().getAttribute("aria-busy");
+      const enabledControls = [
+        ...form().querySelectorAll(
+          "input:enabled, textarea:enabled, select:enabled, button:enabled",
+        ),
+      ];
       pending.reject(new Error("Save unavailable; retry this edit."));
       await vi.waitFor(() => expect(page.workboard.state.draftSaving).toBe(false));
 
       expect(pendingTitle).toBe("Submitted task");
       expect(pendingNotes).toBe("Keep these unsaved notes");
+      expect(pendingBusy).toBe("true");
+      expect(enabledControls).toHaveLength(0);
       const alert = expectDefined(form().querySelector('[role="alert"]'), "retry guidance");
       expect(alert.textContent).toBe("Save unavailable; retry this edit.");
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginImportFixture,
   unresolvedPluginImportCases,
@@ -11,6 +11,7 @@ import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-contro
 
 const directories: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
@@ -49,6 +50,7 @@ describe("native plugin browser builds", () => {
     await writePluginBuildManifest(project.rootDir, { id: "fixture", controlUi: first });
     expect(first.entry).toMatch(/^dist\/control-ui\/[a-f0-9]{64}\/index.js$/u);
     expect(first.styles).toHaveLength(1);
+    expect(await buildPluginControlUi(project)).toEqual(first);
     expect(await buildPluginControlUi({ ...project, check: true })).toEqual(first);
     const built = await import(pathToFileURL(path.join(project.rootDir, first.entry)).href);
     expect(await built.loadDependencies("value")).toEqual([
@@ -70,6 +72,24 @@ describe("native plugin browser builds", () => {
       JSON.parse(await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8"))
         .controlUi,
     ).toEqual(first);
+  });
+
+  it("reuses a Windows build collision only when every asset matches", async () => {
+    const project = await fixture();
+    const first = await buildPluginControlUi(project);
+    const collision = Object.assign(new Error("directory already exists"), { code: "EPERM" });
+    vi.spyOn(fs, "rename").mockRejectedValue(collision);
+
+    expect(await buildPluginControlUi(project)).toEqual(first);
+    const stylesheet = path.join(project.rootDir, first.styles![0]);
+    await fs.writeFile(stylesheet, ".tampered {}");
+    await expect(buildPluginControlUi(project)).rejects.toThrow(
+      "immutable Control UI build was modified",
+    );
+    expect(await fs.readFile(stylesheet, "utf8")).toBe(".tampered {}");
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(first.entry)),
+    ]);
   });
 
   it("bundles browser-safe primitive SDK exports", async () => {

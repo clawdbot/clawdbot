@@ -114,7 +114,11 @@ export async function buildPluginControlUi(params: {
     try {
       await fs.rename(staging, outputDir);
     } catch (error) {
-      if (!(isRecord(error) && (error.code === "EEXIST" || error.code === "ENOTEMPTY"))) {
+      // Windows reports an existing destination directory as EPERM; reuse still requires matching bytes.
+      if (
+        !isRecord(error) ||
+        (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM")
+      ) {
         throw error;
       }
       for (const file of files) {

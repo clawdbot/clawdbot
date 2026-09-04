@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import { renderAgentPicker, renderDialog } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -288,7 +289,7 @@ export function renderCardModal(props: WorkboardProps) {
                 autofocus
                 placeholder=${t("workboard.titlePlaceholder")}
                 ?disabled=${draftActionsBusy}
-                .value=${state.draftTitle}
+                .value=${live(state.draftTitle)}
               />
             </label>
             <label class="workboard-field">
@@ -297,7 +298,7 @@ export function renderCardModal(props: WorkboardProps) {
                 class="input workboard-draft__notes"
                 placeholder=${t("workboard.notesPlaceholder")}
                 ?disabled=${draftActionsBusy}
-                .value=${state.draftNotes}
+                .value=${live(state.draftNotes)}
               ></textarea>
             </label>
           </div>
@@ -354,7 +355,7 @@ export function renderCardModal(props: WorkboardProps) {
                 class="input workboard-draft__labels"
                 placeholder=${t("workboard.labelsPlaceholder")}
                 ?disabled=${draftActionsBusy}
-                .value=${state.draftLabels}
+                .value=${live(state.draftLabels)}
               />
             </label>
           </div>

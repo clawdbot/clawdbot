@@ -1843,24 +1843,55 @@ describe("renderWorkboard", () => {
     },
   );
 
-  it("applies card templates in the create modal", () => {
+  it("reapplies card templates after editing their text fields", async () => {
+    const client = createWorkboardTestClient({
+      "workboard.cards.create": { card: createWorkboardCard({ title: "Release: " }) },
+    });
     const { state, container, renderView } = createWorkboardView({
+      client,
       onRequestUpdate: () => undefined,
     });
     state.draftOpen = true;
     renderView();
-    [...container.querySelectorAll<HTMLButtonElement>(".workboard-template-strip .btn")]
-      .find((button) => button.textContent?.includes("Release"))
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const template = expectDefined(buttonByText(container, "Release"), "release template");
+    const fields = [
+      [".workboard-draft__title", "Release: "],
+      [".workboard-draft__notes", "Scope:\nVerification:\nCloseout:"],
+      [".workboard-draft__labels", "release"],
+    ] as const;
+    template.click();
     renderView();
+    for (const [selector, value] of fields) {
+      const input = expectDefined(
+        container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector),
+        selector,
+      );
+      expect(input.value).toBe(value);
+      input.value = `Edited ${value}`;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    }
 
-    expect(state.draftTemplateId).toBe("release");
-    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
-      "Release: ",
+    template.click();
+    renderView();
+    for (const [selector, value] of fields) {
+      expect(container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value).toBe(
+        value,
+      );
+    }
+    container
+      .querySelector<HTMLFormElement>(".workboard-draft")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await waitForFast(() => expect(state.draftOpen).toBe(false));
+    expect(client.request).toHaveBeenCalledExactlyOnceWith(
+      "workboard.cards.create",
+      expect.objectContaining({
+        title: "Release: ",
+        notes: "Scope:\nVerification:\nCloseout:",
+        labels: ["release"],
+        priority: "urgent",
+        templateId: "release",
+      }),
     );
-    expect(
-      container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value,
-    ).toContain("Verification:");
   });
 
   it("renders card event history", () => {

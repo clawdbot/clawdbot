@@ -216,48 +216,139 @@ it("recovers every shared widget after a failed move when the operator retries",
   expect(move).toHaveBeenCalledTimes(2);
 });
 
-it("keeps a newer mutation failure visible when an older widget refresh succeeds", async () => {
-  const refreshed = createDeferred<unknown>();
-  let listCount = 0;
-  const { fixture, mount } = setup(
-    vi.fn(async (method: string) => {
-      if (method === "workboard.cards.move") {
-        throw new Error("Move temporarily unavailable");
-      }
-      return ++listCount === 1 ? snapshot() : refreshed.promise;
-    }),
-  );
-  const card = mount("card", { cardId: "ready" });
-  await vi.waitFor(() => expect(card.container.querySelector("select")).not.toBeNull());
-  const lease = acquireWidgetRuntime(fixture.host, () => {});
-  disposers.push(() => lease.release());
-  const refresh = lease.runtime.refresh();
-  changeStatus(card.container);
-  await vi.waitFor(() =>
-    expect(card.container.textContent).toContain("Move temporarily unavailable"),
-  );
-  refreshed.resolve(snapshot());
-  await refresh;
-  expect(card.container.textContent).toContain("Move temporarily unavailable");
-  expect(card.container.querySelector("select")).toBeNull();
-});
+it.each([
+  { refreshDuringMove: false, refreshFails: false },
+  { refreshDuringMove: true, refreshFails: false },
+  { refreshDuringMove: false, refreshFails: true },
+  { refreshDuringMove: true, refreshFails: true },
+])(
+  "keeps a newer mutation failure visible (refresh during move: $refreshDuringMove, refresh fails: $refreshFails)",
+  async ({ refreshDuringMove, refreshFails }) => {
+    const refreshed = createDeferred<unknown>();
+    const move = createDeferred<unknown>();
+    let listCount = 0;
+    const { fixture, mount } = setup(
+      vi.fn(async (method: string) => {
+        if (method === "workboard.cards.move") {
+          return move.promise;
+        }
+        return ++listCount === 2 ? refreshed.promise : snapshot();
+      }),
+    );
+    const card = mount("card", { cardId: "ready" });
+    await vi.waitFor(() => expect(card.container.querySelector("select")).not.toBeNull());
+    const lease = acquireWidgetRuntime(fixture.host, () => {});
+    disposers.push(() => lease.release());
+    const refresh = refreshDuringMove ? null : lease.runtime.refresh();
+    changeStatus(card.container);
+    const duringMoveRefresh = refreshDuringMove ? lease.runtime.refresh() : null;
+    move.reject(new Error("Move temporarily unavailable"));
+    await vi.waitFor(() => expect(listCount).toBe(2));
+    if (refreshFails) {
+      refreshed.reject(new Error("List temporarily unavailable"));
+    } else {
+      refreshed.resolve(snapshot());
+    }
+    await Promise.all([refresh, duringMoveRefresh]);
+    await vi.waitFor(() => expect(lease.runtime.loading).toBe(false));
+    expect(card.container.textContent).toContain("Move temporarily unavailable");
+    expect(card.container.querySelector("select")).toBeNull();
 
-it("refreshes every widget after a change during an older pending list", async () => {
-  const firstList = createDeferred<unknown>();
-  const request = vi.fn(async () =>
-    request.mock.calls.length === 1 ? firstList.promise : snapshot(),
-  );
-  const { fixture, mount } = setup(request);
-  const mini = mount("mini", {});
-  const card = mount("card", { cardId: "ready" });
-  fixture.emit("plugin.workboard.changed", {});
-  firstList.resolve(snapshot([]));
-  await vi.waitFor(() => {
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(mini.container.textContent).toContain("Ready card");
-    expect(card.container.textContent).toContain("Ready card");
-  });
-});
+    card.container.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(card.container.querySelector("select")?.value).toBe("ready"));
+    expect(card.container.querySelector('[role="alert"]')).toBeNull();
+    expect(listCount).toBe(3);
+  },
+);
+
+it.each([
+  { kind: "card", refreshDuringMove: false },
+  { kind: "board", refreshDuringMove: false },
+  { kind: "card", refreshDuringMove: true },
+  { kind: "board", refreshDuringMove: true },
+] as const)(
+  "preserves an acknowledged $kind move across shared widgets (refresh during move: $refreshDuringMove)",
+  async ({ kind, refreshDuringMove }) => {
+    const refreshed = createDeferred();
+    const move = createDeferred<unknown>();
+    let persistedCards = cards;
+    let listCount = 0;
+    const { fixture, request, mount } = setup(
+      vi.fn(async (method: string) => {
+        if (method === "workboard.cards.move") {
+          return move.promise;
+        }
+        const listed = snapshot(persistedCards);
+        if (++listCount > 1) {
+          await refreshed.promise;
+        }
+        return listed;
+      }),
+    );
+    const card = mount("card", { cardId: "ready" });
+    const board = mount("board", {});
+    const mini = mount("mini", {});
+    await vi.waitFor(() => expect(card.container.querySelector("select")).not.toBeNull());
+    const lease = acquireWidgetRuntime(fixture.host, () => {});
+    disposers.push(() => lease.release());
+    const refresh = refreshDuringMove ? null : lease.runtime.refresh();
+
+    changeStatus((kind === "card" ? card : board).container);
+    expect(request).toHaveBeenLastCalledWith("workboard.cards.move", {
+      id: "ready",
+      status: "running",
+      position: 3000,
+    });
+    const duringMoveRefresh = refreshDuringMove ? lease.runtime.refresh() : null;
+    const movedCard = createWorkboardCard({ ...cards[0], status: "running", position: 3000 });
+    persistedCards = [...cards.slice(1), movedCard];
+    move.resolve({ card: movedCard });
+    const expectAcknowledgedMove = () => {
+      expect(card.container.querySelector("select")?.value).toBe("running");
+      expect(
+        [...board.container.querySelectorAll(".workboard-column--running .workboard-card h3")].map(
+          (title) => title.textContent,
+        ),
+      ).toEqual(["Running card", "Ready card"]);
+      expect(
+        [...mini.container.querySelectorAll(".workboard-widget-mini__card strong")].map(
+          (title) => title.textContent,
+        ),
+      ).toEqual(["Running card", "Ready card"]);
+    };
+    await vi.waitFor(expectAcknowledgedMove);
+    await vi.waitFor(() => expect(listCount).toBe(2));
+
+    refreshed.resolve();
+    await Promise.all([refresh, duringMoveRefresh]);
+    await vi.waitFor(() => expect(lease.runtime.loading).toBe(false));
+    expectAcknowledgedMove();
+  },
+);
+
+it.each(["success", "failure"] as const)(
+  "refreshes every widget after a change during an older pending list (%s)",
+  async (outcome) => {
+    const firstList = createDeferred<unknown>();
+    const request = vi.fn(async () =>
+      request.mock.calls.length === 1 ? firstList.promise : snapshot(),
+    );
+    const { fixture, mount } = setup(request);
+    const mini = mount("mini", {});
+    const card = mount("card", { cardId: "ready" });
+    fixture.emit("plugin.workboard.changed", {});
+    if (outcome === "success") {
+      firstList.resolve(snapshot([]));
+    } else {
+      firstList.reject(new Error("List temporarily unavailable"));
+    }
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(mini.container.textContent).toContain("Ready card");
+      expect(card.container.textContent).toContain("Ready card");
+    });
+  },
+);
 
 it("preserves a current queued refresh when an older connection completes", async () => {
   const oldList = createDeferred<unknown>();
