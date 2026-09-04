@@ -404,6 +404,41 @@ describe("progress narration through reply options", () => {
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
+  it("narrates a tool burst buffered during an active generation without another event", async () => {
+    const started = createDeferred();
+    const firstGeneration = createDeferred<string>();
+    let generationCount = 0;
+    const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
+      generate: async () => {
+        if (++generationCount === 1) {
+          started.resolve();
+          return await firstGeneration.promise;
+        }
+        return "Checking the later files.";
+      },
+    });
+
+    narrator.noteToolStart({ name: "read", phase: "start", args: { path: "first.txt" } });
+    await started.promise;
+    for (let index = 0; index < 4; index += 1) {
+      narrator.noteToolStart({
+        name: "read",
+        phase: "start",
+        args: { path: `later-${index}.txt` },
+      });
+    }
+    expect(generate).toHaveBeenCalledOnce();
+
+    firstGeneration.resolve("Inspecting the first file.");
+    await flushNarrations();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(inputs[1]?.activityNotes).toContain('Tool read: {"path":"later-3.txt"}');
+    await vi.waitFor(() =>
+      expect(onUpdate).toHaveBeenLastCalledWith({ text: "Checking the later files." }),
+    );
+  });
+
   it("re-narrates after the interval with a single new event", async () => {
     let nowMs = 0;
     const { narrator, generate } = createNarratorHarness({ now: () => nowMs });
