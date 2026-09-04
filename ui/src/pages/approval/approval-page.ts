@@ -8,7 +8,6 @@ import {
   validateApprovalResolveResult,
   type ApprovalDecision,
   type ApprovalGetResult,
-  type ApprovalPresentation,
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
@@ -23,6 +22,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { renderApprovalPresentation } from "./approval-presentation.ts";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
@@ -74,15 +74,6 @@ function appliedDecisionMatches(
     : result.approval.status === "allowed" && result.approval.decision === decision;
 }
 
-function renderMetaRow(label: string, value?: string | null) {
-  return value
-    ? html`<div class="approval-page__meta-row">
-        <dt>${label}</dt>
-        <dd title=${value}><bdi dir="ltr">${value}</bdi></dd>
-      </div>`
-    : nothing;
-}
-
 function renderApprovalChip(kind: "plugin" | "tool" | "agent", value?: string | null) {
   const text = value?.trim();
   return text
@@ -90,35 +81,6 @@ function renderApprovalChip(kind: "plugin" | "tool" | "agent", value?: string | 
     : nothing;
 }
 
-function renderPresentation(presentation: ApprovalPresentation) {
-  if (presentation.kind === "exec") {
-    return html`
-      ${presentation.warningText
-        ? html`<div class="approval-page__warning" role="note">${presentation.warningText}</div>`
-        : nothing}
-      ${presentation.commandPreview
-        ? html`
-            <div class="approval-page__preview-label">${t("approvalPage.summaryLabel")}</div>
-            <div class="approval-page__summary mono" dir="ltr">${presentation.commandPreview}</div>
-          `
-        : nothing}
-      <div class="approval-page__preview-label">${t("approvalPage.commandLabel")}</div>
-      <pre class="approval-page__preview mono" dir="ltr">${presentation.commandText}</pre>
-      <dl class="approval-page__meta">
-        ${renderMetaRow(t("execApproval.labels.host"), presentation.host)}
-        ${renderMetaRow(t("approvalPage.nodeLabel"), presentation.nodeId)}
-      </dl>
-    `;
-  }
-  const previewClass = "approval-page__preview approval-page__preview--prose";
-  return html`
-    <div class="approval-page__preview-label">${t("approvalPage.requestLabel")}</div>
-    <div class=${previewClass}>${presentation.description}</div>
-    ${presentation.kind === "plugin" && presentation.detail
-      ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
-      : nothing}
-  `;
-}
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
@@ -622,15 +584,17 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <div class="approval-page__heading">
         <h1 id="approval-page-title" tabindex=${pending ? nothing : -1}>${title}</h1>
         <div class="approval-page__chips">
-          ${presentation.kind === "plugin"
-            ? html`${renderApprovalChip("plugin", presentation.pluginId)}
-              ${renderApprovalChip("tool", presentation.toolName)}`
-            : nothing}
+          ${
+            presentation.kind === "plugin"
+              ? html`${renderApprovalChip("plugin", presentation.pluginId)}
+                ${renderApprovalChip("tool", presentation.toolName)}`
+              : nothing
+          }
           ${renderApprovalChip("agent", presentation.agentId)}
         </div>
         <p>${statusDescription}</p>
       </div>
-      ${renderPresentation(presentation)}
+      ${renderApprovalPresentation(presentation)}
       <div class="approval-page__timing">
         <span>${pending ? t("approvalPage.expiresLabel") : t("approvalPage.resolvedLabel")}</span>
         <time
@@ -640,38 +604,46 @@ export class ApprovalPage extends OpenClawLightDomElement {
         </time>
       </div>
       ${this.requestError === "connection" ? this.renderConnectionError() : nothing}
-      ${pending
-        ? html`
-            <div
-              class="approval-page__actions"
-              role="group"
-              aria-label=${t("approvalPage.actionsLabel")}
-            >
-              ${presentation.allowedDecisions.map(
-                (decision) => html`
-                  <button
-                    type="button"
-                    class="btn approval-page__action approval-page__action--${decision}"
-                    data-decision=${decision}
-                    ?disabled=${this.resolving ||
-                    !this.hasGatewayConnection ||
-                    !canGrant ||
-                    this.requestError !== null}
-                    @click=${() => void this.resolveApproval(decision)}
-                  >
-                    ${this.resolvingDecision === decision
-                      ? t("approvalPage.resolvingDecision", { decision: decisionLabel(decision) })
-                      : decisionLabel(decision)}
-                  </button>
-                `,
-              )}
-            </div>
-          `
-        : html`
-            <div class="approval-page__terminal" role="status">
-              ${t("approvalPage.safeToClose")}
-            </div>
-          `}
+      ${
+        pending
+          ? html`
+              <div
+                class="approval-page__actions"
+                role="group"
+                aria-label=${t("approvalPage.actionsLabel")}
+              >
+                ${presentation.allowedDecisions.map(
+                  (decision) => html`
+                    <button
+                      type="button"
+                      class="btn approval-page__action approval-page__action--${decision}"
+                      data-decision=${decision}
+                      ?disabled=${
+                        this.resolving ||
+                        !this.hasGatewayConnection ||
+                        !canGrant ||
+                        this.requestError !== null
+                      }
+                      @click=${() => void this.resolveApproval(decision)}
+                    >
+                      ${
+                        this.resolvingDecision === decision
+                          ? t("approvalPage.resolvingDecision", {
+                              decision: decisionLabel(decision),
+                            })
+                          : decisionLabel(decision)
+                      }
+                    </button>
+                  `,
+                )}
+              </div>
+            `
+          : html`
+              <div class="approval-page__terminal" role="status">
+                ${t("approvalPage.safeToClose")}
+              </div>
+            `
+      }
     `;
   }
 
@@ -705,15 +677,17 @@ export class ApprovalPage extends OpenClawLightDomElement {
         >
           ${this.renderHeader()}
           <div class="approval-page__content">
-            ${missingScope
-              ? this.renderMissingScope()
-              : this.loading && !this.approval
-                ? this.renderLoading()
-                : disconnected
-                  ? this.renderConnectionState()
-                  : unavailable || !this.approval
-                    ? this.renderUnavailable()
-                    : this.renderApproval(this.approval)}
+            ${
+              missingScope
+                ? this.renderMissingScope()
+                : this.loading && !this.approval
+                  ? this.renderLoading()
+                  : disconnected
+                    ? this.renderConnectionState()
+                    : unavailable || !this.approval
+                      ? this.renderUnavailable()
+                      : this.renderApproval(this.approval)
+            }
           </div>
         </section>
         <a class="approval-page__back-link" href=${`${this.context.basePath}/chat`}>

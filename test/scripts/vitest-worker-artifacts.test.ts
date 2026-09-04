@@ -7,7 +7,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { describe, expect, vi } from "vitest";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+import { parseCLI } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
   isVitestWorkerDeclaration,
@@ -18,7 +19,7 @@ import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { createDeferred } from "../helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
   createWorkerArtifactTest,
@@ -487,22 +488,45 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }),
   );
 
-  it("observes readiness when borrower completion wins the file-watch event", ({
-    workerArtifacts,
-  }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const filename = path.join(workerArtifacts.fixtureDirectory(), "ready");
-      const { promise: completion, resolve: finish } = createDeferred();
-      let ready = false;
-      const waiting = waitForFixtureFile(filename, completion).then(() => {
-        ready = true;
-      });
-      fs.writeFileSync(filename, "ready");
-      finish();
-      await nextTurn();
-      expect(ready).toBe(true);
-      await waiting;
-    }));
+  it.for(["borrower completion", "persistent file"] as const)(
+    "observes readiness from %s without a file-watch event",
+    { concurrent: false },
+    (observation, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const filename = path.join(workerArtifacts.fixtureDirectory(), "ready");
+        const { promise: completion, resolve: finish } = createDeferred();
+        const watchFile = fs.watchFile;
+        // A successful initial stat establishes a baseline without notifying Node's
+        // watchFile listener. A receipt created during that stat must still be seen.
+        const watcher = vi
+          .spyOn(fs, "watchFile")
+          .mockImplementation((target, ...args) =>
+            target === filename
+              ? watchFile(filename, { interval: 50 }, () => {})
+              : watchFile(target, ...args),
+          );
+        let ready = false;
+        const waiting = waitForFixtureFile(filename, completion).then(() => {
+          ready = true;
+        });
+        try {
+          fs.writeFileSync(filename, "ready");
+          if (observation === "borrower completion") {
+            finish();
+            await nextTurn();
+            expect(ready).toBe(true);
+          }
+          await withTestTimeout(waiting, 10_000, "Persistent readiness was not observed");
+          expect(ready).toBe(true);
+        } finally {
+          finish();
+          await waiting.finally(() => {
+            fs.unwatchFile(filename);
+            watcher.mockRestore();
+          });
+        }
+      }),
+  );
 
   it("keeps standalone configured Vitest on source without a subprocess owner", ({
     workerArtifacts,
@@ -755,13 +779,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: false },
+    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
     { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
-  ])("classifies metadata requests for $args", ({ args, metadata }) => {
-    expect(isVitestWorkerMetadataRequest(args)).toBe(metadata);
+    { args: ["--browser.headless", "run", "--version"], metadata: false },
+    { args: ["--browser.headless", "--version"], metadata: true },
+  ])("classifies native execution requests for $args", ({ args, metadata }) => {
+    const execution = parseVitestExecutionArgs(args, parseCLI);
+    expect(execution === null).toBe(metadata);
+    if (!metadata) {
+      expect(execution?.filter).toEqual(parseCLI(["vitest", ...args]).filter);
+    }
   });
 
   it("shares one lazy build across projects and supports Promise config factories with the runner loader", ({
@@ -1160,7 +1190,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default {plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
     `,
       );
       const handle = spawnWatchedVitestProcess({

@@ -3,7 +3,6 @@
  */
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   parseReplyDirectives,
@@ -16,7 +15,6 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
-  AssistantStreamData,
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
@@ -229,12 +227,7 @@ export function emitAssistantCommentaryStreamData(
       ? itemId
       : resolveAssistantStreamItemId({ message });
     ctx.emitAssistantStreamData(
-      buildAssistantStreamData({
-        text,
-        replace: true,
-        phase: "commentary",
-        itemId: commentaryItemId,
-      }),
+      { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
       { finalMessage },
     );
   }
@@ -244,6 +237,7 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
   }
+  ctx.flushAssistantStream();
   ctx.state.reasoningStreamOpen = false;
   runBestEffortCallback({
     label: "reasoning end",
@@ -253,6 +247,7 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
 }
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
+  ctx.flushAssistantStream();
   runBestEffortCallback({
     label: "assistant message start",
     log: ctx.log,
@@ -261,6 +256,9 @@ export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
 }
 
 export function openReasoningStream(ctx: EmbeddedAgentSubscribeContext) {
+  if (!ctx.state.reasoningStreamOpen) {
+    ctx.flushAssistantStream();
+  }
   ctx.state.reasoningStreamOpen = true;
 }
 
@@ -396,20 +394,5 @@ export function resolveStreamingReply(params: {
     delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
     replace,
     hasText: Boolean(isAppend ? text : text.trim()),
-  };
-}
-
-export function buildAssistantStreamData(
-  params: Partial<Omit<AssistantStreamData, "replace">> & { replace?: boolean; mediaUrl?: string },
-): AssistantStreamData {
-  const mediaUrls = resolveSendableOutboundReplyParts(params, { text: "" }).mediaUrls;
-  return {
-    text: params.text ?? "",
-    delta: params.delta ?? "",
-    replace: params.replace ? true : undefined,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    managedMediaUrls: params.managedMediaUrls?.length ? params.managedMediaUrls : undefined,
-    phase: params.phase,
-    itemId: params.itemId,
   };
 }

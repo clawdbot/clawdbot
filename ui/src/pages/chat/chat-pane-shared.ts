@@ -1,11 +1,11 @@
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -17,6 +17,7 @@ export type PaneSessionHandoff = {
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
+  mentions?: readonly HumanMention[];
   restore?: boolean;
   send?: boolean;
   storageFailed?: boolean;
@@ -164,20 +165,9 @@ export type ResolvedBoardView = {
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  dock: BoardTab["chatDock"];
-  reopenDock: BoardVisibleChatDock;
 };
 
-export const boardChatDockLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.board-chat-dock.v1",
-  minHeight: 180,
-  minWidth: 320,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "left", "right"],
-  defaultHeight: 320,
-  defaultWidth: 420,
-});
-
+export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // One distance owns both halves of early history loading: upward intent within
 // this range arms the sentinel observer, and the observer's rootMargin fires
 // the same distance out. Splitting them re-creates the wall at the smaller value.
@@ -186,6 +176,32 @@ export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 export const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
+
+export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
+  const record = catalogRawRecord(raw);
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+export function catalogRawResult(raw: unknown): string | null {
+  const result = catalogRawRecord(raw)?.result;
+  if (result === undefined) {
+    return null;
+  }
+  try {
+    const text = JSON.stringify(result);
+    return text || null;
+  } catch {
+    return null;
+  }
+}
 
 export type ChatPaneConnectionScope = {
   context: ChatPageContext;

@@ -30,13 +30,18 @@ export function useChatAbortRegistryFixture() {
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     await writeFile(
       path.join(stateDir, "openclaw.json"),
-      JSON.stringify({ agents: { defaults: { workspace: stateDir } } }),
+      JSON.stringify({
+        agents: { defaults: { workspace: stateDir } },
+        browser: { enabled: false },
+      }),
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
     // Supply the real ESM owner through the existing CJS runtime seam.
     setTaskRegistryControlRuntimeForTests(taskControlRuntime);
     testing.setDepsForTest({
+      // These cancellation fixtures own no browser sessions; browser cleanup has its own tests.
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
       loadAgentRuntimePluginRegistryHandle: () => undefined,
       resolveContextEngine: async () => new LegacyContextEngine(),
       callGateway: async ({ method }) => {
@@ -48,18 +53,21 @@ export function useChatAbortRegistryFixture() {
     });
   });
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    resetTaskRegistryControlRuntimeForTests();
-    await cleanupSessionStateForTest({ stateDir });
-    testing.setDepsForTest();
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    await rm(stateDir, { recursive: true, force: true });
-    env.restore();
+    try {
+      await settleSubagentRegistryPersistenceWork();
+      resetSubagentRegistryForTests({ persist: false });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      schedulerTesting.reset();
+      resetTaskRegistryControlRuntimeForTests();
+      await cleanupSessionStateForTest({ stateDir });
+      testing.setDepsForTest();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await rm(stateDir, { recursive: true, force: true });
+    } finally {
+      env.restore();
+    }
   });
 
   return {

@@ -49,8 +49,21 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it("includes heartbeat preflight reasons without verbose opt-in", () => {
+    const message =
+      "Codex session became active in another runner; wait for it to finish before continuing";
+    const reply = buildExternalRunFailureReply(
+      { message, error: new AgentHarnessPreflightError(message) },
+      { isHeartbeat: true },
+    );
+
+    expect(reply.text).toContain(message);
+    expect(reply.isGenericRunnerFailure).toBe(false);
+    expect(reply.text).not.toContain("/new");
+  });
+
   it.each(["401 unauthorized", "529 overloaded", "503 service unavailable", "402 billing"])(
-    "keeps preflight %s diagnostics behind verbose opt-in",
+    "keeps preflight %s diagnostics verbose-gated except for heartbeats",
     (failure) => {
       const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
       const input = {
@@ -77,14 +90,20 @@ describe("buildExternalRunFailureReply", () => {
         isHeartbeat: true,
         includeDetails: true,
       });
-      expect(heartbeat.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+      expect(heartbeat.isGenericRunnerFailure).toBe(false);
+      expect(heartbeat.text).toBe(
+        `⚠️ Heartbeat check failed before it could produce an update: ${message.slice(0, 899)}…. The main chat session remains available.`,
+      );
+      expect(heartbeat.text).toContain("reconnect before continuing");
+      expect(heartbeat.text).toContain("diagnostic-canary");
+      expect(heartbeat.text).not.toContain("/new");
       expect(
         resolveExternalRunFailureTextForConversation({
           text: heartbeat.text,
           isGenericRunnerFailure: heartbeat.isGenericRunnerFailure,
           sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
         }),
-      ).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+      ).toBe(heartbeat.text);
       const verbose = buildExternalRunFailureReply(input, { includeDetails: true });
       expect(verbose.isGenericRunnerFailure).toBe(true);
       expect(verbose.text).toContain("reconnect before continuing");
@@ -94,6 +113,21 @@ describe("buildExternalRunFailureReply", () => {
       );
     },
   );
+
+  it("keeps raw heartbeat failure details behind verbose opt-in", () => {
+    const input = { message: "boom-canary", error: new Error("boom-canary") };
+    expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
+      text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: false,
+    });
+    const verbose = buildExternalRunFailureReply(input, {
+      isHeartbeat: true,
+      includeDetails: true,
+    });
+    expect(verbose.text).toContain("boom-canary");
+    expect(verbose.text).not.toContain("/new");
+    expect(verbose.isGenericRunnerFailure).toBe(false);
+  });
 
   it("forwards classified provider copy when verbose detail is off", () => {
     const message = "opaque provider response with secret-canary";

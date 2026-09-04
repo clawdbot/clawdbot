@@ -4,6 +4,20 @@ import {
 } from "./terminal-panel-session-types.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
+export async function focusTerminalSession(
+  tab: TerminalPanelSessionTab | undefined,
+  rendered: Promise<unknown>,
+): Promise<void> {
+  // Refit and repaint after the container becomes visible. A same-size tab
+  // switch otherwise leaves the newly shown canvas without dirty rows.
+  await rendered;
+  if (tab) {
+    tab.controller.fit();
+    forceTerminalRender(tab.controller);
+    tab.controller.terminal.focus();
+  }
+}
+
 export function updateTerminalSessionTheme(
   tabs: readonly TerminalPanelSessionTab[],
   themeMode: "dark" | "light",

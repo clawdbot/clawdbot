@@ -164,6 +164,51 @@ describe("full release validation evidence", () => {
     ).toThrow(/coverage policy/iu);
   });
 
+  it.each([
+    ["2026.8.28", "release/2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "v2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28-1", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28", false],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-2", false],
+    ["2026.8.28", "release/2026.8.27", "v2026.8.28", false],
+    ["2026.8.28", "main", "v2026.8.28", false],
+    ["2026.8.28", "", "v2026.8.28", false],
+    ["2026.8.33", "extended-stable/2026.8.33", "v2026.8.33", false],
+  ] as const)(
+    "binds npm stable evidence %s/%s to final publication %s",
+    (targetVersion, context, expectedReleaseTag, accepted) => {
+      const validateEvidence = () =>
+        validateFullReleaseValidationEvidence({
+          run: releaseRun({ head_branch: "main" }),
+          manifest: releaseManifest({
+            version: 4,
+            workflowRef: "main",
+            workflowFullRef: "refs/heads/main",
+            releaseProfile: "stable",
+            rerunGroup: "all",
+            runReleaseSoak: "true",
+            targetRef: context.startsWith("v") ? context : targetSha,
+            validationInputs: {
+              coveragePolicy: "npm-stable-v1",
+              targetContextRef: context.startsWith("v") ? "" : context,
+              targetVersion,
+            },
+          }),
+          expectedRepository: "openclaw/openclaw",
+          expectedRunId: "123",
+          expectedTargetSha: targetSha,
+          expectedReleaseTag,
+          isTrustedMainAncestor: () => true,
+        });
+      if (accepted) {
+        expect(validateEvidence().coveragePolicy).toBe("npm-stable-v1");
+      } else {
+        expect(validateEvidence).toThrow();
+      }
+    },
+  );
+
   it("normalizes REST and gh run metadata", () => {
     const normalized = normalizeFullReleaseValidationRun(releaseRun());
 

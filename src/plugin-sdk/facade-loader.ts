@@ -87,56 +87,47 @@ function createLazyFacadeValueLoader<T>(load: () => T): () => T {
   };
 }
 
-function createLazyFacadeProxyValue<T extends object>(params: {
-  load: () => T;
-  target: object;
-}): T {
-  const resolve = createLazyFacadeValueLoader(params.load);
-  return new Proxy(params.target, {
-    defineProperty(_target, property, descriptor) {
-      return Reflect.defineProperty(resolve(), property, descriptor);
-    },
-    deleteProperty(_target, property) {
-      return Reflect.deleteProperty(resolve(), property);
-    },
-    get(_target, property, receiver) {
-      return Reflect.get(resolve(), property, receiver);
-    },
-    getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(resolve(), property);
-    },
-    getPrototypeOf() {
-      return Reflect.getPrototypeOf(resolve());
-    },
-    has(_target, property) {
-      return Reflect.has(resolve(), property);
-    },
-    isExtensible() {
-      return Reflect.isExtensible(resolve());
-    },
-    ownKeys() {
-      return Reflect.ownKeys(resolve());
-    },
-    preventExtensions() {
-      return Reflect.preventExtensions(resolve());
-    },
-    set(_target, property, value, receiver) {
-      return Reflect.set(resolve(), property, value, receiver);
-    },
-    setPrototypeOf(_target, prototype) {
-      return Reflect.setPrototypeOf(resolve(), prototype);
-    },
-  }) as T;
-}
-
 /** Create an object proxy that loads the underlying facade only on first property access. */
 export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: {} });
-}
-
-/** Create an array proxy that loads the underlying facade only on first array access. */
-export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: [] });
+  const resolve = createLazyFacadeValueLoader(load);
+  return new Proxy(
+    {},
+    {
+      defineProperty(_target, property, descriptor) {
+        return Reflect.defineProperty(resolve(), property, descriptor);
+      },
+      deleteProperty(_target, property) {
+        return Reflect.deleteProperty(resolve(), property);
+      },
+      get(_target, property, receiver) {
+        return Reflect.get(resolve(), property, receiver);
+      },
+      getOwnPropertyDescriptor(_target, property) {
+        return Reflect.getOwnPropertyDescriptor(resolve(), property);
+      },
+      getPrototypeOf() {
+        return Reflect.getPrototypeOf(resolve());
+      },
+      has(_target, property) {
+        return Reflect.has(resolve(), property);
+      },
+      isExtensible() {
+        return Reflect.isExtensible(resolve());
+      },
+      ownKeys() {
+        return Reflect.ownKeys(resolve());
+      },
+      preventExtensions() {
+        return Reflect.preventExtensions(resolve());
+      },
+      set(_target, property, value, receiver) {
+        return Reflect.set(resolve(), property, value, receiver);
+      },
+      setPrototypeOf(_target, prototype) {
+        return Reflect.setPrototypeOf(resolve(), prototype);
+      },
+    },
+  ) as T;
 }
 
 /** Resolved public-surface module path plus the filesystem root it must stay within. */

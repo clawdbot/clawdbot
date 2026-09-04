@@ -18,6 +18,7 @@ const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
 // Cold Codex state scans can outlive the Mac node's native 60-second deadline.
@@ -37,7 +38,7 @@ const MAX_ACTIVE_FLAGS = 16;
 export const MAX_ACTION_CATALOG_PAGES = 100;
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
 export const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 
 export class CatalogParamsError extends Error {}
@@ -50,49 +51,6 @@ export function readControlCursor(value: unknown, label: string): string | undef
     throw new CatalogParamsError(`invalid Codex session catalog ${label} cursor`);
   }
   return value;
-}
-
-const TRANSCRIPT_CURSOR_ERROR = "invalid Codex session catalog transcript request cursor";
-
-export type CodexTranscriptCursor = { turnCursor?: string; itemOffset: number };
-
-/**
- * The app-server pages transcripts by turn and one turn can hold thousands of
- * items, so a page boundary falls inside a turn. The cursor carries the upstream
- * turn cursor plus how many items of that turn page were already delivered;
- * dropping either half replays delivered items or skips them.
- */
-export function encodeCodexTranscriptCursor(cursor: CodexTranscriptCursor): string {
-  const payload = { ...(cursor.turnCursor ? { t: cursor.turnCursor } : {}), o: cursor.itemOffset };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
-export function decodeCodexTranscriptCursor(value: unknown): CodexTranscriptCursor {
-  const cursor = readControlCursor(value, "transcript request");
-  if (cursor === undefined) {
-    return { itemOffset: 0 };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-  } catch (error) {
-    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR, { cause: error });
-  }
-  if (!isRecord(parsed) || !Number.isSafeInteger(parsed.o) || Number(parsed.o) < 0) {
-    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR);
-  }
-  const turnCursor =
-    parsed.t === undefined ? undefined : readControlCursor(parsed.t, "transcript request");
-  const decoded: CodexTranscriptCursor = {
-    ...(turnCursor ? { turnCursor } : {}),
-    itemOffset: Number(parsed.o),
-  };
-  // Re-encoding must round-trip: a non-canonical payload would otherwise carry
-  // fields past the bounded turn-cursor check.
-  if (encodeCodexTranscriptCursor(decoded) !== cursor) {
-    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR);
-  }
-  return decoded;
 }
 
 export function boundedCatalogString(

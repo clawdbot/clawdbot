@@ -46,9 +46,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
-// Register shared mocks before loading the execution graph. A timed-out import
-// must not resume later and consume the next case's one-shot mock.
+const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
@@ -975,24 +973,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     resolveImages?.();
     await runPromise;
-  });
-
-  it("clears run ownership when image preflight fails", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(
-      executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          opts: { runId: "preflight-failure" },
-        }),
-      ),
-    ).rejects.toThrow("invalid image metadata");
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {

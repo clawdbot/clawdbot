@@ -2,9 +2,12 @@
  * Public facade and fallback coordinator for embedded-agent compaction.
  */
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -62,13 +65,11 @@ type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSess
   sessionFile: string;
 };
 
-function lockedHarnessCompactionFailure(runtime: string | undefined): EmbeddedAgentCompactResult {
+function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
   return {
     ok: false,
     compacted: false,
-    reason: runtime
-      ? `Model selection is locked to native agent harness "${runtime}"; generic compaction is unavailable.`
-      : "Model selection is locked but the persisted agent harness is unavailable.",
+    reason: `Model selection is locked to native agent harness "${runtime}"; generic compaction is unavailable.`,
     failure: { reason: "model_selection_locked" },
   };
 }
@@ -76,6 +77,7 @@ function lockedHarnessCompactionFailure(runtime: string | undefined): EmbeddedAg
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
   if (!runtime || params.compactParams.trigger !== "manual") {
@@ -118,43 +120,50 @@ export async function compactNativeCliSession(params: {
     "agents.native-compaction",
   );
   try {
-    await runCliAgent({
-      preparedRunAdmission,
-      sessionId: params.compactParams.sessionId,
-      sessionKey: params.compactParams.sessionKey,
-      sessionFile: params.compactParams.sessionFile,
-      agentId: params.compactParams.agentId,
-      workspaceDir: params.compactParams.workspaceDir,
-      cwd: params.compactParams.cwd,
-      agentDir: params.compactParams.agentDir,
-      config: params.compactParams.config,
-      prompt: manualCompaction.buildPrompt(params.compactParams.customInstructions),
-      provider: runtime,
-      modelProvider: params.compactParams.provider,
-      model: params.compactParams.model,
-      thinkLevel: params.compactParams.thinkLevel,
-      timeoutMs: resolveCompactionTimeoutMs(params.compactParams.config),
-      runId,
-      cliSessionId,
-      ...(cliSessionBinding ? { cliSessionBinding } : {}),
-      ...(cliSessionBinding?.authProfileId
-        ? { authProfileId: cliSessionBinding.authProfileId }
-        : params.compactParams.authProfileId
-          ? { authProfileId: params.compactParams.authProfileId }
+    const runControlOperation = async () => {
+      await runCliAgent({
+        preparedRunAdmission,
+        sessionId: params.compactParams.sessionId,
+        sessionKey: params.compactParams.sessionKey,
+        sessionFile: params.compactParams.sessionFile,
+        agentId: params.compactParams.agentId,
+        workspaceDir: params.compactParams.workspaceDir,
+        cwd: params.compactParams.cwd,
+        agentDir: params.compactParams.agentDir,
+        config: params.compactParams.config,
+        prompt: manualCompaction.buildPrompt(params.compactParams.customInstructions),
+        provider: runtime,
+        modelProvider: params.compactParams.provider,
+        model: params.compactParams.model,
+        thinkLevel: params.compactParams.thinkLevel,
+        timeoutMs: resolveCompactionTimeoutMs(params.compactParams.config),
+        runId,
+        cliSessionId,
+        ...(cliSessionBinding ? { cliSessionBinding } : {}),
+        ...(cliSessionBinding?.authProfileId
+          ? { authProfileId: cliSessionBinding.authProfileId }
+          : params.compactParams.authProfileId
+            ? { authProfileId: params.compactParams.authProfileId }
+            : {}),
+        ...(params.compactParams.sessionEntry
+          ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
-      ...(params.compactParams.sessionEntry
-        ? { sessionEntry: params.compactParams.sessionEntry }
-        : {}),
-      contextWindow: params.compactParams.sessionEntry?.contextWindow,
-      trigger: "manual",
-      controlOperation: "compact",
-      disableCliLiveSession: true,
-      // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
-      // after the control turn so the next user turn reloads the compacted conversation.
-      cleanupCliLiveSessionOnRunEnd: true,
-      allowEmptyAssistantReplyAsSilent: true,
-      abortSignal: params.compactParams.abortSignal,
-    });
+        contextWindow: params.compactParams.sessionEntry?.contextWindow,
+        trigger: "manual",
+        controlOperation: "compact",
+        disableCliLiveSession: true,
+        // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
+        // after the control turn so the next user turn reloads the compacted conversation.
+        cleanupCliLiveSessionOnRunEnd: true,
+        allowEmptyAssistantReplyAsSilent: true,
+        abortSignal: params.compactParams.abortSignal,
+      });
+    };
+    if (params.runControlOperation) {
+      await params.runControlOperation(runControlOperation);
+    } else {
+      await runControlOperation();
+    }
   } catch (err) {
     return {
       ok: false,
@@ -233,23 +242,6 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
-  const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(paramsBase.agentHarnessId);
-  const lockedCliBackend =
-    paramsBase.trigger === "manual" && lockedHarnessRuntime
-      ? resolveCliBackendConfig(lockedHarnessRuntime, paramsBase.config, {
-          agentId: paramsBase.agentId,
-        })
-      : undefined;
-  // An owning CLI backend must report its capability or binding failure before
-  // the generic model-lock guard; otherwise the operator gets the wrong remedy.
-  const deferLockedHarnessFailure = lockedCliBackend?.ownsNativeCompaction === true;
-  if (
-    paramsBase.modelSelectionLocked === true &&
-    lockedHarnessRuntime !== "openclaw" &&
-    !deferLockedHarnessFailure
-  ) {
-    return lockedHarnessCompactionFailure(lockedHarnessRuntime);
-  }
   const memoryTranscript = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
   )?.memoryTranscript;
@@ -260,8 +252,13 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
+  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
+    sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+    agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
+    modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
     agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: runSessionTarget.sessionKey,
@@ -309,7 +306,7 @@ export async function compactEmbeddedAgentSessionDirect(
   if (nativeCliResult) {
     return nativeCliResult;
   }
-  if (requestedParams.modelSelectionLocked === true && lockedHarnessRuntime !== "openclaw") {
+  if (lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw") {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
   const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({

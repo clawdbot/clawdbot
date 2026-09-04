@@ -90,9 +90,8 @@ export async function handleAgentExecutionError(params: {
   };
   const settleFailure = async (
     payload: ReplyPayload,
-    terminalMetadata?: { fallbackExhaustedFailure: true },
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
-    takePendingLifecycleTerminal().emit("error", err, terminalMetadata);
+    takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
     return {
@@ -330,13 +329,10 @@ export async function handleAgentExecutionError(params: {
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,
   });
-  return await settleFailure(
-    {
-      text: userVisibleFallbackText,
-      ...(externalRunFailureReply?.presentation
-        ? { presentation: externalRunFailureReply.presentation }
-        : {}),
-    },
-    { fallbackExhaustedFailure: true },
-  );
+  return await settleFailure({
+    text: userVisibleFallbackText,
+    ...(externalRunFailureReply?.presentation
+      ? { presentation: externalRunFailureReply.presentation }
+      : {}),
+  });
 }

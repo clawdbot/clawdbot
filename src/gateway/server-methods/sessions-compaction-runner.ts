@@ -8,7 +8,7 @@ import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-cod
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
 import {
   loadTranscriptEvents,
@@ -133,7 +133,7 @@ export async function runGatewaySessionCompaction(
       model: resolvedModel.model,
       authProfileId:
         compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
-      authProfileIdSource: resolveSessionAuthProfileOverrideSource(params.entry),
+      authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),
       agentHarnessId: compactionCliTarget.agentHarnessId,
       cliSessionId: compactionCliTarget.cliSessionId,
       cliSessionBinding: compactionCliTarget.cliSessionBinding,

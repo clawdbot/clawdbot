@@ -7,7 +7,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { checkUpdateStatus, resolveUpdateInstallIdentity } from "./update-check.js";
+import {
+  checkUpdateStatus,
+  resolveUpdateInstallIdentity,
+  resolveUpdateInstallKind,
+} from "./update-check.js";
 
 const runCommandWithTimeout = processExec.runCommandWithTimeout;
 const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
@@ -39,6 +43,87 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
+  it.each([
+    { scope: "install kind", commands: 1 },
+    { scope: "identity", commands: 2 },
+    { scope: "full status", commands: 5 },
+  ] as const)(
+    "joins $scope Git discovery before reporting cancellation",
+    async ({ scope, commands }) => {
+      await withTestDir({ prefix: "openclaw-update-check-cancel-" }, async (root) => {
+        await initGitRepo(root);
+        await commitGit(root, "initial");
+        const started = createDeferred();
+        const gates: ReturnType<typeof createDeferred<void>>[] = [];
+        const terminations: string[] = [];
+        const controller = new AbortController();
+        const reason = new Error("update discovery stopped");
+        const gitCallsAfterAbort: string[][] = [];
+        vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+          if (controller.signal.aborted) {
+            gitCallsAfterAbort.push(argv);
+          }
+          if (
+            gates.length < commands &&
+            (scope === "install kind" || !argv.includes("--show-toplevel"))
+          ) {
+            const gate = createDeferred();
+            gates.push(gate);
+            if (gates.length === commands) {
+              started.resolve();
+            }
+            await gate.promise;
+            const result = await runCommandWithTimeout(argv, options);
+            terminations.push(result.termination);
+            return result;
+          }
+          return runCommandWithTimeout(argv, options);
+        });
+        let settled = false;
+        const pending =
+          scope === "install kind"
+            ? resolveUpdateInstallKind(root, { signal: controller.signal })
+            : scope === "identity"
+              ? resolveUpdateInstallIdentity({ root, signal: controller.signal })
+              : checkUpdateStatus({ root, includeRegistry: false, signal: controller.signal });
+        const outcome = pending.then(
+          () => {
+            settled = true;
+            return undefined;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        try {
+          await started.promise;
+          controller.abort(reason);
+          if (commands > 1) {
+            for (const gate of gates.slice(0, commands === 5 ? 2 : 1)) {
+              gate.resolve();
+            }
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          }
+          expect(settled).toBe(false);
+          for (const gate of gates) {
+            gate.resolve();
+          }
+          await expect(outcome).resolves.toBe(reason);
+          expect(terminations).toEqual(Array(commands).fill("signal"));
+          expect(gitCallsAfterAbort).toEqual([]);
+        } finally {
+          for (const gate of gates) {
+            gate.resolve();
+          }
+          await outcome;
+        }
+      });
+    },
+  );
+
   it("starts full-status worktree inspection before Git identity resolves", async () => {
     await withTestDir({ prefix: "openclaw-update-check-local-overlap-" }, async (root) => {
       await initGitRepo(root);

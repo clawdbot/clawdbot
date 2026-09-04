@@ -17,14 +17,13 @@ import {
 } from "./elicitation-response.js";
 import type { CodexActiveMcpToolCall } from "./event-projector-native-tool-lifecycle.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  mapExecDecisionToOutcome,
   requestPluginApproval,
+  requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
   type AppServerApprovalOutcome,
   type ExecApprovalDecision,
-  waitForPluginApprovalDecision,
+  type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
 import type {
   CodexAppPolicyContextEntry,
@@ -48,7 +47,7 @@ type BridgeableApprovalElicitation = {
   allowedDecisions?: ExecApprovalDecision[];
 };
 
-type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
+type ElicitationApprovalOutcome = PluginApprovalOutcome;
 type CodexApprovalElicitationResult =
   | { kind: "not-mine" }
   | { kind: "handled"; response: CodexElicitationResponse };
@@ -209,10 +208,11 @@ export async function routeCodexAppServerElicitationRequest(params: {
   }
 
   const outcome = await requestPluginApprovalOutcome({
-    paramsForRun: params.paramsForRun,
+    hostCapabilities: params.paramsForRun.hostCapabilities,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
     allowedDecisions: approvalPrompt.allowedDecisions,
+    toolName: "codex_mcp_tool_approval",
     ...persistence,
     signal: params.signal,
   });
@@ -419,10 +419,11 @@ async function buildPluginPolicyElicitationResponse(params: {
       return response;
     }
     const outcome = await requestPluginApprovalOutcome({
-      paramsForRun: params.paramsForRun,
+      hostCapabilities: params.paramsForRun.hostCapabilities,
       title: approvalPrompt.title,
       description: approvalPrompt.description,
       allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
+      toolName: "codex_mcp_tool_approval",
       signal: params.signal,
     });
     return buildElicitationResponse(approvalPrompt, outcome);
@@ -769,59 +770,6 @@ function sanitizeDisplayText(value: string): string {
   });
   const escaped = sanitized ? formatCodexDisplayText(sanitized) : "";
   return clipped && escaped ? `${escaped}...` : escaped;
-}
-
-async function requestPluginApprovalOutcome(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
-  title: string;
-  description: string;
-  allowedDecisions?: ExecApprovalDecision[];
-  mcpTool?: { server: string; tool: string };
-  toolCallId?: string;
-  isMcpToolApprovalActive?: () => boolean;
-  signal?: AbortSignal;
-}): Promise<ElicitationApprovalOutcome> {
-  try {
-    const requestResult = await requestPluginApproval({
-      hostCapabilities: params.paramsForRun.hostCapabilities,
-      signal: params.signal,
-      title: params.title,
-      description: params.description,
-      severity: "warning",
-      toolName: "codex_mcp_tool_approval",
-      allowedDecisions: params.allowedDecisions,
-      mcpTool: params.mcpTool,
-      toolCallId: params.toolCallId,
-      isMcpToolApprovalActive: params.isMcpToolApprovalActive,
-    });
-
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      return "unavailable";
-    }
-
-    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
-      ? undefined
-      : await waitForPluginApprovalDecision({
-          hostCapabilities: params.paramsForRun.hostCapabilities,
-          approvalId,
-          signal: params.signal,
-        });
-    if (params.signal?.aborted) {
-      return "cancelled";
-    }
-    if (approvalResult?.terminalReason === "timeout") {
-      return "timed-out";
-    }
-    const decision = approvalResult?.decision;
-    return mapExecDecisionToOutcome(
-      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
-        ? "allow-once"
-        : decision,
-    );
-  } catch {
-    return params.signal?.aborted ? "cancelled" : "denied";
-  }
 }
 
 function buildElicitationResponse(

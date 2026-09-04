@@ -595,6 +595,65 @@ describe("opencode-go provider plugin", () => {
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
 
+  it("identifies native Anthropic stream and simple requests without tagging proxies", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const testCase of [
+      {
+        wrap: provider.wrapStreamFn,
+        runtimeApi: "anthropic-messages",
+        sourceApi: undefined,
+      },
+      {
+        wrap: provider.wrapSimpleCompletionStreamFn,
+        runtimeApi: "openclaw-provider-simple:opencode-go:qwen3.8-max",
+        sourceApi: "anthropic-messages",
+      },
+    ] as const) {
+      const capturedHeaders: Array<Record<string, string> | undefined> = [];
+      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+        capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
+        return {} as never;
+      };
+      const streamFn = testCase.wrap?.({
+        streamFn: baseStreamFn as never,
+        providerId: "opencode-go",
+        modelId: "qwen3.8-max",
+        thinkingLevel: "high",
+        sourceApi: testCase.sourceApi,
+      } as never);
+
+      expect(streamFn).toBeTypeOf("function");
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://opencode.ai/zen/go",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
+      );
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://proxy.example.com",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
+      );
+
+      expect(capturedHeaders).toEqual([
+        {
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+          "X-Custom": "1",
+        },
+        { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
+      ]);
+    }
+  });
+
   it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(
     "disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go for %s",
     async (modelId) => {

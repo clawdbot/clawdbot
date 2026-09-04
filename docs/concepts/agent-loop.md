@@ -20,8 +20,13 @@ execution, streaming, persistence.
 1. `agent` RPC validates params, resolves the session (`sessionKey`/`sessionId`), persists session metadata, and returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the turn: resolves model + thinking/verbose/trace defaults, loads the skills snapshot, calls `runEmbeddedAgent`, and emits a fallback **lifecycle end/error** if the embedded loop did not already emit one.
 3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the run timeout (aborting on expiry), and returns payloads plus usage metadata. For Codex app-server turns, native Codex owns provider liveness and the exact `turn/completed` outcome; quiet periods and assistant output do not end the turn.
-4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "end" | "error"`).
+4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "finishing" | "end" | "error"`).
 5. `agent.wait` (`waitForAgentRun`) waits for **lifecycle end/error** on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`.
+
+The wait result also carries the run's `terminalReply` and, when available,
+`terminalReceipt`. A receipt with `sourceReplyDelivered: true` confirms a final
+reply reached the external source conversation. A2A announcements consume that
+fact instead of using display-history mirrors as delivery evidence.
 
 ## Queueing and concurrency
 
@@ -103,7 +108,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
-- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
+- A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
@@ -124,7 +129,27 @@ or raw errors out of the transcript/runtime path.
 
 ## Chat channel handling
 
-Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
+Assistant deltas buffer into chat `delta` messages. Terminal lifecycle events
+produce chat `final`, `error`, or `aborted` messages. Definitive cancellation and
+timeout events finalize immediately, including when the runtime reports them as
+`phase: "error"`. Retryable errors keep a 15-second grace window for a fallback
+or restart of the same run. Once the outer execution owner has finished its
+attempts, it publishes `executionSettled: true`. The Gateway and `agent.wait`
+consume that fact immediately, including preparation failures that never reached
+a model or emitted a fallback step. Unmarked timeout and bare-abort observations
+retain their existing wait-layer retry handling.
+
+Cron attempt completions remain `finishing` across model fallbacks and
+interim-acknowledgment retries; worker `finishing` events do not claim execution
+settlement. Completed execution facts are captured before cron bookkeeping, but
+finality is published only after execution settles. A new attempt clears the
+prior outcome before preparation. Later workflow errors or aborts cannot
+reclassify completed execution; cron persistence, delivery, and yielded-parent
+continuation retain their separate outcomes.
+
+History keeps a run active while its terminal session write is pending. Once
+that write succeeds, history and session activity show the recorded end time
+and duration without waiting for retry grace.
 
 Live snapshots are scoped to their assistant message. A correction can shorten or clear the current preview without erasing earlier messages. Pending text is flushed before the terminal event; pacing live updates does not delay tool execution or transcript writes.
 

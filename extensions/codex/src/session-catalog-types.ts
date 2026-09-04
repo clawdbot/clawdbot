@@ -7,6 +7,8 @@ import type {
   CodexThreadListResponse,
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
+  CodexThreadItemsListParams,
+  CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
 
 export type CodexCatalogHome = {
@@ -77,6 +79,7 @@ export type CodexSessionCatalogControl = {
   requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  listItemPage(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
   forkThread(
     params: CodexThreadForkParams,
     assertCurrent?: () => void,
@@ -107,6 +110,7 @@ export type CodexSessionCatalogHost = {
   nodeId?: string;
   canContinueCodex?: boolean;
   canOpenTerminalCodex?: boolean;
+  canStartTerminal?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;

@@ -13,7 +13,7 @@ import {
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: conversation failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(

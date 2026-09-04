@@ -1,7 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import { threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -71,6 +71,7 @@ export function writeSyntheticAuthDiscoveryFixture(params: {
   harnessId: string;
   unrelatedId: string;
   pluginVersion: string;
+  asyncSyntheticAuth?: boolean;
 }): void {
   const probePath = path.join(params.root, "synthetic-auth-probes.txt");
   fs.writeFileSync(
@@ -82,7 +83,31 @@ module.exports = {
   hookAliases: [${JSON.stringify(params.unrelatedId)}],
   label: "Worker catalog fixture synthetic auth",
   auth: [],
-  resolveSyntheticAuth({ provider }) {
+  ${params.asyncSyntheticAuth ? "async prepareSyntheticAuth" : "resolveSyntheticAuth"}({ provider, signal }) {
+    ${
+      params.asyncSyntheticAuth
+        ? `
+    if (require("node:worker_threads").threadId !== ${threadId}) throw Error("native auth probe entered worker");
+    fs.appendFileSync(${JSON.stringify(path.join(params.root, "synthetic-auth-owner.txt"))}, "parent\\n");
+    if (fs.existsSync(${JSON.stringify(path.join(params.root, "synthetic-auth-hold"))})) {
+      if (!signal) throw Error("held auth probe has no cancellation owner");
+      await new Promise((resolve, reject) => {
+        const abort = () => {
+          fs.appendFileSync(${JSON.stringify(path.join(params.root, "synthetic-auth-cancel.txt"))}, "abort\\n");
+          const cleanup = setInterval(() => {
+            if (fs.existsSync(${JSON.stringify(path.join(params.root, "synthetic-auth-hold"))})) return;
+            clearInterval(cleanup);
+            fs.appendFileSync(${JSON.stringify(path.join(params.root, "synthetic-auth-cancel.txt"))}, "joined\\n");
+            reject(signal.reason);
+          }, 5);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      });
+    }
+    `
+        : ""
+    }
     fs.appendFileSync(${JSON.stringify(probePath)}, provider + "\\n");
     return provider === ${JSON.stringify(params.harnessId)}
       ? { apiKey: "native-login-not-real", source: "fixture native login", mode: "oauth" }

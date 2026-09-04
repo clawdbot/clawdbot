@@ -58,20 +58,18 @@ const workboardExecutionSchema = z
     startedAt: z.number().refine((value) => value !== 0),
     updatedAt: optionalNumberSchema,
   })
-  .transform(
-    (value): WorkboardExecution => ({
-      id: value.id,
-      kind: "agent-session",
-      mode: value.mode,
-      status: value.status,
-      startedAt: value.startedAt,
-      updatedAt: value.updatedAt ?? value.startedAt,
-      ...(value.engine ? { engine: value.engine } : {}),
-      ...(value.model ? { model: value.model } : {}),
-      ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
-      ...(value.runId !== undefined ? { runId: value.runId } : {}),
-    }),
-  );
+  .transform((value): WorkboardExecution => ({
+    id: value.id,
+    kind: "agent-session",
+    mode: value.mode,
+    status: value.status,
+    startedAt: value.startedAt,
+    updatedAt: value.updatedAt ?? value.startedAt,
+    ...(value.engine ? { engine: value.engine } : {}),
+    ...(value.model ? { model: value.model } : {}),
+    ...(value.sessionKey !== undefined ? { sessionKey: value.sessionKey } : {}),
+    ...(value.runId !== undefined ? { runId: value.runId } : {}),
+  }));
 
 const workboardEventSchema = z
   .object({

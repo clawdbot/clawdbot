@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -110,20 +110,6 @@ describe("gateway usage helpers", () => {
       throw new Error(result.error);
     }
     return result.value;
-  }
-
-  function withTimeZone<T>(timeZone: string, run: () => T): T {
-    const previous = process.env.TZ;
-    process.env.TZ = timeZone;
-    try {
-      return run();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previous;
-      }
-    }
   }
 
   beforeEach(() => {
@@ -416,7 +402,7 @@ describe("gateway usage helpers", () => {
 
   it("resolveDateRange uses gateway local day boundaries in gateway mode", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
+    vi.setSystemTime(new Date(2026, 1, 5, 12, 34, 56));
     const range = expectDateRange(testApi.resolveDateRange({ days: 1, mode: "gateway" }));
     const expectedStart = new Date(2026, 1, 5).getTime();
     expect(range.startMs).toBe(expectedStart);
@@ -424,7 +410,9 @@ describe("gateway usage helpers", () => {
   });
 
   it("resolveDateRange uses gateway calendar end boundaries for explicit DST-short days", () => {
-    withTimeZone("America/New_York", () => {
+    withEnv({ TZ: "America/New_York" }, () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       const range = expectDateRange(
         testApi.resolveDateRange({
           startDate: "2026-03-08",
@@ -432,13 +420,15 @@ describe("gateway usage helpers", () => {
           mode: "gateway",
         }),
       );
-      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
-      expect(range.endMs).toBe(new Date(2026, 2, 9).getTime() - 1);
+      expect(range.startMs).toBe(Date.parse("2026-03-08T05:00:00.000Z"));
+      expect(range.endMs).toBe(Date.parse("2026-03-09T04:00:00.000Z") - 1);
     });
   });
 
   it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
-    withTimeZone("America/New_York", () => {
+    withEnv({ TZ: "America/New_York" }, () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
       const range = expectDateRange(
@@ -447,8 +437,8 @@ describe("gateway usage helpers", () => {
           mode: "gateway",
         }),
       );
-      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
-      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+      expect(range.startMs).toBe(Date.parse("2026-03-08T05:00:00.000Z"));
+      expect(range.endMs).toBe(Date.parse("2026-03-10T04:00:00.000Z") - 1);
     });
   });
 

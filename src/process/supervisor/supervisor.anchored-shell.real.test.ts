@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -151,6 +152,73 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.each(["inherited", "replacement", "empty"] as const)(
+    "completes an otherwise idle host with %s command environment",
+    async (environment) => {
+      const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
+      const hostPath = path.join(cwd, "host.mts");
+      const supervisorUrl = new URL("./supervisor.ts", import.meta.url).href;
+      let command =
+        'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
+      if (process.platform === "win32") {
+        const commandPath = path.join(cwd, "environment.cmd");
+        await writeFile(
+          commandPath,
+          "@echo off\r\nif defined OPENCLAW_TEST_PARENT_ENV (echo parent) else (echo absent)\r\nif defined OPENCLAW_TEST_CHILD_ENV (echo child) else (echo absent)\r\n",
+        );
+        command = `"${commandPath}"`;
+      }
+      await writeFile(
+        hostPath,
+        `
+          const { createProcessSupervisor } = await import(${JSON.stringify(supervisorUrl)});
+          const supervisor = createProcessSupervisor();
+          const environment = ${JSON.stringify(environment)};
+          const run = await supervisor.spawn({
+            mode: "anchored-shell",
+            command: ${JSON.stringify(command)},
+            sessionId: "idle-host",
+            backendId: "idle-host",
+            ...(environment === "inherited" ? {} : {
+              env: environment === "empty" ? {} : { OPENCLAW_TEST_CHILD_ENV: "child" },
+            }),
+          });
+          try {
+            const result = await run.wait();
+            await run.waitForExtinction();
+            console.log(JSON.stringify(result));
+          } finally {
+            await supervisor.shutdown();
+          }
+        `,
+        "utf8",
+      );
+      // A separate host has no Vitest timers or IPC keeping admission alive.
+      const host = spawnSync(process.execPath, ["--import", "tsx", hostPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_PARENT_ENV: "parent",
+          OPENCLAW_TEST_CHILD_ENV: undefined,
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(host.error).toBeUndefined();
+      expect(host.status, host.stderr).toBe(0);
+      const result = JSON.parse(host.stdout);
+      expect({ ...result, stdout: result.stdout.replaceAll("\r\n", "\n") }).toMatchObject({
+        reason: "exit",
+        exitCode: 0,
+        stdout:
+          environment === "inherited"
+            ? "parent\nabsent\n"
+            : environment === "replacement"
+              ? "absent\nchild\n"
+              : "absent\nabsent\n",
+      });
+    },
+  );
+
   it.each(["exit", "cancel"] as const)(
     "keeps a replacement's status independent of an older live child's %s",
     async (completion) => {

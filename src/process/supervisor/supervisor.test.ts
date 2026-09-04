@@ -1,5 +1,6 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -203,7 +204,9 @@ describe("process supervisor", () => {
 
       startup.resolve(adapter);
       const run = await pendingRun;
-      expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+      expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+      await run.waitForExtinction?.();
+      expect(adapter.disposeMock).toHaveBeenCalled();
       await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
       expect(supervisor.getRecord(runId)).toMatchObject({
         state: "exited",
@@ -211,6 +214,59 @@ describe("process supervisor", () => {
       });
     },
   );
+
+  it.each([
+    {
+      timeoutField: "timeoutMs" as const,
+      reason: "overall-timeout" as const,
+    },
+    {
+      timeoutField: "noOutputTimeoutMs" as const,
+      reason: "no-output-timeout" as const,
+    },
+  ])("bounds a hung child adapter construction with $reason", async ({ timeoutField, reason }) => {
+    vi.useFakeTimers();
+    const startup = createDeferred<StubChildAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+
+    const supervisor = createProcessSupervisor();
+    const runId = `hung-adapter-${reason}`;
+    const pendingRun = spawnChild(supervisor, {
+      runId,
+      sessionId: runId,
+      argv: createSilentIdleArgv(),
+      [timeoutField]: 25,
+      stdinMode: "pipe-closed",
+    });
+
+    expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+    await vi.advanceTimersByTimeAsync(25);
+    const constructionState = await Promise.race([
+      pendingRun.then(() => "settled" as const),
+      Promise.resolve().then(() => "pending" as const),
+    ]);
+    expect(constructionState).toBe("settled");
+
+    const run = await pendingRun;
+    await expect(run.wait()).resolves.toMatchObject({
+      reason,
+      timedOut: true,
+      noOutputTimedOut: reason === "no-output-timeout",
+    });
+    expect(supervisor.getRecord(runId)).toMatchObject({
+      state: "exited",
+      terminationReason: reason,
+    });
+
+    const lateAdapter = createStubChildAdapter();
+    startup.resolve(lateAdapter);
+    await Promise.resolve();
+    expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
+    lateAdapter.settle(null, "SIGKILL");
+    await run.waitForExtinction?.();
+    expect(lateAdapter.disposeMock).toHaveBeenCalled();
+  });
 
   it("fences new runs and drains an unscoped startup during shutdown", async () => {
     const adapter = createStubChildAdapter({
@@ -241,7 +297,8 @@ describe("process supervisor", () => {
     const run = await pendingRun;
     await expect(shutdown).resolves.toBeUndefined();
 
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(adapter.disposeMock).toHaveBeenCalled();
     await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
   });
 
@@ -337,8 +394,12 @@ describe("process supervisor", () => {
     }
 
     const runs = await Promise.all(pendingRuns);
+    await Promise.all(
+      runs.map((run) => expectDefined(run.waitForExtinction, "cancelled construction cleanup")()),
+    );
     for (const adapter of adapters) {
-      expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+      expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+      expect(adapter.disposeMock).toHaveBeenCalled();
     }
     await expect(Promise.all(runs.map((run) => run.wait()))).resolves.toEqual(
       Array.from({ length: runCount }, () => expect.objectContaining({ reason: "manual-cancel" })),
@@ -391,7 +452,8 @@ describe("process supervisor", () => {
       laterPromise,
     ]);
     expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
-    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(first.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(first.disposeMock).toHaveBeenCalled();
     expect(replacementRun.pid).toBeUndefined();
     expect(replacementRun.waitForExtinction).toBeUndefined();
     expect(later.killMock).not.toHaveBeenCalled();

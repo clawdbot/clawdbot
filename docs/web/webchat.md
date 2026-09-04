@@ -2,6 +2,7 @@
 summary: "Native and Control UI WebChat usage over the Gateway WebSocket"
 read_when:
   - Debugging or configuring WebChat access
+  - Understanding human mention delivery and retry behavior
 title: "WebChat"
 ---
 
@@ -30,7 +31,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
 - Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`; if another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
 - When you change a chat setting and immediately send, Control UI shows **Applying chat settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
-- `chat.send` takes an idempotency key (Control UI uses the run id); the Gateway dedupes repeated requests that reuse the same key, so retried or duplicate in-flight submits for the same session/message/attachments do not create a second run.
+- `chat.send` takes an idempotency key (Control UI uses the run id); the Gateway dedupes repeated requests that reuse the same key, so retried or duplicate in-flight submits for the same session, message, attachments, and mention selections do not create a second run. Reusing that key with different mention selections is rejected.
 - Queued messages keep their original send identity even when execution starts under a different run id. Clients reconcile the local pending message with its saved transcript entry by that send identity, so completion and history reload show one copy.
 - Replying to a specific message (right-click → Reply) sends the target's transcript id as `replyToId` on `chat.send`. For sources with visible text, the Gateway resolves that message from session history and hydrates the same channel-agnostic reply context metadata Discord replies use: agents see `has_reply_context` plus the untrusted "Reply target of current user message" block with sender label and body. (Webchat prompts keep volatile conversation ids such as `reply_to_id` suppressed, per the existing byte-stable prompt policy for direct webchat sessions.) Reply targets without a persisted transcript id (for example pending sends) fall back to an inline quote in the message body.
 - Attachment-only messages keep their Reply action. The preview uses filenames or image labels, and `replyToId` still points to the original entry. Replying does not attach the source files to the new message.
@@ -68,6 +69,25 @@ WebChat has two separate data paths:
 - If live assistant text appears during a run but disappears after history reload, check in order: whether the SQLite transcript contains the assistant text, whether `chat.history` display projection stripped it, then whether the Control UI optimistic-tail merge replaced local delivery state with the persisted snapshot.
 
 Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
+
+## Human mention delivery
+
+The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations; `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions; copying or quoting text does not copy its recipient selections.
+
+The mention becomes eligible for an Inbox entry and optional browser push only after the original human message is newly committed to the transcript. An early `status: "started"` acknowledgment, a staged initial message, or durable pending-input custody is not that commit. A queued or remotely placed first message therefore does not notify while it is still waiting to be recorded. A later agent failure does not undo a mention whose human message was already committed.
+
+Transport retries preserve the exact submitted text, mention annotations, and original send identity, even when execution gets a different run id. Replaying that committed input does not create another mention or restore a dismissed entry. An intentional new send has a new identity and may notify again, even when its text is identical. Transcript loading, hidden continuations, and attachment enrichment are not new human sends.
+
+The supporting RPCs require `operator.read` and use the authenticated profile, never a caller-selected Inbox owner:
+
+| Method or event     | Contract                                                                                                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users.mentionable` | Search with `{ sessionKey, agentId?, query? }`, or use `{ agentId, visibility?, query? }` before creating a session. Returns bounded `{ users, truncated }` results with profile id, display name, optional avatar URL, and online status. |
+| `mentions.list`     | Call with `{}` to fetch your current `{ gatewayInstanceId, revision, items }` snapshot.                                                                                                                                                    |
+| `mentions.dismiss`  | Pass `{ ids }` containing up to 100 distinct visible entry ids. Returns the same snapshot shape after dismissal.                                                                                                                           |
+| `mentions.changed`  | Targeted `{ gatewayInstanceId, revision }` invalidation; fetch `mentions.list` again. Revisions describe that connection's authorized view, not global Gateway activity.                                                                   |
+
+Delivery is best-effort. The Inbox and replay bookkeeping are bounded and process-local; a restart clears them, and capacity limits can skip alerts. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [temporary Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
 ## Control UI agents tools panel
 

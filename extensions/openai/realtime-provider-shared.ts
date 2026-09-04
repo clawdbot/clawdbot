@@ -1,5 +1,10 @@
 // Openai provider module implements model/runtime integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveOpenAICodexAuthIdentity,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   createProviderHttpError,
   readProviderJsonResponse,
@@ -11,6 +16,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 
 const OPENAI_REALTIME_API_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_REALTIME_SSRF_POLICY = {
@@ -21,6 +27,27 @@ const OPENAI_REALTIME_SSRF_POLICY = {
 // Secret minting blocks interactive Talk setup; keep this absolute budget aligned
 // with the maintained realtime Talk live smoke.
 const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
+
+export async function resolveOpenAIChatGptSubscriptionAuth(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Promise<Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined> {
+  const token = await resolveProviderAuthProfileApiKey({
+    provider: "openai",
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    profileTypes: ["oauth"],
+    includeExternalCliAuth: false,
+  });
+  if (!token) {
+    return undefined;
+  }
+  const accountId = resolveOpenAICodexAuthIdentity({ access: token }).accountId;
+  if (!accountId) {
+    throw new Error("The selected ChatGPT OAuth profile is missing its account id");
+  }
+  return { type: "oauth", token, accountId };
+}
 
 export function readRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {

@@ -1,7 +1,7 @@
-// Codex catalog terminal ownership: validated resume commands and terminal plans.
+// Codex catalog terminal ownership: validated native start/resume commands and plans.
 import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { decodeNodePtyResumeParams } from "openclaw/plugin-sdk/node-host";
+import { decodeNodePtyResumeParams, decodeNodePtyStartParams } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -30,6 +30,42 @@ import type {
 } from "./session-catalog-types.js";
 
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
+export const CODEX_TERMINAL_START_COMMAND = "codex.terminal.start.v1";
+
+export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHostCommand {
+  return {
+    command: CODEX_TERMINAL_START_COMMAND,
+    cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
+    dangerous: false,
+    duplex: true,
+    isAvailable: ({ env }) =>
+      Boolean(resolveNodeHostExecutable("codex", { env, strategy: "direct" })),
+    handle: async (paramsJSON, io) => {
+      if (!io) {
+        throw new Error("Codex terminal command requires duplex transport");
+      }
+      const params = decodeNodePtyStartParams(paramsJSON);
+      const resolution = resolveNodeHostExecutable("codex", { strategy: "direct" });
+      if (!resolution) {
+        throw new Error("Codex CLI is unavailable; install codex on this node and reconnect");
+      }
+      // A fresh native CLI owns its account and configuration, not a Gateway agent home.
+      return JSON.stringify(
+        await runNodePtyCommand(
+          {
+            file: resolution.executable,
+            args: params.initialMessage !== undefined ? ["--", params.initialMessage] : [],
+            cwd: params.cwd,
+            requiredCwd: true,
+            cols: params.cols,
+            rows: params.rows,
+          },
+          io,
+        ),
+      );
+    },
+  };
+}
 
 export type CodexTerminalConfigSources = {
   getPluginConfig: () => unknown;
@@ -74,11 +110,15 @@ export function codexNodeTerminalCapability(node: {
   connected?: boolean;
   commands?: string[];
   invocableCommands?: string[];
-}): { canOpenTerminalCodex?: true } {
+}): { canOpenTerminalCodex: boolean; canStartTerminal: boolean } {
   const commands = node.invocableCommands ?? node.commands;
-  return node.connected === true && commands?.includes(CODEX_TERMINAL_RESUME_COMMAND) === true
-    ? { canOpenTerminalCodex: true }
-    : {};
+  return {
+    canOpenTerminalCodex:
+      node.connected === true && commands?.includes(CODEX_TERMINAL_RESUME_COMMAND) === true,
+    canStartTerminal:
+      node.connected === true &&
+      node.invocableCommands?.includes(CODEX_TERMINAL_START_COMMAND) === true,
+  };
 }
 
 export function createCodexTerminalNodeHostCommand(
@@ -257,12 +297,18 @@ export async function startCodexCatalogTerminal(
     cwd: string;
     initialMessage?: string;
     nodeId?: string;
+    source?: CodexCatalogHome;
   } & CodexTerminalConfigSources,
 ): Promise<SessionCatalogTerminalPlan> {
   if (params.nodeId) {
-    throw new CatalogParamsError(
-      "Paired-node Codex terminal start is unavailable; omit hostId to start on the gateway host",
-    );
+    return {
+      kind: "node",
+      nodeId: params.nodeId,
+      command: CODEX_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
+      cwd: params.cwd,
+      title: "codex",
+    };
   }
   const resolution = resolveLocalCodexTerminalResolution();
   if (!resolution) {

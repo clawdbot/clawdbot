@@ -106,34 +106,36 @@ export function listTranscriptInstancesFromDatabase(params: {
 /** Read retained archive identities through the same physical and logical session owner. */
 export function listSessionTranscriptArchivesReadOnly(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
-    sessionIds: readonly string[];
+    archiveNames?: readonly string[];
+    sessionIds?: readonly string[];
   },
 ) {
-  const selectors = [...new Set(scope.sessionIds)];
-  if (selectors.length === 0) {
+  const selectors = [...new Set(scope.sessionIds ?? [])];
+  const archiveNames = [...new Set(scope.archiveNames ?? [])];
+  if (selectors.length === 0 && archiveNames.length === 0) {
     return [];
   }
   const resolved = resolveSqliteReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(({ db, agentId }) => {
-    const rows = executeSqliteQuerySync(
-      db,
-      getSessionKysely(db)
-        .selectFrom("session_transcript_archives")
-        .select([
-          "archive_name as archiveName",
-          "session_id as sessionId",
-          "session_key as sessionKey",
-          "created_at as createdAt",
-        ])
-        .where((expression) =>
-          expression.or([
-            expression("session_id", "in", selectors),
-            expression("session_key", "in", selectors),
-          ]),
-        )
-        .orderBy("created_at")
-        .orderBy("session_id"),
-    ).rows;
+    let query = getSessionKysely(db)
+      .selectFrom("session_transcript_archives")
+      .select([
+        "archive_name as archiveName",
+        "session_id as sessionId",
+        "session_key as sessionKey",
+        "created_at as createdAt",
+      ])
+      .orderBy("created_at")
+      .orderBy("session_id");
+    query = query.where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
+          : []),
+        ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
+      ]),
+    );
+    const rows = executeSqliteQuerySync(db, query).rows;
     return rows.filter(
       (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === resolved.agentId,
     );

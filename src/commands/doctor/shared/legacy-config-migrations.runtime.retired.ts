@@ -447,6 +447,26 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
+    id: "runtime.messages-suppress-tool-errors",
+    describe: "Remove retired tool failure warning suppression",
+    legacyRules: [
+      rule(
+        ["messages", "suppressToolErrors"],
+        "messages.suppressToolErrors is retired; tool failure warnings now appear only when a run ends without a reply.",
+      ),
+    ],
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      if (!messages || !Object.hasOwn(messages, "suppressToolErrors")) {
+        return;
+      }
+      delete messages.suppressToolErrors;
+      changes.push(
+        "Removed messages.suppressToolErrors (tool failure warnings now appear only when a run ends without a reply).",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
     legacyRules: [

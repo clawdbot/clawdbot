@@ -208,6 +208,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
           ...sessionTarget,
           sessionTarget,
           sessionFile: marker,
+          model: "gpt-5.6-luna",
           settledMessages,
           mirroredMessages: settledMessages,
           turnId: "settled",

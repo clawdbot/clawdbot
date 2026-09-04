@@ -1,5 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -15,6 +16,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
 import { workerBundleArchiveRelativePath } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH } from "../gateway-http-route-contracts.js";
+import { isLoopbackHost } from "../net.js";
 import type { TransferArtifact } from "./artifact-transfer-service.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
@@ -61,6 +63,19 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     });
     if (!url.url) {
       throw new Error(url.error ?? "Cloud node bootstrap cannot resolve the Gateway address");
+    }
+    // Cloud workers call back over the public network; a loopback URL can still be
+    // valid for same-host device pairing, so refuse it at this cloud-only boundary.
+    const host = new URL(url.url).hostname;
+    if (
+      isLoopbackHost(host) ||
+      isLinkLocalIpAddress(host) ||
+      host === "0.0.0.0" ||
+      host === "[::]"
+    ) {
+      throw new Error(
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (${url.url}, from ${url.source ?? "unknown"}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+      );
     }
     preparationSignal.throwIfAborted();
     const artifact = await options.prepareArtifact(record, preparationSignal);

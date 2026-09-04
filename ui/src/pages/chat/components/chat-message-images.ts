@@ -3,12 +3,10 @@ import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
-import { until } from "lit/directives/until.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
-  openExternalUrlSafe,
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
@@ -17,6 +15,7 @@ import {
   isManagedOutgoingMediaSource,
   resolveAssistantAttachmentAvailability,
   resolveManagedOutgoingMediaSessionKey,
+  retryAssistantAttachmentAvailability,
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -38,7 +37,6 @@ import {
   type ChatMediaResource,
   type ImageBlock,
   type ImageRenderOptions,
-  type RenderableImageBlock,
 } from "./chat-message-media.ts";
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
@@ -61,18 +59,24 @@ class MessageImageResourceDirective extends AsyncDirective {
   private image: ImageBlock | undefined;
   private options: ImageRenderOptions | undefined;
   private element: HTMLImageElement | undefined;
+  private managed = false;
+  private pendingPreview: Promise<string | null> | undefined;
   private presentationKey = Symbol("image-presentation");
   private retained: RetainedInlineImage | { status: "unavailable" } | undefined;
-  private onRequestUpdate: (() => void) | undefined;
-  private readonly requestUpdate = () => this.onRequestUpdate?.();
+  // Resource updates stay in this part; row ResizeObserver owns layout changes.
+  private readonly requestUpdate = () => this.refreshImage();
   private readonly onSettled = (event: Event, source: string) => {
-    if (!this.isConnected || this.image?.url !== source) {
+    // A removed IMG may finish after denial; it no longer owns displayed pixels.
+    const element = event.currentTarget;
+    if (
+      !this.isConnected ||
+      this.image?.url !== source ||
+      !(element instanceof HTMLImageElement) ||
+      !element.isConnected
+    ) {
       return;
     }
-    this.element =
-      event.type === "load" && event.currentTarget instanceof HTMLImageElement
-        ? event.currentTarget
-        : undefined;
+    this.element = event.type === "load" ? element : undefined;
     if (
       this.retained?.status === "retaining" &&
       this.element?.getAttribute("src") !== this.retained.previewUrl
@@ -88,6 +92,8 @@ class MessageImageResourceDirective extends AsyncDirective {
   override render(image: ImageBlock, options: ImageRenderOptions | undefined) {
     const previous = this.image;
     if (previous?.url !== image.url || previous?.artifactId !== image.artifactId) {
+      this.managed = isManagedOutgoingMediaSource(image.url);
+      this.pendingPreview = undefined;
       this.releaseRetainedImage();
       // The gallery binds the exact submission/slot. Retain only pixels this
       // mounted IMG has loaded, never another pane's cached preview.
@@ -119,17 +125,17 @@ class MessageImageResourceDirective extends AsyncDirective {
       releaseChatMediaResourceSubscriber(this.requestUpdate);
       return noChange;
     }
-    if (this.onRequestUpdate !== options?.onRequestUpdate) {
+    const onRequestUpdate = options?.onRequestUpdate;
+
+    // Lit owns each image part. Reparent its stable subscription when the pane
+    // callback changes without discarding its loaded resource.
+    if (onRequestUpdate) {
+      this.pendingPreview = undefined;
+      observeChatMediaResourceSubscriber(onRequestUpdate, this.requestUpdate);
+    } else {
       releaseChatMediaResourceSubscriber(this.requestUpdate);
     }
-    this.onRequestUpdate = options?.onRequestUpdate;
-
-    // A transcript shares one pane callback across many guarded rows. Lit owns
-    // each image part, so only disconnecting that part may release its resource.
-    if (this.onRequestUpdate) {
-      observeChatMediaResourceSubscriber(this.onRequestUpdate, this.requestUpdate);
-    }
-    const subscriptionOptions = this.onRequestUpdate
+    const subscriptionOptions = onRequestUpdate
       ? { ...options, onRequestUpdate: this.requestUpdate }
       : options;
     const availability = resolveAssistantAttachmentAvailability(
@@ -140,13 +146,23 @@ class MessageImageResourceDirective extends AsyncDirective {
       subscriptionOptions?.onRequestUpdate,
     );
     const decodeFailed = this.retained?.status === "unavailable";
-    if (availability.status !== "available" || decodeFailed) {
-      if (availability.status === "checking" && this.retained?.status === "retaining") {
-        const previewUrl = this.retained.previewUrl;
-        return this.present(
-          this.renderImageElement({ ...image, displayUrl: previewUrl }, previewUrl, options),
-        );
-      }
+    // Tickets authorize new reads, not already decoded pixels. Only this
+    // mounted image can survive an unconfirmed renewal; denial still clears it.
+    const unconfirmed =
+      availability.status === "checking" ||
+      (availability.status === "unavailable" && availability.unconfirmed);
+    const displayUrl =
+      availability.status === "available"
+        ? buildAssistantAttachmentUrl(
+            image.url,
+            options?.resourceBasePath,
+            availability.mediaTicket,
+          )
+        : unconfirmed
+          ? this.element?.getAttribute("src")
+          : undefined;
+    if (!displayUrl || decodeFailed) {
+      this.element = undefined;
       if (!decodeFailed) {
         this.releaseRetainedImage();
       }
@@ -160,17 +176,25 @@ class MessageImageResourceDirective extends AsyncDirective {
         label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
         badge: reason === undefined ? "" : t("chat.attachments.unavailable"),
         reason,
+        onRetry:
+          !decodeFailed && availability.status === "unavailable" && availability.recoverable
+            ? () =>
+                retryAssistantAttachmentAvailability(
+                  image.url,
+                  options?.resourceBasePath,
+                  options?.authToken,
+                  subscriptionOptions?.onRequestUpdate,
+                )
+            : undefined,
       });
     }
-    const displayUrl = buildAssistantAttachmentUrl(
-      image.url,
-      options?.resourceBasePath,
-      availability.mediaTicket,
-    );
-    const renderable = { ...image, displayUrl };
-    if (!isManagedOutgoingMediaSource(displayUrl)) {
+    if (!this.managed) {
       const retained = this.retained;
-      if (retained?.status === "retaining" && retained.timeout === undefined) {
+      if (
+        availability.status === "available" &&
+        retained?.status === "retaining" &&
+        retained.timeout === undefined
+      ) {
         // IMG keeps its current decoded request while the new src loads. One
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(
@@ -178,26 +202,39 @@ class MessageImageResourceDirective extends AsyncDirective {
           CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS,
         );
       }
-      return this.present(this.renderImageElement(renderable, displayUrl, options));
+      return this.present(this.renderImageElement(image, displayUrl, options));
     }
-    // Keep this render's callbacks when the image resolves, not later directive options.
-    const preview = resolveManagedOutgoingImageBlobUrl(
+    const resource = resolveManagedOutgoingImageResource(
       displayUrl,
       subscriptionOptions,
       image.artifactId,
-    ).then((previewUrl) =>
-      previewUrl ? this.renderImageElement(renderable, previewUrl, options) : nothing,
     );
-    return this.present(until(preview, nothing));
+    const pending = resource.pending;
+    // Standalone renders settle without opting into pane-owned automatic retries.
+    if (!onRequestUpdate && pending && this.pendingPreview !== pending) {
+      this.pendingPreview = pending;
+      void pending.then((previewUrl) => {
+        if (this.pendingPreview === pending && this.isConnected && this.image) {
+          this.pendingPreview = undefined;
+          this.setValue(
+            this.present(
+              previewUrl ? this.renderImageElement(this.image, previewUrl, this.options) : nothing,
+            ),
+          );
+        }
+      });
+    }
+    return this.present(
+      resource.value ? this.renderImageElement(image, resource.value, options) : nothing,
+    );
   }
 
   private renderImageElement(
-    img: RenderableImageBlock,
+    img: ImageBlock,
     previewUrl: string,
     opts: ImageRenderOptions | undefined,
   ) {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
-    const managed = isManagedOutgoingMediaSource(img.displayUrl);
     // Upscale genuinely tiny sources enough to read and operate without
     // stretching every transcript image into a fixed-size tile.
     const imageClass =
@@ -205,7 +242,7 @@ class MessageImageResourceDirective extends AsyncDirective {
         ? "chat-message-image chat-message-image--small"
         : "chat-message-image";
     return html`
-      <span class="chat-image-frame ${managed ? "chat-image-frame--managed" : ""}">
+      <span class="chat-image-frame ${this.managed ? "chat-image-frame--managed" : ""}">
         <button
           type="button"
           class="chat-message-image-button"
@@ -225,7 +262,7 @@ class MessageImageResourceDirective extends AsyncDirective {
             height=${img.height ?? nothing}
           />
         </button>
-        ${managed ? renderManagedImageActions(img, opts) : nothing}
+        ${this.managed ? renderManagedImageActions(img, opts) : nothing}
       </span>
     `;
   }
@@ -233,9 +270,6 @@ class MessageImageResourceDirective extends AsyncDirective {
   private releaseRetainedImage() {
     const retained = this.retained;
     this.retained = undefined;
-    if (retained) {
-      this.element = undefined;
-    }
     if (retained?.status === "retaining") {
       clearTimeout(retained.timeout);
     }
@@ -260,6 +294,7 @@ class MessageImageResourceDirective extends AsyncDirective {
   protected override disconnected() {
     this.releaseRetainedImage();
     this.element = undefined;
+    this.pendingPreview = undefined;
     this.presentationKey = Symbol("image-presentation");
     releaseChatMediaResourceSubscriber(this.requestUpdate);
   }
@@ -273,62 +308,47 @@ class MessageImageResourceDirective extends AsyncDirective {
 const renderMessageImageResource = directive(MessageImageResourceDirective);
 
 function openMessageImage(
-  img: RenderableImageBlock,
+  img: ImageBlock,
   previewUrl: string,
   opts: ImageRenderOptions | undefined,
 ) {
   const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
   const requestVersion = opts?.onRequestOpenImage?.();
-  if (!isManagedOutgoingMediaSource(img.displayUrl)) {
+  if (!isManagedOutgoingMediaSource(img.url)) {
     openResolvedImage(opts?.onOpenImage, previewUrl, title, undefined, requestVersion);
     return;
   }
 
-  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(
-    img.displayUrl,
-    opts,
-    img.artifactId,
-    "full",
-  );
-  const cached = readManagedImageBlobUrl(cacheKey);
-  if (cached) {
-    const release = opts?.onOpenImage ? retainManagedImageBlobUrl(cacheKey) : undefined;
-    openResolvedImage(opts?.onOpenImage, cached, title, release, requestVersion);
+  const resource = resolveManagedOutgoingImageResource(img.url, opts, img.artifactId, "full");
+  const open = (url: string) => {
+    const release = opts?.onOpenImage ? retainManagedImageBlobUrl(resource.cacheKey) : undefined;
+    openResolvedImage(opts?.onOpenImage, url, title, release, requestVersion);
+  };
+  if (resource.value) {
+    open(resource.value);
     return;
   }
 
-  if (!opts?.onOpenImage) {
-    const pendingWindow = reserveExternalWindowForDeferredNavigation();
-    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full")
-      .then((freshUrl) => {
-        const safeUrl = freshUrl
-          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
-          : null;
-        if (!safeUrl) {
-          pendingWindow?.close();
-          showToast({ message: t("chat.imageLightbox.loadFailed") });
-        } else if (pendingWindow) {
-          pendingWindow.location.replace(safeUrl);
-        } else {
-          openExternalUrlSafe(safeUrl, { allowDataImage: true });
-        }
-      })
-      .catch(() => {
-        pendingWindow?.close();
-        showToast({ message: t("chat.imageLightbox.loadFailed") });
-      });
-    return;
-  }
-  void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full")
+  const pendingWindow = opts?.onOpenImage ? null : reserveExternalWindowForDeferredNavigation();
+  const failed = () => {
+    pendingWindow?.close();
+    showToast({ message: t("chat.imageLightbox.loadFailed") });
+  };
+  const pending = resource.pending ?? Promise.resolve(null);
+  void pending
     .then((freshUrl) => {
-      if (!freshUrl) {
-        showToast({ message: t("chat.imageLightbox.loadFailed") });
-        return;
+      const safeUrl = freshUrl
+        ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+        : null;
+      if (!safeUrl) {
+        failed();
+      } else if (pendingWindow) {
+        pendingWindow.location.replace(safeUrl);
+      } else {
+        open(safeUrl);
       }
-      const release = cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
-      openResolvedImage(opts.onOpenImage, freshUrl, title, release, requestVersion);
     })
-    .catch(() => showToast({ message: t("chat.imageLightbox.loadFailed") }));
+    .catch(failed);
 }
 
 class MessageImagesDirective extends Directive {
@@ -403,35 +423,28 @@ class MessageImagesDirective extends Directive {
 
 export const renderMessageImages = directive(MessageImagesDirective);
 
-function resolveManagedOutgoingImageBlobUrlCacheKey(
+function resolveManagedOutgoingImageResource(
   source: string,
   opts?: ImageRenderOptions,
   artifactId?: string,
   variant: ManagedImageVariant = "thumbnail",
-): string {
+): ChatMediaResource<string | null> {
+  const variantUrl = buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath);
   const authToken = opts?.authToken?.trim() ?? "";
-  return `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${authToken}::${artifactId?.trim() ?? ""}`;
-}
-
-async function resolveManagedOutgoingImageBlobUrl(
-  source: string,
-  opts?: ImageRenderOptions,
-  artifactId?: string,
-  variant: ManagedImageVariant = "thumbnail",
-): Promise<string | null> {
-  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId, variant);
+  const artifactKey = artifactId?.trim() ?? "";
+  const cacheKey = `${variantUrl}::${authToken}::${artifactKey}`;
   const resource = observeChatMediaResource<string | null>(
     "managed-image",
     cacheKey,
     opts?.onRequestUpdate,
-    `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${artifactId?.trim() ?? ""}`,
+    `${variantUrl}::${artifactKey}`,
   );
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
     resource.value = cached;
     resource.retryAttempted = false;
     resource.unavailableAt = undefined;
-    return cached;
+    return resource;
   }
   if (resource.value === null) {
     if (
@@ -439,11 +452,11 @@ async function resolveManagedOutgoingImageBlobUrl(
       resource.unavailableAt === undefined ||
       Date.now() - resource.unavailableAt < MANAGED_OUTGOING_IMAGE_RETRY_MS
     ) {
-      return null;
+      return resource;
     }
     resource.retryAttempted = true;
-    resource.value = undefined;
   }
+  resource.value = undefined;
   if (!resource.pending) {
     const controller = new AbortController();
     resource.abortController = controller;
@@ -474,12 +487,14 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (resource.pending === pending) {
         resource.pending = undefined;
       }
-      trimManagedImageMissResources();
+      if (resource.value === null && resource.subscribers.size === 0 && !resource.pending) {
+        trimManagedImageMissResources();
+      }
       notifyChatMediaResourceSubscribers(resource);
     });
     resource.pending = pending;
   }
-  return resource.pending;
+  return resource;
 }
 
 function buildManagedOutgoingImageVariantUrl(
@@ -562,7 +577,8 @@ async function readManagedOutgoingImageBlob(
   opts?: ImageRenderOptions,
   artifactId?: string,
 ): Promise<Blob> {
-  const blobUrl = await resolveManagedOutgoingImageBlobUrl(source, opts, artifactId, "full");
+  const resource = resolveManagedOutgoingImageResource(source, opts, artifactId, "full");
+  const blobUrl = resource.value ?? (await resource.pending);
   if (!blobUrl) {
     throw new Error("managed image is unavailable");
   }
@@ -621,14 +637,11 @@ async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
   }
 }
 
-function renderManagedImageActions(
-  image: RenderableImageBlock,
-  opts: ImageRenderOptions | undefined,
-) {
+function renderManagedImageActions(image: ImageBlock, opts: ImageRenderOptions | undefined) {
   const title = image.alt?.trim() || t("chat.imageLightbox.untitled");
   const download = async () => {
     try {
-      const blob = await readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId);
+      const blob = await readManagedOutgoingImageBlob(image.url, opts, image.artifactId);
       downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
     } catch {
       showToast({ message: t("chat.imageLightbox.downloadFailed") });
@@ -639,7 +652,7 @@ function renderManagedImageActions(
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("image clipboard is unavailable");
       }
-      const png = readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId).then(
+      const png = readManagedOutgoingImageBlob(image.url, opts, image.artifactId).then(
         convertImageBlobToPng,
       );
       void png.catch(() => {});

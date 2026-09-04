@@ -1,3 +1,5 @@
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   SQLITE_READONLY_CHILD_ARG,
   prepareSqliteReadOnlyLocationInProcess,
@@ -5,7 +7,27 @@ import {
 } from "./sqlite-readonly-location.js";
 
 function formatWorkerError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
+  const details = new Set<string>();
+  // Only allowlisted codes cross this boundary, through at most eight cause nodes.
+  // Full error formatting would expose cause prose or arbitrary structured data.
+  for (let depth = 0, current = error; depth < 8 && isRecord(current); depth += 1) {
+    const code = extractErrorCode(current);
+    if (code && /^[A-Z0-9_]{1,64}$/u.test(code)) {
+      details.add(`code=${code}`);
+    }
+    const errcode = current.errcode;
+    if (
+      typeof errcode === "number" &&
+      Number.isInteger(errcode) &&
+      errcode >= 0 &&
+      errcode <= 0x7fff_ffff
+    ) {
+      details.add(`errcode=${errcode}`);
+    }
+    current = current.cause;
+  }
+  return details.size > 0 ? `${message} (${[...details].join(", ")})` : message;
 }
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync

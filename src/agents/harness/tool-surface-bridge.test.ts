@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
@@ -11,6 +12,8 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
 import { testing } from "../tool-search.test-support.js";
+import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
+import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
 import { createAgentHarnessToolSurfaceRuntimeCore as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
 
 function createAgentHarnessToolSurfaceRuntime(
@@ -35,6 +38,31 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["quarantine", "prompt-policy"] as const)(
+    "narrows collector capabilities after harness %s",
+    async (restriction) => {
+      const spawn = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+      const reader = createAgentsWaitTool({ agentSessionKey: "agent:main:main" });
+      finalizeAgentToolAvailability([spawn, reader]);
+      expect(spawn.parameters).toHaveProperty("properties.collect");
+      if (restriction === "quarantine") {
+        reader.parameters = { type: "array", items: { type: "string" } };
+      }
+      const runtime = createRuntime({ tools: { toolSearch: false } });
+      try {
+        const compacted = runtime.compactTools([spawn, reader]);
+        const surface = compacted.promptToolPolicy.apply({ toolsAllow: ["sessions_spawn"] });
+        expect(surface.callableToolNames).toEqual(["sessions_spawn"]);
+        expect(spawn.parameters).not.toHaveProperty("properties.collect");
+        await expect(
+          spawn.execute("collector", { task: "inspect", collect: true }),
+        ).rejects.toThrow("Collector results are unavailable");
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
   it("executes a model opt-in while the global default is off", async () => {
     const markerTool = createStubTool("read_marker");
     markerTool.execute = async () => ({

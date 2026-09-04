@@ -181,13 +181,55 @@ const suite = createSidebarFooterProofSuite(
 
 suite.define(() => {
   it("shows visible offline retry and immediate announced-restart states", async () => {
-    const opened = await openSidebarFooterProofPage(suite);
+    const opened = await openSidebarFooterProofPage(suite, { gatewaySuspensionPhase: "prepared" });
     try {
       const { gateway, page, sidebar } = opened;
       const footer = sidebar.locator(".sidebar-footer-bar");
       await setSidebarProofTheme(page, "dark");
       await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
       await waitForControlUiGatewayReady(page);
+      await expect
+        .poll(() => footer.locator(".sidebar-footer-bar__status").textContent())
+        .toBe("Suspended");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => footer.locator(".sidebar-footer-bar__status").count()).toBe(0);
+
+      for (const [phase, label] of [
+        ["preparing", "Suspending…"],
+        ["draining", "Suspending…"],
+        ["prepared", "Suspended"],
+      ]) {
+        await gateway.emitGatewayEvent("gateway.suspension", { phase });
+        await expect
+          .poll(() => footer.locator(".sidebar-footer-bar__status").textContent())
+          .toBe(label);
+        await captureUnionProof(
+          suite,
+          page,
+          "sidebar-account-footer",
+          `feature-dark-${phase}.png`,
+          [footer],
+        );
+      }
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar.locator('wa-dropdown-item[value="command:settings"]').click();
+      const settingsStatus = page.locator(".settings-sidebar .sidebar-footer-bar__status");
+      await expect.poll(() => settingsStatus.textContent()).toBe("Suspended");
+      await captureUnionProof(
+        suite,
+        page,
+        "sidebar-account-footer",
+        "feature-dark-settings-suspended.png",
+        [page.locator(".settings-sidebar__footer")],
+      );
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect.poll(() => settingsStatus.count()).toBe(0);
+      await page.locator(".settings-sidebar__back").click();
+      await sidebar.waitFor();
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
+      await expect
+        .poll(() => footer.locator(".sidebar-footer-bar__status").textContent())
+        .toBe("Suspended");
 
       await gateway.setOnline(false);
       // The offline pill waits out the store's 2s offline-stability debounce.
@@ -208,9 +250,14 @@ suite.define(() => {
 
       await gateway.setOnline(true);
       await expect
+        .poll(() => footer.locator(".sidebar-footer-bar__status").textContent())
+        .toBe("Suspended");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await expect
         .poll(() => footer.locator(".sidebar-footer-bar__status").count(), { timeout: 10_000 })
         .toBe(0);
       await expect.poll(() => page.title()).not.toContain("Disconnected");
+      await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
       await gateway.emitGatewayEvent("shutdown", {
         reason: "gateway restart",
         restartExpectedMs: 5_000,

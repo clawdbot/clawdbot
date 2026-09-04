@@ -338,7 +338,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shipped conversation-binding inspection function and result type.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      4369,
+      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
+      // +1: canonical user-turn operational metadata restoration for native harnesses.
+      // +2: read-only debug proxy capture reader factory and contract.
+      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
+      // +1: canonical conversation-to-session binding read for native channel controls.
+      // +1: final callable-tool availability projection for native harnesses.
+      4377,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -451,7 +457,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shipped read-only conversation-binding inspection function.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      2603,
+      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
+      // +1: canonical user-turn operational metadata restoration for native harnesses.
+      // +1: read-only debug proxy capture reader factory.
+      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
+      // +1: canonical conversation-to-session binding read for native channel controls.
+      // +1: final callable-tool availability projection for native harnesses.
+      2610,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -34,7 +34,7 @@ import {
   resolveNodeRunner,
   runUpdateStep,
 } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
@@ -126,9 +126,12 @@ export async function runPackageInstallUpdate(params: {
       await createUpdateConfigSnapshot(doctorEnv);
       const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
       const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+      // The candidate is live only behind the staged npm rollback boundary. Keep
+      // native service changes external until this verification passes and the
+      // outer update finalizer owns the successful refresh/restart.
       const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: candidateHostVersion,
-        allowGatewayServiceRepair: params.allowGatewayServiceRepair,
+        allowGatewayServiceRepair: false,
       });
       const doctorArgv = [
         params.nodeRunner ?? resolveNodeRunner(),
@@ -151,8 +154,8 @@ export async function runPackageInstallUpdate(params: {
         env: {
           ...doctorEnv,
           ...buildUpdateDoctorEnv({
-            allowGatewayServiceRepair: params.allowGatewayServiceRepair,
-            allowGatewayActivation: params.allowGatewayActivation,
+            allowGatewayServiceRepair: false,
+            allowGatewayActivation: false,
             deferConfiguredPluginInstallRepair: true,
             serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
             compatibilityHostVersion: candidateHostVersion,

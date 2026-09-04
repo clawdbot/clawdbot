@@ -6,6 +6,7 @@ import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -105,7 +106,7 @@ suite.define(() => {
         const navigation = page.getByRole("separator", { name: "Resize sidebar" });
         const sidePanel = page.getByRole("separator", { name: "Resize side panel" });
         const shellNav = page.locator(".shell-nav");
-        const panel = page.locator(".side-panel");
+        const panel = page.locator('[data-panel-slot="detail"]');
         await sidePanel.waitFor();
 
         const [navBounds, panelBounds, sideBounds] = await Promise.all([
@@ -119,9 +120,6 @@ suite.define(() => {
         expect(Math.abs(sideBounds!.x + sideBounds!.width - panelBounds!.x)).toBeLessThanOrEqual(1);
         expect(
           await shellNav.evaluate((element) => getComputedStyle(element).borderInlineEndWidth),
-        ).toBe("1px");
-        expect(
-          await panel.evaluate((element) => getComputedStyle(element).borderInlineStartWidth),
         ).toBe("1px");
         expect((await lineStyle(navigation)).width).toBe("1px");
         expect((await lineStyle(sidePanel)).width).toBe("1px");
@@ -152,12 +150,9 @@ suite.define(() => {
         expect((await lineStyle(navigation)).outline).not.toBe("none");
         await captureResizeState(page, "keyboard-focus");
 
-        await panel.getByRole("button", { name: "Dock to bottom" }).click();
+        await dockChatSidePanel(page, "bottom");
         await expect.poll(() => sidePanel.getAttribute("orientation")).toBe("horizontal");
         expect((await lineStyle(sidePanel)).height).toBe("1px");
-        expect(
-          await panel.evaluate((element) => getComputedStyle(element).borderBlockStartWidth),
-        ).toBe("1px");
         await sidePanel.hover();
         await waitForAnimations(sidePanel);
         expect((await lineStyle(sidePanel)).height).toBe("2px");

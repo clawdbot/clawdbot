@@ -128,6 +128,7 @@ export function prepareWorkspacePluginRegistries(
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
   getConfiguredHarnessRuntimes?: () => readonly string[],
+  basePluginIds?: readonly string[],
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -150,7 +151,9 @@ export function prepareWorkspacePluginRegistries(
             ? { basePluginIds: [] }
             : baseRegistry
               ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
-              : {}),
+              : basePluginIds !== undefined
+                ? { basePluginIds }
+                : {}),
           ...(reusableGeneration?.pluginRegistry
             ? { reusableRegistry: reusableGeneration.pluginRegistry }
             : {}),

@@ -3,11 +3,6 @@
    perches on the sidebar footer.
    ============================================ */
 
-/* The footer bar is the pet's ledge. */
-.sidebar-shell__footer {
-  position: relative;
-}
-
 /* Every visit variant shares this zero-layout overlay strip above the footer.
    Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
    overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */

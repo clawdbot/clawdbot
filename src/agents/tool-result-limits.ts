@@ -63,9 +63,14 @@ export function resolveToolResultBudget(
 }
 
 export function toolResultFitsBudget(text: string, budget?: ToolResultBudget): boolean {
+  if (budget === undefined) {
+    return true;
+  }
+  const chars = estimateToolResultTextChars(text);
   return (
-    budget === undefined ||
-    (estimateToolResultTextChars(text) <= budget.maxChars &&
+    chars <= budget.maxChars &&
+    // Doubling every cost bounds the raw-weight floor without rescanning each code point.
+    (chars * 2 <= budget.maxContextChars ||
       estimateToolResultTextChars(text, { minimumRawWeight: 2 }) <= budget.maxContextChars)
   );
 }

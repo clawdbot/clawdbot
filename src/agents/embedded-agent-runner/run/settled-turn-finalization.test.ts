@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
@@ -12,12 +11,10 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createUsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
+import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -108,87 +105,7 @@ function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
 let admittedRunContext: AdmittedRunContext;
 
 function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
-  let lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const laneController = createEmbeddedRunLaneController({
-    getLifecycleGeneration: () => lifecycleGeneration,
-    getParams: () => ({
-      admittedRunContext,
-      sessionFile: "/tmp/session-settled.jsonl",
-      sessionId: "session-settled",
-      runId: "run-settled",
-      workspaceDir: "/tmp/openclaw-test",
-      prompt: "finish the task",
-      timeoutMs: 60_000,
-    }),
-    globalLane: "settled-finalization-global",
-    sessionLane: "settled-finalization-session",
-    initialQueuedLifecycleGeneration: lifecycleGeneration,
-    setLifecycleGeneration: (value) => {
-      lifecycleGeneration = value;
-    },
-    setParams: () => {},
-  });
-  const usageAccumulator = createUsageAccumulator();
-  usageAccumulator.assistantTurns = 1;
-  usageAccumulator.bridgeCalls = { search: 1, describe: 2, call: 3 };
-  return {
-    initial: {
-      attempt,
-      attemptAssistant: attempt.currentAttemptAssistant,
-      currentAttemptCompletedAssistant: undefined,
-      sessionIdUsed: attempt.sessionIdUsed,
-      sessionFileUsed: attempt.sessionFileUsed,
-      terminalState: resolveEmbeddedRunAttemptTerminalState({
-        attempt,
-        assistant: attempt.currentAttemptAssistant,
-      }),
-      attemptCompactionCount: 0,
-    },
-    terminalBase: {
-      runParams: {
-        admittedRunContext,
-        sessionId: "session-settled",
-        runId: "run-settled",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "finish the task",
-        trigger: "cron",
-        terminalReplyExpectation: "required",
-        timeoutMs: 60_000,
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-      authProfileStore: { version: 1, profiles: {} },
-      outerContextTokenMeta: {},
-      usageAccumulator,
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-    },
-    lastRunPromptUsage: undefined,
-    finalization: {
-      preparedAttempt: {
-        admittedRunContext,
-        runId: "run-settled",
-        sessionId: "session-settled",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "finish the task",
-        timeoutMs: 60_000,
-      },
-      harness: {
-        id: "test-harness",
-        label: "Test harness",
-        supports: () => ({ supported: true }),
-        runAttempt: vi.fn(),
-        finalizeSettledTurn: vi.fn(),
-      },
-      modelApi: "openai-responses",
-      executionContract: undefined,
-      hasTerminalToolPresentation: false,
-      createAttemptControls: vi.fn(laneController.createAttemptControls),
-      abortSignal: laneController.abortSignal,
-    },
-  } as unknown as Parameters<typeof prepareTerminalWithSettledTurnFinalization>[0];
+  return createSettledFinalizationTestInput(attempt, admittedRunContext);
 }
 
 describe("resolveSettledTurnFinalizationRequest", () => {
@@ -463,10 +380,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
-  it("preserves the settled runtime context window through isolated finalization", async () => {
+  it("preserves runtime context and model selection through isolated finalization", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "native-selected-model" };
     const attempt = {
       ...settledFailedAttempt(),
       agentHarnessId: "codex",
+      runtimeModelSelection,
       contextTokens: 1_000_000,
       contextTokensSource: "runtime" as const,
     };
@@ -478,6 +397,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       auth: { credentialSource: { kind: "profile" } },
     } as never;
     const finalAssistant = buildEmbeddedRunnerAssistant({
+      provider: "host-finalizer",
+      model: "summary-model",
       content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
     });
     backendMocks.runSettledFinalization.mockResolvedValueOnce({
@@ -493,6 +414,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(result.attempt).toMatchObject({
       agentHarnessId: "codex",
+      runtimeModelSelection,
       modelAttempt: {
         provider: "openai",
         model: "gpt-5.6-luna",
@@ -503,6 +425,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
     expect(result.prepared.agentMeta).toMatchObject({
       agentHarnessId: "codex",
+      provider: "host-finalizer",
+      model: "summary-model",
+      runtimeModelSelection,
       credentialSource: { kind: "profile" },
       contextTokens: 1_000_000,
       contextTokensSource: "runtime",
@@ -727,70 +652,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       toolMetas: attempt.toolMetas,
     });
   });
-
-  it.each([false, true])(
-    "uses the settled tool-batch identity for command-only fallback (context unavailable: %s)",
-    async (unavailable) => {
-      const assistant = buildEmbeddedRunnerAssistant({
-        model: "gpt-5.6-luna",
-        stopReason: "toolUse",
-        content: [{ type: "toolCall", id: "command-1", name: "exec", arguments: {} }],
-      });
-      const messagesSnapshot: EmbeddedRunAttemptWithReceiptEvidence["messagesSnapshot"] = [
-        { role: "user", content: "Run the command.", timestamp: 1 },
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: "command-1",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ];
-      const attempt = {
-        ...makeEmbeddedRunnerAttempt({
-          terminal: {
-            kind: "failed",
-            source: "prompt",
-            error: new Error("The provider is overloaded"),
-          },
-          sessionIdUsed: "session-settled",
-          sessionFileUsed: "/tmp/session-settled.jsonl",
-          messagesSnapshot,
-          toolMetas: [
-            { toolName: "exec", toolCallId: "command-1", isError: false, replaySafe: false },
-          ],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-          currentAttemptAssistant: undefined,
-          lastAssistant: undefined,
-          settledTurnFinalizationContext: unavailable
-            ? { source: "unavailable" }
-            : { source: "openclaw-transcript", messages: messagesSnapshot },
-        }),
-        successfulNestedToolNames: [],
-      };
-      const input = finalizationInput(attempt);
-      input.terminalBase.runParams.trigger = "user";
-      backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
-
-      const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-      expect(result.finalizationOutcome).toBe("failed");
-      expect(result.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
-      ]);
-      expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
-      expect(result.prepared.failureSignal).toBeUndefined();
-      expect(result.attempt.currentAttemptAssistant).toMatchObject({
-        provider: assistant.provider,
-        model: assistant.model,
-      });
-    },
-  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",

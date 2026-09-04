@@ -736,6 +736,34 @@ describe("applySessionModelSelection", () => {
     expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("rejects account selection authority revoked during metadata preparation", async () => {
+    const metadata = createDeferred<ModelCatalogEntry[]>();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockReturnValueOnce(metadata.promise);
+    let authorized = true;
+    const params = createParams({
+      validateAuthProfileSelection: () => (authorized ? undefined : "Select an account you own."),
+      request: {
+        provider: "openai",
+        model: "gpt-4o",
+        isDefault: false,
+        profileOverride: "openai:work",
+        runtime: { kind: "unchanged" },
+      },
+    });
+    const initial = structuredClone(params.sessionEntry);
+    const pending = applySessionModelSelection(params);
+    authorized = false;
+    metadata.resolve([]);
+
+    expect(await pending).toMatchObject({
+      status: "rejected",
+      message: "Select an account you own.",
+    });
+    expect(params.sessionEntry).toEqual(initial);
+    expect(lifecycleEvents).toEqual([]);
+    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "allowlist",

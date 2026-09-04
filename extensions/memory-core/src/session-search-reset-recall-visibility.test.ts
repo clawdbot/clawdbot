@@ -29,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   return {
     ...actual,
     buildSessionEntry: vi.fn(async () => entryWithCutoff({ state: "absent" })),
+    loadArchivedSessions: vi.fn(() => []),
   };
 });
 
@@ -51,7 +52,49 @@ describe("reset-generation session search visibility", () => {
     vi.mocked(engineSessions.buildSessionEntry).mockResolvedValue(
       entryWithCutoff({ state: "absent" }) as never,
     );
+    vi.mocked(engineSessions.loadArchivedSessions).mockReset();
+    vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([]);
     combinedSessionStore = {};
+  });
+
+  it("resolves bounded archive filenames through canonical SQLite identity", async () => {
+    const archivedSessionId = `oversized-${"x".repeat(300)}`;
+    const sessionKey = "agent:main:telegram:direct:owner";
+    const archiveName = `session-${"a".repeat(64)}.jsonl.reset.2026-08-11T08-00-00.000Z.zst`;
+    combinedSessionStore = {
+      [sessionKey]: {
+        sessionId: "current-after-reset",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/current-after-reset.jsonl",
+        chatType: "direct",
+      },
+    };
+    vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([
+      { archiveName, sessionId: archivedSessionId, sessionKey, createdAt: 1 },
+    ]);
+    const hit: MemorySearchResult = {
+      path: `sessions/main/${archiveName}`,
+      source: "sessions",
+      score: 1,
+      snippet: "retained context",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    await expect(
+      filterMemorySearchHitsBySessionVisibility({
+        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
+        agentId: "main",
+        requesterSessionKey: sessionKey,
+        sandboxed: false,
+        hits: [hit],
+      }),
+    ).resolves.toEqual([hit]);
+    expect(engineSessions.loadArchivedSessions).toHaveBeenCalledWith({
+      agentId: "main",
+      archiveNames: [archiveName],
+      storePath: "(test)",
+    });
   });
 
   it.each([

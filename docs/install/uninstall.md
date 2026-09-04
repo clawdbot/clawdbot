@@ -123,7 +123,7 @@ Default unit name is `openclaw-gateway.service` (or `openclaw-gateway-<profile>.
 
 ```bash
 systemctl --user disable --now openclaw-gateway.service
-rm -f ~/.config/systemd/user/openclaw-gateway.service
+rm -f ~/.config/systemd/user/openclaw-gateway.service{,.bak}
 systemctl --user daemon-reload
 ```
 
