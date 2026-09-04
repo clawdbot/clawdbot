@@ -1,7 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -19,6 +22,12 @@ suite.define(() => {
         viewport: { height: 800, width: 1180 },
       },
       async ({ page }) => {
+        await page.addInitScript((settingsKey) => {
+          localStorage.setItem(
+            settingsKey,
+            JSON.stringify({ fontChat: "jetbrains-mono", textScale: 140 }),
+          );
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await installMockGateway(page, {
           historyMessages: [
             {
@@ -58,6 +67,7 @@ suite.define(() => {
           hasText: "Alignment check",
         });
         await markdown.waitFor();
+        await page.evaluate(() => document.fonts.ready);
 
         const geometry = await markdown.evaluate((root) => {
           const textRect = (selector: string) => {
@@ -79,8 +89,10 @@ suite.define(() => {
           };
           const checkbox = root.querySelector(".task-list-item-checkbox");
           const details = root.querySelector("details[open]");
+          const numberedItem = root.querySelector("ol > li");
+          const numberedList = root.querySelector("ol");
           const summary = root.querySelector("details[open] > summary");
-          if (!checkbox || !details || !summary) {
+          if (!checkbox || !details || !numberedItem || !numberedList || !summary) {
             throw new Error("Missing task-list or disclosure markup");
           }
           const detailsStyle = getComputedStyle(details);
@@ -110,6 +122,13 @@ suite.define(() => {
             collapsedSummaryTextX: collapsedSummaryTextRect.x,
             detailsRight: details.getBoundingClientRect().right,
             detailsX: details.getBoundingClientRect().x,
+            fontSize: Number.parseFloat(getComputedStyle(root).fontSize),
+            numberedMarkerWidth: Number.parseFloat(
+              getComputedStyle(numberedItem, "::marker").width,
+            ),
+            numberedPaddingInlineStart: Number.parseFloat(
+              getComputedStyle(numberedList).paddingInlineStart,
+            ),
             numberedTextX: textRect("ol > li").x,
             rootRight: root.getBoundingClientRect().right,
             rootX: root.getBoundingClientRect().x,
@@ -118,8 +137,20 @@ suite.define(() => {
           };
         });
 
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(suite.artifactDir, "markdown-marker-alignment.png"),
+          });
+        }
+
         const textStarts = [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
         expect(Math.max(...textStarts) - Math.min(...textStarts)).toBeLessThanOrEqual(1);
+        expect(geometry.fontSize).toBeGreaterThan(19);
+        expect(geometry.numberedPaddingInlineStart).toBeGreaterThanOrEqual(
+          geometry.numberedMarkerWidth,
+        );
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
@@ -320,9 +351,18 @@ suite.define(() => {
           const task = root.querySelector(".task-list-item");
           const unorderedList = root.querySelector("ul:not(.contains-task-list)");
           const orderedList = root.querySelector("ol");
+          const numberedItem = root.querySelector("ol > li");
           const summary = root.querySelector("details > summary");
           const details = root.querySelector("details");
-          if (!checkbox || !task || !unorderedList || !orderedList || !summary || !details) {
+          if (
+            !checkbox ||
+            !task ||
+            !unorderedList ||
+            !orderedList ||
+            !numberedItem ||
+            !summary ||
+            !details
+          ) {
             throw new Error("Missing RTL Markdown geometry");
           }
           const checkboxRect = checkbox.getBoundingClientRect();
@@ -333,6 +373,9 @@ suite.define(() => {
             chevronInlineStart: getComputedStyle(summary, "::before").insetInlineStart,
             detailsRight: detailsRect.right,
             detailsX: detailsRect.x,
+            numberedMarkerWidth: Number.parseFloat(
+              getComputedStyle(numberedItem, "::marker").width,
+            ),
             orderedPaddingInlineStart: getComputedStyle(orderedList).paddingInlineStart,
             rootRight: rootRect.right,
             rootX: rootRect.x,
@@ -350,8 +393,11 @@ suite.define(() => {
         expect(
           Math.max(...geometry.textStarts) - Math.min(...geometry.textStarts),
         ).toBeLessThanOrEqual(1);
-        expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(24);
-        expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(24);
+        const orderedPaddingInlineStart = Number.parseFloat(geometry.orderedPaddingInlineStart);
+        expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(
+          orderedPaddingInlineStart,
+        );
+        expect(orderedPaddingInlineStart).toBeGreaterThanOrEqual(geometry.numberedMarkerWidth);
         expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
         expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);

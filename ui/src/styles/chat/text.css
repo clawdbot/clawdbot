@@ -375,7 +375,9 @@
 }
 
 :is(.chat-text, .chat-thinking) {
-  --chat-markdown-indent: var(--space-6);
+  /* Native decimal markers grow with the chat font; keep their gutter inside
+     paint-contained transcript rows at every supported text scale. */
+  --chat-markdown-indent: max(var(--space-6), 2em);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
@@ -399,8 +401,6 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
-  margin-inline-start: calc(-1 * var(--chat-markdown-indent));
-  padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
 
 :is(.chat-text, .chat-thinking) :where(ol > li)::marker {
@@ -470,7 +470,7 @@
   appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
-  inset-inline-start: 0;
+  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
   inline-size: var(--space-4);
   block-size: var(--space-4);
   margin: 0;
