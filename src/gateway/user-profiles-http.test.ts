@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeScopedUserProfileAvatarHttpRequestOrReply = vi.hoisted(() => vi.fn());
@@ -35,14 +37,56 @@ function response() {
   const writeHead = vi.fn();
   return {
     end,
-    response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    response: Object.assign(new EventEmitter(), {
+      destroyed: false,
+      end,
+      setHeader,
+      socket: null,
+      writeHead,
+    }) as unknown as ServerResponse,
     setHeader,
     writeHead,
   };
 }
 
 function request(path: string, headers: Record<string, string> = {}) {
-  return { method: "GET", url: path, headers } as unknown as IncomingMessage;
+  return {
+    method: "GET",
+    url: path,
+    headers,
+    socket: Object.assign(new EventEmitter(), { destroyed: false }),
+  } as unknown as IncomingMessage;
+}
+
+function disconnectableRequest(path: string) {
+  const socket = Object.assign(new EventEmitter(), { destroyed: false });
+  return {
+    request: { method: "GET", url: path, headers: {}, socket } as unknown as IncomingMessage,
+    socket,
+  };
+}
+
+function waitForDeferredResponse(
+  deferred: { promise: Promise<Response> },
+  signal: AbortSignal | null | undefined,
+): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const onAbort = () => {
+      const reason = signal?.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason)));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void deferred.promise.then(
+      (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 describe("profile avatar HTTP endpoint", () => {
@@ -395,6 +439,128 @@ describe("profile avatar HTTP endpoint", () => {
     // secondary email under the shared deadline; the secondary hit is served.
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([2, 2, 2]));
+  });
+
+  it("keeps a shared Gravatar fetch alive after its first waiter's deadline", async () => {
+    const firstProfileId = "profile-shared-deadline-first";
+    const secondProfileId = "profile-shared-deadline-second";
+    const primaryHash = emailHash("shared-deadline-primary@example.com");
+    const sharedHash = emailHash("shared-deadline@example.com");
+    const sharedResponse = createDeferred<Response>();
+    const totalDeadlines: AbortController[] = [];
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+      const controller = new AbortController();
+      if (delay === 6_000) {
+        totalDeadlines.push(controller);
+      }
+      return controller.signal;
+    });
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockImplementation((profileId: string) => ({
+      id: profileId,
+      emails:
+        profileId === firstProfileId
+          ? ["shared-deadline-primary@example.com", "shared-deadline@example.com"]
+          : ["shared-deadline@example.com"],
+      hasAvatar: false,
+    }));
+    const fetchImpl = vi.fn((input: URL | RequestInfo, init?: RequestInit) => {
+      if (fetchUrl(input).includes(primaryHash)) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      expect(fetchUrl(input)).toContain(sharedHash);
+      return waitForDeferredResponse(sharedResponse, init?.signal);
+    });
+    const first = response();
+    const second = response();
+
+    try {
+      const firstRequest = handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        first.response,
+        `/api/users/${firstProfileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+      const secondRequest = handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        second.response,
+        `/api/users/${secondProfileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
+      await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
+
+      totalDeadlines[0]?.abort();
+      await firstRequest;
+      sharedResponse.resolve(
+        new Response(new Uint8Array([7, 8, 9]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+      );
+      await secondRequest;
+
+      expect(first.response.statusCode).toBe(502);
+      expect(second.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+      expect(second.end).toHaveBeenCalledWith(new Uint8Array([7, 8, 9]));
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("retires a disconnected waiter without aborting its shared Gravatar fetch", async () => {
+    const profileId = "profile-shared-disconnect";
+    const sharedResponse = createDeferred<Response>();
+    getProfileAvatar.mockReturnValue(undefined);
+    getUserProfileListItem.mockReturnValue({
+      id: profileId,
+      emails: ["shared-disconnect@example.com"],
+      hasAvatar: false,
+    });
+    const fetchImpl = vi.fn((_input: URL | RequestInfo, init?: RequestInit) =>
+      waitForDeferredResponse(sharedResponse, init?.signal),
+    );
+    const firstReq = disconnectableRequest("/ignored-by-handler");
+    const firstRes = response();
+    const secondRes = response();
+    let firstSettled = false;
+
+    const firstRequest = handleUserProfileAvatarHttpRequest(
+      firstReq.request,
+      firstRes.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    ).then((handled) => {
+      firstSettled = true;
+      return handled;
+    });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    const secondRequest = handleUserProfileAvatarHttpRequest(
+      request("/ignored-by-handler"),
+      secondRes.response,
+      `/api/users/${profileId}/avatar`,
+      { auth: {} as never, fetchImpl },
+    );
+
+    firstReq.socket.emit("close");
+    await vi.waitFor(() => expect(firstSettled).toBe(true));
+    expect(firstRes.writeHead).not.toHaveBeenCalled();
+    expect(firstRes.end).not.toHaveBeenCalled();
+    expect(firstReq.socket.listenerCount("close")).toBe(0);
+
+    sharedResponse.resolve(
+      new Response(new Uint8Array([3, 2, 1]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    await expect(firstRequest).resolves.toBe(true);
+    await secondRequest;
+
+    expect(secondRes.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(secondRes.end).toHaveBeenCalledWith(new Uint8Array([3, 2, 1]));
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("caps the Gravatar fan-out so a profile with many linked emails is bounded", async () => {

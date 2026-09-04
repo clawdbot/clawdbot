@@ -13,7 +13,7 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
   authorizeScopedUserProfileAvatarHttpRequestOrReply,
@@ -201,13 +201,11 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
 async function fetchGravatar(
   hash: string,
   fetchImpl: typeof globalThis.fetch,
-  deadline?: AbortSignal,
 ): Promise<GravatarResult> {
   try {
-    const perCall = AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS);
     const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      signal: deadline ? AbortSignal.any([deadline, perCall]) : perCall,
+      signal: AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS),
     });
     if (response.status === 404) {
       await cancelGravatarBody(response.body);
@@ -239,7 +237,7 @@ async function fetchGravatar(
 
 async function resolveGravatar(
   hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number; deadline?: AbortSignal },
+  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number },
 ): Promise<GravatarResult> {
   const cached = getCachedGravatar(hash, options.nowMs());
   if (cached) {
@@ -249,7 +247,7 @@ async function resolveGravatar(
     gravatarRequests,
     hash,
     async () => {
-      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      const result = await fetchGravatar(hash, options.fetchImpl);
       if (result.kind !== "error") {
         cacheGravatar(hash, result, options.nowMs());
       }
@@ -257,6 +255,35 @@ async function resolveGravatar(
     },
     { evictOnSettled: true },
   );
+}
+
+async function waitForGravatar(
+  result: Promise<GravatarResult>,
+  signal: AbortSignal,
+): Promise<GravatarResult | undefined> {
+  if (signal.aborted) {
+    return undefined;
+  }
+  return await new Promise<GravatarResult | undefined>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(undefined);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void result.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
 }
 
 function sendAvatar(
@@ -382,29 +409,53 @@ export async function handleUserProfileAvatarHttpRequest(
 
   // Resolve linked emails sequentially and stop at the first hit: the primary
   // email keeps precedence, and a secondary email's hash is disclosed to
-  // Gravatar only once the earlier one is a definite miss. A single shared
-  // deadline bounds the total wait, so an unreachable Gravatar cannot stall the
-  // held connection by one timeout per linked email.
+  // Gravatar only once the earlier one is a definite miss. Shared hash fetches
+  // own their intrinsic timeout; this waiter independently owns the total HTTP
+  // deadline and disconnect lifecycle.
+  const clientAbort = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
   const deadline = AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS);
-  let transientFailure = false;
-  for (const hash of hashes) {
-    const result = await resolveGravatar(hash, {
-      fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-      nowMs: opts.nowMs ?? Date.now,
-      deadline,
-    });
-    if (result.kind === "hit") {
-      sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
+  const waiterSignal = AbortSignal.any([clientAbort.signal, deadline]);
+  try {
+    let transientFailure = false;
+    for (const hash of hashes) {
+      if (clientAbort.signal.aborted) {
+        return true;
+      }
+      if (deadline.aborted) {
+        transientFailure = true;
+        break;
+      }
+      const result = await waitForGravatar(
+        resolveGravatar(hash, {
+          fetchImpl: opts.fetchImpl ?? globalThis.fetch,
+          nowMs: opts.nowMs ?? Date.now,
+        }),
+        waiterSignal,
+      );
+      if (!result || waiterSignal.aborted) {
+        if (clientAbort.signal.aborted) {
+          return true;
+        }
+        transientFailure = true;
+        break;
+      }
+      if (result.kind === "hit") {
+        sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
+        return true;
+      }
+      transientFailure ||= result.kind === "error";
+    }
+    if (clientAbort.signal.aborted) {
       return true;
     }
-    transientFailure ||= result.kind === "error";
-    if (deadline.aborted) {
-      break;
-    }
+    transientFailure ||= deadline.aborted;
+    sendJson(res, transientFailure ? 502 : 404, {
+      ok: false,
+      error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },
+    });
+    return true;
+  } finally {
+    stopWatchingDisconnect();
   }
-  sendJson(res, transientFailure ? 502 : 404, {
-    ok: false,
-    error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },
-  });
-  return true;
 }
