@@ -11,6 +11,7 @@ import {
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
+  type SystemAgentChatParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -364,10 +365,35 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     }
   },
   "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {
-    const params = sanitizeSystemAgentChatParams(rawParams);
-    if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
+    const sanitizedParams = sanitizeSystemAgentChatParams(rawParams);
+    const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+    if (
+      !assertValidParams(sanitizedParams, validateSystemAgentChatParams, "openclaw.chat", respond)
+    ) {
       return;
     }
+    const params: SystemAgentChatParams =
+      sanitizedParams.delegation && trustedAgentRuntime
+        ? {
+            ...sanitizedParams,
+            delegation: {
+              agentId: trustedAgentRuntime.agentId,
+              sessionKey: trustedAgentRuntime.sessionKey,
+              ...(trustedAgentRuntime.turnSourceChannel
+                ? { turnSourceChannel: trustedAgentRuntime.turnSourceChannel }
+                : {}),
+              ...(trustedAgentRuntime.turnSourceTo
+                ? { turnSourceTo: trustedAgentRuntime.turnSourceTo }
+                : {}),
+              ...(trustedAgentRuntime.turnSourceAccountId
+                ? { turnSourceAccountId: trustedAgentRuntime.turnSourceAccountId }
+                : {}),
+              ...(trustedAgentRuntime.turnSourceThreadId !== undefined
+                ? { turnSourceThreadId: trustedAgentRuntime.turnSourceThreadId }
+                : {}),
+            },
+          }
+        : sanitizedParams;
     const inputError = getSystemAgentChatInputError(params);
     if (inputError) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, inputError));
@@ -573,6 +599,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             session,
             sessionId,
             delegation: params.delegation,
+            ...(trustedAgentRuntime ? { trustedAgentRuntime } : {}),
           });
         }
         const turnReply = await runSystemAgentChatInput({

@@ -22,6 +22,7 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import {
+  getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
@@ -109,6 +110,48 @@ describe("gateway tool runtime identity", () => {
       expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
     },
   );
+
+  it("carries delegated OpenClaw Full Access on a source-run-bound wire identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ sessionId: "delegate-1", reply: "Applied" });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-openclaw-wire");
+    const toolLifetime = new AbortController();
+    const context = {} as GatewayRequestContext;
+
+    await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        operationalRunInstance,
+        fullPermission: true,
+        approvalSignals: [toolLifetime.signal],
+        gatewayContextResolver: () => context,
+      },
+      async () => {
+        expect(getGatewayToolCallerIdentity()).toMatchObject({ fullPermission: true });
+        await callGatewayTool(
+          "openclaw.chat",
+          {},
+          {
+            sessionId: "delegate-1",
+            message: "Apply the change",
+            delegation: { agentId: "ops", sessionKey: "agent:ops:main" },
+          },
+        );
+        const call = capturedGatewayCall();
+        expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+        const [payload] = call.agentRuntimeIdentityToken!.split(".");
+        expect(JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"))).toMatchObject({
+          fullPermission: true,
+        });
+        const verified = await verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken);
+        expect(verified).toMatchObject({ operationalRunInstance, fullPermission: true });
+        expect(verified && createAgentRuntimeApprovalAuthorityValidator()(verified)).toBe(true);
+
+        toolLifetime.abort(new Error("tool call ended"));
+        expect(verified && createAgentRuntimeApprovalAuthorityValidator()(verified)).toBe(false);
+      },
+    );
+  });
 
   it.each([{}, { gatewayToken: "synthetic-remote-override" }])(
     "keeps ordinary questions available without local authority: %j",

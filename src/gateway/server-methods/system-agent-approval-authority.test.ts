@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
+  claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
@@ -11,6 +12,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
@@ -276,6 +278,99 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     },
   );
 
+  it.each(["active", "run", "tool", "gateway", "worker", "session"] as const)(
+    "uses source-bound wire Full Access and fences the final effect after %s closure",
+    async (owner) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      const effect = vi.fn();
+      const proposal = { operation: { kind: "gateway-restart" as const }, hash: "w".repeat(64) };
+      const session = {
+        engine: {
+          resolveOperatorApproval: async (
+            decision: ExecApprovalDecision | null,
+            _hash: string,
+            assertCurrent?: () => void,
+          ) => {
+            if (decision === null) {
+              return null;
+            }
+            started.resolve();
+            await release.promise;
+            assertCurrent?.();
+            effect();
+            return { text: "Applied", action: "none" as const, applied: true };
+          },
+        },
+        ownerKey: "agent:main:main",
+        lastUsedAt: 1,
+      } as unknown as SystemAgentChatSession;
+      const sessions = new Map([["delegate-wire", session]]);
+      let gatewayActive = true;
+      const context = {
+        systemAgentSessions: sessions,
+        validateAgentRuntimeApprovalAuthority: () => gatewayActive,
+      } as unknown as GatewayRequestContext;
+      const operationalRunInstance = createOperationalRunInstanceRef("wire-full-access-run");
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const controller = new AbortController();
+      const approvalAuthority =
+        owner === "tool"
+          ? claimAgentRunApprovalAuthority(authority, [controller.signal])
+          : authority;
+      const turnClaim = workerTurnClaim("wire-full-turn");
+      const trustedAgentRuntime = {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
+        delegatedAuthority:
+          owner === "worker"
+            ? { kind: "worker", ...approvalAuthority, turnClaim }
+            : { kind: "local", ...approvalAuthority },
+        fullPermission: true,
+      } as AgentRuntimeIdentity;
+
+      const pending = resolveTestProposal({
+        context,
+        sessions,
+        session,
+        sessionId: "delegate-wire",
+        delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        proposal,
+        trustedAgentRuntime,
+      });
+      const startState = await Promise.race([
+        started.promise.then(() => "started" as const),
+        pending.then(
+          () => "settled" as const,
+          () => "settled" as const,
+        ),
+      ]);
+      expect(startState).toBe("started");
+      if (owner === "run") {
+        releaseAgentRunDelegatedAuthority(authority);
+      } else if (owner === "tool") {
+        controller.abort();
+      } else if (owner === "gateway" || owner === "worker") {
+        gatewayActive = false;
+      } else if (owner === "session") {
+        sessions.set("delegate-wire", { ...session });
+      }
+      release.resolve();
+
+      if (owner === "active") {
+        await expect(pending).resolves.toMatchObject({ kind: "completed" });
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow(
+          "system-agent approval authority is no longer active",
+        );
+        expect(effect).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("publishes the channel completion after the delegated change is applied", async (testContext) => {
     const proposal = {
       operation: { kind: "gateway-restart" as const },
@@ -422,9 +517,14 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     expect(applyEffect).not.toHaveBeenCalled();
   });
 
-  it.for([false, true])(
-    "reuses the exact worker approval with Full Access=%s",
-    async (fullPermission, testContext) => {
+  it.for([
+    { source: "ambient", fullPermission: false },
+    { source: "ambient", fullPermission: true },
+    { source: "wire", fullPermission: false },
+    { source: "wire", fullPermission: true },
+  ] as const)(
+    "reuses the exact $source worker approval with Full Access=$fullPermission",
+    async ({ source, fullPermission }, testContext) => {
       const proposal = {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
@@ -452,49 +552,44 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         validateAgentRuntimeApprovalAuthority: () => true,
       } as unknown as GatewayRequestContext;
       const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
-      claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
 
       const firstClaim = workerTurnClaim("turn-2");
-      let firstApprovalId: string | undefined;
-      await withGatewayToolCallerIdentity(
-        {
+      const queueForClaim = async (claim: WorkerSessionTurnClaim, withFullPermission: boolean) => {
+        const trustedAgentRuntime = {
+          kind: "agentRuntime",
           agentId: "main",
           sessionKey: "agent:main:main",
           operationalRunInstance,
-          workerTurnClaim: firstClaim,
-        },
-        async () => {
-          firstApprovalId = await queueDelegatedApproval({
+          delegatedAuthority: { kind: "worker", ...authority, turnClaim: claim },
+          ...(withFullPermission ? { fullPermission: true as const } : {}),
+        } satisfies AgentRuntimeIdentity;
+        const queue = () =>
+          queueDelegatedApproval({
             context,
             sessions,
             session,
             sessionId: "delegate-worker",
             delegation: { agentId: "main", sessionKey: "agent:main:main" },
             proposal,
+            ...(source === "wire" ? { trustedAgentRuntime } : {}),
           });
-        },
-      );
+        return source === "wire"
+          ? await queue()
+          : await withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:main",
+                operationalRunInstance,
+                workerTurnClaim: claim,
+                fullPermission: withFullPermission,
+              },
+              queue,
+            );
+      };
+      const firstApprovalId = await queueForClaim(firstClaim, false);
       const secondClaim = workerTurnClaim("turn-2");
-      let secondApprovalId: string | undefined;
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          workerTurnClaim: secondClaim,
-          fullPermission,
-        },
-        async () => {
-          secondApprovalId = await queueDelegatedApproval({
-            context,
-            sessions,
-            session,
-            sessionId: "delegate-worker",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            proposal,
-          });
-        },
-      );
+      const secondApprovalId = await queueForClaim(secondClaim, fullPermission);
 
       expect(secondApprovalId).toBe(firstApprovalId);
       expect(manager.listPendingRecords()).toHaveLength(1);

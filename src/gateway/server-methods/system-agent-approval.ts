@@ -16,7 +16,10 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
-import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
+import type {
+  AgentRuntimeDelegatedAuthority,
+  AgentRuntimeIdentity,
+} from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import {
@@ -118,19 +121,24 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceAccountId?: string;
     turnSourceThreadId?: string | number;
   };
+  trustedAgentRuntime?: AgentRuntimeIdentity;
 }): Promise<DelegatedProposalResolver> {
   const callerIdentity = getGatewayToolCallerIdentity();
+  const trustedAgentRuntime = callerIdentity ? undefined : params.trustedAgentRuntime;
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
     (callerIdentity?.operationalRunInstance
       ? getActiveAgentRunDelegatedAuthority(callerIdentity.operationalRunInstance)
-      : undefined);
+      : undefined) ??
+    trustedAgentRuntime?.delegatedAuthority;
   if (!approvalAuthority) {
     throw new Error("delegated OpenClaw approval requires an active run authority");
   }
-  const runtimeApprovalAuthority: AgentRuntimeDelegatedAuthority = callerIdentity?.workerTurnClaim
-    ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
-    : { kind: "local", ...approvalAuthority };
+  const runtimeApprovalAuthority: AgentRuntimeDelegatedAuthority =
+    trustedAgentRuntime?.delegatedAuthority ??
+    (callerIdentity?.workerTurnClaim
+      ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
+      : { kind: "local", ...approvalAuthority });
   const isAuthorityActive = () => {
     if (
       !validateAgentRunDelegatedAuthority(approvalAuthority) ||
@@ -141,17 +149,17 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     ) {
       return false;
     }
-    return (
-      runtimeApprovalAuthority.kind === "local" ||
-      (callerIdentity !== undefined &&
-        params.context.validateAgentRuntimeApprovalAuthority?.({
-          kind: "agentRuntime",
-          agentId: callerIdentity.agentId,
-          sessionKey: callerIdentity.sessionKey,
-          operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
-          delegatedAuthority: runtimeApprovalAuthority,
-        }) === true)
-    );
+    return trustedAgentRuntime !== undefined
+      ? params.context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) === true
+      : runtimeApprovalAuthority.kind === "local" ||
+          (callerIdentity !== undefined &&
+            params.context.validateAgentRuntimeApprovalAuthority?.({
+              kind: "agentRuntime",
+              agentId: callerIdentity.agentId,
+              sessionKey: callerIdentity.sessionKey,
+              operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
+              delegatedAuthority: runtimeApprovalAuthority,
+            }) === true);
   };
   const assertLiveApprovalAuthority = () => {
     if (!isAuthorityActive() || params.sessions.get(params.sessionId) !== params.session) {
@@ -207,7 +215,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
+      if ((callerIdentity?.fullPermission ?? trustedAgentRuntime?.fullPermission) === true) {
         const reply = await applyDecision("allow-once");
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");
@@ -231,7 +239,10 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         turnSourceTo: params.delegation.turnSourceTo ?? null,
         turnSourceAccountId: params.delegation.turnSourceAccountId ?? null,
         turnSourceThreadId: params.delegation.turnSourceThreadId ?? null,
-        runId: callerIdentity?.operationalRunInstance?.runId ?? null,
+        runId:
+          callerIdentity?.operationalRunInstance?.runId ??
+          trustedAgentRuntime?.operationalRunInstance.runId ??
+          null,
       };
       const record = manager.create(
         request,
