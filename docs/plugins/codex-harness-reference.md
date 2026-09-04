@@ -982,9 +982,14 @@ tts, video_generate, web_fetch, x_search
 ```
 
 A policy containing only those denies stays on the normal Codex native surface;
-the harness applies the named OpenClaw denial directly. Any other deny fails
-closed into the restricted surface. For example, `tools.deny: ["nodes"]`
-restricts the native surface because `nodes` is not in the audited set.
+the harness applies the named OpenClaw denial directly. Whole-server denies of
+configured MCP, written as `<server>__*` for a static `mcp.servers` entry, also
+stay native: the harness omits that server from its `mcp_servers` projection,
+the same override `codex.agents` scoping uses. Any other deny fails closed into
+the restricted surface, which also disables account-connected Codex Apps for the
+turn. For example, `tools.deny: ["nodes"]` restricts the native surface because
+`nodes` is not in the audited set, and `tools.deny: ["<server>__get_*"]`
+restricts it because Codex accepts only exact MCP tool names.
 
 Policy-restricted turns have no Codex environment selection or native Code Mode.
 OpenClaw disables inherited and configured MCP servers, attests that they remain

@@ -1749,6 +1749,97 @@ describe("runAgentHarnessAttempt", () => {
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
+  it("keeps native tools for whole-server denies of configured MCP the harness enforces", async () => {
+    const received: Array<{
+      restricted: boolean;
+      deniedMcpServers?: readonly string[];
+    }> = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push({
+        restricted: attempt.pluginHarnessToolPolicyRestricted === true,
+        deniedMcpServers: attempt.pluginHarnessToolPolicyDeniedMcpServers,
+      });
+      return createAttemptResult("codex");
+    });
+    const config = {
+      mcp: {
+        servers: {
+          alpha: { url: "https://lox.example/mcp", transport: "streamable-http" },
+          "Gamma Mail": { url: "https://mail.example/mcp", transport: "streamable-http" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const supported: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      conversationToolPolicySupport: "exact",
+      conversationToolPolicySafeDenyTools: ["tts"],
+      conversationToolPolicyMcpServerDenySupport: "configured",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt,
+    };
+    registerAgentHarness(supported, { ownerPluginId: "codex" });
+
+    const policies = [
+      { deny: ["alpha__*"] },
+      { deny: ["gamma-mail__*", "tts"] },
+      { deny: ["ALPHA__*", "Gamma Mail__*"] },
+      { deny: ["alpha__get_*"] },
+      { deny: ["unknown__*"] },
+      { deny: ["alpha__*", "exec"] },
+      { allow: ["alpha__*"] },
+    ];
+    for (const conversationToolPolicy of policies) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        conversationToolPolicy,
+      });
+    }
+
+    expect(received).toEqual([
+      { restricted: false, deniedMcpServers: ["alpha"] },
+      { restricted: false, deniedMcpServers: ["Gamma Mail"] },
+      { restricted: false, deniedMcpServers: ["alpha", "Gamma Mail"] },
+      { restricted: true, deniedMcpServers: undefined },
+      { restricted: true, deniedMcpServers: undefined },
+      { restricted: true, deniedMcpServers: ["alpha"] },
+      { restricted: true, deniedMcpServers: undefined },
+    ]);
+  });
+
+  it("isolates native tools for configured MCP denies when the harness does not certify them", async () => {
+    const received: boolean[] = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push(attempt.pluginHarnessToolPolicyRestricted === true);
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        conversationToolPolicySafeDenyTools: ["tts"],
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const config = {
+      mcp: {
+        servers: { alpha: { url: "https://lox.example/mcp", transport: "streamable-http" } },
+      },
+    } as unknown as OpenClawConfig;
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(config),
+      conversationToolPolicy: { deny: ["alpha__*"] },
+    });
+
+    expect(received).toEqual([true]);
+  });
+
   it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {

@@ -18,6 +18,7 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import { applyHarnessDeniedMcpServerOverrides } from "./harness-mcp-server-denies.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -115,6 +116,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     maxTokens: undefined,
   } as unknown as EmbeddedRunAttemptParams["model"];
   const legacyScheduledAppRecoveryPrompt = buildLegacyScheduledCodexAppRecoveryPrompt(params);
+  // Host-certified `<server>__*` denies join the session overrides on the attempt
+  // params themselves, so bundle loading, the configured-MCP preflight, and the
+  // dynamic materializer all project the same exclusions.
+  const attemptToolOverrides = applyHarnessDeniedMcpServerOverrides(
+    params.toolOverrides,
+    params.pluginHarnessToolPolicyDeniedMcpServers,
+  );
   const runtimeParams: EmbeddedRunAttemptParams = usesSupervisionConnection
     ? {
         ...paramsWithoutOuterNativeOwnership,
@@ -124,11 +132,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         thinkLevel: _outerThinkLevel,
         fastMode: _outerFastMode,
         sessionKey: contextSessionKey,
+        toolOverrides: attemptToolOverrides,
       }
     : {
         ...params,
         authProfileStore: attemptAuthProfileStore,
         sessionKey: contextSessionKey,
+        toolOverrides: attemptToolOverrides,
         ...(legacyScheduledAppRecoveryPrompt
           ? {
               extraSystemPrompt: [params.extraSystemPrompt, legacyScheduledAppRecoveryPrompt]
@@ -165,7 +175,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   preDynamicStartupStages.mark("auth-cache");
   const codexMcpToolOverrides = resolveCodexMcpToolOverridesForAgent(params.config, {
     agentId: sessionAgentId,
-    toolOverrides: params.toolOverrides,
+    toolOverrides: attemptToolOverrides,
   });
   const bundleManifestRegistry = resolveCodexAttemptBundleManifestRegistry(
     params.preparedModelRuntime,

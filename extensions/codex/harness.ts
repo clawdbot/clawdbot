@@ -115,6 +115,9 @@ export function createCodexAppServerAgentHarness(
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+    // Whole-server denies of configured MCP are applied to the Codex `mcp_servers`
+    // projection (see harness-mcp-server-denies.ts) instead of isolating native tools.
+    conversationToolPolicyMcpServerDenySupport: "configured",
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },

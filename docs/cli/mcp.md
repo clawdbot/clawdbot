@@ -455,7 +455,10 @@ other runtime adapters. Use non-empty `codex.agents` to project a server only
 into specific OpenClaw agent ids. Empty, blank, or invalid agent lists are
 rejected by config validation and omitted by the runtime projection path
 instead of becoming global. OpenClaw strips the `codex` metadata before handing
-the native `mcp_servers` config to Codex.
+the native `mcp_servers` config to Codex. A per-agent `tools.deny` entry of
+`<server>__*` for a static server is applied through the same projection, so it
+hides that server from Codex without restricting the harness's native tool
+surface or its account-connected apps.
 
 ### Saved MCP server definitions
 

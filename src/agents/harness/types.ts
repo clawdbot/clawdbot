@@ -396,6 +396,12 @@ type AgentHarnessRunCapability<
    * against native equivalents. Every other deny remains fail-closed.
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
+  /**
+   * Certifies the harness omits a configured `mcp.servers` entry from its native
+   * projection when policy denies `<server>__*`, so whole-server denies of
+   * configured MCP need not isolate the native tool surface.
+   */
+  conversationToolPolicyMcpServerDenySupport?: "configured";
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
   resolveSessionRuntimeOwnership?(params: {
