@@ -30,3 +30,4 @@
 {"ts":"2026-09-04T03:22:39.718Z","kind":"terminate","actor":"planner","payload":{"reason":"cancelled"}}
 {"ts":"2026-09-04T03:24:02.340Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
 {"ts":"2026-09-04T03:31:14.166Z","kind":"compact","actor":"dispatcher","payload":{"agent":"coder","percent":100,"threshold":70}}
+{"ts":"2026-09-04T03:32:38.993Z","kind":"compact","actor":"dispatcher","payload":{"agent":"planner","percent":100,"threshold":80}}
