@@ -643,7 +643,7 @@ extension DashboardWindowSmokeTests {
             persistedWidth: 400) == 400)
 
         let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
-        await TestIsolation.withUserDefaultsValues([key: nil]) {
+        try await TestIsolation.withUserDefaultsValues([key: nil]) {
             let defaults = AppDefaults.standard
             let dashboard = server.url("/control/")
             let link = readerServer.url("/reader/half-width")
@@ -671,11 +671,20 @@ extension DashboardWindowSmokeTests {
                     DashboardWindowLayout.mainBrowserMinWidth)
             #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
 
-            defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
-            controller._testCompleteLinkBrowserDividerDrag()
+            let window = try #require(controller.window)
+            let widerWidth = min(
+                openedLinkBrowserWidth + 80,
+                openedSplitWidth - dividerThickness - DashboardWindowLayout.mainBrowserMinWidth)
+            let narrowerWidth = max(openedLinkBrowserWidth - 80, DashboardWindowLayout.linkBrowserMinWidth)
+            for url in [link, readerServer.url("/reader/second")] {
+                controller._testOpenLinkBrowser(url)
+                for width in [widerWidth, narrowerWidth] {
+                    try Self.dragLinkBrowserDivider(in: window, toBrowserWidth: width)
+                    #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+                    #expect(abs(CGFloat(defaults.double(forKey: key)) - width) < 1)
+                }
+            }
             let resizedWidth = controller._testLinkBrowserWidth
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
 
             controller._testCloseLinkBrowser()
             controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
@@ -707,6 +716,47 @@ extension DashboardWindowSmokeTests {
                 #expect(abs(controller._testLinkBrowserWidth - width) < 1)
             }
         }
+    }
+
+    private static func dragLinkBrowserDivider(in window: NSWindow, toBrowserWidth width: CGFloat) throws {
+        var descendants = try [#require(window.contentView)]
+        var splitView: NSSplitView?
+        while let view = descendants.popLast() {
+            if let split = view as? NSSplitView {
+                splitView = split
+                break
+            }
+            descendants.append(contentsOf: view.subviews)
+        }
+        let split = try #require(splitView)
+        let dashboard = try #require(split.arrangedSubviews.first)
+        let start = split.convert(
+            NSPoint(x: dashboard.frame.maxX + split.dividerThickness / 2, y: split.bounds.midY),
+            to: nil)
+        let end = split.convert(
+            NSPoint(x: split.bounds.width - width - split.dividerThickness / 2, y: split.bounds.midY),
+            to: nil)
+        func event(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(
+                with: type,
+                location: point,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1))
+        }
+        let mouseDown = try event(.leftMouseDown, at: start)
+        let mouseDragged = try event(.leftMouseDragged, at: end)
+        let mouseUp = try event(.leftMouseUp, at: end)
+        // AppKit consumes drag/up events synchronously inside mouseDown. Queue
+        // them in reverse order so the native tracking loop receives the drag first.
+        NSApp.postEvent(mouseUp, atStart: true)
+        NSApp.postEvent(mouseDragged, atStart: true)
+        split.mouseDown(with: mouseDown)
+        split.layoutSubtreeIfNeeded()
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() async throws {
