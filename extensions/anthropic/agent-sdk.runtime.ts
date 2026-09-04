@@ -152,11 +152,14 @@ function resolveClaudeAgentSdkOptions(
     permissionMode: "default",
     settingSources: ["user"],
     spawnClaudeCodeProcess: processOwner.spawn,
-    systemPrompt: {
-      type: "preset",
-      preset: "claude_code",
-      append: context.systemPrompt,
-    },
+    // Replace Claude Code's preset harness prompt entirely rather than appending
+    // to it. OpenClaw already ships a full system prompt for the `cli_backend`
+    // surface (tool guidance, skills usage, identity), so keeping the
+    // `claude_code` preset alongside it means every turn runs with two system
+    // prompts. It also let the Claude Code harness identity surface to end
+    // users ("I don't have image access in this CLI context"). A string
+    // `systemPrompt` is a full custom prompt per the Agent SDK contract.
+    systemPrompt: context.systemPrompt,
     canUseTool: (toolName, input, request) =>
       authorizeClaudeAgentSdkTool({
         currentTurn,
@@ -250,7 +253,6 @@ function resolveClaudeAgentSdkOptions(
   const allowedTools: string[] = [];
   const disallowedTools: string[] = [];
   const extraArgs: NonNullable<ClaudeAgentSdkOptions["extraArgs"]> = {};
-  let excludeDynamicSystemPromptSections = false;
 
   for (let index = 0; index < context.args.length; index += 1) {
     const rawArgument = context.args[index] ?? "";
@@ -365,7 +367,10 @@ function resolveClaudeAgentSdkOptions(
         break;
       }
       case "--exclude-dynamic-system-prompt-sections":
-        excludeDynamicSystemPromptSections = true;
+        // Recognised and deliberately ignored. The flag trims the claude_code
+        // preset's per-user sections; a string systemPrompt is a full custom
+        // prompt with no preset to trim, and letting it fall through to the
+        // default branch would forward it to the CLI as an extra argument.
         break;
       default: {
         if (!argument.startsWith("--")) {
@@ -406,12 +411,23 @@ function resolveClaudeAgentSdkOptions(
   if (Object.keys(extraArgs).length > 0) {
     options.extraArgs = extraArgs;
   }
-  if (excludeDynamicSystemPromptSections) {
-    options.systemPrompt = {
-      type: "preset",
-      preset: "claude_code",
-      append: context.systemPrompt,
-      excludeDynamicSections: true,
+  // Keep Claude Code's own memory surfaces out of the agent's context. These
+  // are the same two keys OpenClaw already sets on its restricted-run path
+  // (CLAUDE_RESTRICTED_SETTINGS in cli-shared.ts); the difference is that a
+  // normal agent run never applied them, so a gateway agent inherited the
+  // host's auto-memory index and any CLAUDE.md reachable from cwd on top of
+  // its own AGENTS.md / MEMORY.md.
+  //
+  // The boundary is explicit: these defaults apply to a run that carries no
+  // `--settings` of its own. A run that does — a restricted run, whose payload
+  // also pins `disableAllHooks` and `enabledPlugins` — keeps it verbatim, and a
+  // two-key object here would drop those. They are not merged: `--settings`
+  // accepts a path as well as inline JSON (`settings?: string | Settings` in
+  // the SDK), so parsing it to merge would have to guess which it received.
+  if (extraArgs.settings === undefined) {
+    options.settings = {
+      autoMemoryEnabled: false,
+      claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
     };
   }
   return options;

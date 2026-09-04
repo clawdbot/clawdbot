@@ -724,9 +724,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock.mock.calls[1]?.[0]?.options).toEqual(
       expect.objectContaining({
         resume: SESSION_ID,
-        systemPrompt: expect.objectContaining({
-          append: "A changed authoritative OpenClaw system prompt.",
-        }),
+        systemPrompt: "A changed authoritative OpenClaw system prompt.",
       }),
     );
   });
