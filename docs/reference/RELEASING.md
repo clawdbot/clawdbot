@@ -629,6 +629,10 @@ the stable tag's base version, the parent skips both native qualification and
 APK publication and records the pin, expected train, and remedy in its summary
 and release proof. Before the next tag, prepare the shared mobile release with
 `node --import tsx scripts/mobile-release-version.ts --prepare --version YYYY.M.PATCH --write`.
+When preparing the core and mobile release together, use
+`pnpm release:prepare --version YYYY.M.PATCH --android --write`; its Android
+selection uses the same shared mobile preparation and reads pending notes from
+`apps/ios/CHANGELOG.md`. iOS App Store finalization remains a separate step.
 A matching pin still requires successful native qualification; a failed run is
 never recorded as a pin mismatch skip.
 
