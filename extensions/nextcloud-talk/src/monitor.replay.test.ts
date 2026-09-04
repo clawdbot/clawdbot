@@ -541,7 +541,7 @@ describe("createNextcloudTalkWebhookServer pre-authentication concurrency", () =
   it("returns an over-limit body's slot, so later deliveries still land", async () => {
     // The 413 answer was moved inside the guarded region so a rejected request keeps its slot
     // until the shared rejection lifecycle has finished answering. Scope: the later 200 shows
-    // one slot came back, not 64 - one free slot serves one delivery. What covers the other 63
+    // at least one slot came back, not that all 64 did - one free slot serves one delivery. What covers the other 63
     // is that all 64 are asserted to receive their 413 below, the 413 is answered inside the
     // guarded region, and the release is an unconditional finally on that path, so each of the
     // 64 released on its own. The hold itself is bounded by REJECTION_CLOSE_TIMEOUT_MS, a
