@@ -252,6 +252,7 @@ function readCliAssistantIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
+  // SAFETY: guarded as a non-null object above; idempotencyKey stays unknown until normalized.
   const record = message as { idempotencyKey?: unknown };
   const direct = normalizeOptionalString(record.idempotencyKey);
   if (direct?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX)) {
