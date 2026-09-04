@@ -7,6 +7,7 @@ import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
 import { isReadHttpMethod, respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 
 const BOARD_WIDGET_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -74,7 +75,11 @@ export function handleBoardHttpRequest(
     respondPlainText(res, 401, "Unauthorized");
     return true;
   }
-  if (authorized.sessionKey !== path.sessionKey || authorized.name !== path.name) {
+  // Ticket claims address stored rows; owned frame routes carry observer identity.
+  const routeSessionKey = authorized.agentId
+    ? sessionObserverScopeKey(authorized.sessionKey, authorized.agentId)
+    : authorized.sessionKey;
+  if (routeSessionKey !== path.sessionKey || authorized.name !== path.name) {
     respondPlainText(res, 401, "Unauthorized");
     return true;
   }

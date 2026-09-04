@@ -57,6 +57,16 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("accepts optional admitted update requester identity and rejects extra authority", () => {
+    const requester = { channel: "slack", accountId: "primary", senderId: "owner" };
+    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateRunParamsSchema, { requester })).toBe(true);
+    expect(
+      Value.Check(UpdateRunParamsSchema, { requester: { ...requester, senderIsOwner: true } }),
+    ).toBe(false);
+    expect(Value.Check(UpdateRunParamsSchema, { requester: { senderId: 123 } })).toBe(false);
+  });
+
   it("accepts only closed, exact tracked Git targets for update.run", () => {
     const target = {
       kind: "git",

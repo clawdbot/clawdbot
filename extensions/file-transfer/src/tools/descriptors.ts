@@ -42,7 +42,7 @@ export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "File Fetch",
   name: "file_fetch",
   description:
-    "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
+    "Retrieve a file from a paired node by absolute path. Saves all fetched bytes in the gateway's file-transfer media store and returns localPath and mediaId. Returns supported images as image content blocks and inlines small text files (≤8 KB). Use this for screenshots, photos, receipts, logs, source files. The mediaId can be reused as sourceMediaId for binary copies when node-write capability is available. Requires operator opt-in: gateway.nodes.commands.allow must include 'file.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: FileFetchToolSchema,
 };
 
@@ -71,7 +71,7 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory List",
   name: "dir_list",
   description:
-    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
+    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover remote paths before requesting file content. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: DirListToolSchema,
 };
 
@@ -95,7 +95,7 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory Fetch",
   name: "dir_fetch",
   description:
-    "Retrieve a whole directory tree, including dotfiles, from a paired node as a gzipped tarball. Unpack it on the gateway and return a manifest of saved paths. A denied descendant rejects the whole transfer. The unpacked files live on the gateway; use their localPath for follow-up operations. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
+    "Retrieve a whole directory tree, including dotfiles, from a paired node as a gzipped tarball. Unpack it on the gateway and return a manifest of saved paths. A denied descendant rejects the whole transfer. The unpacked files live on the gateway; use their localPath for follow-up operations. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
   parameters: DirFetchToolSchema,
 };
 
@@ -112,7 +112,7 @@ const FileWriteToolSchema = Type.Object({
   sourceMediaId: Type.Optional(
     Type.String({
       description:
-        "Media id returned by file_fetch. Preferred for binary copies because bytes stay in the gateway media store.",
+        "mediaId of a previously fetched file in the file-transfer media store. Reuses saved bytes for binary copies. Not a local path or an ID from another media store.",
     }),
   ),
   mimeType: Type.Optional(
@@ -138,6 +138,6 @@ export const FILE_WRITE_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "File Write",
   name: "file_write",
   description:
-    "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default — pass overwrite=true to replace. Refuses to write through symlink targets unless policy explicitly allows following symlinks. Pair with file_fetch by passing its mediaId as sourceMediaId for binary copy. Requires operator opt-in: gateway.nodes.allowCommands must include 'file.write', and file-transfer policy must authorize the path through allowWritePaths or a remembered exact approval. Without policy configured, every call is denied.",
+    "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default; pass overwrite=true to replace. Refuses to write through symlink targets unless policy explicitly allows following symlinks. Pass contentBase64 for inline bytes, or sourceMediaId for a previously fetched file's mediaId in the file-transfer media store. Requires operator opt-in: gateway.nodes.commands.allow must include 'file.write', and file-transfer policy must authorize the path through allowWritePaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: FileWriteToolSchema,
 };

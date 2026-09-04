@@ -76,7 +76,7 @@ public final class GatewayDiscoveryModel {
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var localIdentity: LocalIdentity
-    private var localIdentityTask: Task<Void, Never>?
+    @ObservationIgnored private var localIdentityTask: Task<Void, Never>?
     private let filterLocalGateways: Bool
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
@@ -94,7 +94,8 @@ public final class GatewayDiscoveryModel {
         self.localIdentity = Self.buildLocalIdentityFast(displayName: localDisplayName)
     }
 
-    @MainActor deinit {
+    deinit {
+        // Cancellation is thread-safe; isolated deinit can crash when SwiftUI discards a model outside a task.
         self.localIdentityTask?.cancel()
     }
 

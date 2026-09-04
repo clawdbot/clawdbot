@@ -1,7 +1,12 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
@@ -10,6 +15,49 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:main";
 
 describe("persistReplySessionEntry", () => {
+  it("rejects account selection authority revoked while waiting for the session writer", async () => {
+    const dir = tempDirs.make("openclaw-reply-session-authority-");
+    const storePath = path.join(dir, "sessions.json");
+    const initialEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 100,
+      delivery: { kind: "none" },
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, initialEntry);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
+      entered.resolve();
+      await release.promise;
+      return null;
+    });
+    await entered.promise;
+    let authorized = true;
+    const pending = persistReplySessionEntry({
+      storePath,
+      sessionKey,
+      initialEntry,
+      entry: {
+        ...initialEntry,
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+      },
+      validateCommit: () => (authorized ? undefined : "Select an account you own."),
+    });
+    authorized = false;
+    release.resolve();
+    await writer;
+
+    expect(await pending).toMatchObject({
+      status: "commit-rejected",
+      error: "Select an account you own.",
+      entry: initialEntry,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+      initialEntry,
+    );
+  });
+
   it("does not restore policy fields revoked during reply processing", async () => {
     const dir = tempDirs.make("openclaw-reply-session-store-");
     try {

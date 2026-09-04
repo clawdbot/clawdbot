@@ -3,12 +3,14 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
 } from "../plugins/types.js";
+import { drainingRelaySessions } from "./talk-realtime-relay-state.js";
 import {
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
 } from "./talk-realtime-relay.js";
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
+import { prepareTalkSessionTarget } from "./talk-session-target.js";
 import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
@@ -64,7 +66,7 @@ function transcriptionProvider(
 }
 
 describe("Talk relay audio base64", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const [relaySessionId, connId] of realtime) {
       stopTalkRealtimeRelaySession({ relaySessionId, connId });
     }
@@ -73,6 +75,9 @@ describe("Talk relay audio base64", () => {
     }
     realtime.clear();
     transcription.clear();
+    await Promise.all(
+      [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
+    );
   });
 
   it.each([
@@ -92,12 +97,14 @@ describe("Talk relay audio base64", () => {
     const sendAudio = vi.fn<(audio: Buffer) => void>();
     const { context: relayContext, events } = context();
     const session = createTalkRealtimeRelaySession({
+      controlSource: "transcript",
       context: relayContext,
       connId: "conn",
       provider: voiceProvider(sendAudio),
       providerConfig: {},
       instructions: "brief",
       tools: [],
+      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
     });
     realtime.set(session.relaySessionId, "conn");
     await Promise.resolve();
@@ -117,12 +124,14 @@ describe("Talk relay audio base64", () => {
     const sendAudio = vi.fn<(audio: Buffer) => void>();
     const { context: relayContext, events } = context();
     const session = createTalkRealtimeRelaySession({
+      controlSource: "transcript",
       context: relayContext,
       connId: "conn",
       provider: voiceProvider(sendAudio),
       providerConfig: {},
       instructions: "brief",
       tools: [],
+      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
     });
     realtime.set(session.relaySessionId, "conn");
     await Promise.resolve();

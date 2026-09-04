@@ -7,9 +7,9 @@ read_when:
   - You want one place to find the currently documented experimental flags
 ---
 
-Experimental features are preview surfaces behind explicit flags. They need more real-world mileage before they get a stable default or a long-lived contract.
+Experimental features are preview surfaces controlled by config flags. They need more real-world mileage before their shape and behavior become long-lived contracts.
 
-- Off by default unless a doc describes a narrow automatic setup rule.
+- Off by default unless the feature docs state otherwise. Swarm is enabled by default with an explicit opt-out.
 - Shape and behavior can change faster than stable config.
 - Prefer a stable path when one already exists.
 - Roll out broadly only after testing in a smaller environment first.
@@ -41,6 +41,14 @@ Code Mode remains disabled until you turn on its Labs switch or explicitly set
 `tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
 engages only for models marked as preferred Code Mode performers; it does not
 force Code Mode on for every model.
+
+Swarm is enabled by default, including when `tools.swarm` is omitted or sets
+only limits. Turn off its Labs switch, set `tools.swarm: false`, or set
+`tools.swarm.enabled: false` to opt out. Per-agent overrides remain available;
+an agent that sets only limits inherits global enablement. Swarm does not
+enable Code Mode or grant tools: Code Mode's Swarm API requires an executable
+native `sessions_spawn` tool, while the low-level flow also requires
+`agents_wait`. See [Swarm requirements](/tools/swarm#requirements).
 
 ## Local model lean mode
 

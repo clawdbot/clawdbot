@@ -66,6 +66,8 @@ type WizardDeviceCodeParams = {
 };
 
 export type WizardPrompter = {
+  /** End a hosted flow after a required choice is declined. */
+  cancel?: (message: string) => never;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

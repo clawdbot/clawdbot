@@ -7,6 +7,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
 } from "./embedded-agent-helpers.js";
@@ -173,6 +174,84 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it.each([{ prepared: false }, { prepared: true }])(
+    "replaces raw provider detail with classified facts (prepared: $prepared)",
+    ({ prepared }) => {
+      const raw = "HTTP 500: opaque-provider-canary";
+      const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+        provider: "openai",
+        providerOwner: prepared
+          ? {
+              id: "openai",
+              classifyFailoverReason: () => "server_error",
+            }
+          : undefined,
+        model: "gpt-5.6-luna",
+      });
+
+      expect(userFacing).toBe(
+        "⚠️ openai/gpt-5.6-luna request failed (provider internal error, HTTP 500). " +
+          "This is usually temporary — try again shortly.",
+      );
+      expect(userFacing).not.toContain("opaque-provider-canary");
+    },
+  );
+
+  it("keeps the generic last resort when no classified facts are available", () => {
+    const raw = "opaque-private-provider-detail";
+    const msg = makeAssistantMessageFixture({
+      errorMessage: raw,
+      provider: undefined,
+      model: undefined,
+      errorType: undefined,
+      errorCode: undefined,
+      errorBody: undefined,
+      content: [{ type: "text", text: raw }],
+    });
+
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
+  });
+
+  it("never includes a raw provider body in classified failure copy", () => {
+    const raw = "HTTP 500: Authorization: Bearer sk-secret https://secret.example/path opaque-body";
+    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+      provider: "openai",
+      providerOwner: {
+        id: "openai",
+        classifyFailoverReason: () => "server_error",
+      },
+      model: "gpt-5.6-luna",
+    });
+
+    expect(userFacing).not.toMatch(/sk-secret|secret\.example|opaque-body|Authorization/iu);
+  });
+
+  it("classifies service_unavailable text as provider overload", () => {
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantError("HTTP 503: service_unavailable"), {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    ).toContain("overloaded");
+  });
+
+  it("points classified authentication failures at provider re-authentication", () => {
+    const raw = "HTTP 401: opaque-auth-canary";
+    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+      provider: "openai",
+      providerOwner: {
+        id: "openai",
+        classifyFailoverReason: () => "auth",
+      },
+      model: "gpt-5.6-luna",
+    });
+
+    expect(userFacing).toBe(
+      "⚠️ openai/gpt-5.6-luna request failed (authentication failed, HTTP 401). " +
+        "Re-authenticate the provider and try again.",
+    );
+    expect(userFacing).not.toContain("opaque-auth-canary");
+  });
   it("classifies provider upstream_error payloads as server errors for fallback", () => {
     const msg = makeAssistantMessageFixture({
       errorMessage: "Upstream request failed",
@@ -189,6 +268,19 @@ describe("formatAssistantErrorText", () => {
         ),
       ).toBe("server_error");
     });
+  });
+  it("renders opaque upstream_error facts as a temporary provider error", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      errorMessage: "opaque provider response",
+      errorType: "upstream_error",
+    });
+
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
+        "This is usually temporary — try again shortly.",
+    );
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must

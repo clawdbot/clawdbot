@@ -89,6 +89,14 @@ export async function runDoctorLintChecks(
   };
 }
 
+/** Internal update gate selection; public Doctor lint remains selector-driven. */
+export function selectUpdateReadinessChecks(
+  checks: readonly HealthCheck[],
+  phase: "post-plugin",
+): readonly HealthCheck[] {
+  return checks.filter((check) => "updateReadiness" in check && check.updateReadiness === phase);
+}
+
 function isDefaultDisabled(check: HealthCheck): boolean {
   return "defaultEnabled" in check && check.defaultEnabled === false;
 }

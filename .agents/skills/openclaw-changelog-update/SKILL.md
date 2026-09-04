@@ -43,8 +43,9 @@ every human `Thanks @...` attribution.
    - record the successful Full Release Validation run id and attempt
    - stop if any product/version/backport change is still pending
 2. Audit history, including direct commits:
-   - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
-   - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
    - also inspect `--since='24 hours ago'` when main moved during the release.
 3. Generate the complete contribution record and editorial manifest before
    writing grouped prose:

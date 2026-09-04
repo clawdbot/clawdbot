@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -9,15 +9,14 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const outputDir = path.resolve(
-  process.cwd(),
-  process.env.OPENCLAW_CHAT_HEADER_CAPTURE_OUTPUT_DIR ??
-    ".artifacts/control-ui-e2e/chat-header-owner-presence",
-);
 suite.define(() => {
   it.each(["chat", "dashboard"] as const)(
     "deduplicates participants watching the %s",
     async (face) => {
+      const outputDir = createControlUiE2eArtifactDir(
+        "chat-header-owner-presence",
+        process.env.OPENCLAW_CHAT_HEADER_CAPTURE_OUTPUT_DIR,
+      );
       await suite.withPage(
         {
           locale: "en-US",
@@ -138,7 +137,6 @@ suite.define(() => {
           if (!clip) {
             throw new Error("Chat header did not expose a screenshot bounding box");
           }
-          await mkdir(outputDir, { recursive: true });
           await page.screenshot({ animations: "disabled", clip, path: screenshotPath });
           process.stdout.write(`Chat header screenshot: ${screenshotPath}\n`);
 

@@ -538,6 +538,14 @@ describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
 });
 
 describe("parseNpmPackJsonOutput", () => {
+  it("preserves filename-only pnpm receipts and npm size metadata", () => {
+    const receipt = { filename: "openclaw.tgz", unpackedSize: 120_354_302 };
+    expect(parseNpmPackJsonOutput(JSON.stringify(receipt))).toEqual([receipt]);
+    expect(parseNpmPackJsonOutput(JSON.stringify({ filename: receipt.filename }))).toEqual([
+      { filename: receipt.filename },
+    ]);
+  });
+
   it("parses a plain npm pack JSON array", () => {
     expect(parseNpmPackJsonOutput('[{"filename":"openclaw.tgz","files":[]}]')).toEqual([
       { filename: "openclaw.tgz", files: [] },
@@ -587,6 +595,16 @@ describe("parseNpmPackJsonOutput", () => {
 
   it("returns null when no JSON payload is present", () => {
     expect(parseNpmPackJsonOutput("> openclaw@2026.3.23 prepack")).toBeNull();
+  });
+
+  it.each([{}, { path: 42 }])("rejects incomplete packed file inventories: %j", (file) => {
+    expect(
+      parseNpmPackJsonOutput(
+        JSON.stringify([
+          { filename: "openclaw.tgz", files: [{ path: "dist/control-ui/index.html" }, file] },
+        ]),
+      ),
+    ).toBeNull();
   });
 });
 

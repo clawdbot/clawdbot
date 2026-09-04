@@ -955,6 +955,7 @@ export async function handleSlackAction(
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             media: { outbound: false },
           },
+          imageSanitization: { maxDimensionPx: cfg.agents?.defaults?.imageMaxDimensionPx },
         });
       }
       default:

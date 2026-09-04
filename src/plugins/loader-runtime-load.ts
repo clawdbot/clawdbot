@@ -45,6 +45,7 @@ type InternalPluginLoadOverrides = {
 
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   return {
+    complete: (...args) => runtime.subagent.complete(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
@@ -184,6 +185,7 @@ function loadOpenClawPluginsInternal(
       const activation = resolveEffectivePluginActivationState({
         id: record.id,
         origin: record.origin,
+        channelIds: record.channels,
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

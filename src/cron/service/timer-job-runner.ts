@@ -1,6 +1,11 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
-import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  bindCronJobAdmittedRun,
+  type CronActiveJobMarker,
+  isCronActiveJobMarkerCurrent,
+} from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -14,11 +19,7 @@ import {
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
 } from "./agent-watchdog.js";
-import {
-  abortErrorMessage,
-  isSetupTimeoutErrorText,
-  timeoutErrorMessage,
-} from "./execution-errors.js";
+import { abortErrorMessage, isSetupTimeoutErrorText } from "./execution-errors.js";
 import {
   assertServiceCronRunReceiptCurrent,
   trackServiceCronRunReceiptSettlement,
@@ -27,6 +28,7 @@ import type { CronServiceState } from "./state.js";
 import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
+  type ExecuteJobCoreOptions,
   type CronJobRunResult,
   type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
@@ -43,6 +45,7 @@ import { resolveDeliveryState } from "./timer-trigger.js";
 type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
+type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
   activeJobMarker?: CronActiveJobMarker;
@@ -72,23 +75,13 @@ async function deliverPrimaryWebhook(
   if (plan.mode !== "webhook" || result.triggerEval?.fired === false) {
     return result;
   }
+  const undelivered = (error?: string, deliverySuppressionReason?: "empty") =>
+    withPrimaryWebhookTrace({ job, result, delivered: false, error, deliverySuppressionReason });
   if (result.status !== "error" && !(typeof result.summary === "string" && result.summary.trim())) {
-    return settle(
-      withPrimaryWebhookTrace({
-        job,
-        result,
-        delivered: false,
-        deliverySuppressionReason: "empty",
-      }),
-    );
+    return settle(undelivered(undefined, "empty"));
   }
   if (!state.deps.sendCronWebhook) {
-    return withPrimaryWebhookTrace({
-      job,
-      result,
-      delivered: false,
-      error: "cron webhook delivery is unavailable",
-    });
+    return undelivered("cron webhook delivery is unavailable");
   }
 
   const interruptionError = () => {
@@ -98,12 +91,7 @@ async function deliverPrimaryWebhook(
       : `cron webhook delivery cancelled: ${reason}`;
   };
   if (abortSignal.aborted) {
-    return withPrimaryWebhookTrace({
-      job,
-      result,
-      delivered: false,
-      error: interruptionError(),
-    });
+    return undelivered(interruptionError());
   }
 
   assertRunCurrent?.();
@@ -143,12 +131,7 @@ async function deliverPrimaryWebhook(
       return progress.settledDeliveryResult;
     }
     if (abortSignal.aborted) {
-      return withPrimaryWebhookTrace({
-        job,
-        result,
-        delivered: false,
-        error: interruptionError(),
-      });
+      return undelivered(interruptionError());
     }
     return settle(deliveredResult);
   } catch (error) {
@@ -157,33 +140,8 @@ async function deliverPrimaryWebhook(
     }
     const deliveryError = abortSignal.aborted ? interruptionError() : formatErrorMessage(error);
     state.deps.log.warn({ jobId: job.id, err: deliveryError }, "cron: webhook delivery failed");
-    return settle(withPrimaryWebhookTrace({ job, result, delivered: false, error: deliveryError }));
+    return settle(undelivered(deliveryError));
   }
-}
-
-/**
- * Carries the already-resolved run attribution from watchdog-visible execution
- * state into a timer-built error outcome. The wall-clock/cancel paths return
- * their own outcome (the inner run result loses the Promise.race), so without
- * this the persisted cron run record drops provider/model/session for a
- * post-runner timeout or cancel even though they were already known. Stays
- * empty before the runner starts, so pre-execution setup timeouts read blank.
- */
-function cronRunAttributionFromExecution(execution?: CronAgentExecutionStarted): {
-  provider?: string;
-  model?: string;
-  sessionId?: string;
-  sessionKey?: string;
-} {
-  if (!execution) {
-    return {};
-  }
-  return {
-    provider: execution.provider,
-    model: execution.model,
-    sessionId: execution.sessionId,
-    sessionKey: execution.sessionKey,
-  };
 }
 
 /** Executes cron job core logic with the configured wall-clock timeout and watchdog cleanup. */
@@ -193,37 +151,52 @@ async function executeJobCoreWithTimeoutUnfinalized(
   opts?: CronCoreRunOptions,
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
+  const progress: CronRunProgress = {};
   const assertRunCurrent = opts?.runReceipt
-    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!)
+    ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!, opts.activeJobMarker)
     : undefined;
-  // Timeout/cancel returns a projected outcome before an abort-ignoring core
-  // settles; keep its durable receipt lease tied to the underlying promise.
-  const trackRunSettlement = (settlement: Promise<unknown>) => {
-    if (opts?.runReceipt) {
-      trackServiceCronRunReceiptSettlement({ state, handle: opts.runReceipt, settlement });
-    }
-    trackActiveCronTaskRunSettlement(settlement, runAbortController.signal);
-  };
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");
-  let resolveOperatorCancellation: ((value: typeof operatorCancellationMarker) => void) | undefined;
-  const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
-    resolveOperatorCancellation = resolve;
-  });
-  const createOperatorCancellationOutcome = (execution?: CronAgentExecutionStarted) => {
-    const error = abortErrorMessage(runAbortController.signal);
+  const operatorCancellation = createDeferredCore<typeof operatorCancellationMarker>();
+  const createInterruptionOutcome = async (
+    interruption: CronRunTimeout | "cancelled",
+    execution?: CronAgentExecutionStarted,
+    watchdog?: ReturnType<typeof createCronAgentWatchdog>,
+  ): Promise<CronCoreRunOutcome> => {
+    const error =
+      interruption === "cancelled"
+        ? abortErrorMessage(runAbortController.signal)
+        : interruption.reason;
+    const deliveryError = `cron webhook delivery ${interruption === "cancelled" ? "cancelled" : "timed out"}: ${error}`;
+    const settled = resolveInterruptedRunProgress({ progress, job, error: deliveryError });
+    if (settled) {
+      return settled;
+    }
+    if (interruption !== "cancelled") {
+      await cleanupTimedOutCronAgentRun(state, job, interruption.timeoutMs, execution);
+    }
+    const isolatedAgentSetupTimeout =
+      interruption !== "cancelled" &&
+      job.sessionTarget === "isolated" &&
+      isSetupTimeoutErrorText(error) &&
+      !watchdog?.observedLaneWait()
+        ? { error, timeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS, otherCronJobsActiveAtTimeout: false }
+        : undefined;
     const result: CronCoreRunOutcome = {
-      status: "error" as const,
+      status: "error",
       error,
-      ...cronRunAttributionFromExecution(execution),
+      // The abort race must retain attribution already reported by the runner.
+      ...(execution && {
+        provider: execution.provider,
+        model: execution.model,
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+      }),
+      ...(isolatedAgentSetupTimeout ? { isolatedAgentSetupTimeout } : {}),
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
     };
-    return withPrimaryWebhookInterruption({
-      job,
-      result,
-      error: `cron webhook delivery cancelled: ${error}`,
-    });
+    return withPrimaryWebhookInterruption({ job, result, error: deliveryError });
   };
   const reservation = opts?.runReceipt ? state.queuedRunReservationsByJobId.get(job.id) : undefined;
   if (
@@ -233,135 +206,94 @@ async function executeJobCoreWithTimeoutUnfinalized(
         reservation.lifecycleGeneration !== state.lifecycleGeneration))
   ) {
     runAbortController.abort("Gateway restarting.");
-    return createOperatorCancellationOutcome();
+    return await createInterruptionOutcome("cancelled");
   }
-  const releaseCronTaskRun = runsDetachedFromMainSession(job)
-    ? registerActiveCronTaskRun({
-        runId: opts?.runId ?? `cron-active:${job.id}`,
-        controller: runAbortController,
-        activeJobMarker: opts?.activeJobMarker,
-        onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
-      })
-    : undefined;
-  const recordTaskExecutionStart = (info?: CronAgentExecutionStarted) => {
-    tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
-  };
+  const detachedPayload = runsDetachedFromMainSession(job);
+  const releaseCronTaskRun =
+    detachedPayload || job.trigger
+      ? registerActiveCronTaskRun({
+          runId: opts?.runId ?? `cron-active:${job.id}`,
+          controller: runAbortController,
+          activeJobMarker: opts?.activeJobMarker,
+          onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
+        })
+      : undefined;
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
-    if (typeof jobTimeoutMs !== "number") {
-      // No wall-clock timeout means no watchdog to accumulate the resolved run
-      // identity, so track it locally from the same execution callbacks. Without
-      // this, an operator-cancel row for a timeout-disabled isolated run drops
-      // provider/model/session even though they were already known.
-      let activeExecution: CronAgentExecutionStarted | undefined;
-      const accumulateExecution = (info?: CronAgentExecutionStarted) => {
-        if (info) {
-          activeExecution = { ...activeExecution, ...info };
-        }
-      };
-      const noteExecutionStarted = (info?: CronAgentExecutionStarted) => {
-        accumulateExecution(info);
-        recordTaskExecutionStart(info);
-      };
-      const progress: CronRunProgress = {};
-      const coreOptions = {
-        activeJobMarker: opts?.activeJobMarker,
-        owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
-        streamBatch: opts?.streamBatch,
-        streamScheduleKey: opts?.streamScheduleKey,
-        streamSourceIdentity: opts?.streamSourceIdentity,
-        onExecutionStarted: noteExecutionStarted,
-        onExecutionPhase: accumulateExecution,
-        assertRunCurrent,
-        executionIdentity: opts?.executionIdentity,
-      };
-      const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
-      const runPromise = corePromise.then(async (result) => {
-        progress.completedCoreResult = result;
-        return await deliverPrimaryWebhook(
-          state,
-          job,
-          result,
-          runAbortController.signal,
-          progress,
-          assertRunCurrent,
-        );
-      });
-      trackRunSettlement(runPromise);
-      void runPromise.catch((err: unknown) => {
-        if (runAbortController.signal.aborted) {
-          state.deps.log.warn(
-            { jobId: job.id, err: String(err) },
-            "cron: job core rejected after cancellation abort",
-          );
-        }
-      });
-      const first = await Promise.race([runPromise, operatorCancellationPromise]);
-      if (first !== operatorCancellationMarker) {
-        return first;
-      }
-      const settled = resolveInterruptedRunProgress({
-        progress,
-        job,
-        error: `cron webhook delivery cancelled: ${abortErrorMessage(runAbortController.signal)}`,
-      });
-      if (settled) {
-        return settled;
-      }
-      return createOperatorCancellationOutcome(activeExecution);
-    }
-
-    let timeoutReason: string | undefined;
-    const timeoutMarker = Symbol("cron-timeout");
-    let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
-    const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-      resolveTimeout = resolve;
-    });
+    const timeout = createDeferredCore<CronRunTimeout>();
 
     // Detached agent runs report setup phases separately; defer the wall-clock
     // timeout until the runner starts so cold setup gets a clearer failure reason.
     const deferTimeoutUntilExecutionStart =
       job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
-    const triggerTimeout = (reason: string) => {
-      timeoutReason = reason;
-      if (!runAbortController.signal.aborted) {
-        const timeoutError = new Error(reason);
-        timeoutError.name = "TimeoutError";
-        runAbortController.abort(timeoutError);
+    const watchdog =
+      jobTimeoutMs === undefined
+        ? undefined
+        : createCronAgentWatchdog({
+            deferUntilRunner: deferTimeoutUntilExecutionStart,
+            jobTimeoutMs,
+            triggerTimeout: (reason) => {
+              if (!runAbortController.signal.aborted) {
+                const timeoutError = new Error(reason);
+                timeoutError.name = "TimeoutError";
+                runAbortController.abort(timeoutError);
+              }
+              timeout.resolve({ timeoutMs: jobTimeoutMs, reason });
+            },
+          });
+    // Unlimited runs still retain attribution when cancellation wins the race.
+    let untimedExecution: CronAgentExecutionStarted | undefined;
+    const accumulateExecution = (info?: CronAgentExecutionStarted) => {
+      if (info) {
+        untimedExecution = { ...untimedExecution, ...info };
       }
-      resolveTimeout?.(timeoutMarker);
     };
-    const watchdog = createCronAgentWatchdog({
-      deferUntilRunner: deferTimeoutUntilExecutionStart,
-      jobTimeoutMs,
-      triggerTimeout,
-    });
     const noteLaneState = (info?: { waiting?: boolean }) => {
       if (info?.waiting === false) {
-        watchdog.noteLaneAdmitted();
+        watchdog?.noteLaneAdmitted();
         return;
       }
-      watchdog.noteLaneWait();
+      watchdog?.noteLaneWait();
     };
     const noteRunnerStarted = (info?: CronAgentExecutionStarted) => {
-      watchdog.noteRunnerStarted(info);
-      recordTaskExecutionStart(info);
+      if (watchdog) {
+        watchdog.noteRunnerStarted(info);
+      } else {
+        accumulateExecution(info);
+      }
+      tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
     };
-    const progress: CronRunProgress = {};
-    const coreOptions = {
+    const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
+    const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
+    const executionIdentity = opts?.executionIdentity;
+    const coreOptions: ExecuteJobCoreOptions = {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
-      onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
-      onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      // Conditions own their pending tools; main payloads hand work to a shared
+      // heartbeat. Release cancellation before that handoff can produce effects.
+      onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
+      onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
+      onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
+      onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
+      onHeartbeatExecutionStarted:
+        watchdog && resolveHeartbeatTimeoutMs
+          ? (heartbeat) => watchdog.replaceTimeout(resolveHeartbeatTimeoutMs(heartbeat))
+          : undefined,
       assertRunCurrent,
-      executionIdentity: opts?.executionIdentity,
+      executionIdentity: executionIdentity && {
+        ...executionIdentity,
+        onPostAdmission: (context) => {
+          bindCronJobAdmittedRun(opts?.activeJobMarker, context, runAbortController.signal);
+          executionIdentity.onPostAdmission?.(context);
+        },
+      },
     };
+    watchdog?.start();
     const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
-    watchdog.start();
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
@@ -373,67 +305,37 @@ async function executeJobCoreWithTimeoutUnfinalized(
         assertRunCurrent,
       );
     });
-    trackRunSettlement(runPromise);
+    // Timeout/cancel projects an outcome before an abort-ignoring core settles;
+    // keep the receipt and shutdown drain tied to the underlying promise.
+    if (opts?.runReceipt) {
+      trackServiceCronRunReceiptSettlement({
+        state,
+        handle: opts.runReceipt,
+        settlement: runPromise,
+      });
+    }
+    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
           { jobId: job.id, err: String(err) },
-          "cron: job core rejected after timeout abort",
+          `cron: job core rejected after ${watchdog ? "timeout" : "cancellation"} abort`,
         );
       }
     });
     try {
-      const first = await Promise.race([runPromise, timeoutPromise, operatorCancellationPromise]);
+      const first = await Promise.race([runPromise, timeout.promise, operatorCancellation.promise]);
       if (first === operatorCancellationMarker) {
-        const settled = resolveInterruptedRunProgress({
-          progress,
-          job,
-          error: `cron webhook delivery cancelled: ${abortErrorMessage(runAbortController.signal)}`,
-        });
-        if (settled) {
-          return settled;
-        }
-        return createOperatorCancellationOutcome(watchdog.activeExecution());
+        return await createInterruptionOutcome(
+          "cancelled",
+          watchdog?.activeExecution() ?? untimedExecution,
+        );
       }
-      if (first !== timeoutMarker) {
-        return first;
-      }
-      const activeExecution = watchdog.activeExecution();
-      const settled = resolveInterruptedRunProgress({
-        progress,
-        job,
-        error: `cron webhook delivery timed out: ${timeoutReason ?? timeoutErrorMessage(activeExecution)}`,
-      });
-      if (settled) {
-        return settled;
-      }
-      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-      const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
-      const observedLaneWait = watchdog.observedLaneWait();
-      const isolatedAgentSetupTimeout =
-        job.sessionTarget === "isolated" && isSetupTimeoutErrorText(error) && !observedLaneWait
-          ? {
-              error,
-              timeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS,
-              otherCronJobsActiveAtTimeout: false,
-            }
-          : undefined;
-      const result: CronCoreRunOutcome = {
-        status: "error",
-        error,
-        ...cronRunAttributionFromExecution(activeExecution),
-        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
-          nowMs: state.deps.nowMs,
-        }),
-        ...(isolatedAgentSetupTimeout ? { isolatedAgentSetupTimeout } : {}),
-      };
-      return withPrimaryWebhookInterruption({
-        job,
-        result,
-        error: `cron webhook delivery timed out: ${error}`,
-      });
+      return "status" in first
+        ? first
+        : await createInterruptionOutcome(first, watchdog?.activeExecution(), watchdog);
     } finally {
-      watchdog.dispose();
+      watchdog?.dispose();
     }
   } finally {
     releaseCronTaskRun?.();

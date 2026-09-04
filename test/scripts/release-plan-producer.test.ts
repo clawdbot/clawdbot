@@ -54,6 +54,7 @@ const TOOLING_CLOSURE = [
   "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/pnpm-lockfile-documents.mjs",
@@ -229,24 +230,6 @@ function buildFixtureRepo(root: string, version: string, options: FixtureOptions
       ...(options.conflictingPlatformId
         ? ["  publish_windows:", "    uses: ./.github/workflows/docker-release.yml"]
         : []),
-      "",
-    ].join("\n"),
-  );
-  writeFixture(
-    root,
-    ".github/workflows/openclaw-npm-release.yml",
-    [
-      "name: NPM Release",
-      "jobs:",
-      "  preflight:",
-      "    steps:",
-      "      - name: Pack publishable core packages",
-      "        env:",
-      "          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
-      "        run: |",
-      '          if [[ "$package_dir" == "packages/ai" ]] && ! node -e \'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)\'; then',
-      "            exit 0",
-      "          fi",
       "",
     ].join("\n"),
   );
@@ -587,6 +570,124 @@ describe("release plan producer", () => {
     ]);
   });
 
+  it("ignores large runtime trees when collecting candidate metadata", () => {
+    const fixture = createFixtureRepo();
+    const params = sourceParams(fixture);
+    const expected = produceReleasePlan(params).inventory;
+    const git = (args: string[], input?: string) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw Test", "-c", "user.email=test@example.invalid", ...args],
+        { cwd: fixture.root, encoding: "utf8", input },
+      ).trim();
+    const blob = git(["hash-object", "-w", "--stdin"], "");
+    // Git objects reproduce the >1 MiB listing without creating thousands of files.
+    const runtimeTree = git(
+      ["mktree"],
+      Array.from(
+        { length: 6000 },
+        (_, index) => `100644 blob ${blob}\truntime-${index}-${"x".repeat(180)}.ts\n`,
+      ).join(""),
+    );
+    const directoryLeaves = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tpackage.json\n040000 tree ${runtimeTree}\tREADME.md\n`,
+    );
+    const pluginsTree = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tnoise\n040000 tree ${directoryLeaves}\tdirectory-leaves\n120000 blob ${blob}\tlinked-noise\n`,
+    );
+    const rootTree = git(
+      ["mktree"],
+      `${git(["ls-tree", fixture.candidateSha])}\n040000 tree ${pluginsTree}\textensions\n`,
+    );
+    const candidateSha = git([
+      "commit-tree",
+      rootTree,
+      "-p",
+      fixture.candidateSha,
+      "-m",
+      "runtime",
+    ]);
+    expect(produceReleasePlan({ ...params, candidateSha }).inventory).toEqual(expected);
+  });
+
+  it.each([
+    "package.json",
+    "packages/ai/package.json",
+    "extensions/linked/package.json",
+    "extensions/linked/README.md",
+  ])("rejects candidate metadata symlinks at %s", (path) => {
+    const fixture = createFixtureRepo();
+    const target = join(fixture.root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    rmSync(target, { force: true });
+    symlinkSync("must-not-be-read", target);
+    const candidateSha = commit(fixture.root, "linked metadata");
+    expect(() => produceReleasePlan({ ...sourceParams(fixture), candidateSha })).toThrow(
+      "candidate package inventory must not contain symbolic links",
+    );
+  });
+
+  it.each([
+    ["package.json", "100644", true, Buffer.from([0xff])],
+    ["README.md", "100644", true, Buffer.from([0xff])],
+    ["package.json", "120000", true, Buffer.from([0xff])],
+    ["runtime.ts", "100644", false, Buffer.from([0xff])],
+    ["package.json", "160000", false, Buffer.from([0xff])],
+    ["README.md", "100644", false, Buffer.from("tab\tname")],
+  ] as const)(
+    "preserves candidate metadata path bytes: %s/%s/%s",
+    (name, mode, rejectsPath, directory) => {
+      const fixture = createFixtureRepo();
+      const expected = produceReleasePlan(sourceParams(fixture)).inventory;
+      const tree = (input: Buffer) =>
+        execFileSync("git", ["mktree", "-z"], {
+          cwd: fixture.root,
+          input,
+          encoding: "utf8",
+        }).trim();
+      const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: fixture.root,
+        input: "outside-inventory",
+        encoding: "utf8",
+      }).trim();
+      const entry =
+        mode === "160000" ? `160000 commit ${fixture.candidateSha}` : `${mode} blob ${blob}`;
+      const child = tree(Buffer.from(`${entry}\t${name}\0`));
+      const extensions = tree(
+        Buffer.concat([Buffer.from(`040000 tree ${child}\tname-`), directory, Buffer.from([0])]),
+      );
+      const candidateTree = tree(
+        Buffer.concat([
+          execFileSync("git", ["ls-tree", "-z", fixture.candidateSha], { cwd: fixture.root }),
+          Buffer.from(`040000 tree ${extensions}\textensions\0`),
+        ]),
+      );
+      fixture.candidateSha = execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "commit-tree",
+          candidateTree,
+          "-p",
+          fixture.candidateSha,
+          "-m",
+          "candidate with byte paths",
+        ],
+        { cwd: fixture.root, encoding: "utf8" },
+      ).trim();
+      if (rejectsPath) {
+        expect(() => produceReleasePlan(sourceParams(fixture))).toThrow();
+      } else {
+        expect(produceReleasePlan(sourceParams(fixture)).inventory).toEqual(expected);
+      }
+    },
+  );
+
   it("requires the final tag only for postpublish confidence", () => {
     const fixture = createFixtureRepo();
     expect(produceReleasePlan(sourceParams(fixture))).toMatchObject({
@@ -878,9 +979,6 @@ exports.parse = source => {
   if (source.includes("rerun_group")) {
     return { on: { workflow_dispatch: { inputs: { rerun_group: { options: ["package", "all", "ci"] } } } } };
   }
-  if (source.includes("CORE_PACKAGE_DIRS")) {
-    return { jobs: { preflight: { steps: [{ env: { CORE_PACKAGE_DIRS: "packages/ai packages/gateway-protocol packages/gateway-client" } }] } } };
-  }
   return {
     jobs: {
       publish_docker: { uses: "./.github/workflows/docker-release.yml" },
@@ -921,12 +1019,29 @@ produceReleasePlan({
     expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
-  it("accepts the complete installed yaml package tree", () => {
-    const { result, tempRoot } = runYamlPackageSubprocess();
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(yamlTempEntries(tempRoot)).toEqual([]);
-  });
+  it.each([false, true])(
+    "accepts pinned yaml package bytes (installer metadata=%s)",
+    (installerMetadata) => {
+      const { result, tempRoot, sentinelPath } = runYamlPackageSubprocess({
+        mutate: ({ packageRoot, sentinelPath }) => {
+          const installedDependencies = join(packageRoot, "node_modules");
+          rmSync(installedDependencies, { recursive: true, force: true });
+          if (installerMetadata) {
+            mkdirSync(join(installedDependencies, ".bin"), { recursive: true });
+            writeFileSync(
+              join(installedDependencies, ".bin/yaml"),
+              `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n`,
+            );
+            symlinkSync("must-not-be-read", join(installedDependencies, "foreign-package"));
+          }
+        },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(yamlTempEntries(tempRoot)).toEqual([]);
+      expect(existsSync(sentinelPath)).toBe(false);
+    },
+  );
 
   it("rejects a changed yaml entry before executing it", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({

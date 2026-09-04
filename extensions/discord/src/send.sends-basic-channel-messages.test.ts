@@ -216,6 +216,30 @@ describe("resolveDiscordTargetChannelId", () => {
 });
 
 describe("sendMessageDiscord", () => {
+  it("keeps missing platform identity ambiguous in progress and final results", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        messageId: "",
+        channelId: "789",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+    }
+  });
+
   function expectReplyReference(
     body: { message_reference?: unknown } | undefined,
     messageId: string,

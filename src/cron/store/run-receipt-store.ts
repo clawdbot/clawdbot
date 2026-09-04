@@ -614,6 +614,7 @@ export function assertCronRunReceiptCurrent(params: {
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
   isAgentAvailable?: (agentId: string) => boolean;
+  allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
 }): void {
   if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
@@ -627,11 +628,9 @@ export function assertCronRunReceiptCurrent(params: {
     "cron.run-receipt.assert-current",
     params.env ? { env: params.env } : {},
     (database) =>
-      assertCronRunReceiptCurrentInDatabase({
-        database,
-        handle: params.handle,
-        resolveAgentId: params.resolveAgentId,
-      }),
+      params.allowMissingJob
+        ? assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle })
+        : assertCronRunReceiptCurrentInDatabase({ database, ...params }),
   );
 }
 

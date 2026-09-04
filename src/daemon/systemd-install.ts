@@ -6,7 +6,11 @@ import {
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveGatewayServiceDescription } from "./constants.js";
+import {
+  GATEWAY_SERVICE_KIND,
+  GATEWAY_SERVICE_MARKER,
+  resolveGatewayServiceDescription,
+} from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import {
   hasEnvironmentFileSource,
@@ -33,6 +37,7 @@ import {
   isSystemdUnitMissingDetail,
   isSystemdUserScopeUnavailable,
   readSystemctlDetail,
+  reloadSystemdUserManager,
 } from "./systemd-exec.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
@@ -49,7 +54,18 @@ import {
   buildSystemdUnit,
   parseSystemdEnvAssignments,
   renderSystemdEnvAssignment,
+  splitSystemdLogicalLines,
 } from "./systemd-unit.js";
+
+const SYSTEMD_GATEWAY_CREDENTIAL_KEYS = new Set([
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+]);
+
+function restrictSystemdArtifactMode(mode: number | undefined): number {
+  const ownerOnly = (mode ?? 0o600) & 0o700;
+  return ownerOnly || 0o600;
+}
 
 function collectSystemdInlineManagedKeys(params: {
   environment?: GatewayServiceEnv;
@@ -103,26 +119,19 @@ function collectSystemdFileBackedEnvironment(params: {
   return environment;
 }
 
-function sanitizeSystemdUnitBackupContent(params: {
-  content: string;
-  fileManagedKeys: ReadonlySet<string>;
-}): string {
-  if (params.fileManagedKeys.size === 0) {
-    return params.content;
-  }
-  // Backups should not retain file-managed secrets that OpenClaw moved into the
-  // generated EnvironmentFile during this rewrite.
+function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<string>): string {
   const sanitizedLines: string[] = [];
-  for (const rawLine of params.content.split("\n")) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
-    if (!line.startsWith("Environment=")) {
+    const separator = line.indexOf("=");
+    if (separator < 0 || line.slice(0, separator).trim() !== "Environment") {
       sanitizedLines.push(rawLine);
       continue;
     }
-    const assignments = parseSystemdEnvAssignments(line.slice("Environment=".length).trim());
+    const assignments = parseSystemdEnvAssignments(line.slice(separator + 1).trim());
     const keptAssignments = assignments.filter(({ key }) => {
       const normalizedKey = normalizeServiceEnvKey(key);
-      return !normalizedKey || !params.fileManagedKeys.has(normalizedKey);
+      return !normalizedKey || !keys.has(normalizedKey);
     });
     if (keptAssignments.length === assignments.length) {
       sanitizedLines.push(rawLine);
@@ -139,6 +148,110 @@ function sanitizeSystemdUnitBackupContent(params: {
     );
   }
   return sanitizedLines.join("\n");
+}
+
+function sanitizeSystemdUnitBackupContent(params: {
+  content: string;
+  fileManagedKeys: ReadonlySet<string>;
+}): string {
+  // Gateway credentials are never useful in a recovery artifact. File-managed
+  // values are also omitted after OpenClaw moves them to the generated env file.
+  return removeSystemdInlineEnvironmentKeys(
+    params.content,
+    new Set([...params.fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
+  );
+}
+
+function removeLegacyGatewayVersionMetadata(content: string): string {
+  const description =
+    /^Description=OpenClaw Gateway \((?:(profile: [^,)\r\n]+), )?v([^)\r\n]+)\)$/mu.exec(content);
+  if (!description) {
+    return content;
+  }
+  const inlineEnvironment = new Map<string, string>();
+  let inServiceSection = false;
+  for (const rawLine of splitSystemdLogicalLines(content)) {
+    const line = rawLine.trim();
+    if (/^\[[^\]]+\]$/u.test(line)) {
+      inServiceSection = line === "[Service]";
+      continue;
+    }
+    if (!inServiceSection || !line.startsWith("Environment=")) {
+      continue;
+    }
+    const rawAssignments = line.slice("Environment=".length).trim();
+    if (!rawAssignments) {
+      inlineEnvironment.clear();
+      continue;
+    }
+    for (const assignment of parseSystemdEnvAssignments(rawAssignments)) {
+      inlineEnvironment.set(assignment.key, assignment.value);
+    }
+  }
+  if (
+    inlineEnvironment.get("OPENCLAW_SERVICE_MARKER") !== GATEWAY_SERVICE_MARKER ||
+    inlineEnvironment.get("OPENCLAW_SERVICE_KIND") !== GATEWAY_SERVICE_KIND ||
+    inlineEnvironment.get("OPENCLAW_SERVICE_VERSION") !== description[2]
+  ) {
+    return content;
+  }
+  const replacement = description[1]
+    ? `Description=OpenClaw Gateway (${description[1]})`
+    : "Description=OpenClaw Gateway";
+  const refreshed =
+    content.slice(0, description.index) +
+    replacement +
+    content.slice(description.index + description[0].length);
+  return removeSystemdInlineEnvironmentKeys(refreshed, new Set(["OPENCLAW_SERVICE_VERSION"]));
+}
+
+/** Removes obsolete install-time version stamps without restarting the service. */
+export async function refreshLegacySystemdServiceMetadata(
+  env: GatewayServiceEnv,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadlineAt = Date.now() + Math.max(1, timeoutMs);
+  const remainingTimeoutMs = () => Math.max(1, deadlineAt - Date.now());
+  const unitPath = resolveSystemdUnitPath(env);
+  const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    throw error;
+  });
+  if (current === null || removeLegacyGatewayVersionMetadata(current) === current) {
+    return false;
+  }
+
+  await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
+  return await withSystemdDefinitionMutation(
+    env,
+    env,
+    async (mutation) => {
+      const snapshot = mutation.snapshots.get(unitPath) ?? null;
+      if (!snapshot) {
+        return false;
+      }
+      const previous = snapshot.contents.toString("utf8");
+      const refreshed = removeLegacyGatewayVersionMetadata(previous);
+      if (refreshed === previous) {
+        return false;
+      }
+      // Ownership can change while the mutation snapshot is prepared. Recheck around
+      // publication and restore if a system unit takes ownership during that window.
+      await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
+      await mutation.publish(unitPath, refreshed, snapshot.mode || 0o644);
+      try {
+        await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
+        await reloadSystemdUserManager(env, remainingTimeoutMs());
+      } catch (error) {
+        await mutation.restore(unitPath, snapshot);
+        throw error;
+      }
+      return true;
+    },
+    { timeoutMs: remainingTimeoutMs() },
+  );
 }
 
 async function writeSystemdUnit({
@@ -163,6 +276,8 @@ async function writeSystemdUnit({
       ? undefined
       : (mutation.snapshots.get(environmentFilePath) ?? null);
     const existingUnit = mutation.snapshots.get(unitPath) ?? null;
+    const backupPath = `${unitPath}.bak`;
+    const existingBackup = mutation.snapshots.get(backupPath) ?? null;
     const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
       readStateDirDotEnvFromStateDir(stateDir);
     const stateDirDotEnvVars = new Map(
@@ -178,14 +293,15 @@ async function writeSystemdUnit({
     const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
     const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
 
-    if (existingUnit) {
+    const backupSource = existingUnit ?? existingBackup;
+    if (backupSource) {
       await mutation.publish(
-        `${unitPath}.bak`,
+        backupPath,
         sanitizeSystemdUnitBackupContent({
-          content: existingUnit.contents.toString("utf8"),
+          content: backupSource.contents.toString("utf8"),
           fileManagedKeys,
         }),
-        existingUnit.mode || 0o600,
+        restrictSystemdArtifactMode(backupSource.mode),
       );
     }
     try {
@@ -250,7 +366,7 @@ async function writeSystemdUnit({
         environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
       });
       await assertNoSystemGatewayOwnership(env);
-      await mutation.publish(unitPath, unit, existingUnit?.mode ?? 0o644);
+      await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
       try {
         await assertNoSystemGatewayOwnership(env);
       } catch (ownershipError) {
@@ -258,8 +374,26 @@ async function writeSystemdUnit({
         throw ownershipError;
       }
     } catch (error) {
+      let rollbackError: unknown;
+      try {
+        await mutation.restore(backupPath, existingBackup);
+      } catch (cause) {
+        rollbackError = cause;
+      }
       if (environmentFileSnapshot !== undefined) {
-        await mutation.restore(environmentFilePath, environmentFileSnapshot);
+        try {
+          await mutation.restore(environmentFilePath, environmentFileSnapshot);
+        } catch (cause) {
+          rollbackError ??= cause;
+        }
+      }
+      if (rollbackError) {
+        const failureDetail = error instanceof Error ? error.message : String(error);
+        const rollbackDetail =
+          rollbackError instanceof Error ? rollbackError.message : "unknown rollback error";
+        throw new Error(`${failureDetail}\nSystemd rollback failed: ${rollbackDetail}`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -424,6 +558,11 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
+  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  });
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);

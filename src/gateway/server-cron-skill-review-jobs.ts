@@ -4,6 +4,7 @@ import {
   resolveSkillCollectionReviewMonitorSpecs,
   skillCollectionReviewMonitorAgentId,
 } from "../cron/skill-collection-review-monitor.js";
+import { partitionSystemMonitors } from "../cron/system-monitor-jobs.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 
@@ -27,6 +28,25 @@ export async function reconcileSkillCollectionReviewJobs(params: {
 
   const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg);
   const desired = new Set(specs.map((spec) => spec.agentId));
+  const { retained, duplicates } = partitionSystemMonitors(
+    jobs,
+    skillCollectionReviewMonitorAgentId,
+  );
+  for (const { agentId, job } of duplicates) {
+    try {
+      await params.cron.remove(job.id, {
+        systemOwned: true,
+        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+      });
+    } catch (error) {
+      params.commitGuard?.();
+      ok = false;
+      params.logger.warn(
+        { agentId, err: String(error) },
+        "cron-skill-review: duplicate monitor cleanup failed",
+      );
+    }
+  }
   for (const spec of specs) {
     try {
       await params.cron.add(spec.input, {
@@ -45,9 +65,8 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     }
   }
 
-  for (const job of jobs) {
-    const agentId = skillCollectionReviewMonitorAgentId(job);
-    if (!agentId || desired.has(agentId)) {
+  for (const [agentId, job] of retained) {
+    if (desired.has(agentId)) {
       continue;
     }
     try {

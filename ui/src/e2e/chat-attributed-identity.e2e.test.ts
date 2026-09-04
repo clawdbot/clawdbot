@@ -1,8 +1,8 @@
-// Control UI E2E tests cover attributed chat identity placement.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+// Control UI E2E tests cover attributed chat identity placement.
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,16 +11,19 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function resolveArtifactDir(): string | undefined {
-  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
-}
+let proofArtifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  proofArtifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-attributed-identity", parent)
+    : undefined;
+});
 
 async function captureProof(page: Page, name: string) {
-  const artifactDir = resolveArtifactDir();
+  const artifactDir = proofArtifactDir;
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(artifactDir, name),
@@ -66,10 +69,7 @@ function expectStableNamePosition(
 
 suite.define(() => {
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -446,10 +446,10 @@ suite.define(() => {
   });
 
   it("keeps an attributed failed send in the transcript with one-line retry metadata", async () => {
-    const artifactDir = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("bubble-delivery", artifactRoot)
+      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
@@ -554,10 +554,7 @@ suite.define(() => {
   });
 
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -571,38 +568,17 @@ suite.define(() => {
       name: "Hannah",
       avatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7",
     };
-    let avatarRequestCount = 0;
     const avatarRequests: Array<{ resourceType: string; url: string }> = [];
-    let releaseRetry: () => void = () => undefined;
-    const retryGate = new Promise<void>((resolve) => {
-      releaseRetry = resolve;
-    });
-    let markRetryStarted: () => void = () => undefined;
-    const retryStarted = new Promise<void>((resolve) => {
-      markRetryStarted = resolve;
-    });
-    let markRetrySettled: () => void = () => undefined;
-    const retrySettled = new Promise<void>((resolve) => {
-      markRetrySettled = resolve;
-    });
     await page.route(`**/api/users/${viewer.id}/avatar*`, async (route) => {
       avatarRequests.push({
         resourceType: route.request().resourceType(),
         url: route.request().url(),
       });
-      const requestIndex = ++avatarRequestCount;
-      if (requestIndex === 2) {
-        markRetryStarted();
-        await retryGate;
-      }
       await route.fulfill({
         body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
         contentType: "application/json",
         status: 404,
       });
-      if (requestIndex === 2) {
-        markRetrySettled();
-      }
     });
     await installMockGateway(page, {
       presenceUsers: [
@@ -629,7 +605,15 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const avatarResponse = page.waitForResponse((response) =>
+        response.url().endsWith(viewer.avatarUrl),
+      );
+      const [response] = await Promise.all([
+        avatarResponse,
+        page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")),
+      ]);
+      expect(response.status()).toBe(404);
+      expect(await response.finished()).toBeNull();
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {
@@ -638,17 +622,13 @@ suite.define(() => {
       const slot = userGroup.locator(".chat-avatar-slot");
       const image = slot.locator("img.chat-avatar.user");
       const initials = slot.locator(".chat-avatar--sender-initials");
-      await retryStarted;
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       expect(
         avatarRequests.map((request) => ({
           resourceType: request.resourceType,
           url: new URL(request.url).pathname + new URL(request.url).search,
         })),
-      ).toEqual([
-        { resourceType: "fetch", url: viewer.avatarUrl },
-        { resourceType: "fetch", url: viewer.avatarUrl },
-      ]);
+      ).toEqual([{ resourceType: "fetch", url: viewer.avatarUrl }]);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
@@ -669,20 +649,15 @@ suite.define(() => {
           }),
       );
 
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-local-avatar-after-rerender.png");
 
-      releaseRetry();
-      await retrySettled;
       await expect.poll(() => image.getAttribute("src")).toBeNull();
-      await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect(initials).toBeVisible();
     } finally {
-      releaseRetry();
       await context.close();
     }
   });

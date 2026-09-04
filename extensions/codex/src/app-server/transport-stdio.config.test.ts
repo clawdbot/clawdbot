@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import type { CodexConfigReadResponse, CodexInitializeResponse } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
@@ -57,9 +59,16 @@ type NativeConfigCase = {
   expected: CodexConfigReadResponse["config"];
   authProfileId?: null;
   posixOnly?: boolean;
+  managed?: boolean;
 };
 
 const cases: NativeConfigCase[] = [
+  {
+    name: "loader-owned managed package entrypoint",
+    invocation: () => ({ command: "codex", args: [...mixedArgs] }),
+    expected: expectedMixedConfig,
+    managed: true,
+  },
   {
     name: "root overrides with injected auth",
     invocation: (command) => ({
@@ -201,12 +210,14 @@ describe("Codex stdio effective configuration", () => {
       const options: CodexAppServerStartOptions = {
         ...testCase.invocation(command, launcher),
         transport: "stdio",
-        commandSource: "config",
+        commandSource: testCase.managed ? "managed" : "config",
         cwd,
         headers: {},
       };
       const start = withEphemeralCodexAuthStore({
-        startOptions: options,
+        startOptions: await resolveManagedCodexAppServerStartOptions(options, {
+          pluginRoot: fileURLToPath(new URL("../../", import.meta.url)),
+        }),
         authProfileId: testCase.authProfileId,
       });
       const { config } = await readNativeConfig(start, env);

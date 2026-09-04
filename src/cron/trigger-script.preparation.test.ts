@@ -28,7 +28,7 @@ import {
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resetPluginToolDescriptorCacheForTest } from "../plugins/tools.test-fixtures.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type HeadlessParams = Parameters<
   NonNullable<Parameters<typeof createCronScriptRuntime>[0]["runHeadless"]>

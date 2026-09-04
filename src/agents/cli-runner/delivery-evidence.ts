@@ -9,6 +9,7 @@ type CliMessagingDeliveryEvidence = Pick<
   CliOutput,
   | "didSendViaMessagingTool"
   | "didDeliverSourceReplyViaMessageTool"
+  | "sourceReplyDelivered"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
@@ -26,6 +27,7 @@ function snapshotCliMessagingDeliveryEvidence(
     ...(output.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(output.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: output.messagingToolSentTexts.slice() }
       : {}),

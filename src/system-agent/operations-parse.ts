@@ -16,10 +16,10 @@ import {
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
-import type { SystemAgentOverview } from "./overview.js";
+import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
-type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
+type SystemAgentOverviewLoader = typeof loadSystemAgentOverview;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
 
 export type { SystemAgentOperation };
@@ -52,12 +52,18 @@ export type SystemAgentCommandDeps = {
     path?: string;
     value?: string;
     cliOptions: ConfigSetOptions;
+    beforePersistentApply?: () => void;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
+  gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
+  runPluginUninstall?: (
+    pluginId: string,
+    runtime: RuntimeEnv,
+    options?: { beforePersistentApply?: () => void },
+  ) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {
@@ -67,7 +73,7 @@ export type SystemAgentCommandDeps = {
     historyLimit?: number;
     message?: string;
   }) => Promise<TuiResult | void>;
-  /** Where setup side effects run; the gateway surface never manages its own daemon. */
+  /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
   verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
@@ -292,6 +298,10 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     case "models":
     case "list models":
       return { kind: "models" };
+    case "model accounts":
+    case "personal model accounts":
+    case "manage model accounts":
+      return { kind: "model-accounts" };
     case "tui":
     case "open tui":
     case "chat":
@@ -563,7 +573,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
 }
 
 export const SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF =
-  "This change needs operator approval and cannot be applied from this chat. Approve it in the OpenClaw operator UI (`openclaw dashboard` on the Gateway host), or run the change there with `openclaw setup`.";
+  "The host applies the requesting session's permission policy to this exact proposal and returns the final outcome. Do not request conversational approval or claim the change was applied before that outcome.";
 
 export const SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF =
   "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request. Open `openclaw dashboard` or run `openclaw setup` on the Gateway host.";
@@ -575,7 +585,7 @@ export function formatSystemAgentPersistentPlan(
 ): string {
   const description = describeSystemAgentPersistentOperation(operation);
   return operatorApprovalOnly
-    ? `Refused: ${description} requires operator approval and was not applied from this chat.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+    ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
     : `Plan: ${description}. Say yes to apply.`;
 }
 

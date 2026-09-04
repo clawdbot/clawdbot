@@ -22,7 +22,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   collectMemorySearchHealthFindings,
-  collectWorkspaceStatusPluginVersionDrift,
+  collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
@@ -236,14 +236,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWorkspaceStatusHealthFindings } =
             await import("../commands/doctor-workspace-status.js");
-          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+          const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
           const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
             .runWithPluginMetadataSnapshot;
           return collectWorkspaceStatusHealthFindings(ctx.cfg, {
-            pluginVersionDrift,
+            pluginVersionReadiness,
             ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
           });
         },
@@ -390,7 +390,11 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectDevicePairingHealthFindings } =
             await import("../commands/doctor-device-pairing.js");
-          return collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+          return collectDevicePairingHealthFindings({
+            cfg: ctx.cfg,
+            healthOk: false,
+            env: ctx.env,
+          });
         },
       },
       run: runDevicePairingHealth,

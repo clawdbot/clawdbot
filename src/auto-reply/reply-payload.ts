@@ -305,12 +305,16 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Host-owned acknowledgement after this final payload is confirmed delivered. */
+  onFinalDeliverySuccess?: () => void;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
+  /** One host-visible status gates a child-completion wake for this exact turn. */
+  continuationStatus?: true;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
     deliveryId: string;
@@ -354,6 +358,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** The warning owner observed this tool failure; presentation text is not evidence. */
+  toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */

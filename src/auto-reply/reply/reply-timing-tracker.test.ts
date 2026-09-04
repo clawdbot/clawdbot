@@ -6,11 +6,15 @@ import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.j
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
 const subsystemWarn = vi.hoisted(() => vi.fn());
+const subsystemInfo = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: subsystemWarn }),
+  createSubsystemLogger: () => ({ warn: subsystemWarn, info: subsystemInfo }),
 }));
 
-beforeEach(() => subsystemWarn.mockReset());
+beforeEach(() => {
+  subsystemWarn.mockReset();
+  subsystemInfo.mockReset();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("isReplyProfilerEnabled", () => {
@@ -26,17 +30,26 @@ describe("isReplyProfilerEnabled", () => {
 });
 
 describe("createReplyTimingTracker", () => {
-  it("is a pass-through tracker unless the profiler flag is enabled", async () => {
+  it("reports slow preparation without profiling while keeping fast replies quiet", async () => {
     const warn = vi.fn();
-    const now = vi.spyOn(Date, "now");
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyTimingTracker({ log: { warn }, enabled: false });
 
     expect(tracker.measureSync("sync", () => 42)).toBe(42);
     await expect(tracker.measure("async", async () => "ok")).resolves.toBe("ok");
     tracker.logIfSlow({ message: "reply timings" });
-
-    expect(now).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
+
+    await tracker.measure("prepare", async () => {
+      nowMs += 5_000;
+    });
+    tracker.logIfSlow({ message: "reply timings", details: { runId: "run-1" } });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      runId: "run-1",
+      spans: expect.arrayContaining([{ name: "prepare", durationMs: 5_000, elapsedMs: 5_000 }]),
+    });
   });
 
   it("records and logs spans when the profiler flag is enabled", () => {
@@ -60,9 +73,8 @@ describe("createReplyTimingTracker", () => {
     });
   });
 
-  it("records sync throws and async rejections through the shared clock path", async () => {
+  it("retains failed-stage timings and propagates the original failures", async () => {
     const warn = vi.fn();
-    const now = vi.spyOn(Date, "now");
     const tracker = createReplyTimingTracker({ log: { warn }, enabled: true, totalWarnMs: 0 });
 
     expect(() =>
@@ -77,7 +89,6 @@ describe("createReplyTimingTracker", () => {
     ).rejects.toThrow("async failed");
     tracker.logIfSlow({ message: "reply timings" });
 
-    expect(now).toHaveBeenCalledTimes(8);
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       spans: [{ name: "sync_failure" }, { name: "async_failure" }],
     });
@@ -160,5 +171,74 @@ describe("createReplyTimingTracker", () => {
         spans: [],
       },
     );
+  });
+
+  it("keeps ordinary model and tool execution out of default terminal warnings", async () => {
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const agentTiming = createAgentTurnTimingTracker();
+    const dispatchTiming = createReplyHotPathTimingTracker();
+    const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
+
+    agentTiming.logMilestoneIfSlow({ ...identity, milestone: "before_embedded_run" });
+    agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "turn_accepted" });
+    agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "model_call_started" });
+    await dispatchTiming.measure("reply.run_reply_resolver", () =>
+      agentTiming.measure("embedded_run", async () => {
+        nowMs += 20_000;
+        agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "assistant_output_started" });
+        agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
+      }),
+    );
+    agentTiming.logIfSlow({ ...identity, outcome: "completed" });
+    dispatchTiming.logIfSlow({ channel: "webchat", outcome: "completed" });
+
+    expect(subsystemWarn).not.toHaveBeenCalled();
+    expect(subsystemInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports slow dispatch preparation before model execution without profiling", async () => {
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const tracker = createReplyHotPathTimingTracker();
+    await tracker.measure("reply.load_reply_resolver", async () => {
+      nowMs += 5_000;
+    });
+    tracker.logPreparationIfSlow({ channel: "webchat", sessionKey: "agent:main" });
+
+    expect(subsystemWarn).toHaveBeenCalledOnce();
+    expect(subsystemWarn.mock.calls[0]?.[1]).toMatchObject({
+      channel: "webchat",
+      sessionKey: "agent:main",
+      outcome: "milestone",
+      reason: "before_reply_resolver",
+      totalMs: 5_000,
+      spans: [{ name: "reply.load_reply_resolver", durationMs: 5_000, elapsedMs: 5_000 }],
+    });
+  });
+
+  it("records the first slow execution phases without profiling or repeated tool logs", () => {
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const tracker = createAgentTurnTimingTracker();
+    const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
+
+    tracker.logExecutionPhaseIfSlow({ ...identity, phase: "runner_entered" });
+    expect(subsystemWarn).not.toHaveBeenCalled();
+    nowMs = 21_000;
+    tracker.logExecutionPhaseIfSlow({ ...identity, phase: "turn_accepted" });
+    nowMs = 24_000;
+    tracker.logExecutionPhaseIfSlow({ ...identity, phase: "assistant_output_started" });
+    tracker.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
+    nowMs = 30_000;
+    tracker.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
+
+    expect(subsystemWarn.mock.calls.map((call) => call[1])).toEqual([
+      { ...identity, milestone: "turn_accepted", totalMs: 21_000, spans: [] },
+    ]);
+    expect(subsystemInfo.mock.calls.map((call) => call[1])).toEqual([
+      { ...identity, milestone: "assistant_output_started", totalMs: 24_000, spans: [] },
+      { ...identity, milestone: "tool_execution_started", totalMs: 24_000, spans: [] },
+    ]);
   });
 });

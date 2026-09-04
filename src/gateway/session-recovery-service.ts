@@ -6,6 +6,7 @@ import {
   type ErrorShape,
   type SessionsRecoverResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
@@ -271,10 +272,15 @@ export async function recoverGatewaySession(params: {
           const successorEntry = buildRestartRecoverySuccessorEntry({
             sessionId: successorSessionId,
             source: currentSource,
-            // Authenticated recovery creates a new person's session; actorless recovery
-            // continues the source's immutable isolation instead of dropping it.
+            // Owner attribution keeps the source isolation inherited by actorless recovery.
             creation: params.actor
-              ? { actor: params.actor, sandbox: resolveCreatorSandbox(params.cfg, params) }
+              ? {
+                  actor: params.actor,
+                  sandbox:
+                    params.actor.id === GATEWAY_OWNER_PROFILE_ID
+                      ? currentSource.sandbox
+                      : resolveCreatorSandbox(params.cfg, params),
+                }
               : inheritSessionCreationPolicy(currentSource),
           });
 

@@ -67,6 +67,7 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
   participants?: SessionParticipant[];
+  expandedParticipants?: SessionParticipant[];
   participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
@@ -79,7 +80,6 @@ export type SidebarRecentSession = {
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   workContext?: SessionWorkContext;
-  href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
@@ -152,6 +152,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "hasAutomation"
   | "label"
   | "lastMessagePreview"
+  | "expandedParticipants"
   | "participantCount"
   | "participants"
   | "placementProviderId"

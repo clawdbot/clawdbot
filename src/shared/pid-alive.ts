@@ -4,10 +4,9 @@ import fsSync from "node:fs";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
-// Cron reads its own identity on every tick. Cache only a successful Windows
-// read: the identity cannot change while this process lives, and foreign PIDs
-// must stay live so PID reuse is still detected.
-let selfWindowsStartTime: number | null = null;
+// Cache only a successful self read: this identity lasts for the process.
+// Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
+let selfStartTime: number | null = null;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
@@ -109,19 +108,18 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  if (process.platform === "darwin") {
-    return getDarwinProcessStartTime(pid);
-  }
-  if (process.platform !== "win32") {
-    return getProcessStartTime(pid);
-  }
   const isSelf = pid === process.pid;
-  if (isSelf && selfWindowsStartTime !== null) {
-    return selfWindowsStartTime;
+  if (isSelf && selfStartTime !== null) {
+    return selfStartTime;
   }
-  const startTime = readWindowsProcessStartTimeSync(pid);
+  const startTime =
+    process.platform === "darwin"
+      ? getDarwinProcessStartTime(pid)
+      : process.platform === "win32"
+        ? readWindowsProcessStartTimeSync(pid)
+        : getProcessStartTime(pid);
   if (isSelf && startTime !== null) {
-    selfWindowsStartTime = startTime;
+    selfStartTime = startTime;
   }
   return startTime;
 }

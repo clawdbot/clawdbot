@@ -45,7 +45,10 @@ describe("tool-card source highlighting", () => {
       render(null, container);
     });
     render(
-      renderToolCard({ id: "highlight", ...card }, { expanded: true, onToggleExpanded: vi.fn() }),
+      renderToolCard(
+        { id: "highlight", ...card },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
+      ),
       container,
     );
     await vi.dynamicImportSettled();
@@ -118,7 +121,7 @@ describe("tool-card source highlighting", () => {
             args,
             ...(format === "structured" && !multiple ? { outputText: "Applied patch" } : {}),
           },
-          { expanded: true, onToggleExpanded: vi.fn() },
+          { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
         ),
         container,
       );

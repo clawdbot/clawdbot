@@ -1,5 +1,4 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -14,6 +13,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const rosterMatch = { includeGlobal: true };
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
@@ -47,7 +47,7 @@ suite.define(() => {
       ],
     });
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await gateway.waitForRequest("sessions.list");
+    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     const startup = await gateway.waitForRequest("chat.startup");
     expect(startup.params).toMatchObject({ sessionKey });
     await currentPage.locator(".agent-chat__input textarea").fill("Try again");
@@ -232,8 +232,7 @@ suite.define(() => {
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
     expect(await assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
 
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-single-turn-status");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
       path: path.join(artifactDir, "continuing-reply.png"),
       fullPage: true,
@@ -275,11 +274,11 @@ suite.define(() => {
   });
 
   it("restores only the unpersisted assistant response after reconnecting", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-inflight-reconnect");
+    const artifactDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? path.join(suite.artifactDir, "chat-inflight-reconnect")
+        : "";
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
@@ -383,7 +382,7 @@ suite.define(() => {
     await currentPage
       .getByText("Ready for run lifecycle verification.")
       .waitFor({ timeout: 10_000 });
-    await gateway.waitForRequest("sessions.list");
+    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     await currentPage.locator(".agent-chat__input textarea").fill("finish this run");
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
@@ -398,8 +397,9 @@ suite.define(() => {
       .locator(".nav-item__state")
       .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
-    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
-    await gateway.deferNext("sessions.list");
+    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
+      .length;
+    await gateway.deferNext("sessions.list", rosterMatch);
     const activeUpdatedAt = Date.now();
     const activeStartedAt = activeUpdatedAt - 1_000;
     await gateway.emitGatewayEvent("sessions.changed", {
@@ -413,7 +413,7 @@ suite.define(() => {
       updatedAt: activeUpdatedAt,
     });
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeActive);
     await mainSessionRunIndicator.waitFor();
 
@@ -446,8 +446,9 @@ suite.define(() => {
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
 
-    const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list")).length;
-    await gateway.deferNext("sessions.list");
+    const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list", rosterMatch))
+      .length;
+    await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
@@ -459,7 +460,7 @@ suite.define(() => {
       updatedAt: Date.now(),
     });
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
@@ -472,8 +473,9 @@ suite.define(() => {
     // Event timestamps must follow the page's virtual clock so freshness checks
     // see the same elapsed suppression window that the UI just observed.
     const otherSessionUpdatedAt = await currentPage.evaluate(() => Date.now());
-    const sessionListsBeforeOtherSession = (await gateway.getRequests("sessions.list")).length;
-    await gateway.deferNext("sessions.list");
+    const sessionListsBeforeOtherSession = (await gateway.getRequests("sessions.list", rosterMatch))
+      .length;
+    await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.emitGatewayEvent("sessions.changed", {
       key: "agent:main:another-session",
       kind: "direct",
@@ -482,7 +484,7 @@ suite.define(() => {
       updatedAt: otherSessionUpdatedAt,
     });
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeOtherSession);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
@@ -492,8 +494,10 @@ suite.define(() => {
     // run identity stays terminal until the Gateway publishes different state.
     await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     const lateStaleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
-    const sessionListsBeforeLateStaleActive = (await gateway.getRequests("sessions.list")).length;
-    await gateway.deferNext("sessions.list");
+    const sessionListsBeforeLateStaleActive = (
+      await gateway.getRequests("sessions.list", rosterMatch)
+    ).length;
+    await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
@@ -505,7 +509,7 @@ suite.define(() => {
       updatedAt: lateStaleActiveUpdatedAt,
     });
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
@@ -530,7 +534,7 @@ suite.define(() => {
     await currentPage
       .getByText("Ready for yielded lifecycle verification.")
       .waitFor({ timeout: 10_000 });
-    await gateway.waitForRequest("sessions.list");
+    await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     await currentPage.locator(".agent-chat__input textarea").fill("restart and continue");
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
@@ -545,8 +549,9 @@ suite.define(() => {
       .locator(".nav-item__state")
       .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
-    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
-    await gateway.deferNext("sessions.list");
+    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list", rosterMatch))
+      .length;
+    await gateway.deferNext("sessions.list", rosterMatch);
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
@@ -558,7 +563,7 @@ suite.define(() => {
       updatedAt: Date.now(),
     });
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
       .toBeGreaterThan(sessionListsBeforeActive);
     await mainSessionRunIndicator.waitFor();
 
@@ -586,11 +591,11 @@ suite.define(() => {
   });
 
   it("renders a safe self-abort diagnostic without leaving stale composer status", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-abort-diagnostic");
+    const artifactDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? path.join(suite.artifactDir, "chat-abort-diagnostic")
+        : "";
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

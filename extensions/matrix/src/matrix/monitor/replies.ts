@@ -11,6 +11,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
+import { resolveMatrixExtraContent } from "../../outbound.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { sendMessageMatrix } from "../send.js";
@@ -163,6 +164,10 @@ export async function deliverMatrixReplies(params: {
         }
       };
 
+      // The reply's own event fields ride its first event, exactly as the outbound
+      // send path places them; a later chunk would attach them to the wrong event.
+      const extraContent = resolveMatrixExtraContent(reply);
+
       if (mediaUrls.length === 0) {
         // The send owner prepares native formatting and reports each accepted chunk.
         await sendMessageMatrix(params.roomId, rawText, {
@@ -171,6 +176,7 @@ export async function deliverMatrixReplies(params: {
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
+          extraContent,
           onDeliveryResult,
         });
         continue;
@@ -188,6 +194,7 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           audioAsVoice: reply.audioAsVoice,
           accountId: params.accountId,
+          extraContent: first ? extraContent : undefined,
           onDeliveryResult,
         });
         first = false;

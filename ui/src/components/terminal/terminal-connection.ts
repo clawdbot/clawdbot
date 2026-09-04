@@ -18,13 +18,14 @@ export interface TerminalGatewayClient {
   forceReconnect(reason: string): void;
 }
 
-type TerminalOpenResult = {
+export type TerminalOpenResult = {
   sessionId: string;
   agentId: string;
   shell: string;
   cwd: string;
   confined: boolean;
   title?: string;
+  owner?: "conn" | `agent:${string}`;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -38,6 +39,7 @@ export type TerminalSessionInfo = {
   sessionId: string;
   agentId: string;
   shell: string;
+  title?: string;
   cwd: string;
   confined: boolean;
   attached: boolean;

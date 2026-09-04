@@ -33,13 +33,19 @@ import {
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 
-type StatusDegradationSummary = Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins">;
+type StatusDegradationSummary = Pick<
+  StatusSummary,
+  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning"
+>;
 
 function buildStatusDegradationRows(
   summary: StatusDegradationSummary,
   decorate = (value: string) => value,
 ) {
   const rows: Array<{ Item: string; Value: string }> = [];
+  if (summary.startupMigrationWarning) {
+    rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
+  }
   const secretOwners = summary.degradedSecretOwners ?? [];
   if (secretOwners.length > 0) {
     rows.push({

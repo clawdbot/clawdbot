@@ -12,9 +12,9 @@ function renderSplitSide(
   const sign = side === "left" ? "-" : "+";
   // Tint only sides that carry a line; a lone add/del keeps its counterpart neutral.
   return html`<div
-    class="session-diff-split__side session-diff-split__side--${side} ${line
-      ? "session-diff-split__side--filled"
-      : ""}"
+    class="session-diff-split__side session-diff-split__side--${side} ${
+      line ? "session-diff-split__side--filled" : ""
+    }"
   >
     <span class="session-diff-split__gutter">${line?.lineNo ?? ""}</span>
     <span class="session-diff-split__sign">${line ? sign : ""}</span>
@@ -26,7 +26,7 @@ export function renderSessionSplitDiff(
   lines: readonly DiffLine[],
   renderSkip?: (line: DiffLine) => unknown,
   file: DiffFilePaths = { path: "" },
-) {
+): ReturnType<typeof renderHighlightedDiff> {
   const rows = pairSessionDiffLines(lines);
   return renderHighlightedDiff(
     lines,

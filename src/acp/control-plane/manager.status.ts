@@ -21,6 +21,7 @@ import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 export async function runManagerGetSessionStatus(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   signal?: AbortSignal;
   throwIfAborted: (signal?: AbortSignal) => void;
   resolveSession: ResolveManagerSession;
@@ -35,6 +36,7 @@ export async function runManagerGetSessionStatus(params: {
   const resolution = params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   const resolvedMeta = requireReadySessionMeta(resolution);
   const {
@@ -44,6 +46,7 @@ export async function runManagerGetSessionStatus(params: {
   } = await params.ensureRuntimeHandle({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     meta: resolvedMeta,
   });
   let handle = ensuredHandle;
@@ -67,6 +70,7 @@ export async function runManagerGetSessionStatus(params: {
   const reconciledSession = await params.reconcileRuntimeSessionIdentifiers({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     runtime,
     handle,
     meta: initialMeta,
@@ -79,6 +83,7 @@ export async function runManagerGetSessionStatus(params: {
   const identity = resolveSessionIdentityFromMeta(meta);
   return {
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     backend: handle.backend || meta.backend,
     agent: meta.agent,
     ...(identity ? { identity } : {}),

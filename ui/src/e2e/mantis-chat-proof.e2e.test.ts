@@ -3,6 +3,7 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -17,10 +18,6 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeMantisWebUiChat =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(
-  process.env.OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR ??
-    path.join(process.cwd(), ".artifacts", "qa-e2e", "mantis", "web-ui-chat-proof"),
-);
 
 let server: ControlUiE2eServer;
 const contextBrowsers = new WeakMap<BrowserContext, Browser>();
@@ -51,7 +48,6 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    await mkdir(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
   });
 
@@ -60,6 +56,10 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
   });
 
   it("sends a chat message and captures visible browser proof", async () => {
+    const artifactDir = createControlUiE2eArtifactDir(
+      "mantis-chat-proof",
+      process.env.OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR?.trim() || undefined,
+    );
     const rawVideoDir = path.join(artifactDir, "raw-video");
     await mkdir(rawVideoDir, { recursive: true });
     const context = await newBrowserContext({

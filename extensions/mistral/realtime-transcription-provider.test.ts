@@ -1,7 +1,8 @@
-// Mistral tests cover realtime transcription provider plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -15,6 +16,7 @@ async function createRealtimeServer(
   eventsByConnection?: readonly (readonly Record<string, unknown>[])[],
   onConnection?: (socket: WebSocket) => void,
 ) {
+  const closed = createDeferred<void>();
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
@@ -27,6 +29,7 @@ async function createRealtimeServer(
       onConnection?.(ws);
       ws.on("close", () => {
         clients.delete(ws);
+        closed.resolve();
       });
       ws.on("message", (data) => {
         const bytes = Buffer.isBuffer(data)
@@ -62,7 +65,10 @@ async function createRealtimeServer(
       });
     });
   };
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  return {
+    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
+    closed: closed.promise,
+  };
 }
 
 describe("buildMistralRealtimeTranscriptionProvider", () => {
@@ -124,7 +130,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
 
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
-    const baseUrl = await createRealtimeServer((url) => requests.push(url));
+    const { baseUrl } = await createRealtimeServer((url) => requests.push(url));
     const session = buildMistralRealtimeTranscriptionProvider().createSession({
       providerConfig: {
         apiKey: "fixture-value",
@@ -325,8 +331,8 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       partials: [],
       transcripts: ["hello", "world"],
     },
-  ])("$name", async ({ events, partials, transcripts }) => {
-    const baseUrl = await createRealtimeServer(() => {}, events);
+  ])("$name", async ({ name, events, partials, transcripts }) => {
+    const { baseUrl, closed } = await createRealtimeServer(() => {}, events);
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
     const session = buildMistralRealtimeTranscriptionProvider().createSession({
@@ -336,10 +342,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
-      expect(session.isConnected()).toBe(false);
-    });
+    await withTimeout(closed, 1_000, { message: `Mistral terminal socket did not close: ${name}` });
+    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
+    expect(session.isConnected()).toBe(false);
 
     expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
   });
@@ -370,7 +375,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     async ({ firstEvents, secondEvents, firstPartials, partials }) => {
       const requests: URL[] = [];
       let firstSocket: WebSocket | undefined;
-      const baseUrl = await createRealtimeServer(
+      const { baseUrl } = await createRealtimeServer(
         (url) => requests.push(url),
         [],
         [firstEvents, secondEvents],
@@ -429,7 +434,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);
     const splitSurrogatePrefix = "x".repeat(256 * 1024 - 4);
     const splitSurrogateTranscript = `${splitSurrogatePrefix}🙂`;
-    const baseUrl = await createRealtimeServer(() => {}, [
+    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
       { type: "transcription.text.delta", text: exactUtf8Limit },
       { type: "transcription.segment", text: "first segment", start: 0, end: 1 },
       { type: "transcription.text.delta", text: `${splitSurrogatePrefix}\ud83d` },
@@ -445,19 +450,18 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-        "first segment",
-        splitSurrogateTranscript,
-      ]);
-      expect(session.isConnected()).toBe(false);
-    });
+    await withTimeout(closed, 1_000, { message: "Mistral UTF-8 limit socket did not close" });
+    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+      "first segment",
+      splitSurrogateTranscript,
+    ]);
+    expect(session.isConnected()).toBe(false);
 
     expect(onError).not.toHaveBeenCalled();
   });
 
   it("fails once and ignores late terminal events after 10,000 runaway deltas", async () => {
-    const baseUrl = await createRealtimeServer(() => {}, [
+    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
       ...Array.from({ length: 10_000 }, () => ({
         type: "transcription.text.delta",
         text: "x".repeat(32),
@@ -465,11 +469,8 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
       { type: "transcription.done", text: "late done" },
     ]);
-    let resolveError: (() => void) | undefined;
-    const errorReceived = new Promise<void>((resolve) => {
-      resolveError = resolve;
-    });
-    const onError = vi.fn(() => resolveError?.());
+    const errorReceived = createDeferred<void>();
+    const onError = vi.fn(() => errorReceived.resolve());
     const onTranscript = vi.fn();
     let lastPartialLength = 0;
     let partialCalls = 0;
@@ -484,16 +485,15 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
-    await errorReceived;
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message:
-            "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit",
-        }),
-      );
-      expect(session.isConnected()).toBe(false);
-    });
+    // Start the teardown deadline after overflow is reported, preserving the processing budget.
+    await errorReceived.promise;
+    await withTimeout(closed, 1_000, { message: "Mistral runaway-delta socket did not close" });
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit",
+      }),
+    );
+    expect(session.isConnected()).toBe(false);
 
     expect(partialCalls).toBe(8_192);
     expect(lastPartialLength).toBe(256 * 1024);
@@ -501,7 +501,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("makes a ready-state provider error terminal and ignores late events", async () => {
-    const baseUrl = await createRealtimeServer(() => {}, [
+    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
       { type: "transcription.text.delta", text: "draft" },
       { type: "error", error: { message: "provider failed" } },
       { type: "transcription.text.delta", text: "x".repeat(256 * 1024 + 1) },
@@ -521,12 +521,11 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
-    await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "provider failed" }),
-      );
-      expect(session.isConnected()).toBe(false);
-    });
+    await withTimeout(closed, 1_000, { message: "Mistral provider-error socket did not close" });
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "provider failed" }),
+    );
+    expect(session.isConnected()).toBe(false);
 
     expect(onPartial).toHaveBeenCalledExactlyOnceWith("draft");
     expect(onTranscript).not.toHaveBeenCalled();

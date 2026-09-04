@@ -4,6 +4,7 @@ import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   matchesMentionPatterns,
   implicitMentionKindWhen,
   type ChannelInboundMediaInput,
@@ -16,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -48,6 +50,7 @@ import {
   getLineSourceInfo,
   readLineTextMessageBody,
   type LineInboundContext,
+  type LineInboundMentionAccess,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
@@ -170,6 +173,7 @@ async function resolveLineEventAdmission(
   resolveBoundAccess: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
+  mentions?: LineInboundMentionAccess;
 } | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
@@ -197,12 +201,7 @@ async function resolveLineEventAdmission(
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {
-      return {
-        canDetectMention: false,
-        wasMentioned: false,
-        hasAnyMention: false,
-        implicitMentionKinds: [],
-      };
+      return undefined;
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -218,6 +217,7 @@ async function resolveLineEventAdmission(
     return {
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      explicitlyMentionedBot: wasMentionedByNative,
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
@@ -247,15 +247,7 @@ async function resolveLineEventAdmission(
       ...(isGroup && groupConfig?.enabled === false
         ? { route: { id: "line:group-config", enabled: false } }
         : {}),
-      mentionFacts:
-        isGroup && event.type === "message"
-          ? {
-              canDetectMention: mentionFacts.canDetectMention,
-              wasMentioned: mentionFacts.wasMentioned,
-              hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: mentionFacts.implicitMentionKinds,
-            }
-          : undefined,
+      mentionFacts,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
@@ -303,7 +295,16 @@ async function resolveLineEventAdmission(
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
-    return { access, resolveBoundAccess: resolveAccess };
+    // Quotes and authorized commands can address the bot without a native LINE
+    // mention. Preserve that effective result separately from explicit evidence.
+    const mentions = mentionFacts
+      ? {
+          ...mentionFacts,
+          wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
+          requireMention,
+        }
+      : undefined;
+    return { access, resolveBoundAccess: resolveAccess, mentions };
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -394,16 +395,28 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
   if (isGroup && decision.access.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
-    const sourceInfo = getLineSourceInfo(event.source);
-    logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = sourceInfo.userId ?? "unknown";
+    const groupsConfigPath = resolveChannelGroupsConfigPath({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      groups: account.config.groups,
+    });
+    logInboundDrop({
+      log: runtime.log,
+      channel: "line",
+      reason: "no mention",
+      target: historyKey,
+      onceKey: JSON.stringify([account.accountId, historyKey]),
+      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
+    const senderId = userId ?? "unknown";
     if (historyKey && context.groupHistories) {
-      const displayName = sourceInfo.userId
-        ? await getUserDisplayName(sourceInfo.userId, {
+      const displayName = userId
+        ? await getUserDisplayName(userId, {
             cfg,
             accountId: account.accountId,
             channelAccessToken: account.channelAccessToken,
@@ -488,6 +501,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
       inboundHistory: historyReservation.inboundHistory,
+      mentions: decision.mentions,
       buildContext: context.buildContext,
     });
 

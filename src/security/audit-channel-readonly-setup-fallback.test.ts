@@ -47,6 +47,7 @@ vi.mock("./audit-channel.collect.runtime.js", () => ({
 const collectNoFindings = vi.hoisted(() => vi.fn(() => []));
 vi.mock("./audit.nondeep.runtime.js", () => ({
   collectAttackSurfaceSummaryFindings: collectNoFindings,
+  collectCrossAgentSessionAccessFindings: collectNoFindings,
   collectExposureMatrixFindings: collectNoFindings,
   collectGatewayHttpNoAuthFindings: collectNoFindings,
   collectGatewayHttpSessionKeyOverrideFindings: collectNoFindings,
