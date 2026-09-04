@@ -73,11 +73,13 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${x}px; top: ${y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.lastActive
-          ? html`<div class="session-menu__info">
-              ${t("sessionsView.lastActive", { time: this.lastActive })}
-            </div>`
-          : ""}
+        ${
+          this.lastActive
+            ? html`<div class="session-menu__info">
+                ${t("sessionsView.lastActive", { time: this.lastActive })}
+              </div>`
+            : ""
+        }
         <wa-dropdown-item class="session-menu__item" value="viewer">
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.messageSquare}</span

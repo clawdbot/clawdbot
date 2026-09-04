@@ -1178,15 +1178,15 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
-  ) =>
-    (resolveFeishuToolAccount({
+  ) => {
+    const account = resolveFeishuToolAccount({
       api,
       executeParams: params,
       defaultAccountId,
       requiredTool: { family: "doc", label: "Doc" },
-    }).config?.mediaMaxMb ?? 30) *
-    1024 *
-    1024;
+    });
+    return Math.floor((account.config?.mediaMaxMb ?? 30) * 1024 * 1024);
+  };
 
   const getImageReadTimeoutMs = (
     params: { accountId?: string } | undefined,

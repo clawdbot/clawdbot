@@ -303,9 +303,12 @@ uses the shared typing keepalive/cleanup lifecycle. Add
 Resolve account media limits with `resolveChannelMediaMaxBytes(...)` from
 `openclaw/plugin-sdk/account-helpers`. Pass the already-merged account's
 `mediaMaxMb` through `resolveChannelLimitMb`; the helper applies the agent
-default only when the account/channel limit is absent. Its optional byte result
-must reach the actual media loader, capped by any transport ceiling. Preserve
-the loader's existing default when no limit is configured.
+default when the account/channel limit is absent or invalid. Positive MiB limits
+are floored to whole bytes; a positive sub-byte limit becomes zero and permits no
+non-empty attachment. Pass zero through unchanged, rather than treating it as
+an absent limit. The optional byte result must reach the actual media loader,
+capped by any transport ceiling; preserve the loader's default only when the
+result is `undefined`.
 
 The focused account-helper import keeps setup and account resolution free of
 media analysis runtimes. The old `media-runtime` export remains available for
@@ -750,6 +753,12 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The `threading.resolveReplyTransport` hook receives the payload's optional
+`replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
+native API requires a thread root can resolve a current-message reply against
+the admitted thread without redirecting arbitrary explicit `replyToId` targets.
+Omitted intent keeps the existing explicit-target behavior.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports
@@ -929,7 +938,8 @@ unrelated inbound runtime helpers.
   <Step title="Build the channel plugin object">
     The `ChannelPlugin` interface has many optional adapter surfaces. Start with
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
-    them.
+    them. `createChatChannelPlugin` defaults omitted capabilities to direct
+    messages; declare `capabilities.chatTypes` when the channel supports more.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable

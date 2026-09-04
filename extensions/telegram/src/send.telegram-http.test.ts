@@ -5,9 +5,28 @@ import os from "node:os";
 import path from "node:path";
 import { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterAll, assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { createTelegramBot } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest,
+  resetTelegramAccountThrottlersForTest,
+  resetTelegramMessageCacheForTest,
+  resetTelegramSentMessageCacheForTest,
+} from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import { sendMessageTelegram } from "./send.js";
 
 describe("Telegram physical send acceptance over HTTP", () => {
@@ -15,12 +34,25 @@ describe("Telegram physical send acceptance over HTTP", () => {
   let bot: Bot;
   let mediaDir: string;
   let photoPath: string;
+  const localBotFiles = new Map<string, string>();
   const sockets = new Set<Socket>();
   const requests: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const events: string[] = [];
   const rejections: string[] = [];
   const cfg = { channels: { telegram: { botToken: "123456:telegram-send-http-fixture" } } };
   const buttons = [[{ text: "Continue", callback_data: "continue" }]];
+
+  async function expectUploadedDocument(
+    fields: Record<string, unknown> | undefined,
+    expected: Buffer,
+  ) {
+    const reference = fields?.document;
+    assert(typeof reference === "string" && reference.startsWith("attach://"));
+    // Telegram refers to the separate multipart file part by its attachment identifier.
+    const uploaded = fields?.[reference.slice("attach://".length)];
+    assert(uploaded instanceof File);
+    expect(Buffer.from(await uploaded.arrayBuffer())).toEqual(expected);
+  }
 
   beforeAll(async () => {
     mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-physical-send-"));
@@ -53,6 +85,18 @@ describe("Telegram physical send acceptance over HTTP", () => {
         if (rejection) {
           response.statusCode = 400;
           response.end(JSON.stringify({ ok: false, error_code: 400, description: rejection }));
+          return;
+        }
+        if (method === "getFile") {
+          response.end(
+            JSON.stringify({
+              ok: true,
+              result: {
+                file_id: fields.file_id,
+                file_path: localBotFiles.get(String(fields.file_id)),
+              },
+            }),
+          );
           return;
         }
         response.end(
@@ -93,6 +137,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     requests.length = 0;
     events.length = 0;
     rejections.length = 0;
+    localBotFiles.clear();
   });
 
   afterAll(async () => {
@@ -157,6 +202,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
       assertPlatformSendAuthorized,
     });
   }
+
+  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
+    const source = "<https://example.com/a.pdf|Manual>";
+    const text = sanitizeForPlainText(source, { style: "markdown" });
+
+    await sendThrough("public", text, async () => {});
+
+    expect(requests.at(-1)?.fields.text).toBe("Manual");
+  });
 
   it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
     const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
@@ -347,5 +401,247 @@ describe("Telegram physical send acceptance over HTTP", () => {
     }
     expect(observedError.deliveryResult.messageIds).toEqual(["1", "2"]);
     expect(observedError.deliveryResult.receipt?.platformMessageIds).toEqual(["1", "2"]);
+  });
+
+  it.each([
+    { label: "fractional channel limit", mediaMaxMb: 0.001, size: 1048, accepted: true },
+    { label: "next byte above the limit", mediaMaxMb: 0.001, size: 1049, accepted: false },
+    { label: "positive sub-byte limit", mediaMaxMb: 0.1 / (1024 * 1024), size: 1, accepted: false },
+    {
+      label: "explicit byte override",
+      mediaMaxMb: 0.1 / (1024 * 1024),
+      maxBytes: 1048,
+      size: 1048,
+      accepted: true,
+    },
+    { label: "explicit zero override", mediaMaxMb: 30.1, maxBytes: 0, size: 1048, accepted: false },
+    { label: "default channel limit", mediaMaxMb: undefined, size: 1048, accepted: true },
+  ])("enforces $label for a local document", async (testCase) => {
+    const document = Buffer.alloc(testCase.size, 0x61);
+    document.write("%PDF-1.4\n");
+    const documentPath = path.join(mediaDir, "limit.pdf");
+    await fs.writeFile(documentPath, document);
+    const sending = sendMessageTelegram("123", "document", {
+      cfg: {
+        agents: { defaults: { mediaMaxMb: 0.1 / (1024 * 1024) } },
+        channels: { telegram: { ...cfg.channels.telegram, mediaMaxMb: testCase.mediaMaxMb } },
+      },
+      api: bot.api,
+      mediaUrl: documentPath,
+      mediaLocalRoots: [mediaDir],
+      forceDocument: true,
+      ...("maxBytes" in testCase ? { maxBytes: testCase.maxBytes } : {}),
+    });
+    if (!testCase.accepted) {
+      await expect(sending).rejects.toThrow(/exceeds|too large/i);
+      expect(requests).toHaveLength(0);
+      return;
+    }
+    await sending;
+    expect(requests.map(({ method }) => method)).toEqual(["sendDocument"]);
+    await expectUploadedDocument(requests[0]?.fields, document);
+  });
+
+  it.each([
+    {
+      label: "inbound configured decimal cap",
+      direction: "inbound",
+      mediaMaxMb: 0.001,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "inbound MiB override",
+      direction: "inbound",
+      mediaMaxMb: 0.1 / (1024 * 1024),
+      override: 0.001,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "reply configured decimal cap",
+      direction: "reply",
+      mediaMaxMb: 30.1,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "reply MiB override",
+      direction: "reply",
+      mediaMaxMb: 0.1 / (1024 * 1024),
+      override: 30.1,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "inbound integer cap control",
+      direction: "inbound",
+      mediaMaxMb: 1,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "inbound default cap control",
+      direction: "inbound",
+      mediaMaxMb: undefined,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "reply integer cap control",
+      direction: "reply",
+      mediaMaxMb: 1,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "reply default cap control",
+      direction: "reply",
+      mediaMaxMb: undefined,
+      override: undefined,
+      size: 1048,
+      unavailable: false,
+    },
+    {
+      label: "inbound oversize integer cap control",
+      direction: "inbound",
+      mediaMaxMb: 1,
+      override: undefined,
+      size: 1024 * 1024 + 1,
+      unavailable: true,
+    },
+  ] as const)("preserves $label through the bot's real file read", async (testCase) => {
+    const state = await createOpenClawTestState({ label: "telegram-media-limit" });
+    const abort = new AbortController();
+    let receivingBot: ReturnType<typeof createTelegramBot> | undefined;
+    try {
+      const document = Buffer.alloc(testCase.size, 0x61);
+      document.write("%PDF-1.4\n");
+      const documentName = testCase.unavailable ? "oversize-control.pdf" : "limit.pdf";
+      const documentPath = path.join(state.workspaceDir, documentName);
+      await fs.writeFile(documentPath, document);
+      localBotFiles.set("local-document", documentPath);
+      const botCfg: OpenClawConfig = {
+        agents: { defaults: { workspace: state.workspaceDir } },
+        commands: { native: false, nativeSkills: false },
+        channels: {
+          telegram: {
+            ...cfg.channels.telegram,
+            apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+            trustedLocalFileRoots: [state.workspaceDir],
+            mediaMaxMb: testCase.mediaMaxMb,
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      };
+      await state.writeConfig(botCfg);
+      setTelegramRuntime({
+        state: {
+          openKeyedStore: ((options) =>
+            createPluginStateKeyedStoreForTests(
+              "telegram",
+              options,
+            )) as TelegramRuntime["state"]["openKeyedStore"],
+          openSyncKeyedStore: ((options) =>
+            createPluginStateSyncKeyedStoreForTests(
+              "telegram",
+              options,
+            )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+        },
+        channel: {},
+      } as TelegramRuntime);
+      const received: Buffer[] = [];
+      const contexts: Array<{
+        agentText: string | undefined;
+        commandText: string | undefined;
+        paths: string[];
+      }> = [];
+      receivingBot = createTelegramBot({
+        token: cfg.channels.telegram.botToken,
+        botInfo: telegramBotInfoForTest,
+        config: botCfg,
+        mediaMaxMb: testCase.override,
+        accountAbortSignal: abort.signal,
+        fetchAbortSignal: abort.signal,
+        telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
+        telegramDeps: { ...defaultTelegramBotDeps, getRuntimeConfig: () => botCfg },
+        dispatchReplyFromConfig: async ({ ctx, dispatcher }) => {
+          contexts.push({
+            agentText: ctx.agentText,
+            commandText: ctx.commandText,
+            paths: (ctx.media ?? []).flatMap((media) => (media.path ? [media.path] : [])),
+          });
+          for (const media of ctx.media ?? []) {
+            if (media.path) {
+              received.push(await fs.readFile(media.path));
+            }
+          }
+          if (testCase.direction === "reply") {
+            // Media emitted before the final answer uses Telegram's streaming send funnel.
+            dispatcher.sendBlockReply({ mediaUrl: documentPath });
+          }
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+        },
+      });
+      await receivingBot.handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 1,
+          date: 1_700_000_000,
+          chat: { id: 123, type: "private", first_name: "Fixture" },
+          from: { id: 77, is_bot: false, first_name: "Fixture" },
+          ...(testCase.direction === "inbound"
+            ? {
+                caption: "read this document",
+                document: {
+                  file_id: "local-document",
+                  file_unique_id: "local-document",
+                  file_name: documentName,
+                  mime_type: "application/pdf",
+                  file_size: document.length,
+                },
+              }
+            : { text: "send the document" }),
+        },
+      });
+      if (testCase.direction === "inbound") {
+        expect(requests.filter(({ method }) => method === "getFile")).toHaveLength(1);
+        expect(contexts).toHaveLength(1);
+        if (testCase.unavailable) {
+          expect(received).toEqual([]);
+          expect(contexts[0]?.paths).toEqual([]);
+          // Local read failures currently project a download-failed notice, even for too-large.
+          expect(contexts[0]?.agentText).toContain("[media unavailable: download failed]");
+          expect(contexts[0]?.commandText).toBe("read this document");
+          expect(
+            requests.some(({ method }) =>
+              /^send(?:Document|Photo|Video|Audio|Voice)$/.test(method),
+            ),
+          ).toBe(false);
+        } else {
+          expect(received).toEqual([document]);
+          expect(contexts[0]?.agentText).not.toContain("[media unavailable:");
+        }
+      } else {
+        const uploads = requests.filter(({ method }) => method === "sendDocument");
+        expect(uploads).toHaveLength(1);
+        await expectUploadedDocument(uploads[0]?.fields, document);
+      }
+    } finally {
+      await receivingBot?.stop();
+      abort.abort();
+      resetPluginStateStoreForTests();
+      resetTelegramMessageCacheForTest();
+      resetTelegramSentMessageCacheForTest();
+      resetTelegramAccountThrottlersForTest();
+      clearTelegramRuntimeForTest();
+      await state.cleanup();
+    }
   });
 });

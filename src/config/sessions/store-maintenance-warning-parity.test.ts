@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
+import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -13,7 +14,7 @@ function createMaintenanceArtifacts() {
 
 it("uses enforcement preservation when predicting active-session eviction", async () => {
   const now = Date.now();
-  const createStore = () => ({
+  const createStore = (): Record<string, SessionEntry> => ({
     archived: { sessionId: "archived", updatedAt: now - 2, archivedAt: now },
     active: { sessionId: "active", updatedAt: now - 1 },
     recent: { sessionId: "recent", updatedAt: now },
@@ -21,7 +22,7 @@ it("uses enforcement preservation when predicting active-session eviction", asyn
   const maintenanceConfig = {
     mode: "warn" as const,
     pruneAfterMs: 30 * DAY_MS,
-    maxEntries: 2,
+    maxEntries: 1,
     modelRunPruneAfterMs: DAY_MS,
     resetArchiveRetentionMs: null,
     maxDiskBytes: null,
@@ -52,5 +53,5 @@ it("uses enforcement preservation when predicting active-session eviction", asyn
   expect(onWarn).not.toHaveBeenCalled();
   expect(enforcedStore).toHaveProperty("archived");
   expect(enforcedStore).toHaveProperty("active");
-  expect(enforcedStore.recent).toBeUndefined();
+  expect(enforcedStore.recent?.archivedAt).toEqual(expect.any(Number));
 });

@@ -1,8 +1,12 @@
 // Codex tests cover sandbox exec-server child and backend lease lifecycle ordering.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -88,6 +92,8 @@ function streamingHttpParams(requestId: string) {
   };
 }
 
+useIsolatedStateGuard();
+
 afterEach(() => {
   vi.useRealTimers();
   spawnMock.mockReset();
@@ -95,6 +101,48 @@ afterEach(() => {
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
+  it.each([
+    { key: "HOME", via: "path" },
+    { key: "OPENCLAW_STATE_DIR", via: "path" },
+    { key: "OPENCLAW_STATE_DIR", via: "symlink" },
+  ] as const)(
+    "refuses host metadata discovery outside the isolated home after $key changes ($via)",
+    async ({ key, via }) => {
+      const testHome = process.env.OPENCLAW_TEST_HOME!;
+      // The path cases only point outside the home; nothing is created there.
+      let foreignRoot = path.join(testHome, "..", "foreign-state-path");
+      let target = foreignRoot;
+      const cleanup: string[] = [];
+      spawnMock.mockReturnValue(createFakeChild());
+      try {
+        if (via === "symlink") {
+          // A state root that lexically sits inside the home but physically points outside.
+          // Register each path before the next fallible call so a failed setup still cleans up.
+          foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-foreign-state-"));
+          cleanup.push(foreignRoot);
+          target = path.join(testHome, "linked-state");
+          cleanup.push(target);
+          fs.symlinkSync(foreignRoot, target, "dir");
+        }
+        await withEnvAsync({ [key]: target }, async () => {
+          await expect(
+            startProcess(
+              createExecServer(createSandboxContext({})),
+              new Map(),
+              createFakeNotifications().send,
+              processStartParams("foreign-state"),
+            ),
+          ).rejects.toThrow("state escaped the isolated test home");
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        for (const entry of cleanup) {
+          fs.rmSync(entry, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it("owns JSON-RPC delivery, ordered process notifications, and idempotent session cleanup", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);

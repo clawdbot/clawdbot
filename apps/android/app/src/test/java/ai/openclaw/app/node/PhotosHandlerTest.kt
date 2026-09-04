@@ -47,7 +47,7 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handlePhotosLatest_requiresPermission() {
-    val handler = PhotosHandler.forTesting(appContext(), FakePhotosDataSource(hasPermission = false))
+    val handler = PhotosHandler(appContext(), FakePhotosDataSource(hasPermission = false))
 
     val result = handler.handlePhotosLatest(null)
 
@@ -57,7 +57,7 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handlePhotosLatest_rejectsInvalidJson() {
-    val handler = PhotosHandler.forTesting(appContext(), FakePhotosDataSource(hasPermission = true))
+    val handler = PhotosHandler(appContext(), FakePhotosDataSource(hasPermission = true))
 
     val result = handler.handlePhotosLatest("[]")
 
@@ -79,19 +79,26 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
               height = 480,
               createdAt = "2026-02-28T00:00:00Z",
             ),
+            EncodedPhotoPayload(
+              format = "jpeg",
+              base64 = "xyz789",
+              width = 320,
+              height = 240,
+              createdAt = null,
+            ),
           ),
       )
-    val handler = PhotosHandler.forTesting(appContext(), source)
+    val handler = PhotosHandler(appContext(), source)
 
-    val result = handler.handlePhotosLatest("""{"limit":1}""")
+    val result = handler.handlePhotosLatest("""{"limit":2}""")
 
     assertTrue(result.ok)
-    val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-    val photos = payload.getValue("photos").jsonArray
-    assertEquals(1, photos.size)
-    val first = photos.first().jsonObject
-    assertEquals("jpeg", first.getValue("format").jsonPrimitive.content)
-    assertEquals(640, first.getValue("width").jsonPrimitive.int)
+    assertEquals(
+      Json.parseToJsonElement(
+        """{"photos":[{"format":"jpeg","base64":"abc123","width":640,"height":480,"createdAt":"2026-02-28T00:00:00Z"},{"format":"jpeg","base64":"xyz789","width":320,"height":240}]}""",
+      ),
+      Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
+    )
   }
 
   @Test

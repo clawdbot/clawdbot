@@ -6,9 +6,13 @@ import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { sendQaChannelMediaBatch } from "./outbound.js";
 
 describe("QA media delivery limits", () => {
-  it.each(["channel", "account", "default-account", "agent"] as const)(
-    "rejects an oversized batch before publishing with the %s cap",
-    async (scope) => {
+  it.each(
+    (["channel", "account", "default-account", "agent"] as const).flatMap((scope) =>
+      [1 / 1024, 0.001].map((capMb) => ({ scope, capMb })),
+    ),
+  )(
+    "rejects an oversized batch before publishing with the $scope cap ($capMb MiB)",
+    async ({ scope, capMb }) => {
       const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "qa-media-cap-")));
       const small = path.join(directory, "small.txt");
       const large = path.join(directory, "large.txt");
@@ -17,7 +21,6 @@ describe("QA media delivery limits", () => {
       try {
         await writeFile(small, "a".repeat(512));
         await writeFile(large, "b".repeat(1536));
-        const capMb = 1 / 1024;
         const cfg = {
           agents: { defaults: { mediaMaxMb: scope === "agent" ? capMb : 10 } },
           channels: {

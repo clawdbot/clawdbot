@@ -1,10 +1,54 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { sendMessageSignal } from "../api.js";
 import { signalPlugin } from "./channel.js";
 import * as client from "./client-adapter.js";
 
 describe("Signal account media limits", () => {
+  it.each([30, 30.1])(
+    "delivers local attachments through the public sender with a %s MiB agent cap",
+    async (mediaMaxMb) => {
+      const state = await createOpenClawTestState({ prefix: "signal-agent-media-" });
+      const delivered: Buffer[] = [];
+      const request = vi
+        .spyOn(client, "signalRpcRequest")
+        .mockImplementation(async (_method, params) => {
+          const attachment = Array.isArray(params?.attachments) ? params.attachments[0] : undefined;
+          if (typeof attachment !== "string") {
+            throw new Error("Missing native attachment path");
+          }
+          delivered.push(await readFile(attachment));
+          return { timestamp: 1234567890 };
+        });
+      try {
+        const bytes = Buffer.from("%PDF-1.4\nlocal attachment\n");
+        const mediaUrl = state.path("attachment.pdf");
+        await writeFile(mediaUrl, bytes);
+
+        const result = await sendMessageSignal("+15555550123", "", {
+          cfg: {
+            agents: { defaults: { mediaMaxMb } },
+            channels: {
+              signal: {
+                account: "+15550001111",
+                transport: { kind: "external-native", url: "http://signal.test" },
+              },
+            },
+          },
+          mediaUrl,
+          mediaLocalRoots: [state.root],
+        });
+
+        expect(result.messageId).toBe("1234567890");
+        expect(delivered).toEqual([bytes]);
+      } finally {
+        request.mockRestore();
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
     const state = await createOpenClawTestState({ prefix: "signal-account-media-" });
     const delivered: Buffer[] = [];

@@ -95,6 +95,15 @@ class PhotoContentTest(unittest.TestCase):
     def test_normalizes_serve_messages_and_edits(self):
         known = {}
         message_id = 42 << 20
+        text = "😀 a   b x"
+        entities = [
+            {"offset": 3, "length": 5, "type": {"@type": "textEntityTypeCode"}},
+            {
+                "offset": 9,
+                "length": 1,
+                "type": {"@type": "textEntityTypeTextUrl", "url": "https://example.com/qa"},
+            },
+        ]
         message = {
             "id": message_id,
             "chat_id": -1001,
@@ -103,36 +112,124 @@ class PhotoContentTest(unittest.TestCase):
             "reply_to": {"message_id": 7},
             "content": {
                 "@type": "messageText",
-                "text": {"@type": "formattedText", "text": "first", "entities": []},
+                "text": {"@type": "formattedText", "text": text, "entities": entities},
             },
         }
         users = {101: {"username": "sut_bot"}}
-
         created = driver.serve_update(
             {"@type": "updateNewMessage", "message": message}, users, known
         )
-        edited = driver.serve_update(
-            {
-                "@type": "updateMessageContent",
-                "chat_id": -1001,
-                "message_id": message_id,
-                "new_content": {
-                    "@type": "messageText",
-                    "text": {"@type": "formattedText", "text": "final", "entities": []},
-                },
-            },
-            users,
-            known,
-        )
-
         self.assertEqual(created["kind"], "message")
         self.assertEqual(created["botApiMessageId"], 42)
         self.assertEqual(created["senderUsername"], "sut_bot")
         self.assertEqual(created["replyToMessageId"], 7)
         self.assertEqual(created["timestamp"], 123000)
-        self.assertEqual(edited["kind"], "edit")
-        self.assertEqual(edited["text"], "final")
-        self.assertEqual(edited["senderId"], 101)
+        self.assertEqual(created["contentType"], "messageText")
+        self.assertEqual(created["text"], text)
+        self.assertEqual(created["entities"], entities)
+
+        for edited_text, edited_entities in [
+            (text, [{"offset": 3, "length": 5, "type": {"@type": "textEntityTypeBold"}}]),
+            (text, []),
+            ("final", [{"offset": 0, "length": 5, "type": {"@type": "textEntityTypePre"}}]),
+        ]:
+            with self.subTest(text=edited_text, entities=edited_entities):
+                edited = driver.serve_update(
+                    {
+                        "@type": "updateMessageContent",
+                        "chat_id": -1001,
+                        "message_id": message_id,
+                        "new_content": {
+                            "@type": "messageText",
+                            "text": {
+                                "@type": "formattedText",
+                                "text": edited_text,
+                                "entities": edited_entities,
+                            },
+                        },
+                    },
+                    users,
+                    known,
+                )
+                self.assertEqual(edited["kind"], "edit")
+                self.assertEqual(edited["contentType"], "messageText")
+                self.assertEqual(edited["text"], edited_text)
+                self.assertEqual(edited["entities"], edited_entities)
+                self.assertEqual(edited["senderId"], 101)
+                self.assertEqual(known[message_id]["entities"], edited_entities)
+
+    def test_preserves_native_content_type_and_caption_entities_in_messages_and_edits(self):
+        entities = [{"offset": 3, "length": 5, "type": {"@type": "textEntityTypeCode"}}]
+        message = {
+            "id": 43 << 20,
+            "chat_id": -1001,
+            "sender_id": {"user_id": 101},
+            "date": 123,
+            "content": {
+                "@type": "messagePhoto",
+                "caption": {"@type": "formattedText", "text": "😀 a   b", "entities": entities},
+            },
+        }
+        known = {}
+        created = driver.serve_update(
+            {"@type": "updateNewMessage", "message": message}, {}, known
+        )
+        normalized = driver.normalize_message(message)
+        self.assertEqual(created["contentType"], "messagePhoto")
+        self.assertEqual(created["text"], "😀 a   b")
+        self.assertEqual(created["entities"], entities)
+        self.assertEqual(normalized["entities"], entities)
+        self.assertIs(normalized["raw"], message)
+        edited = driver.serve_update(
+            {
+                "@type": "updateMessageContent",
+                "message_id": message["id"],
+                "new_content": {
+                    "@type": "messageVideo",
+                    "caption": {"@type": "formattedText", "text": "😀 a   b", "entities": []},
+                },
+            },
+            {},
+            known,
+        )
+        self.assertEqual(edited["contentType"], "messageVideo")
+        self.assertEqual(known[message["id"]]["contentType"], "messageVideo")
+        self.assertEqual(edited["text"], "😀 a   b")
+        self.assertEqual(edited["entities"], [])
+
+    def test_requires_explicit_entity_vectors_for_text_and_captions(self):
+        for content_type, field in [("messageText", "text"), ("messagePhoto", "caption")]:
+            for kind in ("message", "edit"):
+                with self.subTest(content_type=content_type, kind=kind):
+                    formatted = {"@type": "formattedText", "text": "plain", "entities": []}
+                    content = {"@type": content_type, field: formatted}
+                    message = {
+                        "id": 44 << 20,
+                        "chat_id": -1001,
+                        "sender_id": {"user_id": 101},
+                        "content": content,
+                    }
+                    known = {}
+                    created = driver.serve_update(
+                        {"@type": "updateNewMessage", "message": message}, {}, known
+                    )
+                    self.assertEqual(created["text"], "plain")
+                    self.assertEqual(created["entities"], [])
+
+                    del formatted["entities"]
+                    update = (
+                        {"@type": "updateNewMessage", "message": message}
+                        if kind == "message"
+                        else {
+                            "@type": "updateMessageContent",
+                            "chat_id": -1001,
+                            "message_id": message["id"],
+                            "new_content": content,
+                        }
+                    )
+                    with self.assertRaisesRegex(KeyError, "entities"):
+                        driver.serve_update(update, {}, known)
+                    self.assertEqual(known[message["id"]]["entities"], [])
 
     def test_ignores_unknown_edit_in_serve_mode(self):
         event = driver.serve_update(

@@ -169,15 +169,32 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("maps --fix to repair=true", async () => {
+  it.each([
+    { args: [], repair: false, force: false, yes: false },
+    { args: ["--fix"], repair: true, force: false, yes: false },
+    { args: ["--force"], repair: false, force: true, yes: false },
+    { args: ["--fix", "--force"], repair: true, force: true, yes: false },
+    { args: ["--repair", "--force"], repair: true, force: true, yes: false },
+    { args: ["--yes", "--force"], repair: false, force: true, yes: true },
+  ])("forwards repair and force independently for $args", async ({ args, repair, force, yes }) => {
     doctorCommand.mockResolvedValue(undefined);
 
-    await runMaintenanceCli(["doctor", "--fix"]);
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
-    expect(options.repair).toBe(true);
+    expect(options).toMatchObject({ repair, force, yes });
+  });
+
+  it("explains the force option without promising service rewrites during repair", () => {
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    const doctor = program.commands.find((command) => command.name() === "doctor");
+    const help = doctor?.helpInformation().replace(/\s+/gu, " ");
+
+    expect(help).toContain("Allow aggressive repair choices");
+    expect(help).toContain("(with --fix, preserves service definitions)");
   });
 
   it("passes session sqlite options to doctor command", async () => {
@@ -653,6 +670,10 @@ describe("registerMaintenanceCommands doctor action", () => {
         updateResult: "/tmp/update-failure.json",
       },
     },
+    ...["claude", "codex", "opencode", "pi"].map((agent) => ({
+      args: ["--agent", agent],
+      options: { json: false, noExport: false, run: false, agent },
+    })),
   ])("forwards triage options for $args", async ({ args, options }) => {
     triageCommand.mockResolvedValue(undefined);
 
@@ -680,6 +701,31 @@ describe("registerMaintenanceCommands doctor action", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
+
+  it("rejects conflicting embedded and external triage routes", async () => {
+    await runMaintenanceCli(["triage", "--run", "--agent", "codex"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("triage --run cannot be combined with --agent.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([false, true])(
+    "rejects an unknown triage agent before diagnostics (json=%s)",
+    async (json) => {
+      await runMaintenanceCli(["triage", "--agent", "unknown-agent", ...(json ? ["--json"] : [])]);
+
+      expect(triageCommand).not.toHaveBeenCalled();
+      const message = "Invalid --agent. Use claude, codex, opencode, or pi.";
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledWith(message);
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
 
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);

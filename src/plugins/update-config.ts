@@ -1,9 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { isOpenClawOrgNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   getExternalizedBundledPluginLegacyPathSuffix,
@@ -246,21 +244,6 @@ export function isExternalizedBundledPluginEnabled(params: {
   return false;
 }
 
-export function shouldFallbackClawHubBridgeToNpm(params: {
-  result: { ok: false; code?: string };
-  npmSpec?: string;
-}): boolean {
-  if (!isOpenClawOrgNpmSpec(params.npmSpec)) {
-    return false;
-  }
-  return (
-    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
-    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE ||
-    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE
-  );
-}
-
 function replacePluginIdInList(
   entries: string[] | undefined,
   fromId: string,
@@ -355,21 +338,6 @@ export function migratePluginConfigId(
   }
 
   return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
-}
-
-export function withoutPluginInstallRecord(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const installs = cfg.plugins?.installs;
-  if (!installs || !Object.hasOwn(installs, pluginId)) {
-    return cfg;
-  }
-  const { [pluginId]: _removed, ...nextInstalls } = installs;
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      installs: nextInstalls,
-    },
-  };
 }
 
 export function disablePluginAfterUpdateFailure(

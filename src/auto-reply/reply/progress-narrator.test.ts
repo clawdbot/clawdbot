@@ -10,9 +10,8 @@ import type { ProgressNarrationInput } from "./progress-narrator-model.js";
 const narratorWarnSpy = vi.hoisted(() => vi.fn());
 const narrationModelMocks = vi.hoisted(() => ({
   prepared: {
-    selection: { provider: "openai", modelId: "gpt-5.5-mini" },
-    model: {},
-    auth: {},
+    provider: "openai",
+    model: "gpt-5.5-mini",
   },
   prepare: vi.fn(),
   generate: vi.fn(),
@@ -209,30 +208,43 @@ describe("progress narration through reply options", () => {
     }
   });
 
-  it("preserves an immediate failure retry while the draft is hidden", async () => {
-    vi.useFakeTimers();
-    try {
-      let visible = true;
-      const { narrator, generate } = createNarratorHarness({
-        texts: ["Running a command.", "The command failed."],
-        isProgressDraftVisible: () => visible,
-      });
+  it.each([false, true])(
+    "preserves an immediate hidden-draft retry with active generation=%s",
+    async (inFlight) => {
+      vi.useFakeTimers();
+      try {
+        let visible = true;
+        const firstGeneration = createDeferred<string>();
+        let generationCount = 0;
+        const { narrator, generate, onUpdate } = createNarratorHarness({
+          generate: async () =>
+            ++generationCount === 1 ? await firstGeneration.promise : "The command failed.",
+          isProgressDraftVisible: () => visible,
+        });
 
-      narrator.noteToolStart({ name: "exec", phase: "start" });
-      await flushNarrations();
-      expect(generate).toHaveBeenCalledTimes(1);
+        narrator.noteToolStart({ name: "exec", phase: "start" });
+        await flushNarrations();
+        expect(generate).toHaveBeenCalledTimes(1);
+        if (!inFlight) {
+          firstGeneration.resolve("Running a command.");
+          await flushNarrations();
+        }
 
-      visible = false;
-      narrator.noteCommandOutput({ name: "exec", phase: "end", exitCode: 1 });
-      visible = true;
-      await vi.advanceTimersByTimeAsync(1_000);
-      await flushNarrations();
+        visible = false;
+        narrator.noteCommandOutput({ name: "exec", phase: "end", exitCode: 1 });
+        visible = true;
+        firstGeneration.resolve("Running a command.");
+        await flushNarrations();
+        await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(generate).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed." });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("cancels retries at final and resets preamble freshness for a queued turn", async () => {
     vi.useFakeTimers();
@@ -403,6 +415,41 @@ describe("progress narration through reply options", () => {
     narrator.noteToolStart({ name: "exec", phase: "start" });
     await flushNarrations();
     expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("narrates a tool burst buffered during an active generation without another event", async () => {
+    const started = createDeferred();
+    const firstGeneration = createDeferred<string>();
+    let generationCount = 0;
+    const { narrator, generate, onUpdate, inputs } = createNarratorHarness({
+      generate: async () => {
+        if (++generationCount === 1) {
+          started.resolve();
+          return await firstGeneration.promise;
+        }
+        return "Checking the later files.";
+      },
+    });
+
+    narrator.noteToolStart({ name: "read", phase: "start", args: { path: "first.txt" } });
+    await started.promise;
+    for (let index = 0; index < 4; index += 1) {
+      narrator.noteToolStart({
+        name: "read",
+        phase: "start",
+        args: { path: `later-${index}.txt` },
+      });
+    }
+    expect(generate).toHaveBeenCalledOnce();
+
+    firstGeneration.resolve("Inspecting the first file.");
+    await flushNarrations();
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(inputs[1]?.activityNotes).toContain('Tool read: {"path":"later-3.txt"}');
+    await vi.waitFor(() =>
+      expect(onUpdate).toHaveBeenLastCalledWith({ text: "Checking the later files." }),
+    );
   });
 
   it("re-narrates after the interval with a single new event", async () => {

@@ -67,6 +67,25 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
+function mockSchemaSnapshotSource(
+  index: ReturnType<typeof makeIndex>,
+  properties: Record<string, unknown>,
+) {
+  const registry = makeManifestRegistry();
+  const plugin = registry.plugins[0];
+  if (!plugin) {
+    throw new Error("expected manifest plugin fixture");
+  }
+  plugin.configSchema = { type: "object", properties };
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source: "provided",
+    snapshot: index,
+    diagnostics: [],
+  });
+  loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+  return registry;
+}
+
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
     loadPluginRegistrySnapshotWithMetadata.mockReset();
@@ -328,25 +347,11 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     const initialMapValue = { nested: { value: "initial-map" } };
     const initialSetValue = { nested: { value: "initial-set" } };
     const sharedMap = new Map([["initial", initialMapValue]]);
     const sharedSet = new Set([initialSetValue]);
-    plugin.configSchema = {
-      type: "object",
-      properties: { sharedMap, sharedSet },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { sharedMap, sharedSet });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(initialMapValue.nested)).toBe(true);
@@ -387,27 +392,13 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks enumerable accessor graphs when their closure-backed values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let accessorValue = { nested: { value: "initial" } };
     const accessor = {} as { current: typeof accessorValue };
     Object.defineProperty(accessor, "current", {
       enumerable: true,
       get: () => accessorValue,
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { accessor },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { accessor });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(accessor)).toBe(true);
@@ -433,11 +424,6 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks proxy graphs that forge safe descriptors before their values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let currentValue = { nested: { value: "decoy" } };
     const target = {} as { current: typeof currentValue };
     Object.defineProperty(target, "current", {
@@ -468,16 +454,7 @@ describe("plugin metadata snapshot", () => {
         return Reflect.get(proxyTarget, key, receiver);
       },
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { proxy },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { proxy });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(forgedDescriptors).toBe(1);

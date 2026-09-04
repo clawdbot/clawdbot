@@ -55,6 +55,7 @@ export function createStubChildAdapter(options?: {
   const adapter: StubChildAdapter = {
     pid: options?.pid ?? 1234,
     stdin: undefined,
+    supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
       stdoutSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },

@@ -4,6 +4,7 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createSessionCapability } from "./index.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
@@ -273,20 +274,14 @@ describe("createSessionCapability message subscriptions", () => {
       timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       requestSent: true,
     });
-    let recoveryStarted: () => void = () => undefined;
-    let rejectRecovery: (error: Error) => void = () => undefined;
-    const recovering = new Promise<void>((resolve) => {
-      recoveryStarted = resolve;
-    });
-    const recovery = new Promise<never>((_resolve, reject) => {
-      rejectRecovery = reject;
-    });
+    const recovering = createDeferred();
+    const recovery = createDeferred<never>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.messages.subscribe") {
         throw timeout;
       }
-      recoveryStarted();
-      return await recovery;
+      recovering.resolve();
+      return await recovery.promise;
     });
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
@@ -303,10 +298,10 @@ describe("createSessionCapability message subscriptions", () => {
     });
     const failure = operations.subscribeMessages("main").catch((error: unknown) => error);
 
-    await recovering;
+    await recovering.promise;
     current = false;
     operations.retireConnection(client);
-    rejectRecovery(new Error("retired Gateway connection"));
+    recovery.reject(new Error("retired Gateway connection"));
 
     await expect(failure).resolves.toBe(timeout);
     expect(forceReconnect).not.toHaveBeenCalled();

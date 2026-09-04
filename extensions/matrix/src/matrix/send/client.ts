@@ -19,10 +19,10 @@ export function resolveMediaMaxBytes(
   const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
   const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
   const mediaMaxMb = matrixCfg.mediaMaxMb;
-  // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
-  // number would become a literal 0-byte limit that rejects every outbound media send;
-  // fall through to the unset path instead. Inbound floors the same field (monitor/index.ts).
-  return typeof mediaMaxMb === "number" && mediaMaxMb > 0 ? mediaMaxMb * 1024 * 1024 : undefined;
+  // Choose the positive MiB cap before flooring so sub-byte limits stay active at zero.
+  return typeof mediaMaxMb === "number" && mediaMaxMb > 0
+    ? Math.floor(mediaMaxMb * 1024 * 1024)
+    : undefined;
 }
 
 export async function withResolvedMatrixSendClient<T>(

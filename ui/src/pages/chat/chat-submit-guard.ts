@@ -3,6 +3,23 @@ import type { ChatHost } from "./chat-send-contract.ts";
 
 const submissionActionIds = new WeakMap<Event, string>();
 
+export function yieldChatSubmitToInput(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.addEventListener(
+      "message",
+      () => {
+        channel.port1.close();
+        channel.port2.close();
+        resolve();
+      },
+      { once: true },
+    );
+    channel.port1.start();
+    channel.port2.postMessage(undefined);
+  });
+}
+
 export async function withChatSubmitGuard<T>(
   host: ChatHost,
   key: string,

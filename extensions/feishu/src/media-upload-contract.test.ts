@@ -1,4 +1,6 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -289,6 +291,45 @@ describe("Feishu upload contracts", () => {
 
     expect(mocks.imageCreate).not.toHaveBeenCalled();
     expect(mocks.messageCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "fractional maximum", mediaMaxMb: 0.001, size: 1048, accepted: true },
+    { label: "next whole byte", mediaMaxMb: 0.001, size: 1049, accepted: false },
+    { label: "positive sub-byte cap", mediaMaxMb: 0.5 / (1024 * 1024), size: 1, accepted: false },
+  ])("loads local attachments under the $label", async (testCase) => {
+    await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-cap-" },
+      async (workspace) => {
+        const buffer = Buffer.alloc(testCase.size, "a");
+        const mediaUrl = await workspace.write("attachment.txt", buffer);
+        mocks.resolveAccount.mockReturnValue(resolvedAccount(testCase.mediaMaxMb));
+        mocks.loadWebMedia.mockImplementationOnce(loadWebMedia);
+
+        const send = sendMediaFeishu({
+          cfg: emptyConfig,
+          to: "user:ou_target",
+          mediaUrl,
+          mediaLocalRoots: [workspace.dir],
+        });
+        if (testCase.accepted) {
+          await expect(send).resolves.toMatchObject({ messageId: "message_1" });
+          expect(mockCallData(mocks.fileCreate)).toEqual({
+            file_type: "stream",
+            file_name: "attachment.txt",
+            file: buffer,
+          });
+          expect(mockCallData(mocks.messageCreate)).toMatchObject({
+            msg_type: "file",
+            content: JSON.stringify({ file_key: "file_1" }),
+          });
+        } else {
+          await expect(send).rejects.toThrow(/exceeds/);
+          expect(mocks.fileCreate).not.toHaveBeenCalled();
+          expect(mocks.messageCreate).not.toHaveBeenCalled();
+        }
+      },
+    );
   });
 
   it("rejects files exceeding the configured attachment limit before contacting Feishu", async () => {

@@ -155,13 +155,25 @@ function normalizedModelCallUsage(rawUsage: unknown): ModelCallUsage | undefined
   };
 }
 
-function observeModelCallUsage(state: ModelCallObservationState, value: unknown): void {
+function observeModelCallTerminalMessage(state: ModelCallObservationState, value: unknown): void {
   if (!isRecord(value)) {
     return;
   }
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    // The stream contract returns failed assistant messages without throwing.
+    // Keep their terminal fact for both iterator and result-only completion.
+    // Abort state takes precedence over transport errors raised during cancellation.
+    if (
+      value.role === "assistant" &&
+      (value.stopReason === "error" || value.stopReason === "aborted")
+    ) {
+      state.terminalError ??= Object.assign(
+        new Error(typeof value.errorMessage === "string" ? value.errorMessage : value.stopReason),
+        { code: value.stopReason === "aborted" ? "ABORT_ERR" : value.errorCode },
+      );
+    }
   } catch {
     return;
   }
@@ -188,7 +200,7 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
   // iterated error-terminated calls still report the per-call usage that the
   // model.call.error event and its OTel span already expose.
   if (message !== undefined) {
-    observeModelCallUsage(state, message);
+    observeModelCallTerminalMessage(state, message);
     if (state.contentCapture?.outputMessages) {
       state.outputMessages = [cloneDiagnosticContentValue(message)];
     }
@@ -201,7 +213,7 @@ function observeResultMessageContent(
   result: unknown,
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
-  observeModelCallUsage(state, result);
+  observeModelCallTerminalMessage(state, result);
   if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
     state.outputMessages = [cloneDiagnosticContentValue(result)];
   }

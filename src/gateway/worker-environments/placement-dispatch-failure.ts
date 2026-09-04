@@ -1,7 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
-import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  placementTurnOwner,
+  type WorkerPlacementExecutionMode,
+} from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
@@ -46,6 +50,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "loadWorkspaceReconciliation"
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
+  | "getWorkspaceReconciliationPlacement"
   | "listWorkspaceReconciliationOwners"
   | "list"
   | "listPendingWorkspaceResults"
@@ -97,6 +102,24 @@ export type WorkerActivationBarrier = (params: {
 const RECOVERY_ERROR_LIMIT = 1_024;
 const boundedError = boundedWorkerError;
 
+export function workerDisappearanceError(
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+): Error | undefined {
+  if (!environment) {
+    return new Error("cloud worker disappeared: environment record missing");
+  }
+  if (
+    environment.state !== "destroyed" &&
+    environment.state !== "failed" &&
+    environment.state !== "orphaned"
+  ) {
+    return undefined;
+  }
+  return new Error(
+    `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
+  );
+}
+
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
 ): boolean {
@@ -128,21 +151,12 @@ export function isCurrentActiveWorkerEnvironment(
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
 ): boolean {
-  return Boolean(
-    environment &&
-    environment.state === "attached" &&
-    environment.destroyRequestedAtMs === null &&
-    placement.environmentId &&
-    environment.environmentId === placement.environmentId &&
-    placement.activeOwnerEpoch !== null &&
-    environment.ownerEpoch === placement.activeOwnerEpoch &&
-    placement.workerBundleHash &&
-    environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
+  return (
+    isExactAttachedEnvironment(environment, placement) &&
+    environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
+    supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
   );
 }
 
@@ -236,7 +250,9 @@ export function createPlacementFailureActions(deps: {
       ownerEpoch: placement.activeOwnerEpoch,
       ...(authorize ? { authorize } : {}),
     });
-    if (teardownErrors.length > 0) {
+    // Forced abandonment is a committed decision used by Continue on Gateway. Retrying
+    // physical cleanup must not replace that decision or advance its placement generation.
+    if (teardownErrors.length > 0 && placement.recoveryError !== FORCED_WORKER_ABANDONMENT_ERROR) {
       const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");
       placements.fail({
         sessionId: placement.sessionId,
@@ -336,19 +352,19 @@ export function createPlacementFailureActions(deps: {
       finishReconcilingFailure(reconciling, claimedTurnError, []);
       return;
     }
-    if (environment && !isUnavailableEnvironment(environment)) {
-      const teardownErrors = await cleanupEnvironment({
-        environmentId: placement.environmentId,
-        ownerEpoch: placement.activeOwnerEpoch,
-      });
-      if (teardownErrors.length > 0) {
-        finishReconcilingFailure(
-          reconciling,
-          new Error(`Worker reclaim teardown failed: ${teardownErrors.join("; ")}`),
-          [],
-        );
-        return;
-      }
+    // Draining and destroying close execution authority, not the provider lease.
+    // Reclaim is complete only after the pending teardown succeeds.
+    const teardownErrors = await cleanupEnvironment({
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    });
+    if (teardownErrors.length > 0) {
+      finishReconcilingFailure(
+        reconciling,
+        new Error(`Worker reclaim teardown failed: ${teardownErrors.join("; ")}`),
+        [],
+      );
+      return;
     }
     placements.transition({
       sessionId: reconciling.sessionId,

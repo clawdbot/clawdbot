@@ -380,11 +380,16 @@ describe("native owner content records", () => {
   });
 
   it.each([
-    ["CI helper", ".ci-harness"],
-    ["pnpm store", ".cache/openclaw-pnpm-store"],
+    ["CI helper", ".ci-harness", "cache/metadata-v1.3/registry.example/package.json"],
+    [
+      "pnpm store",
+      ".cache/openclaw-pnpm-store",
+      "cache/metadata-v1.3/registry.example/package.json",
+    ],
+    ["Vitest cache", ".cache/vitest", "default/_metadata.json"],
   ])(
     "ignores root %s churn while retaining explicit, installed, aliased, and nested inputs",
-    (_, ignoredRoot) => {
+    (_, ignoredRoot, metadataFile) => {
       const f = fixture(true);
       const declaredInput = `${ignoredRoot}/declared/value.ts`;
       const installedSource = `${ignoredRoot}/objects/installed.d.ts`;
@@ -409,7 +414,7 @@ describe("native owner content records", () => {
         ]);
       const first = signature();
 
-      f.write(`${ignoredRoot}/cache/metadata-v1.3/registry.example/package.json`, "{}");
+      f.write(`${ignoredRoot}/${metadataFile}`, "{}");
       expect(signature()).toBe(first);
 
       f.write(declaredInput, "export const value = 2;");
@@ -425,6 +430,12 @@ describe("native owner content records", () => {
       f.write(aliasedSource, "export declare const aliased: 2;");
       expect(signature()).not.toBe(first);
       f.write(aliasedSource, "export declare const aliased: 1;");
+      expect(signature()).toBe(first);
+
+      const adjacentRoot = `${ignoredRoot}-other`;
+      f.write(`${adjacentRoot}/candidate.ts`, "export {};");
+      expect(signature()).not.toBe(first);
+      fs.rmSync(path.join(f.root, adjacentRoot), { recursive: true });
       expect(signature()).toBe(first);
 
       f.write(`nested/${ignoredRoot}/candidate.ts`, "export {};");

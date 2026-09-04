@@ -9,9 +9,13 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
 
   override render() {
     return html`
-      ${this.agentId
-        ? html`<openclaw-agent-memory-panel .agentId=${this.agentId}></openclaw-agent-memory-panel>`
-        : nothing}
+      ${
+        this.agentId
+          ? html`<openclaw-agent-memory-panel
+              .agentId=${this.agentId}
+            ></openclaw-agent-memory-panel>`
+          : nothing
+      }
     `;
   }
 }

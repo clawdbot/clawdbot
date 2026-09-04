@@ -54,6 +54,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
+  settleOpenClawAgentDatabaseWorkerClose,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -3048,6 +3049,22 @@ describe("openclaw agent database", () => {
 
     close.mockRestore();
     expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
+  });
+
+  it("settles a Worker lease after a recoverable handle-close failure", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    vi.spyOn(database.walMaintenance, "close").mockImplementationOnce(() => {
+      throw new Error("wal close failed");
+    });
+
+    const settled = settleOpenClawAgentDatabaseWorkerClose(database.path);
+
+    expect(settled).toMatchObject({ settled: true });
+    expect(settled.errors.map((error) => error.message)).toEqual(["wal close failed"]);
+    expect(database.db.isOpen).toBe(false);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
   });
 

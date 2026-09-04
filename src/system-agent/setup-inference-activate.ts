@@ -19,7 +19,11 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
-import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
+import {
+  WizardCancelledError,
+  WizardNavigationError,
+  type WizardProgress,
+} from "../wizard/prompts.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
@@ -157,6 +161,7 @@ async function activateSetupInferenceUnredacted(
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
   let codexMetadataNeedsRestore = false;
+  let verificationProgress: WizardProgress | undefined;
   let codexProbePluginGeneration: ReturnType<typeof loadSetupInferencePluginGeneration> | undefined;
   const withProbePluginGeneration = <T>(run: () => T): T =>
     codexProbePluginGeneration
@@ -446,6 +451,7 @@ async function activateSetupInferenceUnredacted(
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
     let test: Awaited<ReturnType<typeof runSetupInferenceTest>>;
+    verificationProgress = params.prompter?.progress("Testing your AI connection…");
     try {
       test = await withProbePluginGeneration(() =>
         runSetupInferenceTest({
@@ -469,6 +475,7 @@ async function activateSetupInferenceUnredacted(
     if (!test.ok) {
       return test;
     }
+    verificationProgress?.update("Finishing AI setup…");
     if (plan.authProfileId && test.auth.authProfileId !== plan.authProfileId) {
       return {
         ok: false,
@@ -660,6 +667,7 @@ async function activateSetupInferenceUnredacted(
         : {}),
     };
   } finally {
+    verificationProgress?.stop();
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {
       // Reassert after probing: a partial install-index commit may have cleared

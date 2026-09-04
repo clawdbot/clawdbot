@@ -7,6 +7,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/run-attempt.agent-end-context.test.ts",
+      "extensions/codex/src/app-server/run-attempt.auth-context.test.ts",
       "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
       "extensions/codex/src/app-server/run-attempt.channel-tool-progress.test.ts",
@@ -20,7 +21,9 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.notification-burst.test.ts",
       "extensions/codex/src/app-server/run-attempt.reasoning-effort.test.ts",
       "extensions/codex/src/app-server/run-attempt-runtime.authority.test.ts",
+      "extensions/codex/src/app-server/run-attempt.settlement.test.ts",
       "extensions/codex/src/app-server/run-attempt.steering.test.ts",
+      "extensions/codex/src/app-server/run-attempt.steering-authority.test.ts",
       "extensions/codex/src/app-server/run-attempt.steering-media.test.ts",
       "extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
       "extensions/codex/src/app-server/run-attempt.usage-limits.test.ts",

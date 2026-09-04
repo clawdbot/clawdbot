@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 
 type TestUpdateAvailable = {
@@ -21,7 +22,9 @@ const getUpdateEffectiveChannelMock = vi.hoisted(() =>
   vi.fn<() => Promise<UpdateChannel>>(async () => "stable"),
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
-const refreshGatewayUpdateStatusMock = vi.hoisted(() => vi.fn(async () => {}));
+const refreshGatewayUpdateStatusMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/update-startup.js").refreshGatewayUpdateStatus>(async () => {}),
+);
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => TestUpdateSentinel>(() => null),
 );
@@ -105,7 +108,7 @@ describe("update.status effective channel", () => {
     expect(getUpdateEffectiveChannelMock).not.toHaveBeenCalled();
   });
 
-  it("scopes explicit checkout refreshes to the current config identity", async () => {
+  it("awaits the current config's checkout refresh before reporting its schedule", async () => {
     const { updateHandlers } = await import("./update.js");
     const handler = updateHandlers["update.status"];
     if (!handler) {
@@ -113,41 +116,29 @@ describe("update.status effective channel", () => {
     }
     const config = { update: { channel: "dev" as const } };
     const context = { getRuntimeConfig: () => config };
-
-    await handler({ params: {}, respond: vi.fn(), context } as never);
-    expect(refreshGatewayUpdateStatusMock).not.toHaveBeenCalled();
-
-    let settleRefresh: (() => void) | undefined;
-    refreshGatewayUpdateStatusMock.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          settleRefresh = resolve;
-        }),
+    const refresh = createDeferred();
+    refreshGatewayUpdateStatusMock.mockReturnValueOnce(refresh.promise);
+    const respond = vi.fn();
+    const checking = handler({
+      params: { refreshCheckout: true },
+      respond,
+      context,
+    } as never);
+    const schedule = { channel: "dev" as const, autoEnabled: false };
+    try {
+      await vi.waitFor(() => expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledOnce());
+      expect(refreshGatewayUpdateStatusMock.mock.calls[0]?.[0]).toBe(config);
+      expect(getUpdateScheduleMock).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      getUpdateScheduleMock.mockReturnValue(schedule);
+    } finally {
+      refresh.resolve();
+      await checking;
+    }
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ effectiveChannel: "dev", schedule }),
     );
-    const first = handler({
-      params: { refreshCheckout: true },
-      respond: vi.fn(),
-      context,
-    } as never);
-    const second = handler({
-      params: { refreshCheckout: true },
-      respond: vi.fn(),
-      context,
-    } as never);
-    await vi.waitFor(() => expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(1));
-
-    await handler({
-      params: { refreshCheckout: true },
-      respond: vi.fn(),
-      context: { getRuntimeConfig: () => ({ update: { channel: "beta" } }) },
-    } as never);
-    expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(2);
-
-    settleRefresh?.();
-    await Promise.all([first, second]);
-
-    await handler({ params: { refreshCheckout: true }, respond: vi.fn(), context } as never);
-    expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(3);
   });
 
   it("keeps status available when install identity initialization fails", async () => {

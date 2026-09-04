@@ -5,15 +5,19 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
+  finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
+  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
@@ -327,7 +331,10 @@ async function validateCatalogSchemaValue(
   schemaName: CatalogSchemaName,
   value: unknown,
 ): Promise<CatalogSchemaValidation | undefined> {
-  const schema = schemaName === "inputSchema" ? entry.parameters : entry.outputSchema;
+  const schema =
+    schemaName === "inputSchema"
+      ? resolveAgentToolExecutionSchema(entry.tool, entry.parameters)
+      : entry.outputSchema;
   if (entry.source !== "openclaw" || !schema) {
     return undefined;
   }
@@ -504,11 +511,12 @@ export class ToolSearchRuntime {
     );
 
   namespaceEntries = () =>
-    resolveCatalog(this.ctx).entries.map((entry) =>
-      Object.assign(compactToolSearchCatalogEntry(entry), {
-        ...(entry.mcp ? { mcp: entry.mcp } : {}),
-        parameters: entry.parameters ?? {},
-      }),
+    // Snapshot host metadata without rendering hints or retaining the executable tool.
+    resolveCatalog(this.ctx).entries.map(
+      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
+        entry.parameters ??= {};
+        return entry;
+      },
     );
 
   describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
@@ -589,9 +597,10 @@ export class ToolSearchRuntime {
   ) => {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
-    await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    bindJoinedCollectorInvocation(entry.tool, toolCallId);
+    await assertCatalogOutputSchemaIsValid(entry);
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
@@ -670,22 +679,33 @@ export class ToolSearchRuntime {
         }
       }
     };
-    const result = validateInput
-      ? await runWithToolExecutionValidation(
-          toolCallId,
-          async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
-          runExecution,
-        )
-      : await runExecution();
-    const acceptedResult = await acceptResultBeforeProjection(result);
-    if (options?.parentToolCallId) {
-      this.terminalTargetBatchByParent.set(
-        options.parentToolCallId,
-        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
-          acceptedResult.terminate === true,
-      );
+    let acceptedResult: AgentToolResult<unknown> | undefined;
+    try {
+      const result = validateInput
+        ? await runWithToolExecutionValidation(
+            toolCallId,
+            async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
+            runExecution,
+          )
+        : await runExecution();
+      acceptedResult = await acceptResultBeforeProjection(result);
+      if (options?.parentToolCallId) {
+        this.terminalTargetBatchByParent.set(
+          options.parentToolCallId,
+          this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
+            acceptedResult.terminate === true,
+        );
+      }
+      return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
+    } finally {
+      // Nested executors can reject after raw success; only outer acceptance owns the summary.
+      finalizeToolTerminalPresentation({
+        toolCallId,
+        runId: this.ctx.runId,
+        result: acceptedResult ?? { content: [], details: undefined },
+        isError: acceptedResult === undefined || isToolResultError(acceptedResult),
+      });
     }
-    return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
   telemetry() {

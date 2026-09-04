@@ -725,7 +725,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           webhookUrl: params.webhookUrl,
           webhookPath: params.webhookPath,
           proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
+          mediaMaxBytes: Math.floor(params.mediaMaxMb * 1024 * 1024),
           canHostMedia: params.canHostMedia,
           accountId: account.accountId,
           statusSink,

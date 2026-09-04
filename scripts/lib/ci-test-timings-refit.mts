@@ -33,13 +33,17 @@ function seconds(value: string, unit: string): number {
 
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   const files = new Map<string, number>();
+  let hasParallelFiles = false;
   for (const line of text.split("\n")) {
     const file =
-      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(?:\|ui-e2e\||ui-e2e)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(\|ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?\||ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
         line,
       );
     if (file) {
-      files.set(file[1]!, seconds(file[3]!, file[4]!));
+      files.set(file[2]!, seconds(file[4]!, file[5]!));
+      hasParallelFiles ||=
+        file[1]?.includes("ui-e2e-bundled") === true ||
+        file[1]?.includes("ui-e2e-standalone") === true;
     }
     const summary = /\bDuration\s+([\d.]+)(m?s)\s+\([^)]*\btests\s+([\d.]+)(m?s)/u.exec(line);
     if (summary && files.size > 0) {
@@ -49,10 +53,13 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
       }
       const value =
         (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / files.size;
-      if (overhead && Number.isFinite(value)) {
+      // Vitest sums test time across workers, so wall-minus-tests measures
+      // per-file overhead only for serial invocations.
+      if (overhead && !hasParallelFiles && Number.isFinite(value)) {
         overhead.push(value);
       }
       files.clear();
+      hasParallelFiles = false;
     }
   }
 }

@@ -12,8 +12,7 @@ import {
   listSessionChildEntriesReadOnly,
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
-  loadExactSessionEntry,
-  loadExactSessionEntryReadOnly,
+  loadExactSessionEntryCandidates,
   type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -219,28 +218,17 @@ function loadGatewaySessionLookupStoreUncached(
 ): Record<string, SessionEntry> {
   try {
     if (options.exactKeys) {
-      const store: Record<string, SessionEntry> = {};
       // Borrowed listing views and probes never create stores; ordinary owned reads may.
-      const loadExact =
-        options.readOnly === false && clone !== false
-          ? loadExactSessionEntry
-          : loadExactSessionEntryReadOnly;
-      for (const sessionKey of options.exactKeys) {
-        const match = loadExact({
+      return Object.fromEntries(
+        loadExactSessionEntryCandidates({
           ...(agentId ? { agentId } : {}),
           clone: false,
-          sessionKey,
+          projection: options.projection,
+          sessionKeys: options.exactKeys,
+          readOnly: options.readOnly !== false || clone === false,
           storePath,
-        });
-        if (match) {
-          if (options.projection === "list") {
-            delete match.entry.skillsSnapshot;
-            delete match.entry.systemPromptReport;
-          }
-          store[match.sessionKey] = match.entry;
-        }
-      }
-      return store;
+        }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      );
     }
     const listEntries = options.readOnly
       ? listAccessorSessionEntriesReadOnly
@@ -374,6 +362,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
   if (
     !parsed ||
+    isIncognitoSessionKey(params.key) ||
     legacyAgentId !== DEFAULT_AGENT_ID ||
     listAgentIds(params.cfg).includes(legacyAgentId)
   ) {
@@ -486,7 +475,11 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   if (explicitDeletedMainTarget) {
-    return includeDirectChildEntries(explicitDeletedMainTarget, params.includeStoreChildEntries);
+    return includeDirectChildEntries(
+      explicitDeletedMainTarget,
+      params.includeStoreChildEntries,
+      params.projection,
+    );
   }
 
   const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -519,6 +512,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         store,
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
   const { canonicalValidationError, storePath, store } = resolveGatewaySessionStoreLookup({
@@ -547,6 +541,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
 
@@ -563,12 +558,14 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       ...(canonicalValidationError ? { canonicalValidationError } : {}),
     },
     params.includeStoreChildEntries,
+    params.projection,
   );
 }
 
 function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
+  projection: SessionEntryListScope["projection"],
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
@@ -579,6 +576,7 @@ function includeDirectChildEntries(
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
         clone: false,
+        projection,
         sessionKey: parentKey,
         storePath: target.storePath,
       })) {

@@ -9,7 +9,7 @@ import { listBoundWebPushSubscriptions, type BoundWebPushSubscription } from "..
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 const OPERATOR_ROLE = "operator";
 
@@ -24,6 +24,7 @@ function resolveCurrentWebPushTarget(params: {
   device: PairedDevice | undefined;
   cfg: OpenClawConfig;
   requiredScopes: readonly string[];
+  visibilityScopes?: readonly string[];
 }): CurrentWebPushTarget | null {
   const { device, subscription, cfg } = params;
   if (!device || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
@@ -55,26 +56,29 @@ function resolveCurrentWebPushTarget(params: {
   if (cfg.gateway?.roles && !rolePolicy) {
     return null;
   }
-  const tokenAllows = roleScopesAllow({
-    role: OPERATOR_ROLE,
-    requestedScopes: params.requiredScopes,
-    allowedScopes: operatorToken.scopes,
-  });
-  const profileAllows =
-    !rolePolicy ||
+  const scopesAllowed = (requestedScopes: readonly string[]) =>
     roleScopesAllow({
       role: OPERATOR_ROLE,
-      requestedScopes: params.requiredScopes,
-      allowedScopes: rolePolicy.scopes,
-    });
-  if (!tokenAllows || !profileAllows) {
+      requestedScopes,
+      allowedScopes: operatorToken.scopes,
+    }) &&
+    (!rolePolicy ||
+      roleScopesAllow({
+        role: OPERATOR_ROLE,
+        requestedScopes,
+        allowedScopes: rolePolicy.scopes,
+      }));
+  if (!scopesAllowed(params.requiredScopes)) {
     return null;
   }
+  // Only targeted callers request extra visibility. Both current authorities must
+  // grant it; generic pushes retain their deliberately narrow required scopes.
+  const visibilityScopes = rolePolicy
+    ? (params.visibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
+    : [];
   return {
     subscription,
-    // Project only the authority required by this delivery. This preserves
-    // scope implications without widening the synthetic visibility client.
-    scopes: [...new Set(params.requiredScopes)],
+    scopes: [...new Set([...params.requiredScopes, ...visibilityScopes])],
     userProfileId,
   };
 }
@@ -83,6 +87,7 @@ function resolveCurrentWebPushTarget(params: {
 export function listCurrentWebPushTargets(params: {
   cfg: OpenClawConfig;
   requiredScopes: readonly string[];
+  visibilityScopes?: readonly string[];
   stateDir?: string;
 }): CurrentWebPushTarget[] {
   const pairedByDeviceId = new Map(
@@ -94,13 +99,14 @@ export function listCurrentWebPushTargets(params: {
       device: pairedByDeviceId.get(subscription.deviceId),
       cfg: params.cfg,
       requiredScopes: params.requiredScopes,
+      visibilityScopes: params.visibilityScopes,
     });
     return target ? [target] : [];
   });
 }
 
-export function webPushTargetClient(target: CurrentWebPushTarget): GatewayWsClient {
-  const client = {
+export function webPushTargetClient(target: CurrentWebPushTarget): GatewayClient {
+  return {
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -131,6 +137,4 @@ export function webPushTargetClient(target: CurrentWebPushTarget): GatewayWsClie
         }
       : {}),
   };
-  // SAFETY: visibility checks read only the projected connection identity and scopes.
-  return client as GatewayWsClient;
 }

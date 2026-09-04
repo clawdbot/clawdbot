@@ -222,7 +222,10 @@ export function resolveDynamicModelAuthProfile(params: {
       authProfileMode: params.authProfileMode,
     };
   }
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    profileId: explicitProfileId,
+  });
   const profileId =
     explicitProfileId ??
     listOpenAIAuthProfileProvidersForAgentRuntime({

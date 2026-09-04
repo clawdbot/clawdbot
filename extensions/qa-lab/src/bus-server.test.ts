@@ -1,9 +1,9 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
+import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaBusPollResult } from "./runtime-api.js";
 
@@ -529,34 +529,25 @@ describe("handleQaBusRequest", () => {
     { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
     { pathname: "/v1/reset", limit: 1024 * 1024 },
   ])(
-    "returns a controlled error when the $pathname body exceeds its limit",
+    "delivers 413 over the wire and closes when the $pathname body exceeds its limit",
     async ({ pathname, limit }) => {
-      const req = Object.assign(createMockIncomingRequest([]), {
-        method: "POST",
-        url: pathname,
-        headers: { "content-length": String(limit + 1) },
-      });
-      const res = {
-        statusCode: 0,
-        body: "",
-        writeHead(statusCode: number) {
-          this.statusCode = statusCode;
-        },
-        end(payload: string) {
-          this.body = payload;
-        },
-      };
+      const bus = await startQaBusServer({ state: createQaBusState() });
+      try {
+        // Declared over-cap length: rejected from the header alone, while the sender is
+        // still mid-upload and can only learn the outcome from what reaches it.
+        const result = await postRawWebhook({
+          url: `${bus.baseUrl}${pathname}`,
+          body: "{}",
+          contentLength: limit + 1,
+          headers: { "content-type": "application/json" },
+        });
 
-      const handled = await handleQaBusRequest({
-        req,
-        res: res as never,
-        state: createQaBusState(),
-      });
-
-      expect(handled).toBe(true);
-      expect(req.destroyed).toBe(true);
-      expect(res.statusCode).toBe(413);
-      expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+        expect(result.closedByServer).toBe(true);
+      } finally {
+        await bus.stop();
+      }
     },
   );
 });

@@ -4,7 +4,17 @@ extension OpenClawChatComposer {
     @ViewBuilder
     var cleanAttachmentMenu: some View {
         #if os(macOS)
-        self.attachmentPicker
+        Button {
+            self.pickFilesMac()
+        } label: {
+            CompactChatAttachmentLabel()
+        }
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .help("Add Attachment")
+        .accessibilityLabel("Attachments")
+        .accessibilityIdentifier("chat-attachment-picker")
+        .disabled(!self.isAttachmentInputEnabled)
         #else
         OpenClawChatAttachmentMenu(
             showsPhotoPicker: self.photoPickerPresentation,
@@ -40,22 +50,38 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     var cleanLeadingControls: some View {
+        #if os(macOS)
+        Menu {
+            Button {
+                self.pickFilesMac()
+            } label: {
+                Label("Add Attachment", systemImage: "paperclip")
+            }
+            .disabled(!self.isAttachmentInputEnabled)
+            Divider()
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
+            self.verbosityPicker
+                .disabled(!self.viewModel.composerEffortMutationAvailable)
+        } label: {
+            CompactChatAttachmentLabel()
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Composer options")
+        .accessibilityLabel("Composer options")
+        .accessibilityIdentifier("chat-attachment-picker")
+        #else
         self.cleanAttachmentMenu
-
         #if os(iOS)
         if self.viewModel.supportsComposerCapabilities {
             self.cleanInlinePermissionMenu
         }
         #endif
-
-        #if os(macOS)
-        if self.viewModel.sessionBranches.count > 1 {
-            self.branchMenu
-        }
         #endif
     }
 
-    #if os(iOS)
     @ViewBuilder
     var cleanContextUsageMenu: some View {
         if let usage = self.viewModel.contextUsage {
@@ -80,6 +106,9 @@ extension OpenClawChatComposer {
             } label: {
                 CleanChatContextUsageLabel(usage: usage)
             }
+            #if os(macOS)
+            .fixedSize()
+            #endif
             .menuIndicator(.hidden)
             .help(tokensLine)
             .accessibilityIdentifier("chat-context-usage")
@@ -98,28 +127,29 @@ extension OpenClawChatComposer {
             used,
             ChatContextUsageFormatter.tokens(window))
     }
-    #endif
 
-    @ViewBuilder
     var cleanTrailingControls: some View {
-        #if os(iOS)
         ViewThatFits(in: .horizontal) {
-            self.cleanIOSTrailingControls(compactModel: false)
-            self.cleanIOSTrailingControls(compactModel: true)
+            self.cleanInlineControls(compactModel: false)
+            self.cleanInlineControls(compactModel: true)
         }
-        #else
-        self.cleanCaptureAndPrimaryControls
-        #endif
     }
 
-    #if os(iOS)
-    private func cleanIOSTrailingControls(compactModel: Bool) -> some View {
+    private func cleanInlineControls(compactModel: Bool) -> some View {
         HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
             self.cleanContextUsageMenu
+            // Camera switching only displaces settings in the compact iOS footer.
+            #if os(macOS)
+            if self.viewModel.showsModelPicker {
+                self.cleanInlineModelPicker(compact: compactModel)
+            }
+            self.cleanInlineEffortMenu
+            #else
             if !self.cleanShowsCameraFlip {
                 self.cleanInlineModelPicker(compact: compactModel)
                 self.cleanInlineEffortMenu
             }
+            #endif
             self.cleanCaptureAndPrimaryControls
         }
     }
@@ -159,16 +189,41 @@ extension OpenClawChatComposer {
                 }
             }
             .labelsHidden()
+            #if os(macOS)
+            .pickerStyle(.inline)
+            #endif
+            .disabled(
+                !self.viewModel.composerModelMutationAvailable ||
+                    self.viewModel.isUpdatingSessionSettings)
+            #if os(macOS)
+            if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                Divider()
+                Button {
+                    self.viewModel.toggleSelectedModelPinned()
+                } label: {
+                    Label(
+                        self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model",
+                        systemImage: self.viewModel.isSelectedModelPinned ? "star.slash" : "star")
+                }
+            }
+            #endif
         } label: {
             self.cleanInlineModelLabel(compact: compact)
         }
         .menuIndicator(.hidden)
         .tint(OpenClawChatTheme.muted)
+        #if os(macOS)
+        // Mac session settings remain editable during a response; pinning is
+        // local and stays available while a Gateway settings save is pending.
+        .fixedSize()
+        #else
         .disabled(
             !self.viewModel.showsModelPicker ||
                 !self.viewModel.composerModelMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings ||
                 self.viewModel.hasActiveRunForComposerSettings)
+        #endif
+        .help(self.cleanInlineModelDisabledHint ?? self.viewModel.composerInlineModelLabel)
         .accessibilityLabel("Model")
         .accessibilityValue(self.viewModel.composerInlineModelLabel)
         .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
@@ -178,6 +233,21 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     private func cleanInlineModelLabel(compact: Bool) -> some View {
+        #if os(macOS)
+        HStack(spacing: 6) {
+            Text(self.viewModel.composerInlineModelLabel)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .accessibilityHidden(true)
+        }
+        .font(OpenClawChatTypography.captionSemiBold)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .frame(width: compact ? 104 : 180, height: CleanChatComposerMetrics.controlTouchSize)
+        .contentShape(Rectangle())
+        #else
         if compact {
             Image(systemName: "cpu")
                 .font(OpenClawChatTypography.display(size: 16, weight: .semibold, relativeTo: .body))
@@ -197,6 +267,7 @@ extension OpenClawChatComposer {
                     height: CleanChatComposerMetrics.controlTouchSize)
                 .contentShape(Rectangle())
         }
+        #endif
     }
 
     private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
@@ -248,8 +319,13 @@ extension OpenClawChatComposer {
         .tint(OpenClawChatTheme.muted)
         .disabled(
             !self.viewModel.composerEffortMutationAvailable ||
-                self.viewModel.isUpdatingSessionSettings ||
-                self.viewModel.hasActiveRunForComposerSettings)
+                self.viewModel.isUpdatingSessionSettings)
+        #if os(macOS)
+        .fixedSize()
+        #else
+        .disabled(self.viewModel.hasActiveRunForComposerSettings)
+        #endif
+        .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
         .accessibilityLabel("Effort")
         .accessibilityValue(self.viewModel.composerInlineEffortLabel)
         .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
@@ -257,9 +333,11 @@ extension OpenClawChatComposer {
     }
 
     private var cleanInlineModelDisabledHint: String? {
+        #if os(iOS)
         if self.viewModel.hasActiveRunForComposerSettings {
             return String(localized: "Available after the current response finishes.")
         }
+        #endif
         if !self.viewModel.composerModelMutationAvailable {
             return String(localized: "Changing the model requires operator.write or operator.admin access.")
         }
@@ -270,9 +348,11 @@ extension OpenClawChatComposer {
     }
 
     private var cleanInlineEffortDisabledHint: String? {
+        #if os(iOS)
         if self.viewModel.hasActiveRunForComposerSettings {
             return String(localized: "Available after the current response finishes.")
         }
+        #endif
         if !self.viewModel.composerEffortMutationAvailable {
             return String(localized: "Thinking and Fast controls require operator.admin access.")
         }
@@ -281,10 +361,9 @@ extension OpenClawChatComposer {
         }
         return nil
     }
-    #endif
 
     @ViewBuilder
-    private var cleanCaptureAndPrimaryControls: some View {
+    var cleanCaptureAndPrimaryControls: some View {
         if self.dictationControl != nil || self.voiceNoteControl != nil {
             OpenClawChatMicButton(
                 dictationControl: self.dictationControl,

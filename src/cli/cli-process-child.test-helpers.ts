@@ -1,6 +1,6 @@
 // Shared child harness for CLI process suites: real Node+TSX children, one
 // deadlock guard each, and failures that always carry the child's own output.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
@@ -50,6 +50,7 @@ export async function runCliProcessChild(params: {
   env: NodeJS.ProcessEnv;
   cwd?: string;
   input?: string;
+  interact?: (child: ChildProcessWithoutNullStreams) => Promise<void> | void;
   onStdout?: (stdout: string) => void;
   timeoutMs?: number;
 }): Promise<CliProcessChildResult> {
@@ -59,7 +60,6 @@ export async function runCliProcessChild(params: {
     env: params.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(params.input);
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   let stdout = "";
@@ -82,9 +82,17 @@ export async function runCliProcessChild(params: {
     code: code as number | null,
     signal: signal as NodeJS.Signals | null,
   }));
+  const interaction = (async () => {
+    if (params.interact) {
+      await params.interact(child);
+      return;
+    }
+    child.stdin.end(params.input);
+  })();
+  const completed = Promise.all([closed, interaction]).then(([exit]) => exit);
   let guard: NodeJS.Timeout | undefined;
   const exit = await Promise.race([
-    closed,
+    completed,
     new Promise<never>((_, reject) => {
       guard = setTimeout(() => {
         child.kill("SIGKILL");
@@ -107,10 +115,20 @@ export async function runCliProcessChild(params: {
       }, timeoutMs);
       guard.unref();
     }),
-  ]).finally(() => {
-    if (guard) {
-      clearTimeout(guard);
-    }
-  });
+  ])
+    .catch((error: unknown) => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      throw error;
+    })
+    .finally(() => {
+      if (guard) {
+        clearTimeout(guard);
+      }
+    });
   return { code: exit.code, signal: exit.signal, stdout, stderr };
 }

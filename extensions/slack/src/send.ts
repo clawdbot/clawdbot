@@ -1375,7 +1375,7 @@ async function sendMessageSlackQueuedInner(params: {
   const mediaMaxBytes =
     opts.mediaMaxBytes ??
     (typeof account.config.mediaMaxMb === "number"
-      ? account.config.mediaMaxMb * 1024 * 1024
+      ? Math.floor(account.config.mediaMaxMb * 1024 * 1024)
       : undefined);
 
   let chunksToPost: string[];

@@ -482,6 +482,15 @@ extension SettingsProTab {
                 color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             Section {
+                NavigationLink {
+                    WatchMessageJournalView()
+                } label: {
+                    Label("Message Delivery", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(OpenClawType.body)
+                }
+            }
+
+            Section {
                 Button {
                     Task { await self.sendDirectWatchSetup() }
                 } label: {

@@ -5,24 +5,12 @@ import {
   QuestionWaitAnswerResultSchema,
   type QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { GatewayCallOptions } from "./gateway.js";
+import type { callGatewayTool } from "./gateway.js";
 
 /** Grace added to Gateway RPC deadlines so the question's own timeout wins. */
 const QUESTION_RPC_GRACE_MS = 10_000;
 
-export type GatewayQuestionCall = (
-  method: string,
-  opts: GatewayCallOptions,
-  params?: unknown,
-  // Mirrors callGatewayTool's extra bag so every question caller shares one type.
-  extra?: {
-    expectFinal?: boolean;
-    scopes?: OperatorScope[];
-    requireAgentRuntimeIdentity?: boolean;
-    signal?: AbortSignal;
-  },
-) => Promise<unknown>;
+export type GatewayQuestionCall = (...args: Parameters<typeof callGatewayTool>) => Promise<unknown>;
 
 const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_ALREADY_TERMINAL",

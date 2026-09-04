@@ -200,7 +200,7 @@ export async function sendMessageDiscord(
       : undefined;
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
-      ? accountInfo.config.mediaMaxMb * 1024 * 1024
+      ? Math.floor(accountInfo.config.mediaMaxMb * 1024 * 1024)
       : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
   const renderedText = renderDiscordMarkdown(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(renderedText, {
@@ -446,8 +446,7 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return {
-    messageId: result.id || "unknown",
-    channelId: result.channel_id ?? channelId,
+    ...toDiscordSendResult(result, channelId),
     receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
   };
 }

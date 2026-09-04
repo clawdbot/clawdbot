@@ -247,7 +247,7 @@ function resolveAttachmentMaxBytes(params: {
   // Priority: account-specific > channel-level > global default
   const limitMb =
     resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
+  return typeof limitMb === "number" ? Math.floor(limitMb * 1024 * 1024) : undefined;
 }
 
 function inferAttachmentFilename(params: {
@@ -282,20 +282,6 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
-}
-
-function resolveSendBufferMaxBytes(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  accountId?: string | null;
-}): number {
-  return (
-    resolveAttachmentMaxBytes({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-    }) ?? MEDIA_MAX_BYTES
-  );
 }
 
 function decodeBoundedBase64Attachment(params: { base64: string; maxBytes: number }): Buffer {
@@ -347,7 +333,7 @@ async function hydrateSendBufferMediaParams(params: {
     inferAttachmentFilename({
       contentType: normalized.contentType,
     });
-  const maxBytes = resolveSendBufferMaxBytes(params);
+  const maxBytes = resolveAttachmentMaxBytes(params) ?? MEDIA_MAX_BYTES;
   if (params.dryRun || params.preserveBuffer) {
     decodeBoundedBase64Attachment({
       base64: normalized.base64,

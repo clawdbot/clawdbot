@@ -4,6 +4,7 @@ import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -68,8 +69,8 @@ function rowToRef(row: CronRefRow): PersistedClawCronRef {
     status: row.status,
     job: JSON.parse(row.job_json) as ClawCronJob,
     ...(row.error ? { error: row.error } : {}),
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 

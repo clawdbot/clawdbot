@@ -19,7 +19,10 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import {
@@ -779,6 +782,74 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
         /^Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: .*invalid pending auth profile migration receipt.*/,
       ),
     );
+  });
+
+  it("imports live per-agent JSON after shared relocation without existing shared rows", async () => {
+    const state = await makeTestState();
+    const credential = { type: "api_key" as const, provider: "openai", key: "synthetic-shared" };
+    const localCredential = { ...credential, key: "synthetic-local" };
+    const sources = await Promise.all([
+      writeLegacyAuthProfilesJson(state, {
+        version: 1,
+        profiles: { "openai:default": credential },
+      }),
+      writeLegacyAuthProfilesJson(
+        state,
+        { version: 1, profiles: { "openai:default": localCredential } },
+        "unconfigured",
+      ),
+      writeLegacyAuthProfilesJson(state, { version: 1, profiles: {} }, "empty"),
+    ]);
+    const detected = detectSharedAuthStoreMigration({
+      stateDir: state.stateDir,
+      env: state.env,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(
+      await migrateSharedAuthStore({ detected, stateDir: state.stateDir, env: state.env }),
+    ).toMatchObject({ warnings: [] });
+    expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(result.detected).toEqual(expect.arrayContaining(sources));
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Archived unparseable auth profile input without import"),
+    ]);
+    expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles["openai:default"]).toEqual(
+      credential,
+    );
+    expect(
+      loadPersistedAuthProfileStore(state.agentDir("unconfigured"))?.profiles["openai:default"],
+    ).toEqual(localCredential);
+    for (const [agentId, expected] of [
+      ["main", credential],
+      ["unconfigured", localCredential],
+      ["empty", credential],
+    ] as const) {
+      expect(
+        loadAuthProfileStoreWithoutExternalProfiles(state.agentDir(agentId)).profiles[
+          "openai:default"
+        ],
+      ).toEqual(expected);
+    }
+    for (const source of sources) {
+      expect(fs.existsSync(source)).toBe(false);
+      expectMigratedArchive(source);
+    }
+    expect(
+      (
+        await maybeMigrateAuthProfileJsonStoresToSqlite({
+          cfg: {},
+          prompter: makePrompter(true),
+          env: state.env,
+        })
+      ).detected,
+    ).toEqual([]);
   });
 
   it.each(["legacy-main", "state-db"] as const)(

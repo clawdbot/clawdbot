@@ -682,7 +682,10 @@ describe("diagnostics command", () => {
       true,
     );
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
     expect(execCalls).toHaveLength(0);
   });
 

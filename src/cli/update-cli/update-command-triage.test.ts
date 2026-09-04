@@ -5,7 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 
@@ -101,6 +103,26 @@ async function createManagedTriageTarget() {
   return { target, contextPath };
 }
 
+async function withTerminal(run: () => Promise<void>) {
+  const streams = [process.stdin, process.stdout];
+  const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
+  for (const stream of streams) {
+    Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
+  }
+  try {
+    await run();
+  } finally {
+    streams.forEach((stream, index) => {
+      const descriptor = descriptors[index];
+      if (descriptor) {
+        Object.defineProperty(stream, "isTTY", descriptor);
+      } else {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
+    });
+  }
+}
+
 beforeEach(() => {
   vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -115,14 +137,16 @@ describe("update failure triage boundary", () => {
     "runs the installed triage after cleanup without changing update failure (triage exit %i)",
     async (triageExitCode) => {
       const target = await createInstalledTriage(triageExitCode);
-      await withUpdateFailureTriage({ json: true }, target, async () => {
-        try {
-          defaultRuntime.writeJson(failedUpdate);
-          throw new UpdateCommandFailure(failedUpdate);
-        } finally {
-          await fs.writeFile(path.join(target.root, "released"), "done");
-        }
-      });
+      await expect(
+        withUpdateFailureTriage({ json: true }, target, async () => {
+          try {
+            defaultRuntime.writeJson(failedUpdate);
+            throw new UpdateCommandFailure(failedUpdate);
+          } finally {
+            await fs.writeFile(path.join(target.root, "released"), "done");
+          }
+        }),
+      ).rejects.toMatchObject({ code: 1 });
 
       const receipt = await readReceipt(target);
       expect(receipt).toMatchObject({
@@ -137,7 +161,7 @@ describe("update failure triage boundary", () => {
       expect(receipt.serviceMarker).toBeUndefined();
       expect(receipt.args).toContain("--json");
       expect(JSON.stringify(receipt.failure)).toContain("ENOSPC");
-      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(failedUpdate);
       expect(defaultRuntime.log).not.toHaveBeenCalled();
       expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"promptPath":'));
@@ -174,7 +198,7 @@ describe("update failure triage boundary", () => {
       const result: UpdateRunResult = {
         ...failedUpdate,
         after: { version: "2026.9.1" },
-        recovery: { serviceRestartSafe: true },
+        recovery: { serviceRestartSafe: true, version: "2026.9.1" },
       };
       const targetWithResult: UpdateTriageTarget = { ...target, failureResult: result };
       await fs.writeFile(contextPath, JSON.stringify({ error: "Stale pre-recovery result" }));
@@ -191,8 +215,8 @@ describe("update failure triage boundary", () => {
         }
       });
       if (kind === "reported") {
-        await completion;
-        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        await expect(completion).rejects.toMatchObject({ code: 1 });
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
       } else {
         await expect(completion).rejects.toBe(failure);
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -228,15 +252,17 @@ describe("update failure triage boundary", () => {
     const original = JSON.stringify({ error: "Outer updater owns final recovery" });
     await fs.writeFile(contextPath, original);
 
-    await withUpdateFailureTriage({}, target, async () => {
-      throw new UpdateCommandFailure(failedUpdate, 1);
-    });
+    await expect(
+      withUpdateFailureTriage({}, target, async () => {
+        throw new UpdateCommandFailure(failedUpdate, 1);
+      }),
+    ).rejects.toMatchObject({ code: 1 });
 
     await expect(fs.readFile(contextPath, "utf8")).resolves.toBe(original);
     await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -246,14 +272,16 @@ describe("update failure triage boundary", () => {
   ])("leaves triage to the owner for $name", async ({ opts, env }) => {
     const target = await createInstalledTriage();
     Object.assign(target.env, env);
-    await withUpdateFailureTriage(opts, target, async () => {
-      throw new UpdateCommandFailure(failedUpdate, 80);
-    });
+    await expect(
+      withUpdateFailureTriage(opts, target, async () => {
+        throw new UpdateCommandFailure(failedUpdate, 80);
+      }),
+    ).rejects.toMatchObject({ code: 80 });
     await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(fs.stat(target.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(80);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -264,23 +292,27 @@ describe("update failure triage boundary", () => {
     "managed-service-handoff-cancelled",
   ])("does not diagnose intentional or pending %s", async (reason) => {
     const target = await createInstalledTriage();
-    await withUpdateFailureTriage({}, target, async () => {
-      throw new UpdateCommandFailure({ ...failedUpdate, status: "skipped", reason }, 0);
-    });
+    await expect(
+      withUpdateFailureTriage({}, target, async () => {
+        throw new UpdateCommandFailure({ ...failedUpdate, status: "skipped", reason }, 0);
+      }),
+    ).rejects.toMatchObject({ code: 0 });
     await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("retains the diagnostic export when the installed command is broken", async () => {
     const target = await createInstalledTriage();
     await fs.unlink(path.join(target.root, "dist", "index.js"));
-    await withUpdateFailureTriage({ json: true }, target, async () => {
-      throw new UpdateCommandFailure(failedUpdate);
-    });
-    expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    await expect(
+      withUpdateFailureTriage({ json: true }, target, async () => {
+        throw new UpdateCommandFailure(failedUpdate);
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Saved update failure:"),
     );
@@ -304,4 +336,156 @@ describe("update failure triage boundary", () => {
       code: "ENOENT",
     });
   });
+
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      { stateFailure: "missing", removeCwd: false, agentExitCode: 0 },
+      { stateFailure: "missing", removeCwd: true, agentExitCode: 0 },
+      { stateFailure: "missing", removeCwd: false, agentExitCode: 23 },
+      ...(process.getuid?.() === 0
+        ? []
+        : [{ stateFailure: "unsearchable", removeCwd: false, agentExitCode: 0 }]),
+    ])(
+    "starts native recovery outside an unusable state directory ($stateFailure, removed cwd=$removeCwd, agent exit=$agentExitCode)",
+    async ({ stateFailure, removeCwd, agentExitCode }) => {
+      vi.mocked(defaultRuntime.exit).mockImplementation((code) => {
+        throw new ExitError(code);
+      });
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const invocationCwd = state.path("operator-shell");
+        const brokenStateDir = state.path("unusable-state");
+        const receiptPath = state.path("agent-receipts.jsonl");
+        const releasedPath = state.path("released");
+        const bin = state.path("bin");
+        const secret = "sk-test-triage-recovery-secret-1234567890";
+        await fs.mkdir(invocationCwd);
+        await fs.mkdir(bin);
+        if (stateFailure === "missing") {
+          await fs.symlink(state.path("unavailable-state-volume"), brokenStateDir, "dir");
+        } else {
+          await fs.mkdir(brokenStateDir, { mode: 0o600 });
+        }
+        try {
+          await expect(fs.access(brokenStateDir, fs.constants.X_OK)).rejects.toMatchObject({
+            code: stateFailure === "missing" ? "ENOENT" : "EACCES",
+          });
+          await fs.writeFile(
+            path.join(bin, "claude"),
+            `#!${process.execPath}\n` +
+              `const fs = require("node:fs");\n` +
+              `fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
+              `  cwd: fs.realpathSync(process.cwd()),\n` +
+              `  home: process.env.HOME,\n` +
+              `  stateDir: process.env.OPENCLAW_STATE_DIR,\n` +
+              `  configPath: process.env.OPENCLAW_CONFIG_PATH,\n` +
+              `  workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,\n` +
+              `  path: process.env.PATH,\n` +
+              `  nodeOptions: process.env.NODE_OPTIONS,\n` +
+              `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
+              `  released: fs.existsSync(${JSON.stringify(releasedPath)}),\n` +
+              `  prompt: process.argv[2],\n` +
+              `}) + "\\n");\n` +
+              `process.exitCode = ${agentExitCode};\n`,
+            { mode: 0o700 },
+          );
+          await withEnvAsync(
+            {
+              PATH: bin,
+              NODE_OPTIONS: "--no-warnings",
+              HOME: state.home,
+              USERPROFILE: state.home,
+              OPENCLAW_WORKSPACE_DIR: state.workspaceDir,
+            },
+            () =>
+              withTerminal(async () => {
+                const target: UpdateTriageTarget = { env: { ...process.env } };
+                await expect(
+                  withUpdateFailureTriage({ invocationCwd }, target, async () => {
+                    try {
+                      if (removeCwd) {
+                        await fs.rmdir(invocationCwd);
+                      }
+                      target.root = state.path("unavailable-installed-package");
+                      target.env = {
+                        ...target.env,
+                        HOME: state.path("service-home"),
+                        PATH: state.path("service-tools"),
+                        NODE_OPTIONS: "--trace-warnings",
+                        OPENCLAW_STATE_DIR: brokenStateDir,
+                        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+                      };
+                      process.env.HOME = state.path("later-home");
+                      process.env.USERPROFILE = state.path("later-home");
+                      process.env.PATH = state.path("later-tools");
+                      process.env.NODE_OPTIONS = "--trace-warnings";
+                      throw new UpdateCommandFailure(
+                        {
+                          ...failedUpdate,
+                          root: target.root,
+                          reason: "injected-doctor-failure",
+                          after: { version: "2026.9.1" },
+                          recovery: {
+                            serviceRestartSafe: false,
+                            reason: "state-migration-started",
+                          },
+                          steps: [
+                            {
+                              name: "doctor",
+                              command: "openclaw doctor --fix",
+                              cwd: target.root,
+                              durationMs: 1,
+                              exitCode: 1,
+                              stderrTail: "State migration failed",
+                            },
+                          ],
+                        },
+                        7,
+                        `Doctor failed; Authorization: Bearer ${secret}`,
+                      );
+                    } finally {
+                      await fs.writeFile(releasedPath, "done");
+                    }
+                  }),
+                ).rejects.toMatchObject({ code: 7 });
+              }),
+          );
+          const receipts = (await fs.readFile(receiptPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(receipts).toHaveLength(1);
+          expect(receipts[0]).toMatchObject({
+            cwd: removeCwd ? state.home : invocationCwd,
+            home: state.home,
+            stateDir: brokenStateDir,
+            configPath: state.configPath,
+            workspaceDir: state.workspaceDir,
+            path: bin,
+            nodeOptions: "--no-warnings",
+            released: true,
+          });
+          expect(receipts[0].updateInProgress).toBeUndefined();
+          expect(receipts[0].prompt).toContain("injected-doctor-failure");
+          expect(receipts[0].prompt).not.toContain(secret);
+          expect(defaultRuntime.error).toHaveBeenCalledWith(
+            expect.stringContaining("Debugging prompt could not be saved:"),
+          );
+          expect(defaultRuntime.log).not.toHaveBeenCalledWith(
+            expect.stringMatching(/^Debugging prompt: /u),
+          );
+          if (agentExitCode !== 0) {
+            expect(defaultRuntime.error).toHaveBeenCalledWith(
+              expect.stringContaining(`Triage exited with code ${agentExitCode}`),
+            );
+          }
+          expect(defaultRuntime.exit).not.toHaveBeenCalled();
+        } finally {
+          if (stateFailure === "unsearchable") {
+            await fs.chmod(brokenStateDir, 0o700);
+          }
+        }
+      });
+    },
+  );
 });

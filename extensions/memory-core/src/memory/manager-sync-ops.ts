@@ -22,7 +22,6 @@ import {
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
-  closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
@@ -35,7 +34,6 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
-import { type MemoryReindexLockHandle, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -519,9 +517,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDb = this.db;
-    let reindexLock: MemoryReindexLockHandle | undefined;
-    let tempDb: DatabaseSync | undefined;
-    let tempDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -530,10 +525,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     );
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
-      reindexLock = await waitForMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
-      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
-      const shadow = new MemoryIndexDatabase(tempDb);
+      const shadow = new MemoryIndexDatabase(
+        openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled),
+      );
       shadow.vector.enabled = this.vector.enabled;
       shadow.vector.extensionPath = this.vector.extensionPath;
       shadow.fts.enabled = this.fts.enabled;
@@ -619,8 +614,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
       });
 
-      closeMemoryDatabase(tempDb);
-      tempDbClosed = true;
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
         await withMemoryIndexPublishGeneration(dbPath, async () => {
           await publishMemoryDatabaseTables({
@@ -644,12 +637,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
     } catch (err) {
-      if (tempDb && !tempDbClosed) {
-        try {
-          closeMemoryDatabase(tempDb);
-          tempDbClosed = true;
-        } catch {}
-      }
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,
@@ -657,20 +644,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       throw err;
     } finally {
-      if (tempDb && !tempDbClosed) {
-        try {
-          closeMemoryDatabase(tempDb);
-        } catch {}
-      }
       try {
         removeMemoryDatabaseFiles(tempDbPath);
       } catch (err) {
         log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
-      }
-      try {
-        reindexLock?.release();
-      } catch (err) {
-        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
       }
     }
   }

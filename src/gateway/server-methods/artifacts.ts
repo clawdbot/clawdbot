@@ -349,11 +349,6 @@ async function loadArtifacts(
         downloadArtifactId: opts.downloadArtifactId,
       });
     },
-    {
-      mode: "full",
-      reason: "artifact query transcript scan",
-      cache: "skip",
-    },
   );
   return {
     sessionKey,

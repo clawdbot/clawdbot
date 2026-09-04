@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadFacadeModuleAtLocationSync,
@@ -237,12 +238,17 @@ describe("plugin-sdk facade loader", () => {
       await import("./bundled-channel-config-schema.js");
 
     expect(listImportedBundledPluginFacadeIds()).toEqual([]);
-    expect(TelegramConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    type ChannelConfig = NonNullable<OpenClawConfig["channels"]>;
+    const telegramResult: z.ZodSafeParseResult<NonNullable<ChannelConfig["telegram"]>> =
+      TelegramConfigSchema.safeParse({ dmPolicy: "pairing" });
+    expect(telegramResult.success).toBe(true);
     const extended = TelegramConfigSchema.safeExtend({ testOnly: z.literal(true) });
     expect(extended.safeParse({ dmPolicy: "pairing", testOnly: true }).success).toBe(true);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["telegram"]);
 
-    expect(IMessageConfigSchema.safeParse({ dmPolicy: "pairing" }).success).toBe(true);
+    const imessageResult: z.ZodSafeParseResult<NonNullable<ChannelConfig["imessage"]>> =
+      IMessageConfigSchema.safeParse({ dmPolicy: "pairing" });
+    expect(imessageResult.success).toBe(true);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["imessage", "telegram"]);
   });
 

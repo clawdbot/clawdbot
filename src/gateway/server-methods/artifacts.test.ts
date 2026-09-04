@@ -189,7 +189,6 @@ describe("artifacts RPC handlers", () => {
         storePath: "/tmp/sessions.json",
       },
       expect.any(Function),
-      expect.objectContaining({ cache: "skip" }),
     );
   });
 

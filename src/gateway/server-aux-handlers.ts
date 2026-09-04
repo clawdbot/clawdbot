@@ -1,6 +1,7 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
+import { resolveProjectedMcpCodexToolApprovalMode } from "../agents/mcp-codex-tool-approval.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentRunDelegatedAuthority,
@@ -196,11 +197,25 @@ export function createGatewayAuxHandlers(
     "plugin",
     resolveCanonicalPluginApprovalRequestAllowedDecisions,
     (request) => {
-      if (!request.placementGrant) {
-        return null;
-      }
       // Abort-wins for plugin approvals matches the cron mint boundary.
       if (request.runId && params.hasRunAbortMarker?.(request.runId) === true) {
+        return null;
+      }
+      if (request.mcpTool && request.agentId && request.agentId !== "*") {
+        const servers = getRuntimeConfig().mcp?.servers;
+        const server =
+          servers && Object.hasOwn(servers, request.mcpTool.server)
+            ? servers[request.mcpTool.server]
+            : undefined;
+        // Explicit prompt always asks, even after an earlier operator grant.
+        const mode =
+          server &&
+          resolveProjectedMcpCodexToolApprovalMode(request.mcpTool.server, server, server);
+        if (server && server.enabled !== false && (mode === undefined || mode === "auto")) {
+          return { kind: "mcp-tool", agentId: request.agentId, ...request.mcpTool };
+        }
+      }
+      if (!request.placementGrant) {
         return null;
       }
       return { kind: "placement", ...request.placementGrant };

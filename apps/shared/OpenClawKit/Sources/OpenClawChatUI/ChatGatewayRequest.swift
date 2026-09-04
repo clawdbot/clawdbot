@@ -630,6 +630,7 @@ public enum OpenClawChatGatewayRequests {
         agentID: String?,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        inputRunIDs: [String]? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(sessionKey)]
@@ -639,6 +640,9 @@ public enum OpenClawChatGatewayRequests {
         }
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
+        }
+        if let inputRunIDs, !inputRunIDs.isEmpty {
+            params["inputRunIds"] = AnyCodable(inputRunIDs)
         }
         return OpenClawChatGatewayRequest(
             method: "chat.history",

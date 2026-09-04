@@ -4,11 +4,44 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../config.js";
+import { replaceSessionEntry } from "./session-accessor.js";
+import * as sessionEntryStatus from "./session-accessor.sqlite-status.js";
 import { resolveExistingAgentSessionStoreTargetsSync } from "./targets.js";
 import { countMatching, createAgentSessionStores } from "./targets.test-support.js";
 
 describe("resolveExistingAgentSessionStoreTargetsSync", () => {
+  it("stops validating fixed-store entries after the first matching agent", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "shared.sqlite");
+      for (const agentId of ["main", "alpha", "zulu"]) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:existing`, storePath },
+          { sessionId: `session-${agentId}`, updatedAt: Date.now() },
+        );
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      database.db.prepare("UPDATE session_nodes SET entry_valid = 0").run();
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storePath },
+      };
+      const parseEntry = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
+      try {
+        expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "main")).toEqual([
+          { agentId: "main", storePath },
+        ]);
+        expect(parseEntry.mock.results.map(({ value }) => value?.sessionId)).toEqual([
+          "session-alpha",
+          "session-main",
+        ]);
+      } finally {
+        parseEntry.mockRestore();
+      }
+    });
+  });
+
   it("validates a configured canonical SQLite target once", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");

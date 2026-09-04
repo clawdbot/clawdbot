@@ -107,8 +107,8 @@ export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
   )}`;
 }
 
-// Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
-// from single-file local runs (M4 Max) and static import-graph size. Packing
+// Advisory per-file cost hints (seconds) for stripe balancing, from file walls,
+// serial case costs, and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
 // files use the default, which mostly reflects the per-file module-graph
 // re-evaluation cost that dominates these serial suites.
@@ -117,7 +117,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Runtime prerequisites are charged once per batch, separately from test work.
   ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts", 6],
   ["test/scripts/plugin-release-git-lifecycle.test.ts", 35],
-  ["test/scripts/vitest-report-owner.test.ts", 71],
   ["test/scripts/pr-main-refresh.test.ts", 30],
   ["test/plugin-npm-package-manifest.test.ts", 26],
   ["test/scripts/ci-node-test-plan.test.ts", 24],
@@ -137,6 +136,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/cron-output.process.test.ts", 23],
   // The cold source proof in run 33492093127 took 198.88s; keep it alone.
   ["src/cli/gateway-backed-exit.process.test.ts", 200],
+  // Retain the original isolation budget until the split has measured timings.
+  ["src/cli/gateway-backed-exit-health.process.test.ts", 200],
   ["src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts", 4],
   ["src/cli/gateway-cli/shutdown-hard-exit.process.test.ts", 1],
   ["src/cli/help-exit.process.test.ts", 27],
@@ -186,6 +187,20 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.remove-lease.test.ts", 16],
   ["src/agents/sessions/agent-session-code-mode-source.test.ts", 28],
   ["src/agents/worktrees/run-lease.test.ts", 13],
+  // Main runs 33537556582/33537739443/33543106647: median case-body sums.
+  // Relative weights distribute files; complete generation spans own admission.
+  ["src/agents/cli-runner/prepare.test.ts", 42],
+  ["src/agents/command/attempt-execution.cli.test.ts", 14],
+  ["src/agents/harness/selection.test.ts", 10],
+  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 17],
+  ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
+  ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
+  ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
+  ["src/agents/worktrees/service.capacity.test.ts", 19],
+  ["src/agents/worktrees/service.diagnostics.test.ts", 18],
+  ["src/agents/worktrees/service.naming.test.ts", 10],
+  ["src/agents/worktrees/service.provisioned.test.ts", 24],
+  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -205,10 +220,16 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   ["test/scripts/ci-git-owner.test.ts", 187],
-  // Successful hosted run 33388762505: retain the newer lifecycle measurements.
-  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 305],
+  // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
+  // spans; canonical push plans omit this tooling workload.
+  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 136],
   ["test/scripts/ci-linux-git.test.ts", 204],
-  ["test/scripts/pr-merge-outcome.test.ts", 159],
+  // Historical single-file wall from PR run 33576929814; this file has since grown.
+  ["test/scripts/pr-merge-outcome.test.ts", 206],
+  // Relative serial case costs from PR runs 33571672257/33576929814.
+  // These mixed invocations do not report complete file walls.
+  ["test/scripts/vitest-report-owner.test.ts", 203],
+  ["test/scripts/write-plugin-sdk-entry-dts.test.ts", 74],
   ["test/scripts/ci-workflow-guards.test.ts", 38],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
   ["test/scripts/find-reusable-release-validation.test.ts", 8],

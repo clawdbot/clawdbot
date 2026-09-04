@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
@@ -11,6 +12,7 @@ import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sess
 import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
@@ -475,6 +477,7 @@ export const SessionsSendParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   message: Type.String(),
+  mentions: Type.Optional(HumanMentionsSchema),
   thinking: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),

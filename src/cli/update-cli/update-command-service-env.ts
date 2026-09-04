@@ -133,7 +133,7 @@ export function resolveOwnedManagedUpdateEnv(params: {
   });
 }
 
-export function resolvePostInstallDoctorEnv(params?: {
+export function resolveUpdateTargetEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;

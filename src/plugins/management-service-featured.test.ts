@@ -25,8 +25,11 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   };
 });
 
-const { clearManagedPluginOfficialCatalogCache, listManagedPlugins, resolveManagedPluginIconUrl } =
-  await import("./management-service.js");
+const {
+  clearManagedPluginOfficialCatalogCache,
+  listManagedPlugins,
+  resolveManagedPluginIconSource,
+} = await import("./management-service.js");
 
 function metadataSnapshot(params: {
   id?: string;
@@ -36,7 +39,7 @@ function metadataSnapshot(params: {
   installRecord?: Record<string, unknown>;
   featured?: boolean;
   description?: string;
-  icon?: string;
+  iconPath?: string;
 }) {
   const id = params.id ?? "workboard";
   const packageName =
@@ -49,7 +52,7 @@ function metadataSnapshot(params: {
       name: params.name ?? "Workboard",
       description: params.description ?? "Coordinate agent work in a shared board.",
       catalog: { featured: params.featured ?? true, order: 10 },
-      ...(params.icon ? { icon: params.icon } : {}),
+      ...(params.iconPath ? { iconPath: params.iconPath } : {}),
       channels: [],
       providers: [],
       cliBackends: [],
@@ -199,11 +202,10 @@ describe("plugin management Featured authority", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
 
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const resolved = await resolveManagedPluginIconUrl({
+    const resolved = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "@expediagroup/expedia-openclaw",
-      officialCatalog,
     });
 
     expect(catalog.plugins[0]).toMatchObject({
@@ -212,9 +214,9 @@ describe("plugin management Featured authority", () => {
       description: "Search flights, stays, and travel options.",
       featured: true,
       order: 10,
-      hasIcon: true,
     });
-    expect(resolved).toBe(icon);
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolved).toBeUndefined();
   });
 
   beforeEach(() => {
@@ -463,7 +465,6 @@ describe("plugin management Featured authority", () => {
         packageName: "@openclaw/firecrawl-plugin",
         featured: false,
         description: "Optional OpenClaw capability.",
-        icon: "https://cdn.example.test/firecrawl-bundled.png",
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -481,7 +482,7 @@ describe("plugin management Featured authority", () => {
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
-    const resolvedIcon = await resolveManagedPluginIconUrl({
+    const resolvedIcon = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "firecrawl",
@@ -496,10 +497,10 @@ describe("plugin management Featured authority", () => {
         featured: true,
         featuredAt: 1_784_280_000_000,
         order: 10,
-        hasIcon: true,
       }),
     ]);
-    expect(resolvedIcon).toBe(hostedIcon);
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolvedIcon).toBeUndefined();
   });
 
   it("keeps local curation for an unproven global package identity", async () => {
@@ -527,12 +528,10 @@ describe("plugin management Featured authority", () => {
   });
 
   it("does not identify a package-less private bundled plugin by hosted runtime id", async () => {
-    const localIcon = "https://cdn.example.test/private-workboard.png";
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         packageName: null,
         description: "Private local workboard.",
-        icon: localIcon,
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -547,7 +546,7 @@ describe("plugin management Featured authority", () => {
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
-    const resolvedIcon = await resolveManagedPluginIconUrl({
+    const resolvedIcon = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "workboard",
@@ -562,7 +561,7 @@ describe("plugin management Featured authority", () => {
         order: 10,
       }),
     ]);
-    expect(resolvedIcon).toBe(localIcon);
+    expect(resolvedIcon).toBeUndefined();
   });
 
   it("does not identify a package-less global plugin by hosted runtime id alone", async () => {
@@ -726,17 +725,22 @@ describe("plugin management Featured authority", () => {
     ]);
   });
 
-  it.each(["one", "repeated object", "clone", "npm source only"])(
+  it.each([
+    "one",
+    "repeated object",
+    "clone",
+    "npm source only",
+    "dual-source feed",
+    "npm namesake",
+  ])(
     "preserves installed identity and package suppression for %s hosted occurrence",
     async (mode) => {
-      const localIcon = "https://cdn.example.test/local.png";
       const hostedIcon = "https://cdn.example.test/hosted.png";
       mocks.metadata.mockReturnValue(
         metadataSnapshot({
           id: "installed",
           name: "Local",
           packageName: "@acme/installed",
-          icon: localIcon,
         }),
       );
       mocks.bundledEntries = [
@@ -751,14 +755,26 @@ describe("plugin management Featured authority", () => {
       const hosted = {
         ...compositionEntry(
           "remote",
-          mode === "npm source only"
-            ? { npmSpec: "@acme/installed" }
+          mode === "npm source only" || mode === "npm namesake"
+            ? { npmSpec: mode === "npm namesake" ? "@acme/shared" : "@acme/installed" }
             : { clawhubSpec: "clawhub:@acme/shared" },
         ),
         title: "Remote",
         icon: hostedIcon,
+        ...(mode === "dual-source feed"
+          ? {
+              state: "available",
+              publisher: { trust: "official" },
+              install: {
+                candidates: [
+                  { sourceRef: "public-npm", package: "@acme/installed" },
+                  { sourceRef: "public-clawhub", package: "@acme/shared" },
+                ],
+              },
+            }
+          : {}),
       };
-      // The name arrives from the overlay. Its npm fallback must participate in suppression.
+      // The declared ClawHub counterpart suppresses duplicates without inventing npm identity.
       const entries =
         mode === "repeated object"
           ? [hosted, hosted]
@@ -768,22 +784,32 @@ describe("plugin management Featured authority", () => {
       mocks.officialCatalog.mockResolvedValue(hostedCatalog(entries));
 
       const catalog = await listManagedPlugins({ config: {}, env: {} });
-      const icon = await resolveManagedPluginIconUrl({
+      const icon = await resolveManagedPluginIconSource({
         config: {},
         env: {},
         pluginId: "installed",
       });
+      const curated = mode === "one" || mode === "dual-source feed";
 
       expect(catalog.plugins).toEqual([
+        ...(mode === "npm namesake"
+          ? [
+              expect.objectContaining({
+                id: "remote",
+                installed: false,
+                packageName: "@acme/shared",
+              }),
+            ]
+          : []),
         expect.objectContaining({
           id: "installed",
           installed: true,
-          name: mode === "one" ? "Remote" : "Local",
-          featured: mode === "one",
-          hasIcon: true,
+          name: curated ? "Remote" : "Local",
+          featured: curated,
         }),
       ]);
-      expect(icon).toBe(mode === "one" ? hostedIcon : localIcon);
+      expect(catalog.plugins.find((entry) => entry.id === "installed")?.hasIcon).toBeUndefined();
+      expect(icon).toBeUndefined();
     },
   );
 
@@ -801,7 +827,6 @@ describe("plugin management Featured authority", () => {
       name: "First",
       origin: "global",
       packageName: "@acme/first",
-      icon: "https://cdn.example.test/raw-first.png",
       installRecord: {
         source: "clawhub",
         clawhubUrl: "https://clawhub.ai",
@@ -849,21 +874,18 @@ describe("plugin management Featured authority", () => {
         },
       ],
     };
-    const expected = firstIcon ?? fallbackIcon;
-
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const icon = await resolveManagedPluginIconUrl({
+    const icon = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "ALIAS",
-      officialCatalog,
     });
 
     expect(catalog.plugins).toHaveLength(2);
     for (const plugin of catalog.plugins) {
-      expect(plugin.hasIcon).toBe(expected ? true : undefined);
+      expect(plugin.hasIcon).toBeUndefined();
     }
-    expect(icon).toBe(expected);
+    expect(icon).toBeUndefined();
   });
 
   it.each([undefined, "https://cdn.example.test/first.png"])(
@@ -878,18 +900,14 @@ describe("plugin management Featured authority", () => {
       };
 
       const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-      const icon = await resolveManagedPluginIconUrl({
+      const icon = await resolveManagedPluginIconSource({
         config: {},
         env: {},
         pluginId: "duplicate",
-        officialCatalog,
       });
 
-      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([
-        firstIcon ? true : undefined,
-        true,
-      ]);
-      expect(icon).toBe(firstIcon);
+      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([undefined, undefined]);
+      expect(icon).toBeUndefined();
     },
   );
 
@@ -905,11 +923,24 @@ describe("plugin management Featured authority", () => {
       source: "official",
     },
     { name: "npm", install: { npmSpec: "@acme/action@1.2.3" }, source: "official" },
+    {
+      name: "npm with unversioned ClawHub",
+      install: { npmSpec: "@acme/action@1.2.3", clawhubSpec: "clawhub:@acme/action" },
+      source: "official",
+    },
     { name: "local", install: { localPath: "./plugin" }, source: "official" },
     { name: "malformed ClawHub", install: { clawhubSpec: "clawhub:" }, source: "official" },
     {
       name: "malformed npm selector",
       install: { npmSpec: "@acme/action@^1.2.3" },
+      source: "official",
+    },
+    {
+      name: "malformed npm selector with unversioned ClawHub",
+      install: {
+        npmSpec: "@acme/action@^1.2.3",
+        clawhubSpec: "clawhub:@acme/action",
+      },
       source: "official",
     },
     { name: "no install", install: {}, source: undefined },

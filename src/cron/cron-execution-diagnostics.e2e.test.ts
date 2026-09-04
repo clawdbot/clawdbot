@@ -148,7 +148,7 @@ async function runPersistedDiagnosticCase(params: {
   );
 }
 
-describe.sequential("cron execution diagnostics", () => {
+describe("cron execution diagnostics", { concurrent: false }, () => {
   const servers: Server[] = [];
 
   beforeEach(() => {

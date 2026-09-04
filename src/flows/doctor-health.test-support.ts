@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
+  probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
   restartedHealthy: true,
   emulateNativeInstall: true,
@@ -23,7 +24,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({}),
+  createDoctorPrompter: () => ({ confirm: async () => true }),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -34,6 +35,13 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => mocks.service(),
+}));
+
+// Service absence requires a free port too; never consult the host Gateway
+// while exercising the fixture's in-memory native manager.
+vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage: mocks.probePortUsage,
 }));
 
 vi.mock("../config/paths.js", async (importOriginal) => {
@@ -92,7 +100,7 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
 }));
 
 vi.mock("../commands/doctor-update.js", () => ({
-  maybeOfferUpdateBeforeDoctor: async () => ({ handled: false }),
+  maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
 }));
 
 vi.mock("../commands/doctor-ui.js", () => ({

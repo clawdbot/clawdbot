@@ -1,5 +1,4 @@
 import type {
-  WorkerGitHubPublishParams,
   WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -8,6 +7,7 @@ import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -32,13 +32,16 @@ import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
-import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
+import type {
+  WorkerEnvironmentAbandonment,
+  WorkerProviderLifecycleInputOptions,
+} from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
+import { joinWorkerTunnelStops, type WorkerTunnelStopReason } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
@@ -106,6 +109,12 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
     params:
       | {
           identity: WorkerConnectionIdentity;
+          toolName: "skill_workshop";
+          request: WorkerSkillWorkshopParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
           toolName: "sessions_spawn";
           request: WorkerSessionsSpawnParams;
           signal?: AbortSignal;
@@ -114,12 +123,6 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "github_publish";
-          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         }
       | {
@@ -158,7 +161,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             ownerEpoch?: number,
             reason?: WorkerTunnelStopReason,
           ) => {
-            await Promise.all([
+            await joinWorkerTunnelStops([
               options.tunnelManager?.stop(environmentId, ownerEpoch),
               options.nodeTunnelManager?.stop(environmentId, ownerEpoch, reason),
               options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
@@ -650,8 +653,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
       );
     },
-    destroy: async (environmentId: string) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId)),
+    destroy: async (environmentId: string, abandonment?: WorkerEnvironmentAbandonment) =>
+      environmentAccess.project(await providerLifecycle.destroy(environmentId, { abandonment })),
     destroyUnattached: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),

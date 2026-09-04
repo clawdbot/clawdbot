@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  isOfficialCatalogLookupPluginIdReplacement,
+  isTrustedOfficialCatalogLookupDuplicate,
   isTrustedOfficialPluginInstallRecord,
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
+
+const QQBOT_EXPECTED_INTEGRITY =
+  "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==";
 
 describe("official plugin install trust", () => {
   const packageName = "@openclaw/fish-audio-speech";
@@ -177,6 +182,123 @@ describe("trusted official npm install records", () => {
         record,
       }),
     ).toBeUndefined();
+  });
+
+  it("rewrites a catalog-declared legacy npm package to the current official spec", () => {
+    const record = {
+      source: "npm" as const,
+      spec: "@openclaw/qqbot@1.9.0",
+      resolvedName: "@openclaw/qqbot",
+      resolvedSpec: "@openclaw/qqbot@1.9.0",
+    };
+
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({
+        pluginId: "openclaw-qqbot",
+        record,
+      }),
+    ).toEqual({
+      expectedIntegrity: QQBOT_EXPECTED_INTEGRITY,
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      pluginId: "openclaw-qqbot",
+      replaceNpmPackage: true,
+    });
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({
+        pluginId: "qqbot",
+        record,
+      }),
+    ).toEqual({
+      expectedIntegrity: QQBOT_EXPECTED_INTEGRITY,
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      pluginId: "openclaw-qqbot",
+      replacementPluginId: "openclaw-qqbot",
+      replaceNpmPackage: true,
+    });
+    expect(
+      isOfficialCatalogLookupPluginIdReplacement({
+        expectedPluginId: "qqbot",
+        expectedReplacementPluginId: "openclaw-qqbot",
+      }),
+    ).toBe(true);
+    expect(
+      isOfficialCatalogLookupPluginIdReplacement({
+        expectedPluginId: "fish-audio",
+        expectedReplacementPluginId: "fish-audio-speech",
+      }),
+    ).toBe(false);
+  });
+
+  it("fails closed when a legacy npm package identity is mixed with another package", () => {
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({
+        pluginId: "openclaw-qqbot",
+        record: {
+          source: "npm",
+          spec: "@openclaw/qqbot@1.9.0",
+          resolvedName: "@vendor/qqbot",
+          resolvedSpec: "@openclaw/qqbot@1.9.0",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "npm-pack archive", provenance: { artifactKind: "npm-pack" as const } },
+    { name: "local source path", provenance: { sourcePath: "/tmp/openclaw-qqbot" } },
+  ])("rejects $name provenance before migrating a legacy npm package", ({ provenance }) => {
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({
+        pluginId: "qqbot",
+        record: {
+          source: "npm",
+          spec: "@openclaw/qqbot@1.9.0",
+          resolvedName: "@openclaw/qqbot",
+          resolvedSpec: "@openclaw/qqbot@1.9.0",
+          ...provenance,
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("drops a catalog lookup duplicate only for unanimous canonical npm identity", () => {
+    expect(
+      isTrustedOfficialCatalogLookupDuplicate({
+        pluginId: "qqbot",
+        replacementPluginId: "openclaw-qqbot",
+        replacementRecord: {
+          source: "npm",
+          spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          resolvedName: "@tencent-connect/openclaw-qqbot",
+          resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedOfficialCatalogLookupDuplicate({
+        pluginId: "qqbot",
+        replacementPluginId: "openclaw-qqbot",
+        replacementRecord: {
+          source: "npm",
+          spec: "@vendor/openclaw-qqbot@1.0.0",
+          resolvedName: "@tencent-connect/openclaw-qqbot",
+          resolvedSpec: "@vendor/openclaw-qqbot@1.0.0",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedOfficialCatalogLookupDuplicate({
+        pluginId: "qqbot",
+        replacementPluginId: "openclaw-qqbot",
+        replacementRecord: {
+          source: "npm",
+          spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          resolvedName: "@tencent-connect/openclaw-qqbot",
+          resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          artifactKind: "npm-pack",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("fails closed when recorded npm identities disagree", () => {

@@ -92,6 +92,7 @@ describe("command-path-policy", () => {
   it.each([
     { commandPath: ["database"], hideBanner: true },
     { commandPath: ["audit"], hideBanner: false },
+    { commandPath: ["node", "identity"], hideBanner: false },
     { commandPath: ["update", "cleanup"], hideBanner: true },
   ])("keeps passive startup for $commandPath", ({ commandPath, hideBanner }) => {
     expectResolvedPolicy(commandPath, {
@@ -132,6 +133,24 @@ describe("command-path-policy", () => {
     // Bare `openclaw nodes` still resolves plugin subcommands from validated config.
     expectResolvedPolicy(["nodes"], { networkProxy: "bypass" });
     expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
+  });
+
+  it("retains node host startup outside the exact identity lookup", () => {
+    for (const commandPath of [
+      ["node"],
+      ["node", "install"],
+      ["node", "status"],
+      ["node", "identity", "unknown"],
+    ]) {
+      expectResolvedPolicy(commandPath, { networkProxy: "bypass" });
+    }
+    expectResolvedPolicy(["node", "run"], {});
+    expectResolvedPolicy(["node", "worker"], {
+      configGuard: "validate",
+      hideBanner: true,
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
   });
 
   it("keeps gateway-owned node and device mutations off the local config guard", () => {

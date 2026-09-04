@@ -1,39 +1,50 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveChannelMediaMaxBytes } from "./media-limits.js";
+import { resolveChannelMediaMaxBytes } from "../../plugin-sdk/account-helpers.js";
 
-const MB = 1024 * 1024;
+type LimitCase = {
+  label: string;
+  channel?: number;
+  agent?: number;
+  expected?: number;
+};
 
-function resolve(params: { channelLimitMb?: number; defaultLimitMb?: number }) {
-  const cfg = {
-    agents:
-      params.defaultLimitMb === undefined
-        ? undefined
-        : { defaults: { mediaMaxMb: params.defaultLimitMb } },
-  } as OpenClawConfig;
-  return resolveChannelMediaMaxBytes({
-    cfg,
-    resolveChannelLimitMb: () => params.channelLimitMb,
-  });
-}
+const MIB = 1_048_576;
 
-describe("resolveChannelMediaMaxBytes", () => {
-  it("normalizes channel limits to finite positive whole bytes", () => {
-    expect(resolve({ channelLimitMb: 1.5 / MB })).toBe(1);
-    expect(resolve({ channelLimitMb: 2.9 / MB })).toBe(2);
-  });
-
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "falls back from invalid channel limit %s",
-    (channelLimitMb) => {
-      expect(resolve({ channelLimitMb, defaultLimitMb: 4 / MB })).toBe(4);
+describe("channel media byte-cap contract", () => {
+  it.each<LimitCase>([
+    { label: "no configured maximum" },
+    { label: "channel overrides agent", channel: 1, agent: 2, expected: MIB },
+    { label: "fractional channel", channel: 0.001, agent: 1, expected: 1048 },
+    { label: "fractional agent", agent: 0.001, expected: 1048 },
+    { label: "sub-byte channel overrides agent", channel: 0.5 / MIB, agent: 1, expected: 0 },
+    { label: "sub-byte agent", agent: 0.5 / MIB, expected: 0 },
+    { label: "zero channel falls back", channel: 0, agent: 4 / MIB, expected: 4 },
+    { label: "negative channel falls back", channel: -1, agent: 4 / MIB, expected: 4 },
+    { label: "NaN channel falls back", channel: Number.NaN, agent: 4 / MIB, expected: 4 },
+    {
+      label: "infinite channel falls back",
+      channel: Number.POSITIVE_INFINITY,
+      agent: 4 / MIB,
+      expected: 4,
     },
-  );
-
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "ignores invalid default limit %s",
-    (defaultLimitMb) => {
-      expect(resolve({ defaultLimitMb })).toBeUndefined();
+    {
+      label: "negative infinite channel falls back",
+      channel: Number.NEGATIVE_INFINITY,
+      agent: 4 / MIB,
+      expected: 4,
     },
-  );
+    { label: "zero agent is absent", agent: 0 },
+    { label: "negative agent is absent", agent: -1 },
+    { label: "NaN agent is absent", agent: Number.NaN },
+    { label: "infinite agent is absent", agent: Number.POSITIVE_INFINITY },
+    { label: "negative infinite agent is absent", agent: Number.NEGATIVE_INFINITY },
+  ])("$label", ({ channel, agent, expected }) => {
+    const cfg: OpenClawConfig = { agents: { defaults: { mediaMaxMb: agent } } };
+    const maxBytes = resolveChannelMediaMaxBytes({
+      cfg,
+      resolveChannelLimitMb: () => channel,
+    });
+    expect(maxBytes).toBe(expected);
+  });
 });

@@ -114,11 +114,13 @@ export class CompilerInputSnapshot {
           const file = path.join(directory, entry.name);
           const canonicalFile = path.join(realDirectory, entry.name);
           const id = portableRelativePath(this.rootDir, file);
-          // Helper checkouts and package stores are separate roots; aliases retain their paths.
+          // Helper checkouts and tool scratch are separate roots; aliases retain their paths.
+          // Vitest's checkout-local cache can appear after tests without changing build inputs.
           if (
             id === ".ci-harness" ||
             id === ".worktrees" ||
             id === ".cache/openclaw-pnpm-store" ||
+            id === ".cache/vitest" ||
             (!installed &&
               [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name))
           ) {

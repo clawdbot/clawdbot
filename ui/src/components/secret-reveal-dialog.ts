@@ -71,28 +71,36 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
           >
             <div class="exec-approval-card">
               <div class="secret-reveal__header">
-                ${options.status === "success"
-                  ? html`<span class="secret-reveal__status" aria-hidden="true"
-                      >${icons.check}</span
-                    >`
-                  : nothing}
+                ${
+                  options.status === "success"
+                    ? html`<span class="secret-reveal__status" aria-hidden="true"
+                        >${icons.check}</span
+                      >`
+                    : nothing
+                }
                 <div class="exec-approval-title">${options.title}</div>
               </div>
               <div class="secret-reveal__body"><p>${options.message}</p></div>
-              ${options.callout
-                ? html`<div class="callout info secret-reveal__callout">${options.callout}</div>`
-                : nothing}
-              ${options.secret
-                ? html`
-                    <div class="secret-reveal__value">
-                      <code class="secret-reveal__code">${options.secret}</code>
-                      ${renderCopyButton(options.secret, t("common.copy"))}
-                    </div>
-                  `
-                : nothing}
-              ${dismissRefused
-                ? html`<p class="secret-reveal__hint" role="status">${options.dismissHint}</p>`
-                : nothing}
+              ${
+                options.callout
+                  ? html`<div class="callout info secret-reveal__callout">${options.callout}</div>`
+                  : nothing
+              }
+              ${
+                options.secret
+                  ? html`
+                      <div class="secret-reveal__value">
+                        <code class="secret-reveal__code">${options.secret}</code>
+                        ${renderCopyButton(options.secret, t("common.copy"))}
+                      </div>
+                    `
+                  : nothing
+              }
+              ${
+                dismissRefused
+                  ? html`<p class="secret-reveal__hint" role="status">${options.dismissHint}</p>`
+                  : nothing
+              }
               ${options.note ? html`<p class="secret-reveal__note">${options.note}</p>` : nothing}
               <div class="exec-approval-actions">
                 <button type="button" class=${acknowledgeClass} autofocus @click=${acknowledge}>

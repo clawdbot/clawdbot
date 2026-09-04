@@ -65,23 +65,31 @@ export async function tryCandidate(params: {
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
   collectFailure?: (failure: SetupCandidateFailure) => void;
 }): Promise<CandidateAttempt> {
-  const progress = params.prompter.progress(
-    t("wizard.guided.testingCandidate", {
-      label: params.candidate.label,
-      modelRef: params.candidate.modelRef,
-    }),
-  );
-  const result = await withConsoleSubsystemsSuppressed(() =>
-    params.activate({
-      kind: params.candidate.kind,
-      modelRef: params.candidate.modelRef,
-      workspace: params.workspace,
-      surface: "cli",
-      runtime: params.runtime,
-      ...(params.collectFailure ? {} : { prompter: params.prompter }),
-    }),
-  );
-  progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
+  // Quiet automatic attempts omit the prompter; interactive activation owns
+  // its progress so two Clack spinners never write over the same terminal row.
+  const progress = params.collectFailure
+    ? params.prompter.progress(
+        t("wizard.guided.testingCandidate", {
+          label: params.candidate.label,
+          modelRef: params.candidate.modelRef,
+        }),
+      )
+    : undefined;
+  let result: ActivateSetupInferenceResult | undefined;
+  try {
+    result = await withConsoleSubsystemsSuppressed(() =>
+      params.activate({
+        kind: params.candidate.kind,
+        modelRef: params.candidate.modelRef,
+        workspace: params.workspace,
+        surface: "cli",
+        runtime: params.runtime,
+        ...(params.collectFailure ? {} : { prompter: params.prompter }),
+      }),
+    );
+  } finally {
+    progress?.stop(result?.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
+  }
   if (result.ok) {
     return { kind: "success", result };
   }
@@ -232,9 +240,6 @@ export async function runManualStage(params: {
       sensitive: true,
       validate: (value) => (value.trim() ? undefined : t("common.required")),
     });
-    const progress = params.prompter.progress(
-      t("wizard.guided.testingManualProvider", { label: provider.label }),
-    );
     const result = await withConsoleSubsystemsSuppressed(() =>
       params.activate({
         kind: "api-key",
@@ -246,7 +251,6 @@ export async function runManualStage(params: {
         prompter: params.prompter,
       }),
     );
-    progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
     if (result.ok) {
       return activationLines(result);
     }

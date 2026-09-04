@@ -4,7 +4,7 @@ import { createRelayCommandHandler } from "./relay-command-handler.js";
 
 function createHarness() {
   const send = vi.fn();
-  const epoch = { revision: 1, tabRevision: 2 };
+  const epoch = { revision: 1, groupRevision: 0, tabRevision: 2 };
   const requireAccessibleTab = vi.fn(async () => ({ id: 7, windowId: 3 }));
   const requireNavigatedTab = vi.fn(async () => ({ id: 7, windowId: 3 }));
   const navigateTab = vi.fn(async () => ({ frameId: "root", loaderId: "blank-loader" }));

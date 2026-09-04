@@ -17,6 +17,7 @@ import {
 export const SESSION_FACE_PREFERENCE_PARAM = "__openclawSessionFacePreference";
 export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
+export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
 
 export function composerDraftSearch(draft: string): string {
   return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
@@ -35,13 +36,14 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   sessionKey: string;
   agentId?: string;
   fallbackAgentId?: never;
-  basePath?: never;
+  basePath?: string;
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
+  dashboardExpanded?: boolean;
   navigationKey?: string;
 };
 
@@ -58,6 +60,7 @@ type ExplicitSessionNavigationTargetParams = {
   agentId?: never;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
+  dashboardExpanded?: boolean;
   navigationKey?: string;
 };
 
@@ -130,7 +133,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
       hello: context.gateway.snapshot.hello,
     };
     fallbackAgentId = resolveSessionNavigationAgentId(context, params.agentId);
-    basePath = context.basePath;
+    basePath = params.basePath ?? context.basePath;
     mainKey = resolveUiConfiguredMainKey(defaults);
     row = findUiSessionRow(context, sessionKey, fallbackAgentId);
   } else {
@@ -172,6 +175,9 @@ export function sessionNavigationTarget<TRouteId extends string>(
   if (params.focusComposer) {
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
+  if (params.dashboardExpanded) {
+    navigationParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
+  }
   const navigationKey = params.navigationKey?.trim() || row?.key;
   if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {
     // Sidebar navigation already owns the full row. Carry its key only through the
@@ -182,5 +188,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const options = serializedNavigation
     ? { pathname, search: `?${serializedNavigation}` }
     : { pathname };
-  return { href: `${pathname}${search ?? ""}`, options };
+  const hrefParams = new URLSearchParams(search ?? "");
+  if (params.dashboardExpanded) {
+    hrefParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
+  }
+  const hrefSearch = hrefParams.toString();
+  return { href: `${pathname}${hrefSearch ? `?${hrefSearch}` : ""}`, options };
 }

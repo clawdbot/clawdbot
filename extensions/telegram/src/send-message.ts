@@ -133,7 +133,11 @@ async function sendMessageTelegramWithContext(
   const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
     opts.maxBytes ??
-    (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
+    Math.floor(
+      (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) *
+        1024 *
+        1024,
+    );
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const singleUseReplyTo =

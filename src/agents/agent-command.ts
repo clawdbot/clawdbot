@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
+  createSessionWorkStartChangedError,
   isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
 } from "../config/sessions/lifecycle.js";
@@ -207,16 +208,12 @@ async function agentCommandInternal(
               })
             : sessionEntry;
         if (!currentEntry && preparedSessionId) {
-          throw new Error(
-            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
-          );
+          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
         const matchesIntentionalRollover =
           isNewSession && currentEntry?.sessionId === preparedSessionId;
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
-          throw new Error(
-            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
-          );
+          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
         const archivedSessionError = resolveSessionWorkStartError(
           sessionKey ?? sessionId,
@@ -685,7 +682,6 @@ async function agentCommandFromIngressInternal(
       if (result && preparedAgentDir) {
         emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
       }
-
       return result;
     });
   return generation && runtimeContext

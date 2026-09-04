@@ -452,6 +452,42 @@ describe("runMessageAction media behavior", () => {
       expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 
+    it.each(
+      (["host", "sandbox"] as const).flatMap((policy) =>
+        [30, 30.1].map((mediaMaxMb) => ({ policy, mediaMaxMb })),
+      ),
+    )(
+      "hydrates $policy local attachments with a $mediaMaxMb MiB agent cap",
+      async ({ policy, mediaMaxMb }) => {
+        await restoreRealMediaLoader();
+        await withSandbox(async (tempDir) => {
+          const bytes = Buffer.from("%PDF-1.4\nlocal attachment\n");
+          const attachmentPath = path.join(tempDir, "attachment.pdf");
+          await fs.writeFile(attachmentPath, bytes);
+
+          const result = await runMessageAction({
+            cfg: {
+              ...cfg,
+              agents: { defaults: { mediaMaxMb } },
+              tools: { fs: { workspaceOnly: false } },
+            },
+            action: "upload-file",
+            params: {
+              channel: "attachmentchat",
+              target: "+15551234567",
+              media: policy === "sandbox" ? "./attachment.pdf" : attachmentPath,
+            },
+            sandboxRoot: policy === "sandbox" ? tempDir : undefined,
+          });
+
+          const payload = requireActionPayload(result);
+          expect(payload.buffer).toBe(bytes.toString("base64"));
+          expect(payload.filename).toBe("attachment.pdf");
+          expect(payload.contentType).toBe("application/pdf");
+        });
+      },
+    );
+
     it("enforces sandboxed attachment paths for attachment actions", async () => {
       for (const testCase of [
         {

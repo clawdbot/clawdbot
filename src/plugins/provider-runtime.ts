@@ -50,6 +50,13 @@ import {
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
+  prepareSyntheticAuthWithProvider,
+  readPreparedSyntheticAuthFact,
+  resolveSyntheticAuthWithProvider,
+  type PreparedSyntheticAuthFact,
+  type PreparedSyntheticAuthFacts,
+} from "./provider-synthetic-auth.js";
+import {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
@@ -873,14 +880,18 @@ export function buildProviderUnknownModelHintWithPlugin(params: {
   return resolveProviderRuntimePlugin(params)?.buildUnknownModelHint?.(params.context) ?? undefined;
 }
 
-export function resolveProviderSyntheticAuthWithPlugin(params: {
+type ProviderSyntheticAuthParams = {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
   modelApi?: string;
-}) {
+};
+
+function* resolveSyntheticAuthProviders(
+  params: ProviderSyntheticAuthParams,
+): Generator<ProviderPlugin> {
   const providerRefs = resolveProviderHookRefs(
     params.provider,
     params.context.providerConfig,
@@ -910,44 +921,138 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
         })
       : []
   ).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));
-  if (typeof discoveryProvider?.resolveSyntheticAuth === "function") {
-    return discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined;
-  }
-  const runtimeResolved = resolveProviderRuntimePlugin({
-    ...params,
-    applyAutoEnable: false,
-  })?.resolveSyntheticAuth?.(params.context);
-  if (runtimeResolved) {
-    return runtimeResolved;
+  if (discoveryProvider?.resolveSyntheticAuth || discoveryProvider?.prepareSyntheticAuth) {
+    yield discoveryProvider;
+    return;
   }
   for (const providerRef of providerRefs) {
-    if (normalizeProviderId(providerRef) === normalizeProviderId(params.provider)) {
-      continue;
-    }
-    const runtimeProviderResolved = resolveProviderRuntimePlugin({
+    const provider = resolveProviderRuntimePlugin({
       ...params,
       provider: providerRef,
       applyAutoEnable: false,
-    })?.resolveSyntheticAuth?.(params.context);
-    if (runtimeProviderResolved) {
-      return runtimeProviderResolved;
+    });
+    if (provider?.resolveSyntheticAuth || provider?.prepareSyntheticAuth) {
+      yield provider;
     }
   }
   if (providerRefs.length === 1) {
     // Last-resort match for custom provider ids with no resolvable owning plugin (e.g. Ollama
     // aliases). Entry modules only: a full plugin-runtime sweep here costs seconds per ref on
     // source checkouts and belongs to explicit control-plane loads.
-    return resolvePluginDiscoveryProvidersRuntime({
+    const fallbackProvider = resolvePluginDiscoveryProvidersRuntime({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
       discoveryEntriesOnly: true,
       includeSyntheticAuthProviders: true,
-    })
-      .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
-      ?.resolveSyntheticAuth?.(params.context);
+    }).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));
+    if (fallbackProvider?.resolveSyntheticAuth || fallbackProvider?.prepareSyntheticAuth) {
+      yield fallbackProvider;
+    }
+  }
+}
+
+export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
+  const captured = readPreparedSyntheticAuthFact(params.context, params);
+  if (captured) {
+    return captured.result ?? undefined;
+  }
+  for (const provider of resolveSyntheticAuthProviders(params)) {
+    const resolved = resolveSyntheticAuthWithProvider(provider, params.context, params);
+    if (resolved) {
+      return resolved;
+    }
   }
   return undefined;
+}
+
+type ProviderSyntheticAuthPreparationParams = ProviderSyntheticAuthParams & {
+  signal?: AbortSignal;
+};
+
+async function prepareSyntheticAuthProviders(
+  providers: Iterable<ProviderPlugin>,
+  params: ProviderSyntheticAuthPreparationParams & { preparationOwner?: object },
+) {
+  params.signal?.throwIfAborted();
+  for (const provider of providers) {
+    const resolved = await prepareSyntheticAuthWithProvider(provider, params.context, params);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
+export async function prepareProviderSyntheticAuthWithPlugin(
+  params: ProviderSyntheticAuthPreparationParams,
+) {
+  params.signal?.throwIfAborted();
+  const captured = readPreparedSyntheticAuthFact(params.context, params);
+  if (captured) {
+    return captured.result ?? undefined;
+  }
+  return await prepareSyntheticAuthProviders(resolveSyntheticAuthProviders(params), params);
+}
+
+function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  const providers = [...resolveSyntheticAuthProviders(params)];
+  return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
+}
+
+/** Prepare external checks without evaluating pure-only hooks before their synchronous read. */
+export async function prepareProviderExternalAuthWithPlugin(
+  params: ProviderSyntheticAuthPreparationParams,
+) {
+  params.signal?.throwIfAborted();
+  const captured = readPreparedSyntheticAuthFact(params.context, params);
+  return captured
+    ? (captured.result ?? undefined)
+    : await prepareSyntheticAuthProviders(resolveExternalSyntheticAuthProviders(params), params);
+}
+
+/** Capture a fresh, complete external-auth generation before dispatching read-only worker work. */
+export async function captureProviderSyntheticAuthFacts(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  providerRefs: Iterable<string>;
+  signal?: AbortSignal;
+}): Promise<PreparedSyntheticAuthFacts> {
+  const preparationOwner = {};
+  const facts: PreparedSyntheticAuthFact[] = [];
+  const providerRefs = [...new Set([...params.providerRefs].map(normalizeProviderId))].toSorted();
+  for (const provider of providerRefs) {
+    params.signal?.throwIfAborted();
+    const lookup = {
+      provider,
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      context: {
+        config: params.config,
+        provider,
+        providerConfig: findNormalizedProviderValue(params.config.models?.providers, provider),
+      },
+    };
+    const providers = resolveExternalSyntheticAuthProviders(lookup);
+    if (providers.length === 0) {
+      continue;
+    }
+    const result = await prepareSyntheticAuthProviders(providers, {
+      ...lookup,
+      signal: params.signal,
+      preparationOwner,
+    });
+    facts.push(
+      Object.freeze({
+        providerRef: provider,
+        result: result ? Object.freeze({ ...result }) : null,
+      }),
+    );
+  }
+  params.signal?.throwIfAborted();
+  return Object.freeze(facts);
 }
 
 export { resolveExternalAuthProfilesWithPlugins } from "./provider-external-auth.js";

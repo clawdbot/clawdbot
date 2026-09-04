@@ -6,6 +6,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
 import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
@@ -17,8 +21,6 @@ import {
 } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -708,17 +710,17 @@ function shouldOptionConsumeFollowingToken(
   return option.optional && isValueToken(next);
 }
 
-function isNoColorConsumedAsCommandOptionValue(
+function resolveRootOptionRole(
   program: CommanderCommand,
   remainingArgs: readonly string[],
-  noColorIndex: number,
-): boolean {
+  optionIndex: number,
+): "root" | "command" | "value" {
   let command = program;
   let pendingValue = false;
-  for (let index = 0; index < noColorIndex; index += 1) {
+  for (let index = 0; index < optionIndex; index += 1) {
     const arg = remainingArgs[index];
     if (!arg || arg === FLAG_TERMINATOR) {
-      return false;
+      return "root";
     }
     if (pendingValue) {
       pendingValue = false;
@@ -726,64 +728,36 @@ function isNoColorConsumedAsCommandOptionValue(
     }
     if (arg.startsWith("-")) {
       const option = findCommandOption(command, arg);
-      if (!option && index === noColorIndex - 1 && !arg.includes("=")) {
+      if (!option && index === optionIndex - 1 && !arg.includes("=")) {
         // Unknown option surfaces may allow arbitrary flags; keep the value-safe behavior there.
-        return true;
+        return "value";
       }
       pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
       continue;
     }
     command = findSubcommand(command, arg) ?? command;
   }
-  return pendingValue;
-}
-
-function isLogLevelConsumedAsCommandOption(
-  program: CommanderCommand,
-  remainingArgs: readonly string[],
-  logLevelIndex: number,
-): boolean {
-  let command = program;
-  let pendingValue = false;
-  for (let index = 0; index < logLevelIndex; index += 1) {
-    const arg = remainingArgs[index];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return false;
-    }
-    if (pendingValue) {
-      pendingValue = false;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      const option = findCommandOption(command, arg);
-      if (!option && index === logLevelIndex - 1 && !arg.includes("=")) {
-        return true;
-      }
-      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
-      continue;
-    }
-    command = findSubcommand(command, arg) ?? command;
-  }
-
   if (pendingValue) {
-    return true;
+    return "value";
   }
 
-  const arg = remainingArgs[logLevelIndex];
-  return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined;
+  const arg = remainingArgs[optionIndex];
+  return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined
+    ? "command"
+    : "root";
 }
 
 function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCommand): string[] {
   return normalizeRootNoColorArgv(argv, {
     shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
-      isNoColorConsumedAsCommandOptionValue(program, remainingArgs, noColorIndex),
+      resolveRootOptionRole(program, remainingArgs, noColorIndex) === "value",
   });
 }
 
 function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
   return normalizeRootLogLevelArgv(argv, {
     shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
-      isLogLevelConsumedAsCommandOption(program, remainingArgs, logLevelIndex),
+      resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
   });
 }
 
@@ -1154,6 +1128,7 @@ async function runCliWithPreparedOutputMode(
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
+  const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
 
   if (
@@ -1185,6 +1160,7 @@ async function runCliWithPreparedOutputMode(
   }
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
     ensureOpenClawCliOnPath();
   }
   // Cheap import gate only. Session-ref owns the authoritative URL/options parse.
@@ -1238,8 +1214,14 @@ async function runCliWithPreparedOutputMode(
           return configIo.readBestEffortConfig(readOptions);
         }
         const session = await getPluginCliSession();
-        return (await session.readConfig(() => configIo.readBestEffortConfigSnapshot(readOptions)))
-          .config;
+        const snapshot = await session.readConfig(() =>
+          configIo.readBestEffortConfigSnapshot(readOptions),
+        );
+        if (snapshot.configDiagnostics) {
+          const { path: configPath, issues } = snapshot.configDiagnostics;
+          throw createInvalidConfigError(configPath, formatInvalidConfigDetails(issues));
+        }
+        return snapshot.config;
       });
     }
     return await bestEffortConfigPromise;
@@ -1651,31 +1633,25 @@ async function runCliWithPreparedOutputMode(
             session: await getPluginCliSession(),
           });
         });
-        if (config) {
-          if (
-            primary &&
-            !program.commands.some(
-              (command) => command.name() === primary || command.aliases().includes(primary),
-            )
-          ) {
-            const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
-              await loadManifestCommandAliasesRuntimeModule();
-            const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
-              primary,
-              config,
-            });
-            const missingPluginCommandMessage = resolveMissingPluginCommandMessage(
-              primary,
-              config,
-              {
-                resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
-                resolveToolOwner: resolveManifestToolOwner,
-                resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
-              },
-            );
-            if (missingPluginCommandMessage) {
-              throw await createExpectedPluginPolicyError(missingPluginCommandMessage);
-            }
+        if (
+          primary &&
+          !program.commands.some(
+            (command) => command.name() === primary || command.aliases().includes(primary),
+          )
+        ) {
+          const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
+            await loadManifestCommandAliasesRuntimeModule();
+          const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
+            primary,
+            config,
+          });
+          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config, {
+            resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+            resolveToolOwner: resolveManifestToolOwner,
+            resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
+          });
+          if (missingPluginCommandMessage) {
+            throw await createExpectedPluginPolicyError(missingPluginCommandMessage);
           }
         }
       }

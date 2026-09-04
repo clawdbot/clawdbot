@@ -326,7 +326,9 @@ export function createTelegramBotCore(
     providerSetting: telegramCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
+  const mediaMaxBytes = Math.floor(
+    (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024,
+  );
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
     resolveChannelGroupPolicy({

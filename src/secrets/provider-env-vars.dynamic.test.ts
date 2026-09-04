@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
-import * as installedPluginIndex from "../plugins/installed-plugin-index.js";
+import * as pluginConfigState from "../plugins/config-state.js";
 import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
   getProviderEnvVars,
@@ -196,8 +196,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
   });
 
-  it("scrubs usage credentials from the active configured plugin snapshot", () => {
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+  it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
+    const configuredSnapshot = {
       workspaceDir: "/workspace",
       index: {
         plugins: [
@@ -231,7 +231,11 @@ describe("provider env vars dynamic manifest metadata", () => {
           },
         },
       ],
-    });
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { env?: NodeJS.ProcessEnv }) =>
+        !params.env || params.env === process.env ? configuredSnapshot : undefined,
+    );
 
     expect(
       sanitizeEnvVars({
@@ -798,13 +802,13 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     );
 
-    const policy = vi.spyOn(installedPluginIndex, "isInstalledPluginEnabled");
+    const policy = vi.spyOn(pluginConfigState, "resolveEffectivePluginActivationState");
     let lookupMaps: ReturnType<typeof resolveProviderAuthLookupMaps>;
     try {
       lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
       expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("channel-only");
-      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("metadata-only");
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("channel-only");
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("metadata-only");
     } finally {
       policy.mockRestore();
     }

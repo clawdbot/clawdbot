@@ -194,6 +194,17 @@ describe("subscribeEmbeddedAgentSession", () => {
         partial: commentaryMessage,
       },
     });
+    emit({
+      type: "message_update",
+      message: commentaryMessage,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Checking files",
+        partial: commentaryMessage,
+      },
+    });
+    emit({ type: "message_end", message: commentaryMessage });
     await subscription.waitForPendingEvents();
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
@@ -212,6 +223,15 @@ describe("subscribeEmbeddedAgentSession", () => {
           kind: "preamble",
           itemId: "item-commentary",
           phase: "update",
+          progressText: "Checking files",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "item-commentary",
+          phase: "end",
           progressText: "Checking files",
         },
       },
@@ -299,6 +319,19 @@ describe("subscribeEmbeddedAgentSession", () => {
         stream: "item",
         data: { kind: "preamble", itemId: "second", progressText: scenario.secondText },
       },
+      ...(scenario.eventType === "text_delta"
+        ? [
+            {
+              stream: "item",
+              data: {
+                kind: "preamble",
+                itemId: "second",
+                phase: "end",
+                progressText: scenario.secondText,
+              },
+            },
+          ]
+        : []),
     ]);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
@@ -333,6 +366,15 @@ describe("subscribeEmbeddedAgentSession", () => {
           kind: "preamble",
           title: "Preamble",
           phase: "update",
+          progressText: "First. Second.",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          title: "Preamble",
+          phase: "end",
           progressText: "First. Second.",
         },
       },

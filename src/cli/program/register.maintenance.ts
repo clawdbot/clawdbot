@@ -56,7 +56,11 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
-    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
+    .option(
+      "--force",
+      "Allow aggressive repair choices (with --fix, preserves service definitions)",
+      false,
+    )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
@@ -210,7 +214,7 @@ export function registerMaintenanceCommands(program: Command) {
 
   program
     .command("triage")
-    .description("Collect sanitized diagnostics and prepare an agent debugging handoff")
+    .description("Collect sanitized diagnostics and open a local coding agent for repair")
     .addHelpText(
       "after",
       () =>
@@ -218,6 +222,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
     .option("--no-export", "Skip the sanitized diagnostics archive")
+    .option("--agent <name>", "Select a coding agent (claude|codex|opencode|pi)")
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
     .option(
       "--non-interactive",
@@ -232,6 +237,22 @@ export function registerMaintenanceCommands(program: Command) {
       if (opts.nonInteractive === true && opts.run === true) {
         return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
       }
+      const agent: unknown = opts.agent;
+      if (opts.run === true && agent !== undefined) {
+        return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);
+      }
+      if (
+        agent !== undefined &&
+        agent !== "claude" &&
+        agent !== "codex" &&
+        agent !== "opencode" &&
+        agent !== "pi"
+      ) {
+        return exitDoctorError(
+          "Invalid --agent. Use claude, codex, opencode, or pi.",
+          opts.json === true,
+        );
+      }
       return await runCommandWithRuntime(
         defaultRuntime,
         async () => {
@@ -242,6 +263,7 @@ export function registerMaintenanceCommands(program: Command) {
             run: opts.run === true,
             ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
             ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
+            ...(agent ? { agent } : {}),
           });
         },
         opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,

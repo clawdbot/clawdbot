@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   resetPluginBlobStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 // Matrix tests cover send plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -961,40 +963,55 @@ describe("sendMessageMatrix media", () => {
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
   });
 
-  it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
-    const { client } = makeClient();
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              mediaMaxMb: 1,
-            },
-          },
-        },
+  it.each([
+    { mediaMaxMb: 30.1, accepted: true },
+    { mediaMaxMb: 0.5 / (1024 * 1024), accepted: false },
+  ])("reads local media under the selected Matrix account cap $mediaMaxMb", async (testCase) => {
+    await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "matrix-media-cap-" },
+      async (workspace) => {
+        const buffer = Buffer.from("x");
+        const mediaUrl = await workspace.write("attachment.txt", buffer);
+        const { client, sendMessage, uploadContent } = makeClient();
+        const cfg = {
+          channels: { matrix: { accounts: { ops: { mediaMaxMb: testCase.mediaMaxMb } } } },
+        };
+        loadConfigMock.mockImplementation(() => {
+          throw new Error(
+            "sendMessageMatrix should not reload runtime config when cfg is provided",
+          );
+        });
+        loadOutboundMediaFromUrlMock.mockImplementationOnce(loadOutboundMediaFromUrl);
+        mediaKindFromMimeMock.mockReturnValue("document");
+
+        const send = sendMessageMatrix("room:!room:example", "caption", {
+          client,
+          cfg,
+          accountId: "ops",
+          mediaUrl,
+          mediaLocalRoots: [workspace.dir],
+        });
+        if (testCase.accepted) {
+          await expect(send).resolves.toMatchObject({ messageId: "evt1" });
+          expect(uploadContent).toHaveBeenCalledExactlyOnceWith(
+            buffer,
+            "text/plain",
+            "attachment.txt",
+          );
+          expect(sentContent(sendMessage)).toMatchObject({
+            msgtype: "m.file",
+            url: "mxc://example/file",
+            info: { size: 1, mimetype: "text/plain" },
+          });
+        } else {
+          await expect(send).rejects.toThrow(/exceeds/);
+          expect(uploadContent).not.toHaveBeenCalled();
+          expect(sendMessage).not.toHaveBeenCalled();
+        }
+        expect(loadConfigMock).not.toHaveBeenCalled();
+        expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(cfg, "matrix", "ops");
       },
-    };
-
-    loadConfigMock.mockImplementation(() => {
-      throw new Error("sendMessageMatrix should not reload runtime config when cfg is provided");
-    });
-
-    await sendMessageMatrix("room:!room:example", "caption", {
-      client,
-      cfg: explicitCfg,
-      accountId: "ops",
-      mediaUrl: "file:///tmp/photo.png",
-    });
-
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(mockCallArg(loadWebMediaMock, "loadWebMedia", 0)).toBe("file:///tmp/photo.png");
-    const mediaOptions = requireRecord(
-      mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
-      "media options",
     );
-    expect(mediaOptions.maxBytes).toBe(1024 * 1024);
-    expect(mediaOptions.localRoots).toBeUndefined();
-    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
   it.each([{ mediaMaxMb: 0 }, { mediaMaxMb: -5 }])(

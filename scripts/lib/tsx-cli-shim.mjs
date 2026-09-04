@@ -27,7 +27,7 @@ function resolvePrimaryRoot(checkoutRoot) {
   return path.basename(resolved) === ".git" ? path.dirname(resolved) : null;
 }
 
-function resolveTsxImport(checkoutRoot) {
+export function resolveTsxImport(checkoutRoot) {
   const modulesDir =
     process.env.PNPM_CONFIG_MODULES_DIR?.trim() || process.env.npm_config_modules_dir?.trim();
   const hydratedTsxRoot = modulesDir

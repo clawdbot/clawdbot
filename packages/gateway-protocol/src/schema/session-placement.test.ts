@@ -399,6 +399,18 @@ describe("session dispatch protocol schemas", () => {
     expect(Value.Check(SessionPlacementSchema, failed)).toBe(true);
     expect(
       Value.Check(SessionPlacementSchema, {
+        ...failed,
+        recoveryAction: "restart",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        ...failed,
+        recoveryAction: "stop-first",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
         state: "failed",
         ...basePlacement,
       }),

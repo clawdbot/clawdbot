@@ -6,6 +6,7 @@ import {
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
@@ -253,6 +254,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
       config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
       runId: params.runId,
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),

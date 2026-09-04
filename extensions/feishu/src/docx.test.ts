@@ -1,7 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 // Feishu tests cover docx plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
@@ -684,45 +686,50 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.error).toContain("no document_id");
   });
 
-  it("uploads local file to doc via upload_file action", async () => {
-    blockChildrenCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        children: [{ block_type: 23, block_id: "file_block_1" }],
-      },
-    });
+  it.each([undefined, 0.001])(
+    "uploads a local document file with mediaMaxMb %s",
+    async (mediaMaxMb) => {
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-doc-cap-" },
+        async (workspace) => {
+          const buffer = Buffer.alloc(1048, "a");
+          const filePath = await workspace.write("test-local.txt", buffer);
+          resolveFeishuToolAccountMock.mockReturnValue({
+            config: mediaMaxMb === undefined ? {} : { mediaMaxMb },
+          });
+          loadWebMediaMock.mockImplementationOnce(loadWebMedia);
+          blockChildrenCreateMock.mockResolvedValueOnce({
+            code: 0,
+            data: { children: [{ block_type: 23, block_id: "file_block_1" }] },
+          });
+          const result = await executeFeishuDocTool(resolveFeishuDocTool(), {
+            action: "upload_file",
+            doc_token: "doc_1",
+            file_path: filePath,
+            filename: "test-local.txt",
+          });
 
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("hello from local file", "utf8"),
-      fileName: "test-local.txt",
-    });
-
-    const feishuDocTool = resolveFeishuDocTool();
-
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "upload_file",
-      doc_token: "doc_1",
-      file_path: "/tmp/allowed/test-local.txt",
-      filename: "test-local.txt",
-    });
-
-    expect(result.details.success).toBe(true);
-    expect(result.details.file_token).toBe("token_1");
-    expect(result.details.file_name).toBe("test-local.txt");
-
-    // Without workspace-only policy, localRoots stays undefined so loadWebMedia
-    // applies its default managed-root access behavior.
-    expectLoadWebMediaCall("test-local.txt", undefined);
-
-    const uploadPayload = requireRecord(
-      callArg(driveUploadAllMock, 0, 0, "drive upload payload"),
-      "drive upload payload",
-    );
-    const uploadData = requireRecord(uploadPayload.data, "drive upload data");
-    expect(uploadData.parent_type).toBe("docx_file");
-    expect(uploadData.parent_node).toBe("doc_1");
-    expect(uploadData.file_name).toBe("test-local.txt");
-  });
+          expect(result.details.error).toBeUndefined();
+          expect(result.details).toMatchObject({
+            success: true,
+            file_token: "token_1",
+            file_name: "test-local.txt",
+            size: buffer.length,
+          });
+          expectLoadWebMediaCall("test-local.txt", undefined);
+          expect(driveUploadAllMock).toHaveBeenCalledExactlyOnceWith({
+            data: {
+              parent_type: "docx_file",
+              parent_node: "doc_1",
+              file_name: "test-local.txt",
+              size: buffer.length,
+              file: buffer,
+            },
+          });
+        },
+      );
+    },
+  );
 
   it("passes workspace localRoots for upload_file when workspace-only policy is active", async () => {
     blockChildrenCreateMock.mockResolvedValueOnce({

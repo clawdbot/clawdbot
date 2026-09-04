@@ -855,42 +855,16 @@ function finishTableCell(cell: RenderTarget): TableCell {
 
 function trimCell(cell: TableCell): TableCell {
   const text = cell.text;
-  let start = 0;
-  let end = text.length;
-  while (start < end && /\s/.test(text[start] ?? "")) {
-    start += 1;
-  }
-  while (end > start && /\s/.test(text[end - 1] ?? "")) {
-    end -= 1;
-  }
-  if (start === 0 && end === text.length) {
-    return cell;
-  }
-  const trimmedText = text.slice(start, end);
-  const trimmedLength = trimmedText.length;
-  const trimmedStyles: MarkdownStyleSpan[] = [];
+  let start = text.length - text.trimStart().length;
+  let end = text.trimEnd().length;
+  // Code owns its edge whitespace; only surrounding cell padding may be trimmed.
   for (const span of cell.styles) {
-    const sliceStart = Math.max(0, span.start - start);
-    const sliceEnd = Math.min(trimmedLength, span.end - start);
-    if (sliceEnd > sliceStart) {
-      trimmedStyles.push({ start: sliceStart, end: sliceEnd, style: span.style });
+    if (span.style === "code") {
+      start = Math.min(start, span.start);
+      end = Math.max(end, span.end);
     }
   }
-  const trimmedLinks: MarkdownLinkSpan[] = [];
-  for (const span of cell.links) {
-    const sliceStart = Math.max(0, span.start - start);
-    const sliceEnd = Math.min(trimmedLength, span.end - start);
-    if (sliceEnd > sliceStart) {
-      trimmedLinks.push(copyMarkdownLinkSpan(span, { start: sliceStart, end: sliceEnd }));
-    }
-  }
-  const trimmedAnnotations = sliceAnnotationSpans(cell.annotations ?? [], start, end);
-  return {
-    text: trimmedText,
-    styles: trimmedStyles,
-    links: trimmedLinks,
-    ...(trimmedAnnotations.length > 0 ? { annotations: trimmedAnnotations } : {}),
-  };
+  return start === 0 && end === text.length ? cell : sliceMarkdownIR(cell, start, end);
 }
 
 function appendCell(state: RenderState, cell: TableCell) {
@@ -1440,6 +1414,53 @@ function closeRemainingStyles(target: RenderTarget) {
     }
   }
   target.openStyles = [];
+}
+
+function appendSpans<T extends { start: number; end: number }>(
+  into: T[],
+  spans: T[],
+  offset: number,
+): void {
+  for (const span of spans) {
+    span.start += offset;
+    span.end += offset;
+    into.push(span);
+  }
+}
+
+/** Transfers a separately owned IR slice, including its metadata, into an accumulator. */
+export function appendMarkdownIR(target: MarkdownIR, source: MarkdownIR): void {
+  const offset = target.text.length;
+  target.text += source.text;
+  appendSpans(target.styles, source.styles, offset);
+  appendSpans(target.links, source.links, offset);
+  if (source.annotations?.length) {
+    appendSpans((target.annotations ??= []), source.annotations, offset);
+  }
+  const listItems: MarkdownListItemWithMetadata[] = source.listItems ?? [];
+  for (const item of listItems) {
+    for (const marker of [item.listMarker, item.taskMarker]) {
+      if (marker) {
+        marker.start += offset;
+        marker.end += offset;
+      }
+    }
+    // Source-coordinate metadata stays anchored to the authored Markdown.
+    for (const key of ["start", "end", "contentStart", "contentEnd"] as const) {
+      const value = item[key];
+      if (value !== undefined) {
+        item[key] = value + offset;
+      }
+    }
+    (target.listItems ??= []).push(item);
+  }
+  const sourceWithMetadata: MarkdownIRWithMetadata = source;
+  if (sourceWithMetadata.blocks?.length) {
+    const targetWithMetadata: MarkdownIRWithMetadata = target;
+    const blocks = targetWithMetadata.blocks ?? [];
+    appendSpans(blocks, sourceWithMetadata.blocks, offset);
+    attachBlockMetadata(target, blocks);
+  }
 }
 
 function sliceListMarker(

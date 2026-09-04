@@ -21,6 +21,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-catalog.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -128,6 +129,13 @@ export type ChatProps = Omit<
   };
 
 export function renderChat(props: ChatProps) {
+  // The request session hosts the card; only sourceSessionKey names the requester.
+  const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
+  const approvalSourceSession = approvalSourceSessionKey
+    ? props.sessions?.sessions.find((row) =>
+        areUiSessionKeysEquivalent(row.key, approvalSourceSessionKey),
+      )
+    : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
@@ -164,7 +172,7 @@ export function renderChat(props: ChatProps) {
       streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
       queue,
       pendingInputs: pendingInputs?.page.items,
-      runActive: Boolean(props.canAbort),
+      runActive: props.runActive === true,
       runWorking,
       startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
       questionPrompts: props.gatewayQuestionPrompts,
@@ -305,53 +313,65 @@ export function renderChat(props: ChatProps) {
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
                   ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
-                  ${pendingInputs &&
-                  (pendingInputs.error ||
-                    pendingInputs.page.nextBefore !== undefined ||
-                    pendingInputs.before !== undefined)
-                    ? html`<div class="chat-history-error chat-history-error--inline" role="status">
-                        ${pendingInputs.error ? html`<span>${pendingInputs.error}</span>` : nothing}
-                        ${pendingInputs.page.nextBefore !== undefined
-                          ? html`<button
-                              class="btn btn--sm"
-                              type="button"
-                              ?disabled=${pendingInputs.loading}
-                              @click=${() =>
-                                props.historyState &&
-                                loadChatPendingInputs(
-                                  props.historyState,
-                                  pendingInputs.page.nextBefore,
-                                )}
-                            >
-                              ${t("chat.pendingInputs.earlier")}
-                            </button>`
-                          : nothing}
-                        ${pendingInputs.before !== undefined
-                          ? html`<button
-                              class="btn btn--sm"
-                              type="button"
-                              ?disabled=${pendingInputs.loading}
-                              @click=${() =>
-                                props.historyState && loadChatPendingInputs(props.historyState)}
-                            >
-                              ${t("chat.pendingInputs.latest")}
-                            </button>`
-                          : nothing}
-                      </div>`
-                    : nothing}
+                  ${
+                    pendingInputs &&
+                    (pendingInputs.error ||
+                      pendingInputs.page.nextBefore !== undefined ||
+                      pendingInputs.before !== undefined)
+                      ? html`<div
+                          class="chat-history-error chat-history-error--inline"
+                          role="status"
+                        >
+                          ${pendingInputs.error ? html`<span>${pendingInputs.error}</span>` : nothing}
+                          ${
+                            pendingInputs.page.nextBefore !== undefined
+                              ? html`<button
+                                  class="btn btn--sm"
+                                  type="button"
+                                  ?disabled=${pendingInputs.loading}
+                                  @click=${() =>
+                                    props.historyState &&
+                                    loadChatPendingInputs(
+                                      props.historyState,
+                                      pendingInputs.page.nextBefore,
+                                    )}
+                                >
+                                  ${t("chat.pendingInputs.earlier")}
+                                </button>`
+                              : nothing
+                          }
+                          ${
+                            pendingInputs.before !== undefined
+                              ? html`<button
+                                  class="btn btn--sm"
+                                  type="button"
+                                  ?disabled=${pendingInputs.loading}
+                                  @click=${() =>
+                                    props.historyState && loadChatPendingInputs(props.historyState)}
+                                >
+                                  ${t("chat.pendingInputs.latest")}
+                                </button>`
+                              : nothing
+                          }
+                        </div>`
+                      : nothing
+                  }
                   ${scrollToBottomButton}
-                  ${props.inlineApproval && props.onApprovalDecision
-                    ? html`<div class="chat-inline-approval">
-                        ${renderExecApprovalCard({
-                          approval: props.inlineApproval,
-                          busy: props.approvalBusy === true,
-                          canGrant: props.approvalCanGrant,
-                          error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
-                          variant: "inline",
-                          onDecision: props.onApprovalDecision,
-                        })}
-                      </div>`
-                    : nothing}
+                  ${
+                    props.inlineApproval && props.onApprovalDecision
+                      ? html`<div class="chat-inline-approval">
+                          ${renderExecApprovalCard({
+                            approval: props.inlineApproval,
+                            sourceSession: approvalSourceSession,
+                            busy: props.approvalBusy === true,
+                            canGrant: props.approvalCanGrant,
+                            error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                            variant: "inline",
+                            onDecision: props.onApprovalDecision,
+                          })}
+                        </div>`
+                      : nothing
+                  }
                   ${gutterStack}
                   ${renderChatPullRequests({
                     pullRequests: props.pullRequests ?? [],
