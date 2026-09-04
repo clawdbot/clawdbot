@@ -21,9 +21,9 @@ import { pruneMapToMaxSize } from "./map-size.js";
 // going through Kysely's async driver path.
 
 export { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-const statementInvalidationSymbol = Symbol("openclaw.kyselySyncStatementInvalidation");
-const statementCacheEnabledSymbol = Symbol("openclaw.kyselySyncStatementCacheEnabled");
-const authorizerActiveSymbol = Symbol("openclaw.kyselySyncAuthorizerActive");
+const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInvalidation");
+const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
+const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
 // Bound SQL plus variable-size bindings to about 2 MiB per enabled database.
 // Process-wide retention scales with open handles; repeated variable SQL can enter.
 const statementCacheCapacity = 32;
