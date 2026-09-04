@@ -239,7 +239,7 @@ export function createMentionInbox(params: {
     const visible: MentionInboxItem[] = [];
     const targets = new Map<string, ReturnType<typeof resolveSessionSharingTarget>>();
     const profileItems = itemsByProfile.get(requester.profile.profileId);
-    for (const item of [...(profileItems ?? [])].reverse()) {
+    for (const item of [...(profileItems ?? [])].toReversed()) {
       const current = currentTarget(item, cfg, targets);
       if (current && requester.canRead(current.target)) {
         visible.push(projectItem(item, current));
