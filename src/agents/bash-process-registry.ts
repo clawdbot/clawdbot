@@ -64,17 +64,6 @@ export interface ProcessSession {
   sessionKey?: string;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
-  /** `session.mainKey` from the runtime config, snapshotted at exec start.
-   *  Used by background-exit notifications to remap cron-run keys to the
-   *  agent's main queue without an ambient config load. If config changes
-   *  while the process runs, the exit notification follows the start-time
-   *  session contract. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; required so the cron-run remap
-   *  can route global-scope agents to the literal "global" queue instead
-   *  of an agent-main queue the heartbeat never drains. Snapshotted with
-   *  `mainKey` for the same start-time routing reason. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;

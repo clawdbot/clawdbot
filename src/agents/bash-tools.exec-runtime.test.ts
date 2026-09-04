@@ -625,8 +625,6 @@ describe("terminal execution-context release", () => {
         scopeKey: "process-scope",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
-        mainKey: "main",
-        sessionScope: "per-sender",
         eventRouting: { mainKey: "main", sessionScope: "per-sender" },
         notifyDeliveryContext: deliveryContext,
         notifyOnExit: true,
@@ -661,8 +659,6 @@ describe("terminal execution-context release", () => {
       for (const field of [
         "sessionKey",
         "agentId",
-        "mainKey",
-        "sessionScope",
         "eventRouting",
         "notifyDeliveryContext",
         "notifyOnExit",

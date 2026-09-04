@@ -6,7 +6,11 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
-import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
+import {
+  acknowledgeNotifyOnExit,
+  getFinishedSession,
+  getSession,
+} from "../../agents/bash-process-registry.js";
 import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -247,6 +251,7 @@ export async function handleBashChatCommand(params: {
       };
     }
     if (finished) {
+      acknowledgeNotifyOnExit(finished);
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
       }
@@ -331,8 +336,10 @@ export async function handleBashChatCommand(params: {
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
