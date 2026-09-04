@@ -29,7 +29,7 @@ import {
   OBSERVATION_JSON_SCHEMA,
 } from "./prompts.js";
 import { dayKeyFor, LogbookStore } from "./store.js";
-import type { LogbookBatch, LogbookCard } from "./types.js";
+import type { LogbookBatch } from "./types.js";
 
 const ANALYSIS_TICK_MS = 60 * 1000;
 const PRUNE_TICK_MS = 60 * 60 * 1000;
@@ -493,9 +493,10 @@ export class LogbookService {
   private async reviseCards(batch: LogbookBatch): Promise<void> {
     const store = this.requireStore();
     const lookbackStart = batch.startMs - CARD_LOOKBACK_MS;
-    const previousCards = store
-      .cardsForDay(batch.day)
-      .filter((card) => card.endMs > lookbackStart && card.startMs < batch.endMs);
+    const previousCards = store.cardsForDay(batch.day, {
+      startMs: lookbackStart,
+      endMs: batch.endMs,
+    });
     const observations = store.observationsInRange(
       batch.day,
       Math.min(lookbackStart, batch.startMs),
@@ -626,16 +627,12 @@ export class LogbookService {
 
   // ── Introspection ──────────────────────────────────────────────────
 
-  cardsForDay(day: string): LogbookCard[] {
-    return this.requireStore().cardsForDay(day);
+  timelineForDay(day: string): ReturnType<LogbookStore["timelineForDay"]> {
+    return this.requireStore().timelineForDay(day);
   }
 
   listDays(): ReturnType<LogbookStore["listDays"]> {
     return this.requireStore().listDays();
-  }
-
-  dayStats(day: string): ReturnType<LogbookStore["dayStats"]> {
-    return this.requireStore().dayStats(day);
   }
 
   frameById(id: number): ReturnType<LogbookStore["frameById"]> {
@@ -675,7 +672,7 @@ export class LogbookService {
       visionModel: vision.ref ? `${vision.ref.provider}/${vision.ref.model}` : undefined,
       visionModelSource: vision.source,
       today,
-      todayCards: store.cardsForDay(today).length,
+      todayCards: store.countCardsForDay(today),
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   }
