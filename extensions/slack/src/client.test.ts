@@ -13,7 +13,8 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   isDebugProxyGlobalFetchPatchInstalled: isDebugProxyGlobalFetchPatchInstalledMock,
 }));
 
-vi.mock("@slack/web-api", () => {
+vi.mock("@slack/web-api", async (importOriginal) => {
+  const { WebAPIRateLimitedError } = await importOriginal<typeof import("@slack/web-api")>();
   const WebClient = vi.fn(function WebClientMock(
     this: Record<string, unknown>,
     token: string,
@@ -22,7 +23,7 @@ vi.mock("@slack/web-api", () => {
     this.token = token;
     this.options = options;
   });
-  return { WebClient };
+  return { WebClient, WebAPIRateLimitedError };
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
@@ -308,7 +309,8 @@ describe("slack web client config", () => {
     createSlackWriteClient("xoxb-test", { timeout: 4321, fetch: customFetch });
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
-      fetch: customFetch,
+      fetch: expect.any(Function),
+      rejectRateLimitedCalls: true,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -323,6 +325,8 @@ describe("slack web client config", () => {
       expect(second).toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {
@@ -355,10 +359,14 @@ describe("slack web client config", () => {
       expect(second).not.toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(2);
       expect(WebClient).toHaveBeenNthCalledWith(1, "xoxb-org", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
         teamId: "T1",
       });
       expect(WebClient).toHaveBeenNthCalledWith(2, "xoxb-org", {
+        fetch: expect.any(Function),
+        rejectRateLimitedCalls: true,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
         teamId: "T2",
       });

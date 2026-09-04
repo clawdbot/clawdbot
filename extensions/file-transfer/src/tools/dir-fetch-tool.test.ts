@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
@@ -49,13 +50,17 @@ afterAll(() => {
 
 async function createTarBuffer(params: {
   entries: string[];
+  noPax?: boolean;
   setup: (sourceDir: string) => Promise<void>;
 }): Promise<Buffer> {
   const sourceDir = path.join(tmpRoot, `source-${randomUUID()}`);
   await fs.mkdir(sourceDir, { recursive: true });
   await params.setup(sourceDir);
   const chunks: Buffer[] = [];
-  for await (const chunk of tar.c({ cwd: sourceDir, gzip: true, portable: true }, params.entries)) {
+  for await (const chunk of tar.c(
+    { cwd: sourceDir, gzip: true, portable: true, noPax: params.noPax },
+    params.entries,
+  )) {
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
@@ -109,8 +114,8 @@ function pathOverrideEntries(
   ];
 }
 
-function prepareArchive(tarBuffer: Buffer) {
-  const mediaDir = path.join(tmpRoot, "media");
+function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = "/tmp/project") {
+  const mediaDir = path.join(tmpRoot, mediaName);
   const archivePath = path.join(mediaDir, `archive-${randomUUID()}.tar.gz`);
   saveMediaBuffer.mockImplementation(async () => {
     await fs.mkdir(mediaDir, { recursive: true });
@@ -122,7 +127,7 @@ function prepareArchive(tarBuffer: Buffer) {
     nodeDisplayName: "Node One",
     payload: {
       ok: true,
-      path: "/tmp/project",
+      path: canonicalPath,
       tarBase64: tarBuffer.toString("base64"),
       tarBytes: tarBuffer.byteLength,
       sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
@@ -138,6 +143,23 @@ async function executeDirFetch() {
     node: "node-1",
     path: "/tmp/project",
   });
+}
+
+function readSavedContent(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
+  const text = content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+  expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  const manifest = JSON.parse(text.split("\n").find((line) => line.startsWith("{"))!) as {
+    rootDir: string;
+    fileCount: number;
+    displayedCount: number;
+    files: Array<{ relPath: string; size: number }>;
+  };
+  expect(manifest.displayedCount).toBe(manifest.files.length);
+  return { text, ...manifest };
 }
 
 async function expectUnsafeArchive(
@@ -173,6 +195,12 @@ describe("dir.fetch archive extraction", () => {
     prepareArchive(tarBuffer);
 
     const result = await executeDirFetch();
+    const modelText = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect.soft(modelText).toContain("ok.txt");
+    expect.soft(modelText).toContain(".root-note");
 
     expect(result).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
@@ -198,15 +226,19 @@ describe("dir.fetch archive extraction", () => {
         }),
       ]),
     );
-    const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
-    await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
-    for (const [relPath, contents] of [
+    const visible = readSavedContent(result.content);
+    expect(visible.fileCount).toBe(4);
+    expect(visible.files).toHaveLength(4);
+    const expectedContents = new Map([
+      ["ok.txt", "ok"],
+      [path.join("nested", "also-ok.txt"), "also ok"],
       [".root-note", "hidden root"],
       [path.join(".hidden", "note.txt"), "hidden member"],
-    ]) {
-      const hiddenFile = files.find((file) => file.relPath === relPath);
-      expect(hiddenFile).toBeDefined();
-      await expect(fs.readFile(hiddenFile!.localPath, "utf8")).resolves.toBe(contents);
+    ]);
+    for (const file of visible.files) {
+      const bytes = await fs.readFile(path.join(visible.rootDir, file.relPath));
+      expect(bytes.toString()).toBe(expectedContents.get(file.relPath));
+      expect(bytes.byteLength).toBe(file.size);
     }
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       tarBuffer,
@@ -218,6 +250,159 @@ describe("dir.fetch archive extraction", () => {
       expect.objectContaining({ decision: "allowed" }),
     );
   });
+
+  it("bounds a large saved manifest while preserving every file and image-first attachments", async () => {
+    const names = Array.from(
+      { length: 240 },
+      (_, i) => `${String(i).padStart(3, "0")}-${"雪".repeat(16)}.txt`,
+    );
+    if (process.platform !== "win32") {
+      names.push('000-quoted"line\n.txt');
+    }
+    const relPaths = [...names, "z-image.png", "z-image.jpg"];
+    const tarBuffer = await createTarBuffer({
+      entries: ["."],
+      // These UTF-8 names fit USTAR's 100-byte field. fs-safe rejects non-ASCII
+      // PAX paths; use the supported raw-name format, then verify every saved name.
+      noPax: true,
+      setup: async (sourceDir) => {
+        await Promise.all(
+          relPaths.map((relPath) => fs.writeFile(path.join(sourceDir, relPath), relPath)),
+        );
+      },
+    });
+    // Remote metadata need not fit in text; the exact local root identifies the saved tree.
+    const { archivePath } = prepareArchive(tarBuffer, "media", "/" + "雪".repeat(10000));
+    const result = await executeDirFetch();
+    const visible = readSavedContent(result.content);
+    expect(visible.fileCount).toBe(relPaths.length);
+    expect(visible.displayedCount).toBeGreaterThan(0);
+    expect(visible.displayedCount).toBeLessThan(relPaths.length);
+    expect(visible.files.map((file) => file.relPath)).toEqual(
+      relPaths.toSorted().slice(0, visible.displayedCount),
+    );
+    expect(visible.text).toContain(
+      `${relPaths.length - visible.displayedCount} saved files omitted`,
+    );
+    expect(visible.text).toContain("available local file or directory capabilities");
+    expect(visible.text).not.toContain("details.files");
+    expect(visible.text).not.toContain("pageToken");
+    for (const file of visible.files) {
+      const bytes = await fs.readFile(path.join(visible.rootDir, file.relPath));
+      expect(bytes.toString()).toBe(file.relPath);
+      expect(bytes.byteLength).toBe(file.size);
+    }
+    // Independent structured/media contract: extraction walk order, every metadata
+    // field and all saved bytes survive even when their text rows are omitted.
+    const rootDir = path.join(
+      path.dirname(archivePath),
+      `dir-fetch-${path.basename(archivePath, ".gz")}`,
+    );
+    const expectedFiles: Array<{
+      relPath: string;
+      size: number;
+      mimeType: string;
+      sha256: string;
+      localPath: string;
+    }> = [];
+    const visit = async (directory: string): Promise<void> => {
+      for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        const localPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await visit(localPath);
+        } else {
+          const relPath = path.relative(rootDir, localPath);
+          const bytes = await fs.readFile(localPath);
+          expect(bytes.toString()).toBe(relPath);
+          expectedFiles.push({
+            relPath,
+            localPath,
+            size: bytes.length,
+            sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+            mimeType: relPath.endsWith(".png")
+              ? "image/png"
+              : relPath.endsWith(".jpg")
+                ? "image/jpeg"
+                : "text/plain",
+          });
+        }
+      }
+    };
+    await visit(rootDir);
+    expect(expectedFiles.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
+    const images = expectedFiles.filter((file) => file.mimeType.startsWith("image/"));
+    const others = expectedFiles.filter((file) => !file.mimeType.startsWith("image/"));
+    expect(result.details).toEqual({
+      path: "/" + "雪".repeat(10000),
+      rootDir,
+      fileCount: relPaths.length,
+      tarBytes: tarBuffer.length,
+      sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
+      files: expectedFiles,
+      media: { mediaUrls: [...images, ...others].slice(0, 25).map((file) => file.localPath) },
+    });
+  });
+
+  it.each(["empty", "long paths", "reserved name", "reserved root"] as const)(
+    "reports %s without partial or rewritten saved paths",
+    async (scenario) => {
+      const longDir = path.join(...Array.from({ length: 4 }, () => "x".repeat(150)));
+      const relPaths =
+        scenario === "empty"
+          ? []
+          : scenario === "long paths"
+            ? Array.from({ length: 20 }, (_, i) => path.join(longDir, `${i}.txt`))
+            : [scenario === "reserved name" ? "[INST].txt" : "ok.txt"];
+      const tarBuffer = await createTarBuffer({
+        entries: ["."],
+        setup: async (sourceDir) => {
+          if (scenario === "long paths") {
+            await fs.mkdir(path.join(sourceDir, longDir), { recursive: true });
+          }
+          await Promise.all(
+            relPaths.map((name) => fs.writeFile(path.join(sourceDir, name), "saved")),
+          );
+        },
+      });
+      prepareArchive(tarBuffer, scenario === "reserved root" ? "[INST]" : "media");
+      const result = await executeDirFetch();
+      if (scenario === "reserved root") {
+        const text = result.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+        expect(text).toContain("No usable local path is shown");
+        expect(text).not.toContain("REMOVED_SPECIAL_TOKEN");
+      } else {
+        const visible = readSavedContent(result.content);
+        expect(visible.fileCount).toBe(relPaths.length);
+        if (scenario === "long paths") {
+          expect(visible.displayedCount).toBeGreaterThan(0);
+          expect(visible.displayedCount).toBeLessThan(relPaths.length);
+          for (const file of visible.files) {
+            await expect(
+              fs.readFile(path.join(visible.rootDir, file.relPath), "utf8"),
+            ).resolves.toBe("saved");
+          }
+        } else {
+          expect(visible.files).toEqual([]);
+          expect(visible.text).toContain(
+            scenario === "empty" ? "0 saved files omitted" : "1 saved files omitted",
+          );
+        }
+      }
+      expect(result.details).toMatchObject({
+        fileCount: relPaths.length,
+        files: expect.any(Array),
+      });
+      const details = result.details as { files: Array<{ relPath: string; localPath: string }> };
+      expect(details.files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
+      for (const file of details.files) {
+        await expect(fs.readFile(file.localPath, "utf8")).resolves.toBe("saved");
+      }
+    },
+  );
 
   it.each(["SymbolicLink", "Link", "CharacterDevice", "BlockDevice", "FIFO"] as const)(
     "rejects a Fleet-shaped archive containing a %s",

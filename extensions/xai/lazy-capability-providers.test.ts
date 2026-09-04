@@ -85,7 +85,7 @@ vi.mock("./video-generation-provider.js", () => ({
 vi.mock("./speech-provider.js", () => ({
   buildXaiSpeechProvider: runtimeMocks.buildSpeechProvider,
 }));
-vi.mock("./realtime-transcription-provider.js", () => ({
+vi.mock("./realtime-transcription-provider-factory.js", () => ({
   buildXaiRealtimeTranscriptionProvider: runtimeMocks.buildTranscriptionProvider,
 }));
 vi.mock("./realtime-voice-provider.js", () => ({

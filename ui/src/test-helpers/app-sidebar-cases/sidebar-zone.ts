@@ -9,6 +9,7 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
+import "../../plugins/control-ui-view.runtime.ts";
 
 function createDataTransferStub() {
   const data = new Map<string, string>();

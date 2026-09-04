@@ -34,6 +34,8 @@ describe("findSettingsSearchBlocks", () => {
       "updates.page.intro",
       "updates.channel.stable",
       "updates.installKind.git",
+      "modelProviders.title",
+      "modelProviders.defaults.utilityHelpPurpose",
     ];
     try {
       for (const key of lazyKeys) {
@@ -70,6 +72,10 @@ describe("findSettingsSearchBlocks", () => {
       expect(find("check for updates")).toEqual([
         expect.objectContaining({ routeId: "updates", label: "Updates" }),
       ]);
+      expect(runtime.t("modelProviders.title")).toBe("Configured providers");
+      expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
+        "2 of 3 models available",
+      );
       expect(runtime.t("settings.missing.key")).toBe("settings.missing.key");
       await runtime.i18n.setLocale("en");
       expect(find("collapse task progress")).toEqual([

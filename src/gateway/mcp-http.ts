@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
@@ -451,7 +452,12 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           ? JSON.stringify(responses)
           : JSON.stringify(responses[0]);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(payload);
+        res.end(payload, () => {
+          // Ending queues bytes; only a completed write owns result delivery.
+          if (res.writableFinished) {
+            responses.forEach(acknowledgeInternalToolResult);
+          }
+        });
       } catch (error) {
         logWarn(`mcp-loopback: request handling failed: ${formatErrorMessage(error)}`);
         logMcpLoopbackTraffic("request-failed", {

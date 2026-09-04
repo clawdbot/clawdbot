@@ -23,10 +23,6 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
-type DowngradeOpenAIReasoningBlocksOptions = {
-  dropReplayableReasoningBefore?: number;
-};
-
 const OPENAI_RESPONSES_ID_MAX_LENGTH = 64;
 const OPENAI_RESPONSES_CALL_ID_RE = /^call_[A-Za-z0-9_-]{1,59}$/;
 const OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE = /^fc_[A-Za-z0-9_-]{1,61}$/;
@@ -65,22 +61,6 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
 
 function parseTimestampMs(value: unknown): number | null {
   return parseDateFirstTimestampMs(value) ?? null;
-}
-
-function hasFollowingNonThinkingBlock(
-  content: Extract<AgentMessage, { role: "assistant" }>["content"],
-  index: number,
-): boolean {
-  for (let i = index + 1; i < content.length; i++) {
-    const block = content[i];
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    if ((block as { type?: unknown }).type !== "thinking") {
-      return true;
-    }
-  }
-  return false;
 }
 
 function splitOpenAIFunctionCallPairing(id: string): {
@@ -391,16 +371,16 @@ function extractTextSignaturePhase(signature: string): "commentary" | "final_ans
 }
 
 /**
- * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
- * without the required following item, or stale encrypted reasoning after a model route switch.
- *
- * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
- * is incomplete or no longer replay-safe, drop the block to keep history usable.
+ * Drops reasoning from before a model route switch and clears paired message ids.
+ * The transport owns orphan detection after preparing the actual replay payload.
  */
-export function downgradeOpenAIReasoningBlocks(
+export function dropStaleOpenAIReasoning(
   messages: AgentMessage[],
-  options: DowngradeOpenAIReasoningBlocksOptions = {},
+  dropBefore?: number,
 ): AgentMessage[] {
+  if (dropBefore === undefined) {
+    return messages;
+  }
   let anyChanged = false;
   const out: AgentMessage[] = [];
 
@@ -424,16 +404,17 @@ export function downgradeOpenAIReasoningBlocks(
     const messageTimestamp = parseTimestampMs((assistantMsg as { timestamp?: unknown }).timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.
-    const dropReplayableReasoning =
-      options.dropReplayableReasoningBefore !== undefined &&
-      (messageTimestamp === null || messageTimestamp <= options.dropReplayableReasoningBefore);
+    if (messageTimestamp !== null && messageTimestamp > dropBefore) {
+      out.push(msg);
+      continue;
+    }
 
     let changed = false;
     let droppedReplayableReasoning = false;
     type AssistantContentBlock = (typeof assistantMsg.content)[number];
 
     const nextContent: AssistantContentBlock[] = [];
-    for (const [i, block] of assistantMsg.content.entries()) {
+    for (const block of assistantMsg.content) {
       if (!block) {
         changed = true;
         continue;
@@ -452,16 +433,8 @@ export function downgradeOpenAIReasoningBlocks(
         nextContent.push(block);
         continue;
       }
-      if (dropReplayableReasoning) {
-        changed = true;
-        droppedReplayableReasoning = true;
-        continue;
-      }
-      if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
-        nextContent.push(block);
-        continue;
-      }
       changed = true;
+      droppedReplayableReasoning = true;
     }
 
     if (!changed) {

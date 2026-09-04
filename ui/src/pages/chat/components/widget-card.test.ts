@@ -639,9 +639,13 @@ describe("widget-card presentation", () => {
       }),
       host,
     );
-    expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(scripted);
+    const managedView = host.querySelector("openclaw-canvas-widget-view");
+    expect(managedView !== null).toBe(sandbox !== "strict");
     expect(host.querySelector("[data-pin-widget]") !== null).toBe(scripted);
-    if (!scripted) {
+    if (managedView) {
+      expect(managedView.allowScripts).toBe(scripted);
+      expect(host.querySelector("iframe")).toBeNull();
+    } else {
       expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
     }
   });

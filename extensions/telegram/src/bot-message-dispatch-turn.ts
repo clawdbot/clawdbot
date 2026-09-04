@@ -55,7 +55,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   const toolProgressEnabled =
     turn.streamMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
+    resolveChannelStreamingPreviewToolProgress(
+      turn.telegramCfg,
+      turn.streamMode !== "progress",
+      turn.streamMode,
+    );
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,

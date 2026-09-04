@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {},
   "sessionRouteStateOwners": [
     {

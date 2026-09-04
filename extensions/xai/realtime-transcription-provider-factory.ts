@@ -1,21 +1,27 @@
+import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 // Xai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  createRealtimeTranscriptionWebSocketSession,
-  type RealtimeTranscriptionProviderPlugin,
-  type RealtimeTranscriptionSession,
-  type RealtimeTranscriptionSessionCreateRequest,
-  type RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription";
+import type {
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+  RealtimeTranscriptionSessionCreateRequest,
+  RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-session";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createXaiRealtimeTranscriptionProviderMetadata,
   normalizeXaiRealtimeTranscriptionProviderConfig,
   type XaiRealtimeTranscriptionEncoding,
-} from "./capability-provider-metadata.js";
+} from "./capability-provider-metadata-factory.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
+
+type XaiTranscriptionRuntime = Pick<
+  PluginCapabilityCatalogContext,
+  | "isProviderAuthProfileConfigured"
+  | "resolveApiKeyForProvider"
+  | "createRealtimeTranscriptionWebSocketSession"
+>;
 
 type XaiRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
@@ -82,6 +88,7 @@ function readTranscriptText(event: XaiRealtimeTranscriptionEvent): string | unde
 
 function createXaiRealtimeTranscriptionSession(
   config: XaiRealtimeTranscriptionSessionConfig,
+  createRealtimeTranscriptionWebSocketSession: XaiTranscriptionRuntime["createRealtimeTranscriptionWebSocketSession"],
 ): RealtimeTranscriptionSession {
   let lastTranscript: string | undefined;
   let speechStarted = false;
@@ -170,25 +177,31 @@ function createXaiRealtimeTranscriptionSession(
   });
 }
 
-export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
+export function buildXaiRealtimeTranscriptionProvider(
+  runtime: XaiTranscriptionRuntime,
+): RealtimeTranscriptionProviderPlugin {
   return {
-    ...createXaiRealtimeTranscriptionProviderMetadata(),
+    ...createXaiRealtimeTranscriptionProviderMetadata(runtime),
     createSession: (req) => {
       const config = normalizeXaiRealtimeTranscriptionProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().
       const seedApiKey =
         normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
-      return createXaiRealtimeTranscriptionSession({
-        ...req,
-        apiKey: seedApiKey ?? "",
-        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg),
-        baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),
-        sampleRate: config.sampleRate ?? XAI_REALTIME_STT_DEFAULT_SAMPLE_RATE,
-        encoding: config.encoding ?? XAI_REALTIME_STT_DEFAULT_ENCODING,
-        interimResults: config.interimResults ?? true,
-        endpointingMs: config.endpointingMs ?? XAI_REALTIME_STT_DEFAULT_ENDPOINTING_MS,
-        language: config.language,
-      });
+      return createXaiRealtimeTranscriptionSession(
+        {
+          ...req,
+          apiKey: seedApiKey ?? "",
+          resolveApiKey: () =>
+            resolveXaiRealtimeApiKey(config.apiKey, req.cfg, runtime.resolveApiKeyForProvider),
+          baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),
+          sampleRate: config.sampleRate ?? XAI_REALTIME_STT_DEFAULT_SAMPLE_RATE,
+          encoding: config.encoding ?? XAI_REALTIME_STT_DEFAULT_ENCODING,
+          interimResults: config.interimResults ?? true,
+          endpointingMs: config.endpointingMs ?? XAI_REALTIME_STT_DEFAULT_ENDPOINTING_MS,
+          language: config.language,
+        },
+        runtime.createRealtimeTranscriptionWebSocketSession,
+      );
     },
   };
 }
@@ -200,6 +213,7 @@ export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionPr
 async function resolveXaiRealtimeApiKey(
   configApiKey: string | undefined,
   cfg: OpenClawConfig | undefined,
+  resolveApiKeyForProvider: XaiTranscriptionRuntime["resolveApiKeyForProvider"],
 ): Promise<string> {
   const direct =
     normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);

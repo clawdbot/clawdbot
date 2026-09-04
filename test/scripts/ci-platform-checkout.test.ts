@@ -912,7 +912,7 @@ it.skipIf(process.platform === "win32")(
         "-S",
         "-c",
         String.raw`
-import ast, errno, json, os, pathlib, signal, subprocess, sys, tempfile, time
+import ast, contextlib, errno, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 
 # Load only the actual boundary functions; never execute checkout or real Git.
 functions = [node for node in ast.parse(sys.stdin.read()).body
@@ -934,17 +934,56 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
     group_signal(child.pid, signal.SIGTERM, deadline)
     group_signal(child.pid, signal.SIGKILL, deadline)
     with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory:
-        root = pathlib.Path(directory)
+        root = pathlib.Path(directory).resolve()
         (root / "workspace").mkdir()
         (root / "pids").mkdir()
         (root / "lease").write_text("owned")
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
             (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
-        subprocess.run([sys.argv[1], sys.argv[2], "git", directory, "early-leader-exit",
+        subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
                         "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True)
         observed = json.loads((root / "events.jsonl").read_text())
         assert observed["alive"] == [], "fixture counted a terminated zombie as a live writer"
         assert observed["sentinelAlive"]
+
+# Reap the session/group leader while its real descendant still owns the pipe.
+# A PID-only query or Darwin's legacy -g must not lose that remaining writer.
+with subprocess.Popen([sys.executable, "-I", "-S", "-c", """
+import os, sys
+if os.fork():
+    os._exit(0)
+print(os.getpid(), os.getpgrp(), os.getsid(0), flush=True)
+sys.stdin.read()
+"""], start_new_session=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as child:
+    descendant, pgid, sid = map(int, child.stdout.readline().split())
+    assert descendant != child.pid and pgid == sid == child.pid
+    child.wait(timeout=2)
+    actual_run = subprocess.run
+    command_mode = os.environ.get("COMMAND_MODE")
+    def scoped_census(command, **options):
+        assert "-g" in command and command[command.index("-g") + 1] == str(pgid), "owner census must select its owned group/session"
+        assert not set(command) & {"-a", "-A", "-e", "-x", "-axo", "-p"}, "owner census broadened or lost descendants"
+        result = actual_run(command, **options)
+        assert result.returncode == 0 and result.stderr == ""
+        assert [int(line.split()[0]) for line in result.stdout.splitlines()] == [pgid]
+        return result
+    try:
+        subprocess.run = scoped_census
+        for mode in ("legacy", "unix2003"):
+            os.environ["COMMAND_MODE"] = mode
+            assert group_alive(pgid, time.monotonic() + 2), "reaped leader hid a live descendant"
+            assert os.environ["COMMAND_MODE"] == mode, "query changed its owner's environment"
+    finally:
+        subprocess.run = actual_run
+        if command_mode is None:
+            os.environ.pop("COMMAND_MODE", None)
+        else:
+            os.environ["COMMAND_MODE"] = command_mode
+        child.communicate(timeout=2)
+    deadline = time.monotonic() + 2
+    while group_alive(pgid, deadline):
+        assert time.monotonic() < deadline, "descendant survived pipe closure"
+        time.sleep(0.01)
 
 # A denied signal is safe to normalize only if the same census proves extinction.
 with subprocess.Popen([sys.executable, "-I", "-S", "-c",
@@ -956,6 +995,44 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c",
     def denied(pgid, signum):
         assert pgid == child.pid and signum in (0, signal.SIGTERM)
         raise PermissionError(errno.EPERM, "test-owned signal denial")
+    actual_run = subprocess.run
+    try:
+        for probe in (actual_killpg, denied):
+            os.killpg = probe
+            for code, output, diagnostic in [
+                (1, "", ""), (0, "", ""), (0, " \n", ""), (2, "", ""), (-9, "", ""),
+                (1, f"{child.pid} Z\n", ""),
+                (0, f"{child.pid} Z\n", "injected census diagnostic\n"),
+                (1, "", "injected census diagnostic\n"),
+                ("timeout", "", "injected census diagnostic\n"),
+                (0, f"{child.pid} Z\nbroken\n", ""),
+                (0, f"{child.pid} S\nbroken\n", ""),
+                (0, f"{child.pid} Z", ""),
+                (0, f"{os.getpgrp()} S\n", ""),
+                (0, "invalid Z\n", ""),
+                (0, f"{child.pid} Zbogus\n", ""),
+                (0, f"{child.pid} Z extra\n", ""),
+            ]:
+                def census_result(command, **options):
+                    if code == "timeout":
+                        raise subprocess.TimeoutExpired(command, options["timeout"], stderr=diagnostic.encode())
+                    result = subprocess.CompletedProcess(command, code, output, diagnostic)
+                    if options.get("check"):
+                        result.check_returncode()
+                    return result
+                subprocess.run = census_result
+                captured = io.StringIO()
+                with contextlib.redirect_stderr(captured):
+                    try:
+                        group_alive(child.pid, time.monotonic() + 2)
+                    except (RuntimeError, ValueError, PermissionError, subprocess.SubprocessError):
+                        pass
+                    else:
+                        raise AssertionError(f"ambiguous census accepted: {(code, output, diagnostic)!r}")
+                assert captured.getvalue() == diagnostic, "census lost its diagnostic"
+    finally:
+        subprocess.run = actual_run
+        os.killpg = actual_killpg
     os.killpg = denied
     try:
         try:
@@ -966,6 +1043,18 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c",
             raise AssertionError("live denied group was accepted as terminated")
     finally:
         os.killpg = actual_killpg
+    # Force the real probe/query race: the group exists at killpg(0), then exits
+    # before native ps selects it. Only the subsequent native ESRCH proves absence.
+    def census_after_exit(command, **options):
+        child.communicate(timeout=2)
+        result = actual_run(command, **options)
+        assert result.returncode == 1 and result.stdout == result.stderr == ""
+        return result
+    try:
+        subprocess.run = census_after_exit
+        assert not group_alive(child.pid, time.monotonic() + 2)
+    finally:
+        subprocess.run = actual_run
 print("group contract passed")
 `,
         process.execPath,

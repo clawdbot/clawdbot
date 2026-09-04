@@ -1,13 +1,21 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  publishEncodedSessionTranscriptArchive,
+  resolveSqliteTranscriptArchivePath,
+} from "../config/sessions/session-accessor.sqlite-archive.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
+import { isGatewayProtocolResponseError } from "./client.js";
 import {
   cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
 } from "./managed-image-attachments.js";
 import { readManagedImageRecord } from "./managed-image-record-store.js";
+import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import {
   installGatewayTestHooks,
@@ -29,7 +37,8 @@ describe("managed image actions Gateway E2E", () => {
     }
     testState.gatewayAuth = { mode: "token", token: GATEWAY_TOKEN };
     testState.gatewayControlUi = { basePath: "/rosita" };
-    testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
+    const storePath = path.join(stateDir, "sessions.sqlite");
+    testState.sessionStorePath = storePath;
 
     const source = await fs.readFile(
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
@@ -61,27 +70,25 @@ describe("managed image actions Gateway E2E", () => {
     const sessionId = "managed-image-actions-session";
     const transcriptPath = path.join(stateDir, `${sessionId}.jsonl`);
     const timestamp = new Date().toISOString();
-    await fs.writeFile(
-      transcriptPath,
-      [
-        { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
-        {
-          type: "message",
-          id: messageId,
-          parentId: null,
-          timestamp,
-          message: {
-            role: "assistant",
-            content: blocks,
-            timestamp: Date.now(),
-            __openclaw: { id: messageId },
-          },
+    const transcriptEvents = [
+      { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
+      {
+        type: "message",
+        id: messageId,
+        parentId: null,
+        timestamp,
+        message: {
+          role: "assistant",
+          content: blocks,
+          timestamp: Date.now(),
+          __openclaw: { id: messageId },
         },
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n",
-      "utf8",
+      },
+    ];
+    const transcriptBytes = Buffer.from(
+      transcriptEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
     );
+    await fs.writeFile(transcriptPath, transcriptBytes);
     await writeSessionStore({
       entries: {
         [SESSION_KEY]: {
@@ -165,6 +172,113 @@ describe("managed image actions Gateway E2E", () => {
           } finally {
             vi.useRealTimers();
           }
+
+          const scope = { agentId: "main", sessionKey: SESSION_KEY, sessionId, storePath };
+          // Retire the imported fixture: archive selection must not see an obsolete active file.
+          await fs.rm(transcriptPath);
+          await replaceTranscriptEvents(scope, transcriptEvents.slice(0, 1));
+          const archiveDirectory = path.dirname(storePath);
+          const archiveHash = createHash("sha256").update(transcriptBytes).digest("hex");
+          const archivePath = publishEncodedSessionTranscriptArchive({
+            archiveDirectory,
+            archiveName: path.basename(
+              resolveSqliteTranscriptArchivePath({
+                archiveDirectory,
+                identityOwner: "filename",
+                sessionId,
+                reason: "reset",
+                nowMs: Date.parse(timestamp),
+              }),
+            ),
+            bytes: transcriptBytes,
+            sha256: archiveHash,
+          });
+          const archiveBefore = await fs.stat(archivePath);
+          const archivedFull = await fetch(fullUrl);
+          expect(archivedFull.status).toBe(200);
+          expect(Buffer.from(await archivedFull.arrayBuffer())).toEqual(source);
+          const archivedThumbnail = await fetch(thumbnailUrl);
+          expect(archivedThumbnail.status).toBe(200);
+          expect(Buffer.from(await archivedThumbnail.arrayBuffer())).toEqual(thumbnailBytes);
+
+          await replaceTranscriptEvents(scope, [
+            ...transcriptEvents.slice(0, 1),
+            {
+              type: "message",
+              id: "managed-image-actions-live-replacement",
+              parentId: null,
+              timestamp,
+              message: { role: "assistant", content: "Live history without the old image" },
+            },
+          ]);
+          const activeHistory = await readSessionMessagesWithSourceAsync(scope, {
+            mode: "full",
+            reason: "managed image E2E archive precedence",
+            allowResetArchiveFallback: true,
+          });
+          expect(activeHistory.messages).toHaveLength(1);
+          expect(activeHistory.messages[0]).toMatchObject({
+            content: "Live history without the old image",
+            __openclaw: { id: "managed-image-actions-live-replacement" },
+          });
+          const denied = [];
+          for (const variant of ["full", "thumbnail"] as const) {
+            for (const credential of ["ticket", "bearer"] as const) {
+              const revokedUrl = new URL(variant === "full" ? fullUrl : thumbnailUrl);
+              if (credential === "bearer") {
+                revokedUrl.searchParams.delete("mediaTicket");
+              }
+              const response = await fetch(
+                revokedUrl,
+                credential === "bearer"
+                  ? { headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` } }
+                  : undefined,
+              );
+              denied.push({
+                variant,
+                credential,
+                status: response.status,
+                notFound: (await response.text()) === "not found",
+              });
+            }
+          }
+          let downloadNotFound = false;
+          try {
+            await client.request("artifacts.download", { sessionKey: SESSION_KEY, artifactId });
+          } catch (error) {
+            downloadNotFound =
+              isGatewayProtocolResponseError(error) &&
+              error.code === "INVALID_REQUEST" &&
+              typeof error.details === "object" &&
+              error.details !== null &&
+              "type" in error.details &&
+              error.details.type === "artifact_not_found";
+          }
+          const archiveAfter = await fs.stat(archivePath);
+          expect([archiveAfter.size, archiveAfter.mtimeMs]).toEqual([
+            archiveBefore.size,
+            archiveBefore.mtimeMs,
+          ]);
+          expect(
+            createHash("sha256")
+              .update(await fs.readFile(archivePath))
+              .digest("hex"),
+          ).toBe(archiveHash);
+          expect(
+            readManagedImageRecord(
+              artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
+              stateDir,
+            ) !== null,
+          ).toBe(true);
+          // Retain only statuses and predicates so a failed denial never prints a new ticket.
+          expect(denied).toEqual([
+            { variant: "full", credential: "ticket", status: 404, notFound: true },
+            { variant: "full", credential: "bearer", status: 404, notFound: true },
+            { variant: "thumbnail", credential: "ticket", status: 404, notFound: true },
+            { variant: "thumbnail", credential: "bearer", status: 404, notFound: true },
+          ]);
+          expect(downloadNotFound).toBe(true);
+          await replaceTranscriptEvents(scope, transcriptEvents);
 
           await disconnectGatewayClient(client);
           const afterDisconnect = await fetch(fullUrl);

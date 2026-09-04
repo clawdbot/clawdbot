@@ -881,9 +881,26 @@ private final class WatchMessageSendGate {
     private(set) var commandIDs: [String] = []
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
+    private let firstSend = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    func waitForFirstSend() async throws -> String? {
+        if let commandID = self.commandIDs.first { return commandID }
+        let stream = self.firstSend.stream
+        return try await AsyncTimeout.withTimeout(
+            seconds: 2,
+            onTimeout: { URLError(.timedOut) })
+        {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+    }
 
     func holdFirstSend(commandID: String) async -> Int {
         self.commandIDs.append(commandID)
+        if self.commandIDs.count == 1 {
+            self.firstSend.continuation.yield(commandID)
+            self.firstSend.continuation.finish()
+        }
         let attempt = self.commandIDs.count { $0 == commandID }
         if self.commandIDs.count == 1, !self.released {
             await withCheckedContinuation { self.continuation = $0 }
@@ -6538,7 +6555,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 let first = fixture.command(id: "first-watch-send", body: body)
                 let second = fixture.command(id: "second-watch-send", body: body)
                 try await coordinator.admit(first)
-                try #require(await waitForMainActorWork { gate.commandIDs == [first.commandId] })
+                // Admission starts transport work asynchronously; observe entry before inspecting its held claim.
+                try #require(try await gate.waitForFirstSend() == first.commandId)
+                #expect(gate.commandIDs == [first.commandId])
                 let firstClaim = try #require(try await fixture.journal.entries().first {
                     $0.commandId == first.commandId
                 })
@@ -8658,6 +8677,28 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await #expect(throws: Error.self) {
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
         }
+    }
+
+    @Test
+    func `cancellation retires queued and late one shot frames`() async {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        socket.emitReceiveSuccess(.string("queued-before-cancellation"))
+        socket.cancel(with: .normalClosure, reason: nil)
+        let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
+        socket.receive { continuation.yield($0) }
+        socket.emitReceiveSuccess(.string("late-after-cancellation"))
+        continuation.finish()
+        var errors: [URLError.Code] = []
+        for await result in events {
+            switch result {
+            case .success:
+                Issue.record("Canceled sockets must not deliver queued or late frames")
+            case let .failure(error):
+                errors.append((error as? URLError)?.code ?? .unknown)
+            }
+        }
+        #expect(errors == [.cancelled])
     }
 
     private static func nodeAppModelSourceURL() -> URL {

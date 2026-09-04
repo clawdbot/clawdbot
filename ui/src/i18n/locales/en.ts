@@ -12,6 +12,7 @@ export const en: TranslationMap & {
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect", string>;
   updates: TranslationMap;
+  login: TranslationMap;
 } = {
   pluginUi: {
     customize: "Customize UI",
@@ -2365,69 +2366,7 @@ export const en: TranslationMap & {
     logs: "Live gateway logs.",
     plugin: "Plugin-provided panel.",
   },
-  cloudWorkersPage: {
-    intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
-    empty: "No cloud worker profiles are configured.",
-    addProfile: "Add profile",
-    editProfile: "Edit profile",
-    editAction: "Edit",
-    deleteTitle: "Delete cloud worker profile",
-    deleteConfirm: "Delete profile {profile}? New cloud sessions cannot use it after restart.",
-    advertised: "Advertised",
-    restartRequired: "Restart required",
-    adminRequired: "Administrator access is required to manage cloud worker profiles.",
-    catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
-    providerFact: "Provider: {provider}",
-    backendFact: "Crabbox backend: {backend}",
-    classFact: "Class: {value}",
-    ttlFact: "Max lifetime: {value}",
-    idleFact: "Idle stop: {value}",
-    desktopFact: "Desktop: {value}",
-    providerList: "View supported backends",
-    fields: {
-      profileId: "Profile ID",
-      profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
-      backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
-      backendPlaceholder: "hetzner",
-      machineClass: "Machine class",
-      machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
-      ttl: "Max lifetime",
-      ttlHelp: "Use a positive Go duration such as 8h or 90m.",
-      ttlPlaceholder: "8h",
-      idleTimeout: "Idle stop",
-      idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
-      idleTimeoutPlaceholder: "45m",
-      setup: "Setup command",
-      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
-      setupPlaceholder: "command -v node || install-node",
-      desktop: "Desktop",
-      desktopHelp:
-        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
-      binary: "Crabbox binary",
-      binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
-      binaryPlaceholder: "/usr/local/bin/crabbox",
-      actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
-    },
-    errors: {
-      title: "Profile needs attention",
-      profileId:
-        "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
-      profileExists: "Choose another profile ID; this one already exists.",
-      profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws or hetzner.",
-      machineClass: "Enter a machine class of 1 to 128 characters.",
-      ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
-      idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
-      binary: "Enter an absolute Crabbox binary path or leave the field empty.",
-      saveFailed: "The profile was not saved. Reload the config and try again.",
-      deleteFailed: "The profile was not deleted. Reload the config and try again.",
-    },
-  },
+  cloudWorkersPage: {},
   portalsPage: {
     listLabel: "Active portals",
     portLabel: "Port {port}",
@@ -4313,139 +4252,7 @@ export const en: TranslationMap & {
       whisperingVectorStore: "whispering to the vector store…",
     },
   },
-  modelProviders: {
-    title: "Configured providers",
-    configureModels: "Configure Models",
-    subtitle: "Model providers with auth, plan, quota, and cost data.",
-    updated: "Updated {time}",
-    refreshing: "Refreshing…",
-    disconnected: "Connect to the gateway to see configured model providers.",
-    emptyTitle: "No model providers configured",
-    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
-    status: {
-      ok: "Signed in",
-      ready: "Ready",
-      expiring: "Expiring",
-      expired: "Expired",
-      missing: "Not signed in",
-      apiKey: "API key",
-      denied: "Credentials rejected",
-      configured: "Credentials configured",
-    },
-    expiresIn: "Credential expires in {time}",
-    models: "{count} models",
-    modelOne: "1 model",
-    modelsAvailable: "{available} of {count} models available",
-    globalUsage: "Global usage and cost",
-    noStats: "No live usage data reported by this provider.",
-    localCost: "Global session spend · {days}d",
-    localCostDetail: "{tokens} tokens · {sessions} sessions",
-    saving: "Saving…",
-    requestFailed: "Request failed.",
-    configUnavailable: "Configuration is unavailable. Refresh and try again.",
-    credentials: {
-      label: "Credentials for {agent}",
-      oauth: "OAuth profiles: {count}",
-      tokenProfiles: "Token profiles: {count}",
-      configKey: "API key set in config",
-      envKey: "API key from environment",
-      envKeyNamed: "API key from environment ({name})",
-      profileKey: "API key profiles: {count}",
-      none: "Not configured",
-    },
-    apiKey: {
-      label: "API key",
-      placeholder: "Enter provider API key",
-      replacePlaceholder: "Secret saved. Enter a new key to replace it.",
-      set: "Set API key",
-      replace: "Replace key",
-      remove: "Remove key",
-      saved: "Secret saved.",
-      removed: "API key removed.",
-      authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
-    },
-    probe: {
-      test: "Test connection",
-      testing: "Testing…",
-      unavailable: "Connection testing requires a newer gateway.",
-      latency: "{ms} ms",
-      status: {
-        ok: "Connected",
-        auth: "Authentication failed",
-        rate_limit: "Rate limited",
-        billing: "Billing problem",
-        timeout: "Timed out",
-        format: "Invalid response",
-        unknown: "Connection failed",
-        no_model: "No models available",
-        partial: "Connected with warnings",
-      },
-    },
-    readiness: {
-      title: "AI setup",
-      heading: "Connect a verified AI model",
-      signedInNoModels:
-        "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
-      notConfigured: "Choose a provider and verify the model OpenClaw will use.",
-      noModels: "No models available",
-      modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
-    },
-    logout: {
-      action: "Log out",
-      confirm: "Log out of {provider}? Saved OAuth and token profiles will be removed.",
-      loggingOut: "Logging out…",
-      done: "Logged out.",
-    },
-    add: {
-      title: "Add provider",
-      subtitle: "Choose a known model provider and save its API key.",
-      action: "Add provider",
-      none: "All known providers are already configured.",
-      provider: "Provider",
-      selectProvider: "Select a provider",
-      save: "Save provider",
-      saved: "Provider {provider} added.",
-    },
-    defaults: {
-      title: "Defaults",
-      subtitle: "Applies across all providers and models where applicable.",
-      primary: "Model",
-      utility: "Utility Model",
-      utilityHelpLabel: "About the utility model",
-      utilityHelpPurpose:
-        "Handles short background tasks such as generated titles, progress narration, and session summaries.",
-      utilityHelpAutomatic:
-        "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
-      automatic: "Automatic (provider default)",
-      disabled: "Disabled",
-      fallback: "Fallback Model",
-      noFallback: "No fallback model",
-      selectModel: "Select a model",
-      noModels: "Configure a provider before selecting default models.",
-      thinkingHelpLabel: "About thinking defaults",
-      thinkingHelp:
-        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
-      thinkingDefaultHelp:
-        "Uses the selected model's thinking policy instead of saving a global thinking override.",
-      fastModeHelpLabel: "About fast mode defaults",
-      fastModeHelp:
-        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
-      fastModeDefaultHelp:
-        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
-      saved: "Defaults saved.",
-    },
-    readOnly: {
-      disconnected: "Connect to the gateway to change model settings.",
-      adminRequired: "Browsing only. Model changes require operator.admin access.",
-    },
-    notes: {
-      saveKey: "Save API key for {provider} from Control UI",
-      removeKey: "Remove API key for {provider} from Control UI",
-      addProvider: "Add model provider {provider} from Control UI",
-      defaultModel: "Update defaults from Control UI",
-    },
-  },
+  modelProviders: {},
   usage: {
     common: {
       emptyValue: "—",
@@ -4725,124 +4532,6 @@ export const en: TranslationMap & {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional",
-    showToken: "Show token",
-    hideToken: "Hide token",
-    toggleTokenVisibility: "Toggle token visibility",
-    showPassword: "Show password",
-    hidePassword: "Hide password",
-    togglePasswordVisibility: "Toggle password visibility",
-    failure: {
-      rawError: "Raw error",
-      profileUnavailable: {
-        title: "Profile verification unavailable",
-        stepRetry: "Retry shortly.",
-        stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
-      },
-      verifiedUserRequired: {
-        title: "Verified identity required",
-        summary:
-          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
-        stepIdentity:
-          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
-        stepSharedSecret:
-          "For trusted local operator access, use the shared Gateway token or password.",
-      },
-      authRequired: {
-        title: "Auth required",
-        summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
-        stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
-      },
-      authFailed: {
-        title: "Auth did not match",
-        summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
-        stepDashboard:
-          "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
-        stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
-        stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
-      },
-      trustedProxy: {
-        title: "Proxy authentication required",
-        summary:
-          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
-        stepSignIn:
-          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
-        stepHeaders:
-          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
-        stepNoToken: "A Gateway token cannot replace proxy authentication.",
-      },
-      rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
-      },
-      pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
-        summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
-        upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepDashboard:
-          "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
-      },
-      insecure: {
-        title: "Secure browser context required",
-        summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
-        stepAvoidDisable:
-          "Do not use a remote plain-HTTP URL; a token or password cannot replace browser device identity.",
-      },
-      origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
-      },
-      protocol: {
-        title: "Protocol mismatch",
-        summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
-        refresh: "Refresh page",
-        stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
-        stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
-        stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
-      },
-      network: {
-        title: "Could not connect",
-        summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
-        stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
-        stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
-      },
-    },
   },
   chat: {
     modelAccounts: {
@@ -5216,6 +4905,9 @@ export const en: TranslationMap & {
       expand: "Expand diagram",
       rendering: "Rendering diagram…",
       error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+      rendererError:
+        "The Mermaid renderer could not load or finish. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
+      imageError: "The diagram image could not be displayed. Reload the dashboard to try again.",
     },
     codeBlock: {
       languageFallback: "Code",

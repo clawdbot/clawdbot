@@ -1252,12 +1252,8 @@ export async function startGatewayPostAttachRuntime(
 ) {
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
-  const shouldStartControlUiAssets =
-    !params.minimalTestGateway &&
-    (controlUiRootLifecycle?.state?.kind === "preparing" ||
-      controlUiRootLifecycle?.state?.kind === "bundled");
   const controlUiAssetsSidecar =
-    shouldStartControlUiAssets && controlUiRootLifecycle
+    !params.minimalTestGateway && controlUiRootLifecycle
       ? schedulePostReadySidecarTask({
           name: "sidecars.control-ui-assets",
           startupTrace: params.startupTrace,

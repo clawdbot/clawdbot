@@ -181,13 +181,6 @@ function findExistingTranscriptPath(
 export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
-  async resolvePath(opts: {
-    allowResetArchiveFallback?: boolean | undefined;
-    resetArchiveOnly?: boolean | undefined;
-  }): Promise<string | null> {
-    return (await this.resolveArtifact(opts))?.path ?? null;
-  }
-
   private activePath(): string | null {
     return findExistingTranscriptPath(
       this.scope.sessionId,
@@ -465,22 +458,6 @@ export function capArrayByJsonBytes<T>(
   }
   const next = start > 0 ? items.slice(start) : items;
   return { items: next, bytes };
-}
-
-export async function resolveSessionHistoryTranscriptPathAsync(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  opts?: { agentId?: string; allowResetArchiveFallback?: boolean },
-): Promise<string | null> {
-  return await new ArchivedTranscriptReader({
-    agentId: opts?.agentId,
-    sessionFile,
-    sessionId,
-    storePath,
-  }).resolvePath({
-    allowResetArchiveFallback: opts?.allowResetArchiveFallback,
-  });
 }
 
 export async function readLatestSessionUsageFromTranscriptFileAsync(

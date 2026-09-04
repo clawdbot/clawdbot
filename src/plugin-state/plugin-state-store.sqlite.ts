@@ -16,7 +16,10 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  hasOpenClawStateTablesBeyondStartupCheckpoint,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -427,16 +430,6 @@ function isMissingPluginStateTableError(error: unknown): boolean {
   );
 }
 
-function hasStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
-  return (
-    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
-      .prepare(
-        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
-      )
-      .get() !== undefined
-  );
-}
-
 /** Read plugin state without joining the shared writable database lifecycle. */
 function withPluginStateDatabaseReadOnly<T>(
   operationName: PluginStateStoreOperation,
@@ -454,7 +447,7 @@ function withPluginStateDatabaseReadOnly<T>(
         if (isMissingPluginStateTableError(error)) {
           // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
           // any other table means the missing plugin-state table is damage, not fresh state.
-          if (!hasStateTablesBeyondStartupCheckpoint(db)) {
+          if (!hasOpenClawStateTablesBeyondStartupCheckpoint(db)) {
             return undefined;
           }
         }

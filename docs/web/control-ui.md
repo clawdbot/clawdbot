@@ -12,6 +12,11 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
+`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
+pages and assets while bots and existing Gateway connections keep running.
+Re-enable it to resume serving; missing assets are prepared in the background.
+Changing the serving base path or asset root still requires a Gateway restart.
+
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
 It speaks **directly to the Gateway WebSocket** on the same port.
@@ -894,6 +899,16 @@ diagrams keep their source visible with an error; correct the syntax or simplify
 the diagram. Diagram source cannot run scripts or click handlers, load external
 images, or add custom CSS to the Control UI.
 
+Renderer loading or timeout errors instead suggest reloading the dashboard and
+checking proxy authentication. The renderer runs in an isolated frame, so its
+`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
+static asset URLs must be reachable without those cookies, including under any
+configured `gateway.controlUi.basePath`. Check the browser Network panel for
+blocked requests or redirects to a login page. Keep authentication on the
+dashboard and Gateway APIs; any proxy exception should cover only these static
+renderer assets. Reload after correcting the asset access rules.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
@@ -1021,6 +1036,8 @@ Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway
 ## Hosted embeds
 
 Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
+
+Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled.
 
 The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel plugins such as Discord Activities can register contextual presenters behind that same tool. Channel-originated runs without an eligible presenter or inline client do not receive it.
 

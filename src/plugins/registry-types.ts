@@ -482,6 +482,8 @@ export type PluginRecord = {
   explicitlyEnabled?: boolean;
   activated?: boolean;
   imported?: boolean;
+  /** Families authoritatively supplied by a descriptor entry, including empty collections. */
+  capabilityCatalog?: Array<keyof import("./capability-catalog.types.js").PluginCapabilityCatalog>;
   compat?: readonly PluginCompatCode[];
   activationSource?: PluginActivationSource;
   activationReason?: string;
