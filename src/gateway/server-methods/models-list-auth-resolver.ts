@@ -82,7 +82,7 @@ function createModelsListEntryEvaluator(params: {
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   preferredProfileId?: string;
   preferredProfilesByProvider?: ReadonlyMap<string, string>;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
 }): (
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
@@ -101,14 +101,14 @@ function createModelsListEntryEvaluator(params: {
       );
       const preferredProfileId = params.preferredProfileId ?? defaultProfileId;
       // New sessions capture personal defaults with the same strength as explicit account pins.
-      const lockedProfileId = params.lockedProfileId ?? defaultProfileId;
+      const pinnedProfileId = params.pinnedProfileId ?? defaultProfileId;
       const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(normalizeProviderId(entry.provider) === "openai"
           ? {}
           : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(preferredProfileId ? { preferredProfileId } : {}),
-        ...(lockedProfileId ? { lockedProfileId } : {}),
+        ...(pinnedProfileId ? { pinnedProfileId } : {}),
         observedRoutes: routeVariants.map((variant) => ({
           api: variant.api,
           baseUrl: variant.baseUrl,
@@ -123,7 +123,7 @@ function createModelsListEntryEvaluator(params: {
         provider: entry.provider,
         modelId: entry.id,
         preferredProfileId,
-        lockedProfileId,
+        pinnedProfileId,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
@@ -163,7 +163,7 @@ export type ModelsListAuthProjectionParams = {
   pluginRegistry?: PluginRegistry;
   observationConfig?: OpenClawConfig;
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   isCurrent?: () => boolean;
 };
@@ -230,7 +230,7 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
     workspaceDir,
     preferredProfileId: params.preferredProfileId,
-    lockedProfileId: params.lockedProfileId,
+    pinnedProfileId: params.pinnedProfileId,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.observationConfig,
@@ -261,7 +261,7 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+    ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
   });
   const missingPersonalPin = Boolean(
     params.preferredProfileId &&

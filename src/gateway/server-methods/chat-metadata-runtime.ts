@@ -180,7 +180,7 @@ function generationFactsMatch(
 
 function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
   if (!profileId) {
@@ -189,7 +189,7 @@ function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefin
   const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
-    ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
+    ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
 }
 
@@ -200,7 +200,7 @@ function sessionProjectionKey(
   return [
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
-    profiles.lockedProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
   ].join("\0");
 }
 
@@ -288,7 +288,7 @@ export function createGatewayChatMetadataRuntime(params: {
     assertCurrent?.();
     const profiles = resolveSessionProfiles(sessionEntry);
     const neutral =
-      profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
+      profiles.preferredProfileId === undefined && profiles.pinnedProfileId === undefined;
     const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
     // Personal selections and credentials can change without publishing a shared auth
     // generation. Keep those projections request-local, including linked session pins.

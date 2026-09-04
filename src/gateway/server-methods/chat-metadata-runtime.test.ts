@@ -221,7 +221,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenLastCalledWith(
       expect.objectContaining({
         preferredProfileId: "test:session",
-        lockedProfileId: "test:session",
+        pinnedProfileId: "test:session",
       }),
     );
   });
@@ -444,11 +444,11 @@ describe("gateway chat metadata runtime", () => {
     if (locked) {
       expect(projectionParams).toEqual(
         expect.objectContaining({
-          lockedProfileId: sessionEntry.authProfileOverride,
+          pinnedProfileId: sessionEntry.authProfileOverride,
         }),
       );
     } else {
-      expect(projectionParams).not.toHaveProperty("lockedProfileId");
+      expect(projectionParams).not.toHaveProperty("pinnedProfileId");
     }
   });
 

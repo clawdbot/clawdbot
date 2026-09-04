@@ -99,7 +99,7 @@ describe("model auth unavailability reasons", () => {
           cfg,
           authStore: store,
           env: {},
-        }).evaluateModelAuth("acme", locked ? { lockedProfileId: "bound" } : {});
+        }).evaluateModelAuth("acme", locked ? { pinnedProfileId: "bound" } : {});
         expect(result.availability).toBe(available);
         if (available === true) {
           expect(result.evidence).toBe("runtime");
@@ -192,14 +192,14 @@ describe("model auth unavailability reasons", () => {
       unavailableReason: "cooldown",
       unavailableUntil: until,
     });
-    expect(evaluate({ store, ref: { lockedProfileId: "invalid" } })).toMatchObject({
+    expect(evaluate({ store, ref: { pinnedProfileId: "invalid" } })).toMatchObject({
       availability: false,
       unavailableReason: "auth-failed",
     });
   });
 
   it.each(["openai", "anthropic"])(
-    "reports permanent auth rejection for %s without removing explicit profile retry",
+    "reports permanent auth rejection for %s including a pinned profile",
     (provider) => {
       const store = authStore({ bound: { type: "api_key", provider, key: "rejected-key" } });
       store.usageStats = {
@@ -214,9 +214,9 @@ describe("model auth unavailability reasons", () => {
       const result = resolver.evaluateModelAuth(provider);
       expect(result).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
       expect(result.unavailableUntil).toBeUndefined();
-      const locked = resolver.evaluateModelAuth(provider, { lockedProfileId: "bound" });
-      expect(locked.availability).toBe(true);
-      expect(locked.unavailableReason).toBeUndefined();
+      const pinned = resolver.evaluateModelAuth(provider, { pinnedProfileId: "bound" });
+      expect(pinned).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
+      expect(pinned.unavailableUntil).toBeUndefined();
     },
   );
 
