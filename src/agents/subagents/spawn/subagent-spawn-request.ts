@@ -53,7 +53,7 @@ type ResolvedSubagentSpawnRequest = {
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
     reservation?: { release: () => void };
     childDepth: number;
-    maxSpawnDepth: number;
+    maxSpawnDepth?: number;
   };
   childIdem: string;
 };
@@ -260,7 +260,7 @@ export function resolveSubagentSpawnRequest(
     );
   }
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
-  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
+  const maxSpawnDepth = admission.maxSpawnDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
   const childIdem = swarmLaunchReplayKey
@@ -321,7 +321,7 @@ export function resolveSubagentSpawnRequest(
         initial: admission,
         reservation: admissionReservation?.ok ? admissionReservation : undefined,
         childDepth,
-        maxSpawnDepth,
+        ...(maxSpawnDepth === undefined ? {} : { maxSpawnDepth }),
       },
       childIdem,
     },

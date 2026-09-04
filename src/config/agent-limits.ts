@@ -26,8 +26,9 @@ export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
 /** Default age before completed subagent state is archived. */
 export const DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES = 60;
-// Keep depth-1 subagents as leaves unless config explicitly opts into nesting.
-export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 1;
+export function isSubagentSpawnDepthAllowed(depth: number, maxSpawnDepth?: number): boolean {
+  return maxSpawnDepth === undefined || depth < maxSpawnDepth;
+}
 
 /** Resolves top-level agent concurrency, flooring finite values and clamping to at least one. */
 export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {

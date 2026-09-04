@@ -1115,7 +1115,7 @@ for provider examples and precedence.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 - `subagents.maxConcurrent`: max concurrent child-agent runs across subagent execution. Default: `8`.
 - `subagents.maxChildrenPerAgent`: max active children a single agent session can spawn. Default: `5`.
-- `subagents.maxSpawnDepth`: max nesting depth for sub-agent spawning (`1`-`5`). Default: `1` (no nesting).
+- `subagents.maxSpawnDepth`: optional max nesting depth for sub-agent spawning (`1`-`5`). Omit it for unlimited nesting; set `1` to make direct children leaves.
 - `subagents.archiveAfterMinutes`: age before completed subagent state is archived. Default: `60`.
 
 ---

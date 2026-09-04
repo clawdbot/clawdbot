@@ -30,4 +30,14 @@ describe("resolveSubagentCapabilities", () => {
       canControlChildren: false,
     });
   });
+
+  it("keeps arbitrarily deep children spawn-capable when depth is unlimited", () => {
+    expect(resolveSubagentCapabilities({ depth: 1_000 })).toEqual({
+      depth: 1_000,
+      role: "orchestrator",
+      controlScope: "children",
+      canSpawn: true,
+      canControlChildren: true,
+    });
+  });
 });
