@@ -129,7 +129,7 @@ const FAILURE_CONCLUSIONS = new Set([
   "TIMED_OUT",
 ]);
 const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{databaseId workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
-const MAX_ALIAS_READS_PER_POLL = 32;
+const MAX_EVIDENCE_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
   timeout: 60_000,
@@ -236,6 +236,7 @@ export function classifyRollup(
   rollup: RollupPayload | null | undefined,
   reconciledChecks: ReadonlyMap<number, string> = new Map(),
   replacement?: PrRunReplacement,
+  pendingEvidence: ReadonlySet<RollupCheck> = new Set(),
 ) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
@@ -309,12 +310,17 @@ export function classifyRollup(
     return true;
   });
   const checks = nodes.filter((check) => !isAutoResponse(check));
-  const pendingCount = checks.filter((check) =>
-    check.kind === "StatusContext"
-      ? check.state === "PENDING" || check.state === "EXPECTED"
-      : check.status !== "COMPLETED",
+  const pendingCount = checks.filter(
+    (check) =>
+      pendingEvidence.has(check) ||
+      (check.kind === "StatusContext"
+        ? check.state === "PENDING" || check.state === "EXPECTED"
+        : check.status !== "COMPLETED"),
   ).length;
   const failingChecks = checks.filter((check) => {
+    if (pendingEvidence.has(check)) {
+      return false;
+    }
     if (check.kind === "StatusContext") {
       return check.state === "ERROR" || check.state === "FAILURE";
     }
@@ -355,11 +361,13 @@ export function classifyRollup(
     }
     // A refresh can invalidate every alias proof. Unknown outcomes still block,
     // even when no placeholder was removed from this snapshot.
-    const hasUnresolvedChecks = checks.some((check) =>
-      check.kind === "StatusContext"
-        ? check.state !== "SUCCESS"
-        : check.status !== "COMPLETED" ||
-          !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? ""),
+    const hasUnresolvedChecks = checks.some(
+      (check) =>
+        pendingEvidence.has(check) ||
+        (check.kind === "StatusContext"
+          ? check.state !== "SUCCESS"
+          : check.status !== "COMPLETED" ||
+            !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? "")),
     );
     if (hasUnresolvedChecks) {
       return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
@@ -382,11 +390,11 @@ function ghReadOptions(deadline?: number) {
   return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
-const readPr = (pr: number, repo: string) =>
+const readPr = (pr: number, repo: string, deadline?: number) =>
   RollupPageSchema.parse(
     execGhJson(
       `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
-      GH_READ_OPTIONS,
+      ghReadOptions(deadline),
     ),
   );
 export const buildFindRunArgs = (repo: string, sha: string) =>
@@ -486,7 +494,7 @@ function readQueuedPlaceholderEvidence(
     job.run_id === run.id && job.run_attempt === run.run_attempt && job.head_sha === headSha;
   const unassignedQueued = (job: z.infer<typeof AttemptJobSchema>) =>
     job.status === "queued" && job.conclusion === null && job.runner_id === null;
-  let remainingAliasReads = MAX_ALIAS_READS_PER_POLL;
+  let remainingAliasReads = MAX_EVIDENCE_READS_PER_POLL;
   for (const name of new Set(queued.map((check) => check.name))) {
     const checks = queued.filter((check) => check.name === name);
     const siblings = jobs.filter((job) => job.name === name);
@@ -645,6 +653,7 @@ function readPrRollup(
   args: ReturnType<typeof parseArgs>,
   attachment: NonNullable<ReturnType<typeof findRun>>,
   deadline: number,
+  reads: { remaining: number },
   reconciled?: ReadonlyMap<number, string>,
 ) {
   const { run, runs } = attachment;
@@ -655,6 +664,7 @@ function readPrRollup(
     candidate.pull_requests[0]?.number === args.pr &&
     candidate.pull_requests[0]?.head.sha === args.headSha;
   const checkSuites = new Map<number, number>();
+  const pendingEvidence = new Set<RollupCheck>();
   const replacement =
     boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
       ? { workflowId: run.workflow_id, checkSuites }
@@ -665,7 +675,13 @@ function readPrRollup(
     if (blocked !== null) {
       return { exitCode: blocked };
     }
+    if (pr.statusCheckRollup?.state === "SUCCESS") {
+      return { pr, result: classifyRollup(pr.statusCheckRollup, reconciled) };
+    }
     const knownRuns = runs.size;
+    // Pending evidence belongs only to these exact observations, never a later
+    // check state or a different workflow/event sharing its run ID.
+    pendingEvidence.clear();
     for (const check of pr.statusCheckRollup?.contexts?.nodes ?? []) {
       const identity = checkRunIdentity(check);
       if (
@@ -682,6 +698,11 @@ function readPrRollup(
       // caching even unbound results so repeated jobs/polls do not multiply reads.
       let previous = runs.get(identity.runId);
       if (!previous) {
+        if (reads.remaining === 0) {
+          pendingEvidence.add(check);
+          continue;
+        }
+        reads.remaining -= 1;
         previous = RunListItemSchema.parse(
           execGhJson(
             ["api", `repos/${args.repo}/actions/runs/${identity.runId}`],
@@ -702,7 +723,13 @@ function readPrRollup(
     // Metadata reads can span a push or new checks. Reobserve before deciding;
     // any newly referenced IDs are resolved within the same watcher deadline.
     if (runs.size === knownRuns) {
-      return { pr, result: classifyRollup(pr.statusCheckRollup, reconciled, replacement) };
+      if (pendingEvidence.size > 0) {
+        console.log(`STATUS evidence=PENDING deferred-checks=${pendingEvidence.size}`);
+      }
+      return {
+        pr,
+        result: classifyRollup(pr.statusCheckRollup, reconciled, replacement, pendingEvidence),
+      };
     }
   }
 }
@@ -820,11 +847,11 @@ async function main(argv = process.argv.slice(2)) {
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(readPr(args.pr, args.repo), args.headSha, true);
+          const blocked = precheck(readPr(args.pr, args.repo, watchDeadline), args.headSha, true);
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId);
+          const run = readRun(args.repo, runId, watchDeadline);
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";
@@ -837,7 +864,8 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        let observed = readPrRollup(args, attachment, watchDeadline);
+        const reads = { remaining: MAX_EVIDENCE_READS_PER_POLL };
+        let observed = readPrRollup(args, attachment, watchDeadline, reads);
         if ("exitCode" in observed) {
           return observed.exitCode;
         }
@@ -863,7 +891,7 @@ async function main(argv = process.argv.slice(2)) {
           if (reconciled.size > 0) {
             // The evidence scan may span pushes or new checks. Reobserve the PR
             // before applying proof, then retain the ordinary final CI-run check.
-            observed = readPrRollup(args, attachment, watchDeadline, reconciled);
+            observed = readPrRollup(args, attachment, watchDeadline, reads, reconciled);
             if ("exitCode" in observed) {
               return observed.exitCode;
             }

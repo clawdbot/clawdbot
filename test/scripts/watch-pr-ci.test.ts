@@ -299,15 +299,22 @@ esac
       conclusion?: string | null;
       runPatch?: Record<string, unknown>;
       previousPatch?: Record<string, unknown>;
+      lastPreviousPatch?: Record<string, unknown>;
       olderRunOutsidePage?: boolean;
+      oldRunCount?: number;
+      expectedMetadataReads?: number;
       afterMetadata?: Record<string, unknown>;
+      afterMetadataState?: string;
+      rollupState?: string;
       slowMetadata?: boolean;
       slowFinalRun?: boolean;
+      slowWatchPr?: boolean;
       checkSuiteId?: number | null;
-      oldConclusion?: "FAILURE" | "CANCELLED";
+      oldConclusion?: "FAILURE" | "CANCELLED" | "SUCCESS";
       checkEvent?: string;
       newCheckName?: string;
       newCheckEvent?: string | null;
+      newCheckConclusion?: string;
       expectedRun?: number;
       completion?: "ci-run";
       exitCode?: number;
@@ -328,6 +335,125 @@ esac
         output: "TIMEOUT",
       },
       { label: "successful replacement", exitCode: 0, output: "GREEN" },
+      {
+        label: "ci-run slow final run",
+        completion: "ci-run",
+        slowFinalRun: true,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      {
+        label: "ci-run slow watch PR read",
+        completion: "ci-run",
+        slowWatchPr: true,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      ...[33, 65].map((oldRunCount) => ({
+        label: `${oldRunCount}-run authoritative SUCCESS`,
+        oldRunCount,
+        olderRunOutsidePage: true,
+        rollupState: "SUCCESS",
+        oldConclusion: "SUCCESS" as const,
+        expectedMetadataReads: 0,
+        exitCode: 0,
+        output: "GREEN",
+      })),
+      {
+        label: "65-run refreshed SUCCESS",
+        oldRunCount: 65,
+        olderRunOutsidePage: true,
+        afterMetadataState: "SUCCESS",
+        expectedMetadataReads: 32,
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "65-run SUCCESS with failed attached run",
+        oldRunCount: 65,
+        olderRunOutsidePage: true,
+        rollupState: "SUCCESS",
+        oldConclusion: "SUCCESS",
+        conclusion: "failure",
+        expectedMetadataReads: 0,
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      ...[32, 33, 65].map((oldRunCount) => ({
+        label: `${oldRunCount}-run metadata progress`,
+        oldRunCount,
+        olderRunOutsidePage: true,
+        exitCode: 0,
+        output: "GREEN",
+      })),
+      {
+        label: "33-run unknown association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [] },
+        expectedMetadataReads: 32,
+      },
+      {
+        label: "33-run foreign association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [association(43)] },
+        expectedMetadataReads: 32,
+      },
+      {
+        label: "33-run failed attached run",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        conclusion: "failure",
+        expectedMetadataReads: 32,
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      {
+        label: "33-run moved head",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        afterMetadata: { headRefOid: "c".repeat(40) },
+        expectedMetadataReads: 32,
+        exitCode: 11,
+        output: "HEAD-MOVED",
+      },
+      {
+        label: "33-run deferred unknown association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        lastPreviousPatch: { pull_requests: [] },
+      },
+      {
+        label: "33-run deferred foreign association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        lastPreviousPatch: { pull_requests: [association(43)] },
+      },
+      {
+        label: "33-run independent failed check",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        newCheckName: "new required job",
+        newCheckConclusion: "FAILURE",
+        expectedMetadataReads: 32,
+        output: "FAILING checks=new required job",
+      },
+      {
+        label: "33-run new failure during metadata",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        afterMetadata: {
+          statusCheckRollup: {
+            state: "FAILURE",
+            contexts: {
+              totalCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
+            },
+          },
+        },
+        expectedMetadataReads: 32,
+        output: "FAILING checks=new required check",
+      },
       {
         label: "21-run same-PR replacement",
         olderRunOutsidePage: true,
@@ -515,15 +641,22 @@ esac
         conclusion = "success",
         runPatch,
         previousPatch,
+        lastPreviousPatch,
         olderRunOutsidePage = false,
+        oldRunCount = 1,
+        expectedMetadataReads = oldRunCount,
         afterMetadata,
+        afterMetadataState,
+        rollupState = "FAILURE",
         slowMetadata = false,
         slowFinalRun = false,
+        slowWatchPr = false,
         checkSuiteId = 10_000,
         oldConclusion = "FAILURE",
         checkEvent = "pull_request",
         newCheckName,
         newCheckEvent = checkEvent,
+        newCheckConclusion = "SUCCESS",
         expectedRun = 201,
         completion,
         exitCode = 15,
@@ -551,12 +684,21 @@ esac
           conclusion: oldConclusion.toLowerCase(),
           ...previousPatch,
         };
+        const previousRuns = Array.from({ length: oldRunCount }, (_, index) => ({
+          ...previous,
+          id: previous.id - index,
+          check_suite_id:
+            typeof previous.check_suite_id === "number"
+              ? previous.check_suite_id - index
+              : undefined,
+          ...(index === oldRunCount - 1 ? lastPreviousPatch : undefined),
+        }));
         const pr = {
           state: "OPEN",
           mergeable: true,
           headRefOid: sha,
           statusCheckRollup: {
-            state: "FAILURE",
+            state: rollupState,
             contexts: {
               totalCount: newCheckName ? 2 : 1,
               pageInfo: { hasNextPage: false, endCursor: null },
@@ -583,7 +725,7 @@ esac
                         databaseId: 2_000,
                         name: newCheckName,
                         status: "COMPLETED",
-                        conclusion: "SUCCESS",
+                        conclusion: newCheckConclusion,
                         checkSuite: {
                           databaseId: 20_000,
                           workflowRun: {
@@ -602,11 +744,28 @@ esac
         const listedRuns = olderRunOutsidePage
           ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
           : [run, previous];
+        for (let index = 1; index < oldRunCount; index += 1) {
+          const old = pr.statusCheckRollup.contexts.nodes[0]!;
+          pr.statusCheckRollup.contexts.nodes.push({
+            ...old,
+            databaseId: 1_000 + index,
+            name: `old matrix shard ${index + 1}`,
+            checkSuite: {
+              databaseId: 10_000 - index,
+              workflowRun: {
+                databaseId: 100 - index,
+                event: "pull_request",
+                workflow: { databaseId: 10 },
+              },
+            },
+          });
+          pr.statusCheckRollup.contexts.totalCount += 1;
+        }
         if (olderRunOutsidePage) {
           // Multiple visible jobs share one exact old-run metadata read.
           pr.statusCheckRollup.contexts.nodes.push({
             ...pr.statusCheckRollup.contexts.nodes[0]!,
-            databaseId: 1_001,
+            databaseId: 9_001,
             name: "old matrix shard 2",
           });
           pr.statusCheckRollup.contexts.totalCount += 1;
@@ -622,27 +781,31 @@ const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
 const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
+if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state = ${JSON.stringify(afterMetadataState)};
 const runs = ${JSON.stringify(listedRuns)};
-const previous = ${JSON.stringify(previous)};
+const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "pr" && args[1] === "view") value = pr;
+if (args[0] === "pr" && args[1] === "view") {
+  if (${slowWatchPr} && calls.some((call) => call[0] === "pr" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = pr;
+}
 else if (args[0] === "run" && args[1] === "view") {
   if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
   value = runs.find((run) => String(run.id) === args[2]);
 }
 else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
-else if (args[1] === "repos/openclaw/openclaw/actions/runs/100") {
+else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
   if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = previous;
+  value = previousRuns[100 - Number(args[1].split("/").at(-1))];
 }
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
             sha,
-            completion ? ["--completion", completion] : [],
-            slowMetadata || slowFinalRun ? "wall" : "poll",
+            completion ? ["--completion", completion] : oldRunCount > 1 ? ["--timeout", "6"] : [],
+            slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
           );
           return {
             ...watched,
@@ -657,7 +820,21 @@ console.log(JSON.stringify(value));
         expect(result.stdout).toContain(output);
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
-        ).toHaveLength(olderRunOutsidePage ? 1 : 0);
+        ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
+        const metadataReads = result.calls.filter((call) =>
+          call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/"),
+        );
+        expect(metadataReads).toHaveLength(olderRunOutsidePage ? expectedMetadataReads : 0);
+        let readsThisPoll = 0;
+        for (const call of result.calls) {
+          if (call[0] === "run" && call[1] === "view") {
+            readsThisPoll = 0;
+          }
+          if (call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
+            readsThisPoll += 1;
+          }
+          expect(readsThisPoll).toBeLessThanOrEqual(32);
+        }
       },
     );
   });
