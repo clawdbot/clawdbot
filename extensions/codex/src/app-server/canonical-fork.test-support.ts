@@ -251,6 +251,7 @@ export async function createCanonicalForkFixture(params: {
             agentDir,
             appServer: home.appServer,
             usesSupervisionConnection: true,
+            assertCurrent: host.capabilities.assertActive,
           },
           runtimeParams: attempt,
           effectiveRuntimeModelId: model.id,
