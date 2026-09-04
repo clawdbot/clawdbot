@@ -1,4 +1,4 @@
-#if os(macOS)
+#if os(macOS) || os(iOS)
 import CryptoKit
 import Foundation
 import Network
@@ -106,6 +106,10 @@ final class NativeGatewayWebSocketFixture {
 
     nonisolated func url() -> URL {
         URL(string: "ws://127.0.0.1:\(self.port)")!
+    }
+
+    var activeConnectionCount: Int {
+        self.clients.count
     }
 
     func capturedAuth(at index: Int) -> ConnectAuth? {

@@ -399,6 +399,8 @@ targets:
           - Logic
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
+        group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift

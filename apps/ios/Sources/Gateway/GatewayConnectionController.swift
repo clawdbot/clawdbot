@@ -1231,24 +1231,24 @@ extension GatewayConnectionController {
                 GatewayStableIdentifier.matches($0.stableID, connectedID)
             }
         }
-        await withTaskGroup(of: GatewayOperatorFleetResolvedConfig?.self) { group in
+        await withTaskGroup(of: GatewayConnectConfig?.self) { group in
             for entry in connectedEntries {
                 group.addTask { [weak self] in
                     guard !Task.isCancelled,
                           let config = await self?.backgroundConnectConfig(for: entry)
                     else { return nil }
-                    return GatewayOperatorFleetResolvedConfig(config: config, name: entry.name)
+                    return config
                 }
             }
 
-            var configs: [(config: GatewayConnectConfig, name: String)] = []
+            var configs: [GatewayConnectConfig] = []
             for await resolved in group {
                 guard !Task.isCancelled, self.currentScenePhase == .active else {
                     group.cancelAll()
                     return
                 }
                 guard let resolved else { continue }
-                configs.append((resolved.config, resolved.name))
+                configs.append(resolved)
                 // Each route becomes usable independently; one stalled Bonjour resolver must
                 // not hold manual or otherwise-resolved gateways behind it.
                 self.operatorFleet.reconcile(desiredStableIDs: backgroundIDs, configs: configs)
