@@ -52,6 +52,10 @@ export function runFixture(
   });
 }
 
+export function runFixtureModule(root: string, source: string, privateQa = false) {
+  return runFixture(root, ["--import", loader, "--input-type=module", "--eval", source], privateQa);
+}
+
 type ConfigEntries = {
   inputs: string[];
   selected: Record<string, string>;
@@ -65,14 +69,9 @@ function readConfigEntries(
   privateQa: boolean,
   groups: readonly string[],
 ): ConfigEntries {
-  const result = runFixture(
+  const result = runFixtureModule(
     root,
-    [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
-      `
+    `
 import path from "node:path";
 import configs from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.config.ts")).href)};
 const groups = configs.filter(config => ${JSON.stringify(groups)}.includes(config.name));
@@ -85,7 +84,6 @@ const inputs = configs.filter(config => config.name === "openclaw-unified")
   .flatMap(config => Object.values(config.entry));
 process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
 `,
-    ],
     privateQa,
   );
   expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -306,11 +304,8 @@ export function runWriter(root: string, privateQa = false, env: NodeJS.ProcessEn
 }
 
 export function runUnifiedBuild(root: string) {
-  return runFixture(root, [
-    "--import",
-    loader,
-    "--input-type=module",
-    "--eval",
+  return runFixtureModule(
+    root,
     `
 import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
@@ -321,7 +316,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   process.exitCode = result.exitCode;
 });
 `,
-  ]);
+  );
 }
 
 export function runUnifiedWriter(root: string, env: NodeJS.ProcessEnv = {}) {

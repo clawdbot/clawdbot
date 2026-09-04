@@ -292,11 +292,11 @@ describe("write-plugin-sdk-entry-dts", () => {
           `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 for (const config of configs) {
   if (!config.dts?.emitDtsOnly) continue;
-  const done = config.hooks?.["build:done"];
-  config.hooks = { ...config.hooks, "build:done": async (context) => {
-    await done?.(context);
-    fs.appendFileSync("src/shared.ts", "\\n");
-  }};
+  const register = config.hooks;
+  config.hooks = async hooks => {
+    await register(hooks);
+    hooks.hook("build:done", () => fs.appendFileSync("src/shared.ts", "\\n"));
+  };
 }
 `,
         );
