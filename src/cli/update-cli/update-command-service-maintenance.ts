@@ -227,7 +227,6 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
 }
 
 type WindowsTaskAutoStartRecovery = {
-  suspended: Promise<boolean>;
   beginMutation: () => void;
   restore: (restartSafe?: boolean) => Promise<void>;
   complete: (restartSafe?: boolean) => void;
@@ -250,11 +249,15 @@ function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
 
-function armWindowsTaskAutoStartRecovery(
-  serviceEnv: NodeJS.ProcessEnv,
-  assertCurrentService?: () => Promise<void>,
-  updateRun?: UpdateCommandOptions["run"],
-): WindowsTaskAutoStartRecovery {
+async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
+  serviceEnv: NodeJS.ProcessEnv | undefined;
+  assertCurrentService?: () => Promise<void>;
+  updateRun?: UpdateCommandOptions["run"];
+}): Promise<WindowsTaskAutoStartRecovery | undefined> {
+  const { serviceEnv, assertCurrentService, updateRun } = params;
+  if (process.platform !== "win32" || !serviceEnv) {
+    return undefined;
+  }
   let restorePromise: Promise<void> | undefined;
   let restorationFailed = false;
   let restoreAllowed = true;
@@ -349,8 +352,7 @@ function armWindowsTaskAutoStartRecovery(
   // Arm recovery before starting the persistent state change. A signal arriving
   // while schtasks is still returning waits for that result before restoring.
   const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
-  return {
-    suspended: suspensionPromise,
+  const recovery: WindowsTaskAutoStartRecovery = {
     beginMutation: () => {
       restoreAllowed = false;
     },
@@ -358,38 +360,9 @@ function armWindowsTaskAutoStartRecovery(
     complete,
     interrupted: () => interrupted,
   };
-}
-
-async function abortWindowsTaskUpdateIfInterrupted(
-  recovery: WindowsTaskAutoStartRecovery,
-): Promise<void> {
-  if (!recovery.interrupted()) {
-    return;
-  }
-  try {
-    await recovery.restore();
-  } finally {
-    recovery.complete();
-  }
-  throw new UpdateCommandAbort();
-}
-
-async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
-  serviceEnv: NodeJS.ProcessEnv | undefined;
-  assertCurrentService?: () => Promise<void>;
-  updateRun?: UpdateCommandOptions["run"];
-}): Promise<WindowsTaskAutoStartRecovery | undefined> {
-  if (process.platform !== "win32" || !params.serviceEnv) {
-    return undefined;
-  }
-  const recovery = armWindowsTaskAutoStartRecovery(
-    params.serviceEnv,
-    params.assertCurrentService,
-    params.updateRun,
-  );
   let suspended: boolean;
   try {
-    suspended = await recovery.suspended;
+    suspended = await suspensionPromise;
   } catch (err) {
     await recovery.restore().catch(() => undefined);
     recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
@@ -405,6 +378,20 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     return undefined;
   }
   return recovery;
+}
+
+async function abortWindowsTaskUpdateIfInterrupted(
+  recovery: WindowsTaskAutoStartRecovery,
+): Promise<void> {
+  if (!recovery.interrupted()) {
+    return;
+  }
+  try {
+    await recovery.restore();
+  } finally {
+    recovery.complete();
+  }
+  throw new UpdateCommandAbort();
 }
 
 export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
