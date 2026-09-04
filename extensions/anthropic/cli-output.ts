@@ -178,9 +178,30 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * Reads the compaction trigger off a `compact_boundary` record.
+ *
+ * The Agent SDK types this field as `compact_metadata`; Claude Code's on-disk
+ * session transcripts carry the same payload as `compactMetadata`. Accept both
+ * so the projection does not depend on which spelling reaches the stream.
+ */
+function readCompactBoundaryTrigger(parsed: Record<string, unknown>): string | undefined {
+  for (const key of ["compact_metadata", "compactMetadata"]) {
+    const metadata = parsed[key];
+    if (isRecord(metadata) && typeof metadata.trigger === "string") {
+      return metadata.trigger;
+    }
+  }
+  return undefined;
+}
+
 /** Project Claude-owned lifecycle records without widening the legacy parser event union. */
 export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
-  if (!line.includes("compacting") && !line.includes("compact_result")) {
+  if (
+    !line.includes("compacting") &&
+    !line.includes("compact_result") &&
+    !line.includes("compact_boundary")
+  ) {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
@@ -193,6 +214,15 @@ export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEve
       phase: "end",
       completed: parsed.compact_result === "success",
     };
+  }
+  if (parsed.type === "system" && parsed.subtype === "compact_boundary") {
+    // The status lifecycle above reports both outcomes of an operator-driven
+    // `/compact`, so a manual boundary would double-report it. Automatic
+    // compaction emits no status record at all — the boundary is its only
+    // signal — so project just that case, and only when the trigger says so.
+    return readCompactBoundaryTrigger(parsed) === "auto"
+      ? { kind: "compaction", phase: "end", completed: true }
+      : null;
   }
   if (parsed.type === "system" && parsed.subtype === "status") {
     return parsed.status === "compacting" ? { kind: "compaction", phase: "start" } : null;
