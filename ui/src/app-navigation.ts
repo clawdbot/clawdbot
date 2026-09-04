@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
 
@@ -186,6 +187,7 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "communications", "talk", "devices", "cloud-workers"],
@@ -206,6 +208,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
 
 const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["profile", "appearance", "notifications"] },
+  { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
     routes: ["connection", "channels", "talk", "devices"],
@@ -217,14 +220,21 @@ const NON_ADMIN_SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: "nav.settingsGroupSecurity", routes: ["approvals"] },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["advanced", "debug", "logs", "about"],
+    routes: ["advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
 export function isSettingsNavigationRouteVisible(
   routeId: NavigationRouteId,
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
+  if (routeId === "device" || routeId === "device-permissions") {
+    return nativeDeviceSettings !== null;
+  }
+  if (routeId === "updates") {
+    return canAdmin || nativeDeviceSettings !== null;
+  }
   return (
     canAdmin ||
     NON_ADMIN_SETTINGS_NAVIGATION_GROUPS.some((group) =>
@@ -235,8 +245,21 @@ export function isSettingsNavigationRouteVisible(
 
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): readonly SettingsNavigationGroup[] {
-  return canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
+  const groups = canAdmin ? SETTINGS_NAVIGATION_GROUPS : NON_ADMIN_SETTINGS_NAVIGATION_GROUPS;
+  return groups
+    .map((group) => ({
+      labelKey:
+        group.labelKey === "nav.settingsGroupDevice" &&
+        nativeDeviceSettings?.snapshot?.device.platform !== "macos"
+          ? "nav.settingsGroupThisDevice"
+          : group.labelKey,
+      routes: group.routes.filter((route) =>
+        isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+      ),
+    }))
+    .filter((group) => group.routes.length > 0);
 }
 
 // Settings subpages render with settings chrome but stay out of the sidebar.
@@ -278,6 +301,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   skills: ["zap", "tabs.skills", "subtitles.skills"],
   plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
   "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
+  device: ["monitor", "tabs.device", "subtitles.device"],
+  "device-permissions": ["shieldCheck", "tabs.devicePermissions", "subtitles.devicePermissions"],
   devices: ["monitorSmartphone", "tabs.devices", "subtitles.devices"],
   "cloud-workers": ["server", "tabs.cloudWorkers", "subtitles.cloudWorkers"],
   chat: ["messageSquare", "tabs.chat", "subtitles.chat"],

@@ -378,6 +378,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           identityAvailable: Boolean(gatewaySnapshot.selfUser),
           basePath: context.basePath,
           canAdmin: operatorAccess.canAdmin,
+          nativeDeviceSettings: context.nativeDeviceSettings,
         },
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
@@ -404,6 +405,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onApply: () => void context.runtimeConfig.apply(),
         },
         canAdmin: operatorAccess.canAdmin,
+        nativeDeviceSettings: context.nativeDeviceSettings,
       })
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,

@@ -5,6 +5,7 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -70,6 +71,7 @@ export function findSettingsSearchBlocks(params: {
   identityAvailable?: boolean;
   basePath?: string;
   canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -80,7 +82,11 @@ export function findSettingsSearchBlocks(params: {
       ? STATIC_SETTINGS_BLOCKS.filter(
           (block) =>
             (params.identityAvailable || !block.requiresIdentity) &&
-            isSettingsNavigationRouteVisible(block.routeId, params.canAdmin !== false),
+            isSettingsNavigationRouteVisible(
+              block.routeId,
+              params.canAdmin !== false,
+              params.nativeDeviceSettings,
+            ),
         )
           .map(resolveStaticSettingsBlock)
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
@@ -95,7 +101,13 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
-    if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
+    if (
+      !isSettingsNavigationRouteVisible(
+        routeId,
+        params.canAdmin !== false,
+        params.nativeDeviceSettings,
+      )
+    ) {
       continue;
     }
     const sectionSchema =

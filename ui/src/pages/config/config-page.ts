@@ -431,6 +431,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
+      () => this.context?.nativeDeviceSettings ?? undefined,
+      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
+    )
+    .watch(
       () => this.context?.nativeNotifications ?? undefined,
       (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
@@ -1083,6 +1087,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
+        nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
           this.context.config.current.serverVersion ??

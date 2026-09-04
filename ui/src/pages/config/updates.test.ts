@@ -2,8 +2,10 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateStatusResponse } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { renderUpdates } from "./updates.ts";
 
 type UpdatesViewProps = Parameters<typeof renderUpdates>[0];
@@ -76,6 +78,40 @@ beforeEach(async () => {
 });
 
 describe("renderUpdates", () => {
+  it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+    const nativeDeviceSettings = {
+      snapshot: createNativeDeviceSettingsSnapshot(),
+      subscribe: () => () => undefined,
+      set: vi.fn(),
+      requestPermission: vi.fn(),
+      openSystemSettings: vi.fn(),
+      openPanel: vi.fn(),
+      checkForUpdates: vi.fn(),
+      refresh: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies NativeDeviceSettingsCapability;
+    const props = createProps({ nativeDeviceSettings, canAdmin: false, configBusy: true });
+    render(renderUpdates(props), container);
+    expect(container.textContent).toContain("This Mac");
+    expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
+    const automatic = row("Check for updates automatically").querySelector<
+      HTMLElement & { checked: boolean }
+    >("wa-switch")!;
+    expect(automatic.hasAttribute("disabled")).toBe(false);
+    automatic.checked = false;
+    automatic.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
+    row("Check for Updates…").querySelector("button")?.click();
+    expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
+    nativeDeviceSettings.snapshot!.updates.available = false;
+    nativeDeviceSettings.snapshot!.updates.unavailableReason = "Updater is not bundled";
+    render(renderUpdates(props), container);
+    expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
+    expect(container.textContent).not.toContain("Check for updates automatically");
+    render(renderUpdates(createProps()), container);
+    expect(container.textContent).not.toContain("This Mac");
+  });
+
   it("renders build facts, policy controls, status, and the shared update action", () => {
     const onChannelChange = vi.fn();
     const onAutomaticUpdatesChange = vi.fn();

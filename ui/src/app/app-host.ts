@@ -336,6 +336,10 @@ class OpenClawShell
         },
       )
       .watch(
+        () => this.context?.nativeDeviceSettings,
+        (settings, notify) => settings.subscribe(notify),
+      )
+      .watch(
         () => this.context?.navigation,
         (navigation, notify) => navigation.subscribe(notify),
       )

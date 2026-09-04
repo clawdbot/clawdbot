@@ -321,6 +321,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       isBrowserPanelAvailable(gateway.snapshot) &&
       document.querySelector("openclaw-app-shell")?.isConnected === true,
   });
+  let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
   const chatSubmissions = createChatSubmissions();
@@ -493,6 +494,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    get nativeDeviceSettings() {
+      return nativeDeviceSettings;
+    },
     nativeNotifications,
     webPush,
     chatSubmissions,
@@ -533,6 +537,26 @@ export function bootstrapApplication(): ApplicationRuntime {
         // Download explicit-route chunks alongside startup. Default landing must
         // wait for setup's decision before fetching the Chat workspace graph.
         steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
+      }
+      // Only the native host needs the bridge parser. Initialize before routing,
+      // and fence the import so a stopped application cannot install listeners.
+      // SAFETY: WebKit adds this optional host field; its callable handler is checked below.
+      const nativeWindow = window as Window & {
+        webkit?: { messageHandlers?: { openclawDeviceSettings?: { postMessage?: unknown } } };
+      };
+      if (
+        typeof nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings?.postMessage ===
+        "function"
+      ) {
+        steps.unshift(async () => {
+          const { createNativeDeviceSettingsCapability } =
+            await import("./native-device-settings.ts");
+          if (!startupLifecycle.signal.aborted) {
+            nativeDeviceSettings = createNativeDeviceSettingsCapability();
+            return () => nativeDeviceSettings?.dispose();
+          }
+          return undefined;
+        });
       }
       // Resolve first-run setup before routing: the default Chat route owns the
       // workspace graph, which setup users would otherwise fetch and discard.

@@ -2107,6 +2107,8 @@ export const en: TranslationMap & {
     forward: "Forward",
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
+    settingsGroupDevice: "This Mac",
+    settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
     settingsGroupSecurity: "Privacy & Security",
@@ -2249,6 +2251,8 @@ export const en: TranslationMap & {
     advanced: "Advanced",
   },
   tabs: {
+    device: "This Mac",
+    devicePermissions: "Permissions",
     agents: "Agents",
     activity: "Activity",
     meetings: "Meetings",
@@ -2293,6 +2297,8 @@ export const en: TranslationMap & {
     plugin: "Plugin",
   },
   subtitles: {
+    device: "App settings and capabilities on this Mac.",
+    devicePermissions: "Manage macOS access, location, and computer presence.",
     agents: "Workspaces, tools, identities.",
     activity: "Recent sessions across people using this gateway.",
     meetings: "Meeting notes and transcripts across this gateway.",

@@ -4,6 +4,7 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import type {
   ApplicationStatusBanner,
   RecordedUpdateAttempt,
@@ -31,6 +32,7 @@ registerSettingsEnglish();
 type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 
 type UpdatesViewProps = {
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
   controlUiCommit: string | null;
@@ -55,6 +57,48 @@ type UpdatesViewProps = {
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<void>;
 };
+
+function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
+  if (!capability) {
+    return nothing;
+  }
+  const snapshot = capability.snapshot;
+  return renderSettingsSection(
+    { title: t("updates.device.title") },
+    snapshot
+      ? [
+          renderSettingsRow({
+            title: t("updates.device.version"),
+            control: renderSettingsValue(
+              t("updates.device.versionBuild", {
+                version: snapshot.device.appVersion,
+                build: snapshot.device.appBuild,
+              }),
+            ),
+          }),
+          snapshot.updates.available
+            ? html`${renderSettingsToggleRow({
+                title: t("updates.device.automatic"),
+                checked: snapshot.updates.automatic,
+                onChange: (value) => capability.set("updates.automatic", value),
+              })}${renderSettingsRow({
+                title: t("updates.device.check"),
+                control: html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${() => capability.checkForUpdates()}
+                >
+                  ${t("updates.device.check")}
+                </button>`,
+              })}`
+            : renderSettingsRow({
+                title: t("updates.device.unavailable"),
+                description: snapshot.updates.unavailableReason,
+              }),
+        ]
+      : renderSettingsRow({ title: t("common.loading") }),
+  );
+}
 
 function formatAttemptIdentity(version: string | null, sha: string | null): string {
   return version ? `v${version}` : sha ? sha.slice(0, 12) : t("common.unknown");
@@ -420,6 +464,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
   return html`
     <div id="config-section-update">
       ${renderSettingsPage([
+        renderDeviceUpdates(props.nativeDeviceSettings),
         !props.canAdmin
           ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
           : nothing,
