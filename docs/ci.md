@@ -890,8 +890,9 @@ historical file contents stay out of this metadata-only job. Build and test jobs
 check out their own complete source trees.
 
 `OpenClaw Release Publish` is the manual mutating release workflow. Dispatch
-regular beta and stable publishes from trusted `main` after the release tag
-exists and after the OpenClaw npm preflight has succeeded (the preflight runs
+regular beta and stable publishes from a protected lightweight
+`release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
+release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
 release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
 publishes keep using their matching alpha branch. For current validation runs,
@@ -902,18 +903,19 @@ that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor
 The producer ID alone does not carry Full Release Validation authorization.
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
-and attempt.
+and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+real core npm, plugin npm, or ClawHub publication from `main` is rejected before
+child dispatch. Docker-only recovery may still use `main`.
 
 The publisher dispatches `Plugin NPM Release` for all
 publishable plugin packages, dispatches `Plugin ClawHub Release` for the same
-release SHA, and only then dispatches `OpenClaw NPM Release`. Stable publish also
-requires an exact `windows_node_tag`; the workflow verifies the Windows source
-release and compares its x64/ARM64 installers with the candidate-approved
-`windows_node_installer_digests` input before any publish child, then promotes
-and verifies those same pinned installer digests plus the exact companion asset
-and checksum contract before publishing the GitHub release draft.
-For npm-stable evidence, a separate native qualification job starts full CI for
-the exact release SHA with Android enabled. A successful result is revalidated
+release SHA, then dispatches `OpenClaw NPM Release` after plugin npm succeeds.
+Stable Windows promotion is optional: supply both an exact `windows_node_tag`
+and candidate-approved `windows_node_installer_digests` to dispatch its signed
+installers after GitHub release finalization. Omit both to skip Windows.
+For npm-stable evidence, when the tagged `apps/android/version.json` matches
+the stable tag's base version, a separate native qualification job starts full
+CI for the exact release SHA with Android enabled. A successful result is revalidated
 after core publication before the separate Android job creates its existing
 approval receipt and dispatches the tag-owned APK workflow. This keeps frozen
 release tags usable without allowing narrower npm evidence to authorize an
@@ -921,16 +923,20 @@ unqualified native build. Native failure remains visible and prevents Android
 approval; core npm and GitHub release finalization do not wait for it. The whole
 parent can remain active after core publication while native qualification
 finishes. Existing full evidence and macOS's independent validation retain their
-native qualification contracts.
+native qualification contracts. A mismatched Android pin skips both native
+qualification and APK publication, with the pin, release train, and shared
+mobile cutter (`scripts/mobile-release-version.ts --prepare`) remedy recorded
+in the parent summary and release proof.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
 preflight and Full Release Validation evidence as a core publish.
 
 ```bash
+PUBLISH_REF="release-publish/<tooling-sha12>-<epoch>"
 FRV_RUN_ID="<successful-full-release-validation-run-id>"
 FRV_RUN_ATTEMPT="<successful-full-release-validation-run-attempt>"
 gh workflow run openclaw-release-publish.yml \
-  --ref main \
+  --ref "$PUBLISH_REF" \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id="$FRV_RUN_ID" \
   -f full_release_validation_run_id="$FRV_RUN_ID" \
