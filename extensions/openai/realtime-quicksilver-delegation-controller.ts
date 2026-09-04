@@ -9,6 +9,7 @@ import {
   readErrorName,
   toErrorObject,
   rawDataToString,
+  truncateUtf16Safe,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -51,7 +52,10 @@ function shortFailureReason(
   error: unknown,
   formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
 ): string {
-  return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
+  return (
+    truncateUtf16Safe(formatErrorMessage(error).replaceAll(/\s+/g, " ").trim(), 180) ||
+    "unknown error"
+  );
 }
 
 function readWireEventType(payload: string): string | undefined {
