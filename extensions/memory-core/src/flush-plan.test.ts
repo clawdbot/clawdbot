@@ -33,10 +33,7 @@ describe("buildMemoryFlushPlan", () => {
       },
     });
     // Blank refs are dropped; order is preserved.
-    expect(withFallbacks?.fallbacks).toEqual([
-      "anthropic/claude-haiku-4-5",
-      "openai/gpt-5.4",
-    ]);
+    expect(withFallbacks?.fallbacks).toEqual(["anthropic/claude-haiku-4-5", "openai/gpt-5.4"]);
 
     // Omitted, empty, and all-blank lists all keep the exact-override default,
     // so an unreachable maintenance model never silently bills the paid model.
