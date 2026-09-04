@@ -16,6 +16,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
 } from "../sessions/session-lifecycle-admission.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { countPendingQueueItems } from "../utils/queue-helpers.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -183,27 +184,41 @@ it(
 
       const canceledRunId = "webchat-canceled-during-recovery";
       const survivorRunId = "webchat-survives-recovery";
-      await Promise.all(
-        [
-          [canceledRunId, canceledMessage],
-          [survivorRunId, survivorMessage],
-        ].map(async ([runId, message]) => {
-          await expect(
-            client.request("chat.send", {
-              sessionKey,
-              sessionId,
-              message,
-              deliver: false,
-              queueMode: "followup",
-              idempotencyKey: runId,
-            }),
-          ).resolves.toMatchObject({ runId, status: "started" });
-        }),
-      );
+      const expectedQueuedMessages = new Map([
+        [canceledRunId, canceledMessage],
+        [survivorRunId, survivorMessage],
+      ]);
+      const sendQueuedTurn = async (runId: string, message: string) => {
+        await expect(
+          client.request("chat.send", {
+            sessionKey,
+            sessionId,
+            message,
+            deliver: false,
+            queueMode: "followup",
+            idempotencyKey: runId,
+          }),
+        ).resolves.toMatchObject({ runId, status: "started" });
+      };
+      // Hold the cancellation target in flight before queueing the survivor.
+      // A started ACK precedes insertion into the followup queue.
+      await sendQueuedTurn(canceledRunId, canceledMessage);
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
+        expect([...(queue?.inFlight ?? [])].map((item) => item.messageId)).toEqual([canceledRunId]);
+      });
+      await sendQueuedTurn(survivorRunId, survivorMessage);
+      await vi.waitFor(() => {
+        const queue = getExistingFollowupQueue(sessionKey);
+        // Active sources remain in items; started ACKs can precede queue admission.
+        expect(queue?.items).toHaveLength(expectedQueuedMessages.size);
+        expect(new Map(queue?.items.map(({ messageId, prompt }) => [messageId, prompt]))).toEqual(
+          expectedQueuedMessages,
+        );
         expect(queue?.inFlight).toHaveLength(1);
-        expect(queue?.items).toHaveLength(1);
+        expect(queue?.items.map((item) => item.messageId)).toEqual([canceledRunId, survivorRunId]);
+        expect(countPendingQueueItems(queue?.items ?? [], queue?.inFlight)).toBe(1);
+        expect(targetRequests).toHaveLength(1);
       });
       replacementOwner = await beginSessionWorkAdmission({
         scope: storePath,
@@ -224,7 +239,8 @@ it(
       ).resolves.toMatchObject({ aborted: true, runIds: [canceledRunId] });
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
-        expect(new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])])).toHaveLength(1);
+        const queued = new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])]);
+        expect(Array.from(queued, (item) => item.messageId)).toEqual([survivorRunId]);
       });
 
       replacementOwner.release();

@@ -26,6 +26,7 @@ import {
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { ANNOUNCE_EXPIRY_MS, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
+import { safeFinalizeSubagentTaskRun } from "./subagent-registry-lifecycle-delivery.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
@@ -225,7 +226,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
   });
 }
 
-export function resumeSubagentRun(runId: string) {
+export function resumeSubagentRun(runId: string, source: "live" | "restore" = "live") {
   if (!runId || resumedRuns.has(runId)) {
     return;
   }
@@ -239,6 +240,16 @@ export function resumeSubagentRun(runId: string) {
     resumedRuns.add(runId);
     return;
   }
+  if (entry.execution.outcome && entry.suppressAnnounceReason !== "steer-restart") {
+    // The child result can reach disk before its task projection. Replay that
+    // idempotent projection before terminal cleanup exits during restoration.
+    // A steer restart deliberately leaves the shared task writable for its
+    // successor run, so the retired row must not terminalize it.
+    safeFinalizeSubagentTaskRun(subagentLifecycleController.options, {
+      entry,
+      outcome: entry.execution.outcome,
+    });
+  }
   const yieldedWakeWaitingForDelivery =
     entry.requesterSettleWake?.requesterYieldBatch === true &&
     (entry.delivery?.status === "pending" ||
@@ -249,7 +260,7 @@ export function resumeSubagentRun(runId: string) {
     typeof entry.execution.endedAt === "number" &&
     !yieldedWakeWaitingForDelivery
   ) {
-    resumeRequesterSettleWake(runId, entry);
+    resumeRequesterSettleWake(runId, entry, source);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -337,7 +348,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
-  resumeRun: (runId) => resumeSubagentRun(runId),
+  resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
   startQueuedSubagentRun: (runId, gatewayRunId, lifecycleGeneration) =>

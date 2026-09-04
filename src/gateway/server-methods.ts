@@ -47,9 +47,11 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
-import { coreGatewayHandlers } from "./server-methods/core-handler-registry.js";
+import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
+import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
+import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -57,10 +59,9 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import {
-  resolveDirectIncognitoTargets,
-  sessionMutationTargetFields,
-} from "./session-sharing-target-input.js";
+import type { GatewayRequestEntry } from "./server-request-entry.js";
+import { sessionMutationTargetFields } from "./session-method-policy.js";
+import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -234,12 +235,6 @@ export function createRequestGatewayMethodRegistry(
     }
   }
   const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
-  for (const descriptor of coreDescriptors) {
-    const extraHandler = extraHandlers?.[descriptor.name];
-    if (extraHandler && !pluginMethodNames.has(descriptor.name)) {
-      descriptor.handler = extraHandler;
-    }
-  }
   const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
     extraHandlerEntries.filter(
@@ -493,59 +488,80 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & {
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
+    requestEntry?: GatewayRequestEntry;
   },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
-  // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
-  // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-  // attached snapshot does not own the method, rebuild from the process-root registry so late
-  // methods remain reachable (#94127).
-  const methodRegistry =
-    opts.methodRegistry?.getHandler(req.method) !== undefined
-      ? opts.methodRegistry
-      : createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authorization = await authorizeGatewayRequestPreDispatch({
-    method: req.method,
-    requestParams: req.params,
-    client,
-    context,
-    methodRegistry,
-  });
-  if (authorization.error) {
-    respond(false, undefined, authorization.error);
-    return;
-  }
-  const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
-  if (!handler) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
-    );
-    return;
-  }
-  const invokeHandler = () =>
-    handler({
-      req,
-      params: (req.params ?? {}) as Record<string, unknown>,
+  const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
+  try {
+    entry?.assertOpen();
+    // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
+    // metadata newer than global runtime state still authorizes and dispatches correctly. When the
+    // attached snapshot does not own the method, rebuild from the process-root registry so late
+    // methods remain reachable (#94127).
+    const methodRegistry =
+      opts.methodRegistry?.getHandler(req.method) !== undefined
+        ? opts.methodRegistry
+        : createRequestGatewayMethodRegistry(opts.extraHandlers);
+    const authorization = await authorizeGatewayRequestPreDispatch({
+      method: req.method,
+      requestParams: req.params,
       client,
-      isWebchatConnect,
-      respond,
       context,
-      ...(signal ? { signal } : {}),
-      ...(opts.sessionMutationCommitGuard
-        ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
-        : {}),
-      ...(authorization.sessionMutationAuthorization
-        ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
-        : {}),
+      methodRegistry,
     });
-  await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
-    context,
-    isWebchatConnect,
-    methodRegistry,
-    requestParams: req.params,
-    admission: opts.admission,
-    reject: (error) => respond(false, undefined, error),
-  });
+    entry?.assertOpen();
+    if (authorization.error) {
+      respond(false, undefined, authorization.error);
+      return;
+    }
+    const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
+    if (!handler) {
+      const error = errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`);
+      respond(false, undefined, error);
+      return;
+    }
+    // Every session mutation owner uses these pre-commit assertions. Compose the
+    // host lifetime here so individual handlers cannot lose it across an await.
+    const sessionMutationAuthorization = withSessionMutationCommitGuard(
+      authorization.sessionMutationAuthorization,
+      opts.sessionMutationCommitGuard,
+    );
+    const invokeHandler = async () => {
+      const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
+      const handlerOptions = {
+        req,
+        params: (req.params ?? {}) as Record<string, unknown>,
+        client,
+        isWebchatConnect,
+        respond,
+        context,
+        signal,
+        sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+        sessionMutationAuthorization,
+      };
+      opts.sessionMutationCommitGuard?.();
+      entry?.assertOpen();
+      if (signal?.aborted) {
+        return;
+      }
+      // No await between the final fence, ownership handoff, and actual invocation.
+      // Long polls and shutdown initiators must never remain preparation leases.
+      entry?.release();
+      return preparedHandler(handlerOptions);
+    };
+    await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
+      context,
+      isWebchatConnect,
+      methodRegistry,
+      requestParams: req.params,
+      admission: opts.admission,
+      reject: (error) => respond(false, undefined, error),
+    });
+  } finally {
+    // Transport/import owners retain failures through their response and logging paths.
+    if (!opts.requestEntry) {
+      entry?.release();
+    }
+  }
 }

@@ -34,7 +34,7 @@ import {
   projectSessionParticipants,
   projectSessionPeople,
   projectSessionPeopleFacet,
-  projectSessionActor,
+  resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import {
@@ -50,7 +50,6 @@ import type {
 import {
   deriveSessionTitle,
   buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
@@ -170,6 +169,7 @@ function filterSessionEntries(params: {
   configuredAgentIds?: ReadonlySet<string>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
 }): Pick<
@@ -204,15 +204,37 @@ function filterSessionEntries(params: {
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
-  let selectedProfileId: string | undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const visibleEntries = Object.entries(store).filter(
+    ([key, entry]) => params.entryFilter?.(key, entry) ?? true,
+  );
+  const allowedProfileIds =
+    opts.involvingProfileId && params.restrictProfileReferences
+      ? new Set(
+          visibleEntries.flatMap(([, entry]) => {
+            const owner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+            return projectSessionPeople(entry, identities, cfg, owner).map(
+              (person) => person.identity.id,
+            );
+          }),
+        )
+      : undefined;
+  const profileReference = opts.involvingProfileId
+    ? resolveSessionListProfileReference(
+        opts.involvingProfileId,
+        visibleEntries,
+        identities,
+        allowedProfileIds,
+      )
+    : undefined;
+  if (profileReference && !profileReference.ok) {
+    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
+  }
+  const selectedProfileId = profileReference?.value;
 
-  for (const [key, entry] of Object.entries(store)) {
-    if (params.entryFilter && !params.entryFilter(key, entry)) {
-      continue;
-    }
+  for (const [key, entry] of visibleEntries) {
     if (
       isCronRunSessionKey(key) ||
       (!includeGlobal && key === "global") ||
@@ -347,11 +369,6 @@ function filterSessionEntries(params: {
         });
       }
       if (opts.involvingProfileId) {
-        selectedProfileId ??= projectSessionActor(
-          { type: "human", id: opts.involvingProfileId },
-          identities,
-          cfg,
-        )?.identity?.id;
         if (!associated.some((person) => person.identity.id === selectedProfileId)) {
           continue;
         }
@@ -366,16 +383,16 @@ function filterSessionEntries(params: {
     entries.push([key, entry]);
   }
 
-  const {
-    people: visiblePeople,
-    selected,
-    overflow,
-  } = projectSessionPeopleFacet(people.values(), selectedProfileId);
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
+    people.values(),
+    selectedProfileId,
+  );
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
-    involvingProfileId: selected?.identity.id,
+    // Empty time/search windows do not invalidate a resolved person link.
+    involvingProfileId: selectedProfileId,
     ...(opts.includePeople
       ? {
           people: visiblePeople,
@@ -405,6 +422,7 @@ function selectSessionEntries(params: {
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   configuredAgentIds?: ReadonlySet<string>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
 }): SessionEntrySelection {
@@ -468,6 +486,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     opts,
     now,
     entryFilter,
+    // This wrapper also tracks incognito for unrestricted callers; preserve the original scope.
+    restrictProfileReferences: params.entryFilter !== undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     getRowContext:
       hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
@@ -488,16 +508,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const sharedRowContext =
     usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
-  const childCandidates =
-    !usePreparedChildReads && selection.entries.length > 0
-      ? getSingleRowChildSessionCandidates({ storePath, store })
-      : undefined;
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
     keys: selection.entries.map(([key]) => key),
     now,
     subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
-    candidates: childCandidates,
     excludedChildKeys: filteredSessionKeys,
     requireCurrentController: !usePreparedChildReads,
   });
@@ -582,7 +597,10 @@ export function filterAndSortSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   involvingActorId?: string;
 }): [string, SessionEntry][] {
-  return selectSessionEntries(params).entries;
+  return selectSessionEntries({
+    ...params,
+    restrictProfileReferences: params.entryFilter !== undefined,
+  }).entries;
 }
 
 /** Projects lightweight list rows while sharing the event loop with other requests. */

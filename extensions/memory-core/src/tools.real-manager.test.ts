@@ -305,6 +305,7 @@ describe("memory_search real manager", () => {
 
   it("preserves canonical-session migration recovery through cooldown", async () => {
     const baseConfig = fixture.createConfig({
+      provider: "none",
       sources: ["sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -314,6 +315,17 @@ describe("memory_search real manager", () => {
       ...baseConfig,
       memory: { ...baseConfig.memory, citations: "off" },
     } satisfies OpenClawConfig;
+    await fixture.seedSessionTranscript({
+      sessionId: "recovery-source",
+      sessionKey: "agent:main:telegram:direct:recovery-source",
+      messages: [
+        {
+          role: "user",
+          content: "Operator recovery instructions.",
+          timestamp: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    });
     const initializedManager = await fixture.getFreshManager(cfg);
     await initializedManager.sync({ reason: "test", force: true });
     await initializedManager.close();

@@ -150,11 +150,9 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   return await Promise.race([
     terminalDispatchOutcome,
     executionStartTimeoutPromise,
-    executionStartedPromise.then(
-      (): RestartRecoveryDispatchStartOutcome => ({
-        kind: "started",
-        observation: observe(),
-      }),
-    ),
+    executionStartedPromise.then((): RestartRecoveryDispatchStartOutcome => ({
+      kind: "started",
+      observation: observe(),
+    })),
   ]);
 }

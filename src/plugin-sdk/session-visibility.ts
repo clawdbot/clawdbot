@@ -100,7 +100,7 @@ export async function listSpawnedSessionKeys(params: {
   return result.value;
 }
 
-/** Resolve configured session-tool visibility, defaulting invalid or missing values to agent. */
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -108,7 +108,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
-  return "agent";
+  return "all";
 }
 
 /** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
@@ -199,11 +199,13 @@ function matchesCompiledWildcard(
 /** Compile agent-to-agent allow rules into reusable matching predicates. */
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled === true;
+  const enabled = routingA2A?.enabled !== false;
   const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
   const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
+    // Agent-to-agent is on by default; omitted/empty `allow` permits every agent pair.
+    // Blank entries compile to `deny`, so a configured-but-blank list still fails closed.
     if (allowPatterns.length === 0) {
       return true;
     }

@@ -441,25 +441,49 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
-    it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
+    it.runIf(process.platform !== "win32").each([
+      { label: "LF", before: '{ "version": "1.0" }\n', json: false },
+      { label: "CRLF", before: '{ "version": "1.0" }\r\n', json: true },
+      { label: "no final newline", before: '{ "version": "1.0" }', json: true },
+      {
+        label: "middle-of-file",
+        before: `{\n${"  // leading context\n".repeat(5)}  "version": "1.0"\n${"  // trailing context\n".repeat(5)}}\n`,
+        json: true,
+      },
+    ])("emits an applicable $label dry-run patch", async ({ before, json }) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
+      const patchPath = join(workspaceDir, "preview.patch");
+      const after = before.replace('"1.0"', '"2.0"');
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathSetCommand(
         "oc://gateway.jsonc/version",
         "2.0",
-        { cwd: workspaceDir, human: true, dryRun: true, diff: true },
+        { cwd: workspaceDir, human: !json, json, dryRun: true, diff: true },
         rt,
       );
+
       expect(rt.exitCode).toBe(0);
-      const out = stdoutText(rt);
-      expect(out).toContain("--- ");
-      expect(out).toContain("+++ ");
-      expect(out).toContain('-  "version": "1.0",');
-      expect(out).toContain('+  "version": "2.0",');
+      const output = stdoutText(rt);
+      const payload = json ? JSON.parse(output) : undefined;
+      const patch = json ? payload.diff : output;
+      if (json) {
+        expect(payload.bytes).toBe(after);
+      }
+      writeFileSync(patchPath, patch, "utf-8");
       expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync(
+        "git",
+        ["apply", "--check", `-p${filePath.split("/").filter(Boolean).length}`, patchPath],
+        {
+          cwd: workspaceDir,
+        },
+      );
+      execFileSync("patch", ["--dry-run", "--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync("patch", ["--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(after);
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {

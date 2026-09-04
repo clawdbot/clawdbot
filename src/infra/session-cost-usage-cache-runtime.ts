@@ -46,14 +46,8 @@ type UsageCostRefreshState = {
   sessionsDir: string;
 };
 
-type UsageCostRefresh = {
-  state: UsageCostRefreshState;
-  controller: AbortController;
-  completion: Promise<void>;
-};
-
 // Only active queues retain their scope; one owner cannot adopt another owner's work.
-const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCostRefresh>>();
+const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCostRefreshState>>();
 
 function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
@@ -225,10 +219,10 @@ function requestCostUsageCacheRefresh(params: {
     return;
   }
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefresh>();
+  const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
   const existing = refreshes.get(databasePath);
   if (existing) {
-    mergeUsageCostRefreshRequest(existing.state, params);
+    mergeUsageCostRefreshRequest(existing, params);
     return;
   }
 
@@ -241,16 +235,10 @@ function requestCostUsageCacheRefresh(params: {
     sessionsDir: resolveSessionTranscriptsDirForAgent(params.agentId),
   };
   mergeUsageCostRefreshRequest(state, params);
-  const controller = new AbortController();
-  const signal = scopeSignal
-    ? AbortSignal.any([scopeSignal, controller.signal])
-    : controller.signal;
   usageCostRefreshes.set(scopeSignal, refreshes);
   // Register the initial timer and every retry now, not after a timer fires.
-  const completion = trackAsyncWork(() =>
-    runQueuedUsageCostRefresh(state, signal, refreshes, scopeSignal),
-  );
-  refreshes.set(databasePath, { state, controller, completion });
+  refreshes.set(databasePath, state);
+  void trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
 }
 
 function mergeUsageCostRefreshRequest(
@@ -274,30 +262,27 @@ function mergeUsageCostRefreshRequest(
   }
 }
 
-function waitForUsageCostRefresh(signal: AbortSignal, delayMs: number): Promise<void> {
+function waitForUsageCostRefresh(signal: AbortSignal | undefined, delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     // Zero must remain a real timer so cache reads return before refresh starts.
     const timer = setTimeout(finish, delayMs);
     timer.unref?.();
     function finish() {
       clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
+      signal?.removeEventListener("abort", finish);
       resolve();
     }
-    signal.addEventListener("abort", finish, { once: true });
-    if (signal.aborted) {
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) {
       finish();
     }
   });
 }
 
-const usageCostRefreshRuntime = { refreshCostUsageCacheForAgent };
-
 async function runQueuedUsageCostRefresh(
   state: UsageCostRefreshState,
-  signal: AbortSignal,
-  refreshes: Map<string, UsageCostRefresh>,
-  scopeSignal: AbortSignal | undefined,
+  refreshes: Map<string, UsageCostRefreshState>,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   let busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
   let retryDelayMs = 0;
@@ -307,7 +292,7 @@ async function runQueuedUsageCostRefresh(
       retryDelayMs = 0;
       try {
         while (
-          !signal.aborted &&
+          !signal?.aborted &&
           (state.fullRefreshRequested || state.pendingSessionFiles.size > 0)
         ) {
           const fullRefreshRequested = state.fullRefreshRequested;
@@ -316,7 +301,7 @@ async function runQueuedUsageCostRefresh(
             state.pendingSessionFiles.clear();
           }
           state.fullRefreshRequested = false;
-          const result = await usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+          const result = await refreshCostUsageCacheForAgent({
             config: state.config,
             agentId: state.agentId,
             databasePath: state.databasePath,
@@ -341,37 +326,15 @@ async function runQueuedUsageCostRefresh(
       } catch (error) {
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
       }
-    } while (!signal.aborted && (state.fullRefreshRequested || state.pendingSessionFiles.size > 0));
+    } while (
+      !signal?.aborted &&
+      (state.fullRefreshRequested || state.pendingSessionFiles.size > 0)
+    );
   } finally {
     // Remove synchronously with completion; a late request must enqueue a new owner.
     refreshes.delete(state.databasePath);
     if (refreshes.size === 0) {
-      usageCostRefreshes.delete(scopeSignal);
+      usageCostRefreshes.delete(signal);
     }
   }
-}
-
-async function clearUsageCostRefreshesForTest(): Promise<void> {
-  const refreshes: UsageCostRefresh[] = [];
-  for (const queue of usageCostRefreshes.values()) {
-    for (const refresh of queue.values()) {
-      refreshes.push(refresh);
-    }
-  }
-  for (const refresh of refreshes) {
-    refresh.controller.abort();
-  }
-  const results = await Promise.allSettled(refreshes.map((refresh) => refresh.completion));
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "Usage cost refresh cleanup failed");
-  }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionCostUsageTestApi")] = {
-    requestCostUsageCacheRefresh,
-    usageCostRefreshRuntime,
-    clearUsageCostRefreshesForTest,
-  };
 }

@@ -21,6 +21,18 @@ export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
   return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
 }
 
+const PROTOCOL_EVENT_COVERAGE_INPUT_RE =
+  /^(?:src\/gateway\/(?:server-methods-list|events)\.ts|scripts\/(?:(?:check-protocol-event-coverage|changed-lanes|check-changed)\.m[jt]s|tsx\.mjs|lib\/(?:(?:tsx-cli-shim|record-shared)\.mjs|local-check-runtime\.mts)|protocol-event-coverage\.allowlist\.json)|apps\/(?:ios\/Sources|shared\/OpenClawKit\/Sources)\/.+\.swift|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/.+\.kt)$/u;
+
+export function hasProtocolEventCoverageInput(changedPaths: string[]): boolean {
+  // Match the guard's scan roots and excluded directories, including deleted inputs.
+  return changedPaths
+    .map(normalizeChangedPath)
+    .some(
+      (p) => PROTOCOL_EVENT_COVERAGE_INPUT_RE.test(p) && !/\/(?:Tests|\.build|build)\//u.test(p),
+    );
+}
+
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 /** @internal Shared repository-script contract. */
@@ -57,6 +69,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "apps/mobile/version.json",
   "docs/.generated/config-baseline.counts.json",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
@@ -199,7 +212,11 @@ export function detectChangedLanes(
       continue;
     }
 
-    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
+    // Test leaves exercise contracts; shared helpers and suites can affect their consumers.
+    if (
+      PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath) &&
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(changedPath)
+    ) {
       lanes.core = true;
       lanes.coreTests = true;
       lanes.extensions = true;

@@ -20,6 +20,7 @@ import {
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { createOpenClawTestState, withOpenClawTestState } from "../plugin-sdk/test-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -32,7 +33,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, captureFullEnv, setTestEnvValue, withEnvAsync } from "./env.js";
-import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 import * as sessionCleanup from "./session-state-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {

@@ -417,21 +417,6 @@ class SessionsPage extends OpenClawLightDomElement {
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
-    if (!this.gatewayLifecycle.isRouteDataCurrent(data) || data.sessions !== context.sessions) {
-      this.routeDataEnabled = false;
-      void this.refreshSessionList();
-      if (data.expandedSessionKey) {
-        void this.loadCheckpoint(data.expandedSessionKey);
-      }
-      return;
-    }
-    this.result = data.result
-      ? filterSessionRows(data.result, { archivedFilter: data.statusFilter })
-      : null;
-    this.appliedListResult = data.result;
-    this.error = data.error;
-    this.loading = data.loading;
-    this.ensureAgentIdentities(this.result);
     if (data.expandedSessionKey) {
       void this.loadCheckpoint(data.expandedSessionKey);
     }
@@ -655,8 +640,8 @@ class SessionsPage extends OpenClawLightDomElement {
     this.page = 0;
     this.selectedKeys = new Set();
     this.deepLinkSessionKey = null;
-    // Route navigation refetches (statusFilter is in loaderDeps); mask the old
-    // view's rows until the new result applies via applyRouteData.
+    // Route navigation changes the managed query; mask the old view's rows
+    // until its current list subscription publishes.
     this.loading = true;
     this.error = null;
     context.navigate(
@@ -1452,12 +1437,14 @@ class SessionsPage extends OpenClawLightDomElement {
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
         .work=${this.sessionMenuWork}
-        .workboard=${canCapture && row.kind !== "global"
-          ? {
-              captured: capturedSessionKeys.has(row.key),
-              busy: workboardState.capturingSessionKeys.has(row.key),
-            }
-          : null}
+        .workboard=${
+          canCapture && row.kind !== "global"
+            ? {
+                captured: capturedSessionKeys.has(row.key),
+                busy: workboardState.capturingSessionKeys.has(row.key),
+              }
+            : null
+        }
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {

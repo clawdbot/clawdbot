@@ -119,7 +119,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   onSessionPrepared: state.notePreparedSession,
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
-                suppressToolErrorWarnings: state.suppressToolErrorWarnings,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
                 onPartialReply: deferFinalTtsText
@@ -192,13 +191,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
-                    if (
-                      payload.isError === true &&
-                      replyConfig.messages?.suppressToolErrors === true
-                    ) {
-                      return;
-                    }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
                     const isFastModeAutoProgressDelivery =
                       isFastModeAutoProgress &&
@@ -612,42 +604,45 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       cfg: replyConfig,
     });
   });
-  if (isDispatchOperationAborted()) {
-    await flushDeferredFinalText();
-  }
-  const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
-  notifySessionMetadataChanges(sessionMetadataChanges);
-  const resolvedCommandReply = isCommandReplyForDelivery(replyResult);
-  const finalDispatchAcquisition = resolvedCommandReply
-    ? ({ status: "ready" } as const)
-    : await state.ensureDispatchReplyOperation("dispatch");
-  if (finalDispatchAcquisition.status === "aborted") {
-    await releasePendingContinuation();
-    return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
-  }
-  if (finalDispatchAcquisition.status === "busy") {
-    await releasePendingContinuation();
-    return {
-      status: "complete" as const,
-      result: state.finishReplyOperationBusyDispatch({
-        recordAgentDispatchCompleted: true,
-        ...(state.routeState.sessionMetadataChangesForResult
-          ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
-          : {}),
-      }),
-    };
-  }
+  try {
+    if (isDispatchOperationAborted()) {
+      await flushDeferredFinalText();
+    }
+    const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
+    notifySessionMetadataChanges(sessionMetadataChanges);
+    const resolvedCommandReply = isCommandReplyForDelivery(replyResult);
+    const finalDispatchAcquisition = resolvedCommandReply
+      ? ({ status: "ready" } as const)
+      : await state.ensureDispatchReplyOperation("dispatch");
+    if (finalDispatchAcquisition.status === "aborted") {
+      return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
+    }
+    if (finalDispatchAcquisition.status === "busy") {
+      return {
+        status: "complete" as const,
+        result: state.finishReplyOperationBusyDispatch({
+          recordAgentDispatchCompleted: true,
+          ...(state.routeState.sessionMetadataChangesForResult
+            ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+            : {}),
+        }),
+      };
+    }
 
-  const acpTailResult = await handleAcpDispatchTailAfterReset(state);
-  if (acpTailResult) {
+    const acpTailResult = await handleAcpDispatchTailAfterReset(state);
+    if (acpTailResult) {
+      return acpTailResult;
+    }
+    const nextState = extendPreparedDispatchState(state, {
+      deliberateSilentTerminalReply,
+      pendingContinuation,
+      pendingContinuationSettlement,
+      replyResult,
+    });
+    // Finalization now owns the exact settlement; earlier returns and throws release it here.
+    pendingContinuationSettlement = undefined;
+    return { status: "ready" as const, state: nextState };
+  } finally {
     await releasePendingContinuation();
-    return acpTailResult;
   }
-  const nextState = extendPreparedDispatchState(state, {
-    deliberateSilentTerminalReply,
-    pendingContinuation,
-    pendingContinuationSettlement,
-    replyResult,
-  });
-  return { status: "ready" as const, state: nextState };
 }

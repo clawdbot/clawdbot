@@ -432,18 +432,20 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
             control: html`
               <div class="updates-status-control">
                 ${renderScheduleStatus(props)}
-                ${showHold
-                  ? html`
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        ?disabled=${props.updateBusy}
-                        @click=${() => void props.onHoldUpdate()}
-                      >
-                        ${t("updates.holdOneHour")}
-                      </button>
-                    `
-                  : nothing}
+                ${
+                  showHold
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          ?disabled=${props.updateBusy}
+                          @click=${() => void props.onHoldUpdate()}
+                        >
+                          ${t("updates.holdOneHour")}
+                        </button>
+                      `
+                    : nothing
+                }
               </div>
             `,
           }),

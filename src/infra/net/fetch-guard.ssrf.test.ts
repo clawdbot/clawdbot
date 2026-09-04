@@ -2374,37 +2374,99 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("skips target DNS pinning in trusted explicit-proxy mode after hostname-policy checks", async () => {
+  it.each(["http", "socks", "socks5"])(
+    "skips target DNS pinning through trusted %s proxies after hostname-policy checks",
+    async (protocol) => {
+      (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: agentCtor,
+        EnvHttpProxyAgent: envHttpProxyAgentCtor,
+        ProxyAgent: proxyAgentCtor,
+        fetch: vi.fn(async () => okResponse()),
+      };
+      const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+        if (hostname === "localhost") {
+          return [{ address: "127.0.0.1", family: 4 }];
+        }
+        throw new Error(`unexpected target DNS lookup for ${hostname}`);
+      }) as unknown as LookupFn;
+      const fetchImpl = vi.fn(async () => okResponse());
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+        fetchImpl,
+        lookupFn,
+        mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY,
+        policy: { hostnameAllowlist: ["api.telegram.org"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: `${protocol}://localhost:6152`,
+          allowPrivateProxy: true,
+        },
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(lookupFn).toHaveBeenCalledOnce();
+      expect(lookupFn).toHaveBeenCalledWith("localhost", { all: true });
+      await result.release();
+    },
+  );
+
+  it.each(["socks", "socks5"])(
+    "rejects %s proxies in strict mode before remote target DNS can bypass pinning",
+    async (protocol) => {
+      const fetchImpl = vi.fn(async () => okResponse());
+      await expect(
+        fetchWithSsrFGuard({
+          url: "https://public.example/resource",
+          fetchImpl,
+          lookupFn: createPublicLookup(),
+          dispatcherPolicy: {
+            mode: "explicit-proxy",
+            proxyUrl: `${protocol}://localhost:6152`,
+            allowPrivateProxy: true,
+          },
+        }),
+      ).rejects.toThrow("Explicit proxy URL must use http or https");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("selects proxy policy again after redirects and pins direct targets", async () => {
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
       EnvHttpProxyAgent: envHttpProxyAgentCtor,
       ProxyAgent: proxyAgentCtor,
       fetch: vi.fn(async () => okResponse()),
     };
-    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
-      if (hostname === "localhost") {
-        return [{ address: "127.0.0.1", family: 4 }];
-      }
-      throw new Error(`unexpected target DNS lookup for ${hostname}`);
-    }) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
+    const lookupFn = createPublicLookup();
+    const beforeRequest = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://direct.example/second"))
+      .mockResolvedValueOnce(redirectResponse("https://proxied.example/third"))
+      .mockResolvedValueOnce(okResponse());
     const result = await fetchWithSsrFGuard({
-      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      url: "https://proxied.example/first",
       fetchImpl,
       lookupFn,
+      beforeRequest,
       mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY,
-      policy: { hostnameAllowlist: ["api.telegram.org"] },
-      dispatcherPolicy: {
-        mode: "explicit-proxy",
-        proxyUrl: "http://localhost:6152",
-        allowPrivateProxy: true,
-      },
+      resolveDispatcherPolicy: (url) =>
+        url.hostname === "direct.example"
+          ? undefined
+          : {
+              mode: "explicit-proxy",
+              proxyUrl: "http://proxy.example:6152",
+            },
     });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(lookupFn).toHaveBeenCalledOnce();
-    expect(lookupFn).toHaveBeenCalledWith("localhost", { all: true });
+    expect(proxyAgentCtor).toHaveBeenCalledTimes(2);
+    expect(agentCtor).toHaveBeenCalledOnce();
+    expect(vi.mocked(lookupFn).mock.calls.map(([hostname]) => hostname)).toEqual([
+      "proxy.example",
+      "direct.example",
+      "proxy.example",
+    ]);
+    expect(beforeRequest).toHaveBeenCalledTimes(3);
     await result.release();
   });
 

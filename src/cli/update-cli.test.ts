@@ -21,6 +21,8 @@ import {
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
+import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { isBetaTag } from "../infra/update-channels.js";
@@ -74,9 +76,10 @@ const serviceReadRuntime = vi.fn();
 const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const terminateStaleGatewayPids = vi.fn();
 const inspectPortUsage = vi.fn();
+const probePortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
-const probeGateway = vi.fn();
+const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
@@ -483,13 +486,19 @@ vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
 }));
 
+vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage: (...args: unknown[]) => probePortUsage(...args),
+}));
+
 vi.mock("../infra/ports-format.js", () => ({
   classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
   formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
 }));
 
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: (...args: unknown[]) => probeGateway(...args),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -894,7 +903,7 @@ describe("update-cli", () => {
     }
   };
 
-  const probeGatewayCall = (index = 0) => probeGateway.mock.calls[index]?.[0];
+  const gatewayHealthCall = (index = 0) => callGateway.mock.calls[index]?.[0];
 
   const pluginWarning = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.warnings?.[0];
   const pluginOutcome = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.npm.outcomes[0];
@@ -1477,7 +1486,7 @@ describe("update-cli", () => {
         pid: gatewayFixturePid,
         state: "running",
       });
-      mockGatewayProbe(manifest.version, "updated-gateway");
+      mockGatewayHealth(manifest.version, "updated-gateway");
     };
   };
 
@@ -1563,20 +1572,8 @@ describe("update-cli", () => {
     expect(logs).not.toContain("Update Result: OK");
   };
 
-  const mockGatewayProbe = (version: string, connId: string, buildId?: string) => {
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version, connId, buildId },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
-    });
+  const mockGatewayHealth = (version: string, connId: string, buildId?: string) => {
+    callGateway.mockImplementation(gatewayHealthResponse({ server: { version, connId, buildId } }));
   };
 
   const completeChangedPostCorePluginUpdate = (
@@ -1666,7 +1663,7 @@ describe("update-cli", () => {
         pid: gatewayFixturePid,
         state: "running",
       });
-      mockGatewayProbe("2026.4.27", "updated-work");
+      mockGatewayHealth("2026.4.27", "updated-work");
     });
     return updatedEntrypoint;
   };
@@ -1768,6 +1765,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    probePortUsage.mockResolvedValue("free");
     serviceEnabled.mockResolvedValue(true);
     serviceDefinitionMutationCapability.mockResolvedValue(undefined);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
@@ -1888,7 +1886,7 @@ describe("update-cli", () => {
     });
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
-    mockGatewayProbe("1.0.0", "conn-test");
+    mockGatewayHealth("1.0.0", "conn-test");
     pathExists.mockResolvedValue(false);
     syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(baseConfig));
     updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(baseConfig));
@@ -1957,35 +1955,71 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
   });
 
-  it("recovers a stopped sealed service after a restart-safe failure", async () => {
-    const entrypoint = path.join(process.cwd(), "dist", "index.js");
-    const nodeRunner = path.join(fixtureRoot, "managed", "node");
+  it("recovers a stopped sealed service after staged npm installation fails", async () => {
+    const {
+      root,
+      nodeModules,
+      entrypoint,
+      serviceNode: nodeRunner,
+    } = await setupServicePackageAtPrefix({
+      prefix: createCaseDir("staging-recovery"),
+      version: "1.0.0",
+    });
     mockRunningManagedGateway([nodeRunner, entrypoint, "gateway"]);
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     serviceDefinitionMutationCapability.mockResolvedValue({ kind: "sealed", detail: "root owner" });
+    const activateGateway = mockPackageGatewayLifecycle();
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      await activateGateway(argv);
+      return commandResult();
+    });
     const {
       maybeStopManagedServiceBeforeMutableUpdate,
       maybeRestartServiceAfterFailedMutableUpdate,
     } = await import("./update-cli/update-command-service.js");
     const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      root: process.cwd(),
-      updateInstallKind: "git",
+      root,
+      updateInstallKind: "package",
       shouldRestart: true,
       jsonMode: true,
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop: before,
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
-      jsonMode: true,
-      nodeRunner,
-      timeoutMs: 17_000,
-      invocationCwd: process.cwd(),
+    expect(before?.stopped).toBe(true);
+    const { runGlobalPackageUpdateSteps } = await import("../infra/package-update-steps.js");
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget: {
+        manager: "npm",
+        command: "npm",
+        globalRoot: nodeModules,
+        packageRoot: root,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
+      },
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      packageRoot: root,
+      runCommand: async () => ({ code: 0, stdout: nodeModules, stderr: "" }),
+      runStep: async ({ name, argv }) => {
+        expect(argv).toContain("--prefix");
+        return { name, command: argv.join(" "), cwd: root, durationMs: 0, exitCode: 1 };
+      },
+      timeoutMs: 1000,
     });
+    expect(result.failedStep?.exitCode).toBe(1);
+    expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+    await expect(
+      maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: before,
+        recovery: result.recovery,
+        jsonMode: true,
+        nodeRunner,
+        timeoutMs: 17_000,
+        invocationCwd: root,
+      }),
+    ).resolves.toBe("healthy");
     expect(freshRestartCalls()).toEqual([
       [
         [nodeRunner, entrypoint, "gateway", "restart", "--preserve-definition", "--json"],
         expect.objectContaining({
-          cwd: process.cwd(),
+          cwd: root,
           timeoutMs: 17_000,
           baseEnv: {},
           env: expect.objectContaining({ NODE_DISABLE_COMPILE_CACHE: "1" }),
@@ -2093,7 +2127,7 @@ describe("update-cli", () => {
           : path.join(root, "dist", "index.js");
       if (kind === "package") {
         mockPackageInstallStatus(root);
-        mockGatewayProbe("9999.0.0", "updated-service");
+        mockGatewayHealth("9999.0.0", "updated-service");
       } else {
         mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
       }
@@ -3224,7 +3258,7 @@ describe("update-cli", () => {
         expect(syncPluginsForUpdateChannel).toHaveBeenCalledOnce();
         expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
       }
-      expectNoSideEffects(runDaemonInstall, probeGateway);
+      expectNoSideEffects(runDaemonInstall, callGateway);
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
@@ -4948,7 +4982,7 @@ describe("update-cli", () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
     mockOwnedGitService(root);
-    mockGatewayProbe("1.0.0", "restored", "fixture-original-build");
+    mockGatewayHealth("1.0.0", "restored", "fixture-original-build");
     const entrypoint = path.join(root, "dist", "index.js");
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
 
@@ -5461,7 +5495,7 @@ describe("update-cli", () => {
   const packageUpdateInGatewayMessage = [
     "Package updates cannot run from inside the gateway service process.",
     "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-    "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+    "Run `openclaw update` from a terminal outside the gateway service.",
   ].join("\n");
 
   it("allows package updates from inherited gateway service env when the managed gateway is not running", async () => {
@@ -5552,9 +5586,13 @@ describe("update-cli", () => {
     await expect(invokeUpdateCli({ yes: true })).rejects.toEqual(new ExitError(1));
 
     const errors = getErrorOutput();
-    expect(errors).toContain("This command is running inside the gateway process tree.");
-    expect(errors).toContain("Run this command from a shell outside the gateway service");
-    expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
+    expect(errors).toContain(
+      `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
+    );
+    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).toContain("would kill this command");
+    expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("stop the gateway service first");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5705,7 +5743,7 @@ describe("update-cli", () => {
         recovery: { serviceRestartSafe: true },
         steps: [
           expect.objectContaining({
-            stderrTail: expect.stringContaining(`Gateway PID ${gatewayFixturePid} is an ancestor`),
+            stderrTail: expect.stringContaining("would kill this command"),
           }),
         ],
       },
@@ -5735,9 +5773,13 @@ describe("update-cli", () => {
     ).rejects.toEqual(new ExitError(1));
 
     const errors = getErrorOutput();
-    expect(errors).toContain("This command is running inside the gateway process tree.");
-    expect(errors).toContain("Run this command from a shell outside the gateway service");
-    expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
+    expect(errors).toContain(
+      `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
+    );
+    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).toContain("would kill this command");
+    expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("stop the gateway service first");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5892,10 +5934,9 @@ describe("update-cli", () => {
   });
 
   it.each(["verification", "lifecycle", "shim swap"] as const)(
-    "restores package files but keeps the Gateway stopped after staged npm %s failure",
+    "gates old Gateway recovery at the swap boundary after staged npm %s failure",
     async (failure) => {
       const tempDir = tempDirs.make("openclaw-update-staged-fail-");
-      const stateCanary = path.join(tempDir, "synthetic-state-canary");
       const prefix = path.join(tempDir, "prefix");
       const nodeModules = path.join(prefix, "lib", "node_modules");
       const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
@@ -5934,7 +5975,6 @@ describe("update-cli", () => {
           if (typeof stagePrefix !== "string") {
             throw new Error("missing stage prefix");
           }
-          await fs.writeFile(stateCanary, "changed by staged install\n");
           const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
           await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
             entrySource: "export {};\n",
@@ -5992,8 +6032,21 @@ describe("update-cli", () => {
       if (failure !== "verification") {
         await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
       }
-      await expect(fs.readFile(stateCanary, "utf8")).resolves.toBe("changed by staged install\n");
-      expect(freshRestartCalls()).toEqual([]);
+      expect(freshRestartCalls()).toEqual(
+        failure === "shim swap"
+          ? []
+          : [
+              [
+                [process.execPath, entryPath, "gateway", "restart", "--preserve-definition"],
+                expect.objectContaining({ baseEnv: {} }),
+              ],
+            ],
+      );
+      expect(
+        logs.includes(
+          "Recovered managed gateway service and verified readiness after failed update.",
+        ),
+      ).toBe(failure !== "shim swap");
       expectNoSideEffects(serviceStart, serviceRestart);
     },
   );
@@ -6595,7 +6648,7 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeDefined();
   });
 
-  it("keeps a quiesced LaunchAgent stopped after unverified package lifecycle failure", async () => {
+  it("recovers a quiesced enabled LaunchAgent after staged installation fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const tempDir = tempDirs.make("openclaw-update-stopped-launchagent-failure-");
     const { nodeModules, entryPath } = await setupInstalledPackageAtNodeModules(
@@ -6608,8 +6661,11 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
-    mockPackageReplacementFailure("package replacement failed");
+    mockNpmGlobalCommands(nodeModules, async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        throw new Error("package replacement failed");
+      }
+    });
 
     try {
       await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
@@ -6622,7 +6678,15 @@ describe("update-cli", () => {
     expect(serviceStop).toHaveBeenCalledOnce();
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(freshRestartCalls()).toHaveLength(0);
+    expect(freshRestartCalls()).toEqual([
+      [
+        [nodeRunner, entryPath, "gateway", "restart", "--preserve-definition"],
+        expect.objectContaining({ timeoutMs: 17_000 }),
+      ],
+    ]);
+    expect(getLogOutput()).toContain(
+      "Recovered managed gateway service and verified readiness after failed update.",
+    );
 
     const packageInstallCallIndex = commandCalls().findIndex(
       ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
@@ -7550,7 +7614,7 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
     mockRunningManagedGateway(["node", packageEntrypoint, "gateway", "run"]);
-    mockGatewayProbe("2026.4.21", "updated-checkout");
+    mockGatewayHealth("2026.4.21", "updated-checkout");
     serviceReadCommand.mockImplementation(async () => ({
       programArguments: [
         "node",
@@ -7735,7 +7799,7 @@ describe("update-cli", () => {
       expectNoSideEffects(serviceStart, serviceRestart, runRestartScript);
       expect(lastWriteJsonCall()).toMatchObject({
         status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
     },
@@ -9264,7 +9328,7 @@ describe("update-cli", () => {
           });
         });
       }
-      mockGatewayProbe("2026.4.24", "updated-gateway");
+      mockGatewayHealth("2026.4.24", "updated-gateway");
 
       await updateCommand({ yes: true, json });
 
@@ -9308,7 +9372,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     primeServiceCommand(["node", updatedEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
-    mockGatewayProbe("2026.4.24", "matching-old-gateway");
+    mockGatewayHealth("2026.4.24", "matching-old-gateway");
 
     await updateCommand({ yes: true });
 
@@ -9341,7 +9405,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     primeServiceCommand(["node", oldEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
-    mockGatewayProbe("2026.4.24", "matching-old-service");
+    mockGatewayHealth("2026.4.24", "matching-old-service");
 
     await updateCommand({ yes: true });
 
@@ -9362,7 +9426,7 @@ describe("update-cli", () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
-    mockGatewayProbe("2026.4.23", "old-gateway");
+    mockGatewayHealth("2026.4.23", "old-gateway");
 
     await expect(updateCommand({ yes: true, json: true, timeout: "123" })).rejects.toEqual(
       new ExitError(1),
@@ -9374,8 +9438,7 @@ describe("update-cli", () => {
     expect(restartCall?.[0].slice(1)).toEqual([updatedEntrypoint, "gateway", "restart", "--json"]);
     expect(restartCall?.[1].cwd).toBe(updatedRoot);
     expect(restartCall?.[1].timeoutMs).toBe(123_000);
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
     expect(getErrorOutput()).toContain(
@@ -9419,7 +9482,7 @@ describe("update-cli", () => {
   it("skips the post-refresh restart script when LaunchAgent already serves the expected package version", async () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     serviceLoaded.mockResolvedValue(true);
-    mockGatewayProbe("2026.4.24", "updated-gateway");
+    mockGatewayHealth("2026.4.24", "updated-gateway");
 
     await updateCommand({ yes: true });
 
@@ -9430,8 +9493,7 @@ describe("update-cli", () => {
     expect(installCall?.[1].timeoutMs).toBe(60_000);
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(runRestartScript).not.toHaveBeenCalled();
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
@@ -9448,7 +9510,7 @@ describe("update-cli", () => {
       beforeUpdate: () => {
         setupNpmUpdatedRootRefresh();
         serviceLoaded.mockResolvedValue(true);
-        mockGatewayProbe("2026.4.24", "updated-gateway");
+        mockGatewayHealth("2026.4.24", "updated-gateway");
       },
     });
     expect(sentinel?.payload.status).toBe("ok");
@@ -9538,12 +9600,12 @@ describe("update-cli", () => {
           setupNpmUpdatedRootRefresh();
           prepareRestartScript.mockResolvedValue(null);
           serviceLoaded.mockResolvedValue(true);
-          mockGatewayProbe("2026.4.23", "old-gateway");
+          mockGatewayHealth("2026.4.23", "old-gateway");
           if (consumed) {
-            const probeResult = await probeGateway();
-            probeGateway.mockImplementation(async () => {
+            const respond = expectDefined(callGateway.getMockImplementation(), "health response");
+            callGateway.mockImplementation(async (opts) => {
               sentinelConsumed = (await clearRestartSentinel()) || sentinelConsumed;
-              return probeResult;
+              return respond(opts);
             });
           }
         },
@@ -9565,40 +9627,29 @@ describe("update-cli", () => {
     setupNpmUpdatedRootRefresh();
     readPackageVersion.mockResolvedValue("2026.4.24");
     serviceLoaded.mockResolvedValue(true);
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: {
-        version: "2026.4.24",
-        connId: "updated-gateway",
-      },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: {
-        ok: true,
-        plugins: {
-          errors: [
-            {
-              id: "telegram",
-              origin: "bundled",
-              activated: true,
-              error: "failed to load plugin dependency: ENOSPC",
-            },
-          ],
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "updated-gateway" },
+        health: {
+          ok: true,
+          plugins: {
+            errors: [
+              {
+                id: "telegram",
+                origin: "bundled",
+                activated: true,
+                error: "failed to load plugin dependency: ENOSPC",
+              },
+            ],
+          },
         },
-      },
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
-    });
+      }),
+    );
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
     expect(runRestartScript).toHaveBeenCalledTimes(1);
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getLogOutput()).toContain("- telegram: failed to load plugin dependency: ENOSPC");
   });

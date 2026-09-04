@@ -29,8 +29,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google" },
-  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],
@@ -42,13 +40,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "amazon-bedrock" },
-  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
-  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -77,10 +72,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell" },
-  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },

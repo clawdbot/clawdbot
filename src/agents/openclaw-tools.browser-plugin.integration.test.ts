@@ -513,6 +513,8 @@ describe("createOpenClawTools browser plugin integration", () => {
           workspaceDir: "/tmp",
           activeProjectKeys: [],
           config,
+          observationConfig: config,
+          isCurrent: () => true,
           authModes: {},
           metadataSnapshot,
           pluginRegistry,

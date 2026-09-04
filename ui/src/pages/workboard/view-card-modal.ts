@@ -248,29 +248,33 @@ export function renderCardModal(props: WorkboardProps) {
           </openclaw-tooltip>
         </div>
         <div class="workboard-draft__body">
-          ${!editing
-            ? html`
-                <div class="workboard-template-strip" aria-label=${t("workboard.templatesLabel")}>
-                  ${workboardTemplates.map(
-                    (template) => html`
-                      <button
-                        class="btn btn--xs ${state.draftTemplateId === template.id
-                          ? "workboard-template-strip__button--active"
-                          : ""}"
-                        type="button"
-                        ?disabled=${draftActionsBusy}
-                        @click=${() => {
-                          applyTemplate(state, template.id);
-                          props.onRequestUpdate?.();
-                        }}
-                      >
-                        ${t(`workboard.template.${template.id}`)}
-                      </button>
-                    `,
-                  )}
-                </div>
-              `
-            : nothing}
+          ${
+            !editing
+              ? html`
+                  <div class="workboard-template-strip" aria-label=${t("workboard.templatesLabel")}>
+                    ${workboardTemplates.map(
+                      (template) => html`
+                        <button
+                          class="btn btn--xs ${
+                            state.draftTemplateId === template.id
+                              ? "workboard-template-strip__button--active"
+                              : ""
+                          }"
+                          type="button"
+                          ?disabled=${draftActionsBusy}
+                          @click=${() => {
+                            applyTemplate(state, template.id);
+                            props.onRequestUpdate?.();
+                          }}
+                        >
+                          ${t(`workboard.template.${template.id}`)}
+                        </button>
+                      `,
+                    )}
+                  </div>
+                `
+              : nothing
+          }
           <div class="workboard-draft__main">
             <label class="workboard-field">
               <span>${t("workboard.fieldTitle")}</span>
@@ -347,48 +351,52 @@ export function renderCardModal(props: WorkboardProps) {
               />
             </label>
           </div>
-          ${editing
-            ? html`
-                <section
-                  class="workboard-field workboard-field--wide"
-                  aria-labelledby="workboard-card-comments-title"
-                >
-                  <span id="workboard-card-comments-title">
-                    ${t("workboard.badgeComments", { count: String(comments.length) })}
-                  </span>
-                  ${comments.length
-                    ? html`
-                        <ol>
-                          ${comments.map((comment) => html`<li>${comment.body}</li>`)}
-                        </ol>
-                      `
-                    : nothing}
-                  <textarea
-                    class="input workboard-comments__input"
+          ${
+            editing
+              ? html`
+                  <section
+                    class="workboard-field workboard-field--wide"
                     aria-labelledby="workboard-card-comments-title"
-                    maxlength="2000"
-                    ?disabled=${draftActionsBusy}
-                    .value=${state.draftCommentBody}
-                  ></textarea>
-                  <div class="workboard-modal__actions">
-                    <button
-                      class="btn workboard-comments__submit"
-                      type="button"
-                      ?disabled=${draftActionsBusy || !state.draftCommentBody.trim()}
-                      @click=${() => {
-                        void addWorkboardCardComment({
-                          host: props.host,
-                          client: props.client,
-                          requestUpdate: props.onRequestUpdate,
-                        });
-                      }}
-                    >
-                      ${icons.plus} ${t("common.create")}
-                    </button>
-                  </div>
-                </section>
-              `
-            : nothing}
+                  >
+                    <span id="workboard-card-comments-title">
+                      ${t("workboard.badgeComments", { count: String(comments.length) })}
+                    </span>
+                    ${
+                      comments.length
+                        ? html`
+                            <ol>
+                              ${comments.map((comment) => html`<li>${comment.body}</li>`)}
+                            </ol>
+                          `
+                        : nothing
+                    }
+                    <textarea
+                      class="input workboard-comments__input"
+                      aria-labelledby="workboard-card-comments-title"
+                      maxlength="2000"
+                      ?disabled=${draftActionsBusy}
+                      .value=${state.draftCommentBody}
+                    ></textarea>
+                    <div class="workboard-modal__actions">
+                      <button
+                        class="btn workboard-comments__submit"
+                        type="button"
+                        ?disabled=${draftActionsBusy || !state.draftCommentBody.trim()}
+                        @click=${() => {
+                          void addWorkboardCardComment({
+                            host: props.host,
+                            client: props.client,
+                            requestUpdate: props.onRequestUpdate,
+                          });
+                        }}
+                      >
+                        ${icons.plus} ${t("common.create")}
+                      </button>
+                    </div>
+                  </section>
+                `
+              : nothing
+          }
         </div>
         <div class="workboard-modal__actions">
           <button

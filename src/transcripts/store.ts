@@ -17,7 +17,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+} from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
@@ -35,12 +39,15 @@ import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
 } from "./store-export-ownership.js";
+import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
 import {
   appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   type MeetingTranscriptSessionRow,
+  readRecentStoppedTranscriptSession,
+  readTranscriptSummaryInputRevision,
   sessionFromRow,
   summaryFromRow,
   utteranceFromRow,
@@ -51,6 +58,12 @@ import { renderTranscriptsMarkdown } from "./summary.js";
 
 export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
+
+export class TranscriptsSummaryChangedError extends Error {
+  constructor() {
+    super("Transcript changed while generating notes; summarize it again.");
+  }
+}
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -314,6 +327,46 @@ export class TranscriptsStore {
     );
   }
 
+  readRecentStoppedSession(
+    source: TranscriptSourceLocator,
+    stoppedAfter: string,
+    stoppedBefore: string,
+  ) {
+    return readRecentStoppedTranscriptSession(
+      this.database().db,
+      source,
+      stoppedAfter,
+      stoppedBefore,
+    );
+  }
+
+  readSummaryInputRevision(session: TranscriptSessionDescriptor): string | undefined {
+    return readTranscriptSummaryInputRevision(this.database().db, session);
+  }
+
+  listReadEntries(options: TranscriptReadOptions) {
+    return queryTranscriptReadEntries(this.database().db, options);
+  }
+
+  readUtteranceEntries(session: TranscriptSessionDescriptor, maxUtterances: number) {
+    const database = this.database();
+    return executeSqliteQuerySync(
+      database.db,
+      meetingTranscriptUtteranceQuery(database.db, session)
+        .select([
+          "sequence",
+          "started_at",
+          "ended_at",
+          "speaker_id",
+          "speaker_label",
+          "text",
+          "final",
+        ])
+        .orderBy("sequence", "desc")
+        .limit(maxUtterances),
+    ).rows.toReversed();
+  }
+
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     ensureMeetingTranscriptsSchema(this.databaseOptions);
     if (
@@ -480,6 +533,7 @@ export class TranscriptsStore {
   async writeSummary(
     summary: TranscriptsSummary,
     session: TranscriptSessionDescriptor,
+    expectedInputRevision?: string,
   ): Promise<string> {
     const summaryJson = JSON.stringify(summary);
     const markdown = renderTranscriptsMarkdown(summary);
@@ -491,6 +545,14 @@ export class TranscriptsStore {
     };
     ensureMeetingTranscriptsSchema(this.databaseOptions);
     this.transaction("meeting-transcripts.summary.write", ({ db: database }) => {
+      // Recheck under the writer lock; a concurrent writer can change the
+      // transcript after the caller's pre-check but before this commit.
+      if (
+        expectedInputRevision !== undefined &&
+        readTranscriptSummaryInputRevision(database, session) !== expectedInputRevision
+      ) {
+        throw new TranscriptsSummaryChangedError();
+      }
       executeSqliteQuerySync(
         database,
         meetingTranscriptDb(database)

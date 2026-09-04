@@ -284,11 +284,9 @@ class OpenClawMermaid extends OpenClawLitElement {
           @click=${() => void this.copySource()}
         >
           <span aria-hidden="true"
-            >${this.copyResult === undefined
-              ? icons.copy
-              : this.copyResult
-                ? icons.check
-                : icons.x}</span
+            >${
+              this.copyResult === undefined ? icons.copy : this.copyResult ? icons.check : icons.x
+            }</span
           >
         </button>
         <wa-dropdown
@@ -326,34 +324,40 @@ class OpenClawMermaid extends OpenClawLitElement {
       <span class="copy-feedback" aria-live="polite"
         >${this.copyResult === undefined ? nothing : copyLabel}</span
       >
-      ${this.failed
-        ? html`<p class="status" role="status">${t("chat.mermaid.error")}</p>`
-        : this.pending && !this.imageUrl
-          ? html`<p class="status" role="status">${t("chat.mermaid.rendering")}</p>`
-          : nothing}
-      ${sourceVisible
-        ? html`<pre><code>${this.source}</code></pre>`
-        : this.imageUrl
-          ? html`<div class="preview">
-              <img
-                src=${this.imageUrl}
-                alt=${t("chat.mermaid.title")}
-                @error=${() => {
-                  this.failed = true;
-                  this.releaseImage();
-                }}
-              />
-            </div>`
-          : nothing}
-      ${this.expanded && this.imageUrl
-        ? html`<openclaw-image-lightbox
-            src=${this.imageUrl}
-            .imageTitle=${t("chat.mermaid.title")}
-            @image-lightbox-close=${() => {
-              this.expanded = false;
-            }}
-          ></openclaw-image-lightbox>`
-        : nothing}
+      ${
+        this.failed
+          ? html`<p class="status" role="status">${t("chat.mermaid.error")}</p>`
+          : this.pending && !this.imageUrl
+            ? html`<p class="status" role="status">${t("chat.mermaid.rendering")}</p>`
+            : nothing
+      }
+      ${
+        sourceVisible
+          ? html`<pre><code>${this.source}</code></pre>`
+          : this.imageUrl
+            ? html`<div class="preview">
+                <img
+                  src=${this.imageUrl}
+                  alt=${t("chat.mermaid.title")}
+                  @error=${() => {
+                    this.failed = true;
+                    this.releaseImage();
+                  }}
+                />
+              </div>`
+            : nothing
+      }
+      ${
+        this.expanded && this.imageUrl
+          ? html`<openclaw-image-lightbox
+              src=${this.imageUrl}
+              .imageTitle=${t("chat.mermaid.title")}
+              @image-lightbox-close=${() => {
+                this.expanded = false;
+              }}
+            ></openclaw-image-lightbox>`
+          : nothing
+      }
     `;
   }
 }

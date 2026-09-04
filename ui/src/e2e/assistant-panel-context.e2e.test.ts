@@ -64,7 +64,7 @@ suite.define(() => {
           defaults: { modelProvider: "openai", model: "gpt-5.6-luna", contextTokens: null },
           sessions: [renamed, home],
         };
-        await gateway.setMethodResponse("sessions.list", list);
+        await gateway.setSessionsListResponse(list);
         await gateway.emitGatewayEvent("sessions.changed", {
           ...renamed,
           sessionKey: work.key,

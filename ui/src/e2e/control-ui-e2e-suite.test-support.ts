@@ -9,8 +9,10 @@ import {
   describe,
   expect,
   inject,
+  vi,
   type TestContext,
 } from "vitest";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -58,6 +60,7 @@ type ControlUiE2eSuite = {
   withPage: <T>(
     options: Parameters<Browser["newContext"]>[0],
     run: (fixture: ControlUiE2ePage) => Promise<T>,
+    cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
   ) => Promise<T>;
 };
 
@@ -204,11 +207,16 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     let closing = contextClosures.get(context);
     if (!closing) {
       // Playwright's second close can return while the first is still finalizing.
-      closing = Promise.resolve()
-        .then(() => context.close())
-        .then(() => {
-          openBrowserContexts.delete(context);
+      closing = Promise.resolve().then(async () => {
+        await context.close();
+        // Requests outlive sockets; pending handlers must release their admission
+        // roots before fixture cleanup. waitFor also works in afterAll.
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+          interval: 100,
+          timeout: 15_000,
         });
+        openBrowserContexts.delete(context);
+      });
       contextClosures.set(context, closing);
     }
     return closing;
@@ -453,13 +461,15 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         defineTests();
       });
     },
-    async withPage(contextOptions, run) {
+    async withPage(contextOptions, run, cleanup) {
       const context = await newBrowserContext(contextOptions);
+      let fixture: ControlUiE2ePage | undefined;
       return await runQaGatewayFixture(
         async () => {
           const page = await context.newPage();
+          fixture = { context, page };
           try {
-            return await run({ context, page });
+            return await run(fixture);
           } catch (error) {
             await captureControlUiE2eFailureDiagnostics(page, {
               error: error instanceof Error ? error : new Error(String(error)),
@@ -468,6 +478,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throw error;
           }
         },
+        // Capture assertion diagnostics before a test closes its page or drains routes.
+        () => (fixture ? cleanup?.(fixture) : undefined),
         () => closeBrowserContext(context),
       );
     },

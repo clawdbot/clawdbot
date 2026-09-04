@@ -502,7 +502,11 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
 
-  params.dedupe.set(params.key, params.entry);
+  // Terminal writers own outcomes, not request identity; never erase the admission binding.
+  const entry = existing?.requestIdentity
+    ? { ...params.entry, requestIdentity: existing.requestIdentity }
+    : params.entry;
+  params.dedupe.set(params.key, entry);
   const key = parseDedupeKey(params.key);
   if (!key) {
     return;

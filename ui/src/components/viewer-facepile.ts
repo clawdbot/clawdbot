@@ -131,19 +131,21 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
                 variant="session"
               ></openclaw-viewer-avatar>`,
               user.identity?.type === "profile"
-                ? personActivityLink(user.identity.id, this.personActivity)
+                ? personActivityLink(user.identity.id, this.personActivity, user.name)
                 : null,
             )}
           </span>
         </openclaw-tooltip>`,
       )}
-      ${overflowCount > 0
-        ? html`<openclaw-tooltip .content=${overflowLabel}>
-            <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
-              >+${overflowCount}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
+      ${
+        overflowCount > 0
+          ? html`<openclaw-tooltip .content=${overflowLabel}>
+              <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
+                >+${overflowCount}</span
+              >
+            </openclaw-tooltip>`
+          : nothing
+      }
     </span>`;
   }
 }

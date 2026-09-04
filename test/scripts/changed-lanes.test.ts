@@ -156,6 +156,9 @@ function createRootTestLintFixture() {
     "test/tsconfig/tsconfig.test.json",
     "test/tsconfig/tsconfig.test.root.json",
     "test/vitest/vitest.test-shards.d.mts",
+    "src/gateway/server-methods-list.ts",
+    "src/gateway/events.ts",
+    "scripts/protocol-event-coverage.allowlist.json",
   ]) {
     writeRepoFile(dir, file, readFileSync(path.join(repoRoot, file), "utf8"));
   }
@@ -169,8 +172,13 @@ function createRootTestLintFixture() {
     writeRepoFile(dir, file, source);
   }
   symlinkSync(path.join(repoRoot, "node_modules"), path.join(dir, "node_modules"), "junction");
-  mkdirSync(path.join(dir, "scripts"));
-  for (const script of ["run-oxlint.mjs", "report-test-temp-creations.mjs"]) {
+  // All-lane plans run the real coverage guard against unchanged mobile inputs.
+  symlinkSync(path.join(repoRoot, "apps"), path.join(dir, "apps"), "junction");
+  for (const script of [
+    "run-oxlint.mjs",
+    "report-test-temp-creations.mjs",
+    "check-protocol-event-coverage.mjs",
+  ]) {
     symlinkSync(path.join(repoRoot, "scripts", script), path.join(dir, "scripts", script));
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
@@ -1055,6 +1063,80 @@ describe("scripts/changed-lanes", () => {
     expect(isChangedLaneTestPath("src/latest.ts")).toBe(false);
   });
 
+  it.each([
+    ...[
+      "src/gateway/server-methods-list.ts",
+      "src/gateway/events.ts",
+      "apps/ios/Sources/RootTabs.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatGatewayPayloadCodec.swift",
+      "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+      "scripts/protocol-event-coverage.allowlist.json",
+      "scripts/check-protocol-event-coverage.mjs",
+      "scripts/check-protocol-event-coverage.mts",
+      "scripts/tsx.mjs",
+      "scripts/lib/tsx-cli-shim.mjs",
+      "scripts/lib/local-check-runtime.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/changed-lanes.mjs",
+      "scripts/changed-lanes.mts",
+      "scripts/check-changed.mjs",
+      "scripts/check-changed.mts",
+      "unknown-surface.foo",
+      "vitest.config.ts",
+    ].map((file) => ({ name: file, paths: [file], selected: true })),
+    {
+      name: "mixed normalized paths",
+      paths: ["docs/ci.md", "./src/gateway/events.ts", "src\\gateway\\events.ts"],
+      selected: true,
+    },
+    ...[
+      "src/gateway/server-runtime-state.ts",
+      "src/gateway/events.test.ts",
+      "test/scripts/check-protocol-event-coverage.test.ts",
+      "docs/ci.md",
+      "apps/ios/Tests/ProtocolTests.swift",
+      "apps/shared/OpenClawKit/Tests/ProtocolTests.swift",
+      "apps/ios/Sources/Nested/Tests/ProtocolTests.swift",
+      "apps/shared/OpenClawKit/Sources/.build/Generated.swift",
+      "apps/android/app/src/test/java/ai/openclaw/app/GatewayTest.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/build/Generated.kt",
+      "apps/android/app/src/main/java/ai/openclaw/application/Other.kt",
+      "apps/ios/Sources/README.md",
+      "apps/android/app/src/main/AndroidManifest.xml",
+      "apps/macos/Sources/OpenClaw/AppDelegate.swift",
+      "scripts/check-protocol-event-coverage.mts.bak",
+    ].map((file) => ({ name: file, paths: [file], selected: false })),
+    { name: "no changes", paths: [], selected: false },
+  ])("selects early protocol coverage=$selected for $name", ({ paths, selected }) => {
+    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
+      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
+    });
+    const coverage = plan.commands.filter(
+      (command) => command.args[0] === "scripts/check-protocol-event-coverage.mjs",
+    );
+
+    expect(coverage).toHaveLength(selected ? 1 : 0);
+    if (selected) {
+      expect(plan.commands[0]).toEqual(coverage[0]);
+      expect(coverage[0]).toMatchObject({
+        bin: "node",
+        args: ["scripts/check-protocol-event-coverage.mjs"],
+        env: { OPENCLAW_LOCAL_CHECK: "1", PATH: "/usr/bin" },
+      });
+    }
+  });
+
+  it("selects protocol coverage for deleted mobile handlers without filtering absent files", () => {
+    const changedPath = "apps/ios/Sources/DeletedProtocolCoverageFixture.swift";
+    expect(existsSync(changedPath)).toBe(false);
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]));
+
+    expect(plan.commands[0]).toMatchObject({
+      bin: "node",
+      args: ["scripts/check-protocol-event-coverage.mjs"],
+    });
+  });
+
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -1258,9 +1340,9 @@ describe("scripts/changed-lanes", () => {
     ...[
       "packages/normalization-core/src/record-coerce.ts",
       "packages/normalization-core/package.json",
-    ].map((path) => ({
-      name: `keeps core checks and adds browser typechecking for ${path}`,
-      path,
+    ].map((filePath) => ({
+      name: `keeps core checks and adds browser typechecking for ${filePath}`,
+      path: filePath,
       expected: {
         includes: ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
         excludes: [],
@@ -1673,16 +1755,21 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
-    {
-      name: "selects compiler-owned graphs for core test leaf changes",
-      path: "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+    ...[
+      "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+      "src/plugin-sdk/config-runtime.test.ts",
+      "src/plugins/contracts/registry.retry.test.ts",
+      "src/channels/plugins/config-schema.test.ts",
+    ].map((changedPath) => ({
+      name: "selects core test graphs",
+      path: changedPath,
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
-        excludes: ["tsgo:core"],
+        excludes: ["tsgo:core", "tsgo:extensions", "tsgo:extensions:test", "lint:extensions"],
         coreTestChecks: ["checkBoundary", "checkTypes"],
       },
-    },
+    })),
     {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",
@@ -1710,12 +1797,13 @@ describe("scripts/changed-lanes", () => {
         excludes: ["tsgo:extensions"],
       },
     },
-  ])("$name", ({ path: changedPath, expected }) => {
+  ])("$name: $path", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
     const plan = createChangedCheckPlan(result);
     const commands = plan.commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, expected.lanes);
+    expect(result.extensionImpactFromCore).toBe(false);
     expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
       "coreTestChecks" in expected ? expected.coreTestChecks : [],
     );
@@ -1727,10 +1815,25 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each([{ otherPaths: [] }, { otherPaths: [githubActivityHelper] }])(
-    "expands public core/plugin contracts with $otherPaths to extension validation",
-    ({ otherPaths }) => {
-      const result = detectChangedLanes(["src/plugin-sdk/core.ts", ...otherPaths]);
+  it.each([
+    { contractPath: "src/plugin-sdk/core.ts", otherPaths: [] },
+    { contractPath: "src/plugin-sdk/core.ts", otherPaths: [githubActivityHelper] },
+    ...[
+      "src/plugin-sdk/qa-runtime.test-helpers.ts",
+      "src/plugin-sdk/channel-contract.ts",
+      "src/plugins/contracts/registry.ts",
+      "src/plugins/contracts/contract.suite.ts",
+      "src/channels/plugins/contracts/test-helpers/surface-contract-suite.ts",
+      "src/channels/plugins/types.plugin.ts",
+      "scripts/lib/plugin-sdk-entrypoints.json",
+    ].map((contractPath) => ({
+      contractPath,
+      otherPaths: ["src/plugin-sdk/test-state.test.ts"],
+    })),
+  ])(
+    "expands public core/plugin contract $contractPath with $otherPaths to extension validation",
+    ({ contractPath, otherPaths }) => {
+      const result = detectChangedLanes([contractPath, ...otherPaths]);
       const plan = createChangedCheckPlan(result);
 
       expect(result.extensionImpactFromCore).toBe(true);
@@ -1739,7 +1842,7 @@ describe("scripts/changed-lanes", () => {
         coreTests: true,
         extensions: true,
         extensionTests: true,
-        tooling: otherPaths.length > 0,
+        tooling: otherPaths.includes(githubActivityHelper),
       });
       expect(plan.commands.map((command) => command.args[0])).toEqual(
         expect.arrayContaining([
@@ -2038,6 +2141,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "apps/mobile/version.json",
       "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
@@ -2339,6 +2443,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(shouldRunWrapperShadowingCheck(["scripts/lib/source-file-scan-cache.mts"])).toBe(true);
     expect(
       shouldRunWrapperShadowingCheck([
         "src/channels/turn/run-channel-turn.ts",
@@ -2531,8 +2636,10 @@ describe("scripts/changed-lanes", () => {
     expect(withoutFormat(mixedPlan)).toEqual(withoutFormat(fullPlan));
   });
 
-  it("runs macOS CI tests for workspace rsync receiver owners", () => {
+  it("runs macOS CI tests for worker deploy artifact owners", () => {
     for (const changedPath of [
+      "src/agents/github-exec-launcher.ts",
+      "src/agents/github-exec-credential.ts",
       "src/shared/worker-bundle-hash.ts",
       "src/worker/workspace-rsync-receiver.ts",
       "src/gateway/worker-environments/workspace-sync.ts",

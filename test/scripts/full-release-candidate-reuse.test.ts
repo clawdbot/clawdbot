@@ -156,13 +156,22 @@ function constituentArtifactReader(manifest: CandidateConstituentSource) {
   };
 }
 
-async function fixture() {
+async function fixture(now = NOW) {
   const manifest = fullReleaseCandidateManifestFixture();
+  // Pure tests use NOW; CLI cases pass real time without freezing discovery deadlines.
+  // Set every expiry before sealing the manifest into the archive and its digest.
+  const expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+  manifest.package.artifact.expiresAt = expiresAt;
+  manifest.prepublishPluginRegistry.artifact.expiresAt = expiresAt;
+  manifest.sharedImage.artifact.expiresAt = expiresAt;
   const archive = await archiveWithManifest(manifest);
   return {
     archive,
     manifest,
-    metadata: artifactMetadata(archive),
+    metadata: artifactMetadata(archive, {
+      created_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+      expires_at: expiresAt,
+    }),
   };
 }
 
@@ -553,15 +562,17 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest } = await fixture();
+    const now = Date.now();
+    const { manifest, metadata } = await fixture(now);
     const artifacts = Array.from({ length: 6 }, (_, index) => {
       const runId = 80 + index;
       const jobs = workflowJobs(manifest, { runId });
       jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
       writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
       writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
-      return artifactMetadata(archive, {
-        created_at: new Date(NOW - index * 1000).toISOString(),
+      return {
+        ...metadata,
+        created_at: new Date(now - index * 1000).toISOString(),
         id: 400 + index,
         workflow_run: {
           head_repository_id: 1,
@@ -569,7 +580,7 @@ esac
           id: runId,
           repository_id: 1,
         },
-      });
+      };
     });
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
@@ -638,7 +649,7 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest, metadata } = await fixture();
+    const { archive, manifest, metadata } = await fixture(Date.now());
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
@@ -1007,6 +1018,26 @@ describe("full release candidate binding authority", () => {
     expect(fresh).toEqual(binding);
     expect(reused).toEqual(binding);
     expect(candidateArtifactJsonFromBinding(fresh)).toBe(candidateArtifactJsonFromBinding(reused));
+  });
+
+  it("preserves published package provenance across fresh and reused evidence", () => {
+    const binding = fullReleaseCandidateBindingFixture({ packagePublished: true });
+    const fresh = resolveCandidateBinding({
+      freshBinding: binding,
+      now: NOW,
+      request: binding.request,
+      required: true,
+    });
+    const reused = resolveCandidateBinding({
+      now: NOW,
+      request: binding.request,
+      required: true,
+      reusedBinding: binding,
+    });
+    const freshArtifact = candidateArtifactJsonFromBinding(fresh);
+
+    expect(freshArtifact).toBe(candidateArtifactJsonFromBinding(reused));
+    expect(JSON.parse(freshArtifact)).toMatchObject({ packagePublished: true });
   });
 
   it("rejects missing, ambiguous, expired, and wrong-request evidence", () => {

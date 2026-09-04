@@ -1,20 +1,21 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
@@ -27,11 +28,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(
-  process.cwd(),
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
-    ".artifacts/control-ui-e2e/control-ui-auth-transports",
-);
+let artifactDir: string;
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
 const configProofIdentifier = "9223372036854775807";
@@ -511,7 +508,6 @@ async function createBrowserPage(
   errors: string[];
   page: Page;
 }> {
-  await mkdir(artifactDir, { recursive: true });
   const context = await suite.newBrowserContext({
     locale: "en-US",
     recordVideo: captureUiProofEnabled ? { dir: artifactDir, size: viewport } : undefined,
@@ -543,30 +539,30 @@ async function createBrowserPage(
   return { context, errors, evidenceStartIndex, page };
 }
 
-async function closeConnectedContext(context: BrowserContext): Promise<void> {
-  await suite.closeBrowserContext(context);
-  // UI requests intentionally outlive socket teardown. Drain their admitted work
-  // before another browser interaction so lazy handler imports cannot starve it.
-  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
-}
-
-async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
+async function captureChromiumScreenshot(
+  fileName: string,
+  surface: Locator,
+  content: readonly Locator[],
+): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  const session = await page.context().newCDPSession(page);
-  try {
-    // The live dashboard keeps rendering while RPCs settle. Capture the current
-    // Chromium surface directly so proof does not wait on unrelated UI activity.
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    await writeFile(path.join(artifactDir, fileName), Buffer.from(result.data, "base64"));
-  } finally {
-    await session.detach();
-  }
+  const image = await takeControlUiViewportScreenshot(surface.page(), surface, content);
+  await writeFile(path.join(artifactDir, fileName), image);
+}
+
+async function captureConnectedAuth(fileName: string, page: Page): Promise<void> {
+  await captureChromiumScreenshot(fileName, page.locator(".shell"), [
+    page.getByRole("textbox", { name: "WebSocket URL", exact: true }),
+    page.getByText("Authenticated via trusted proxy.", { exact: true }),
+  ]);
+}
+
+async function captureRejectedAuth(fileName: string, failure: Locator): Promise<void> {
+  await captureChromiumScreenshot(fileName, failure.page().locator(".login-gate__card"), [
+    failure.locator(".login-gate__failure-title"),
+    failure.locator(".login-gate__failure-steps"),
+  ]);
 }
 
 async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix: string | null }> {
@@ -628,7 +624,11 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
   startServer: async () => {
     console.info("[real-config-id-proof] setup-start");
-    await mkdir(artifactDir, { recursive: true });
+    artifactDir = createControlUiE2eArtifactDir(
+      "control-ui-auth-transports",
+      process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
+        ".artifacts/control-ui-e2e/control-ui-auth-transports",
+    );
     return startControlUiE2eServer();
   },
   resources: {
@@ -706,7 +706,11 @@ suite.define(() => {
           .toContain(`"${configProofIdentifier}"`);
         await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
         await rawEditorBefore.scrollIntoViewIfNeeded();
-        await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
+        await captureChromiumScreenshot(
+          "01-real-config-id-before.png",
+          connected.page.locator(".shell"),
+          [rawEditorBefore],
+        );
 
         const settingsUrl = new URL("settings/communications", gateway.httpUrl);
         settingsUrl.searchParams.set("section", "messages");
@@ -769,9 +773,13 @@ suite.define(() => {
           "utf8",
         );
         console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
-        await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
+        await captureChromiumScreenshot(
+          "02-real-config-id-after.png",
+          connected.page.locator(".shell"),
+          [rawEditor],
+        );
         expect(connected.errors).toEqual([]);
-        await closeConnectedContext(connected.context);
+        await suite.closeBrowserContext(connected.context);
       },
     });
   });
@@ -780,8 +788,6 @@ suite.define(() => {
     await suite.runScenario(context, {
       async run(signal) {
         signal.throwIfAborted();
-        // A connected shell starts bootstrap RPCs that can outlive context teardown.
-        // Keep it last so those requests cannot starve the next browser interaction.
         const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
         const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
         await waitForVisibleFailure(rejected.page, "unauthorized");
@@ -803,7 +809,7 @@ suite.define(() => {
         expect(await failure.locator(".login-gate__command").count()).toBe(0);
         expect(untrustedEvidence.identityInjected).toBe(false);
         expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
-        await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
+        await captureRejectedAuth("02-untrusted-proxy-rejected.png", failure);
         expect(rejected.errors).toEqual([]);
         await suite.closeBrowserContext(rejected.context);
 
@@ -828,9 +834,9 @@ suite.define(() => {
         expect(trustedEvidence.requiredHeaderInjected).toBe(true);
         expect(trustedEvidence.gatewayResult?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
         expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
-        await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
+        await captureConnectedAuth("01-trusted-proxy-connected.png", connected.page);
         expect(connected.errors).toEqual([]);
-        await closeConnectedContext(connected.context);
+        await suite.closeBrowserContext(connected.context);
 
         await writeFile(
           path.join(artifactDir, "trusted-proxy-behavior.json"),
@@ -939,7 +945,7 @@ suite.define(() => {
         );
         console.info(`[gateway-credential-rescope-proof] ${JSON.stringify(proof)}`);
         expect(connected.errors).toEqual([]);
-        await closeConnectedContext(connected.context);
+        await suite.closeBrowserContext(connected.context);
       },
     });
   });
@@ -963,7 +969,7 @@ suite.define(() => {
               entry.upstreamHandshakeStatus === 403),
           rejected.evidenceStartIndex,
         );
-        await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
+        await captureRejectedAuth("04-rejected-origin-recovery.png", originFailure);
         expect(rejected.errors).toEqual([]);
         await suite.closeBrowserContext(rejected.context);
 
@@ -979,9 +985,9 @@ suite.define(() => {
             entry.gatewayResult?.ok === true,
           allowed.evidenceStartIndex,
         );
-        await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
+        await captureConnectedAuth("03-allowed-origin-connected.png", allowed.page);
         expect(allowed.errors).toEqual([]);
-        await closeConnectedContext(allowed.context);
+        await suite.closeBrowserContext(allowed.context);
 
         await writeFile(
           path.join(artifactDir, "allowed-origins-behavior.json"),

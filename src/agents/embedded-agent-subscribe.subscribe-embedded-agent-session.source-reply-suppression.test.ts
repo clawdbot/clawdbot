@@ -509,6 +509,41 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
       { text: "Visible terminal answer." },
     ]);
+    expect(subscription.getSourceReplyDelivered()).toBeUndefined();
+  });
+
+  it("retains source delivery without destination arguments or visible result details", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const sessionManager = {};
+    Object.assign(session, { sessionManager });
+    const subscription = subscribeEmbeddedAgentSession({ session, runId: "implicit-source" });
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "source-send",
+      args: { action: "send", message: "Delivered once." },
+    });
+    await Promise.resolve();
+    recordEmbeddedToolReceipt(sessionManager, "source-send", {
+      messageDelivery: {
+        status: "settled",
+        partialDelivery: false,
+        createdThreadIds: [],
+        sourceReplyDelivered: true,
+      },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "source-send",
+      isError: false,
+      result: { content: [], details: { redacted: true } },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getMessagingToolSentTargets()).toEqual([]);
+    expect(subscription.getSourceReplyDelivered()).toBe(true);
+    subscription.unsubscribe();
   });
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {

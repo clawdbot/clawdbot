@@ -184,6 +184,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
+    getSourceReplyDelivered: () => undefined,
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getToolAutoDeliveryMediaUrls: () => [] as string[],
@@ -814,6 +815,7 @@ vi.mock("../../transcript-policy.js", () => ({
 }));
 
 vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
   appendCacheTtlTimestamp: (
     sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
     data: unknown,

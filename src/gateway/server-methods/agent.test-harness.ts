@@ -1114,6 +1114,8 @@ export function applyGatewaySubagentRegistryTestDeps(
       endedAt: Date.now(),
     })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
+    // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ...overrides,
   });
 }

@@ -13,7 +13,6 @@ import {
 } from "../cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
-  capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
@@ -173,12 +172,12 @@ export function capChatHistoryAroundMessage(params: {
   messageId: string;
   maxCost: number;
   messageCost?: (message: unknown) => number;
-}): unknown[] | undefined {
+}): unknown[] {
   const anchorIndex = params.messages.findIndex(
     (message) => readChatHistoryMessageId(message) === params.messageId,
   );
   if (anchorIndex === -1) {
-    return undefined;
+    return [];
   }
   const messageCost = params.messageCost ?? (() => 1);
   const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
@@ -326,11 +325,11 @@ export async function readChatHistoryPage(params: {
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
-      ? (capChatHistoryAroundMessage({
+      ? capChatHistoryAroundMessage({
           messages: projected,
           messageId,
           maxCost: max,
-        }) ?? capOffsetChatHistoryProjectedMessages(projected, max))
+        })
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
@@ -415,6 +414,13 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    // Import snapshots are terminal, but a missing display anchor is not a tail request.
+    if (
+      messageId &&
+      !displayMessages.some((message) => readChatHistoryMessageId(message) === messageId)
+    ) {
+      return { messages: [] };
+    }
     return {
       activeLeafEntryId,
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),

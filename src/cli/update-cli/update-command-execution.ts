@@ -24,7 +24,10 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
-import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import {
+  formatUpdateAncestryBlockMessage,
+  handoffUpdateFromGateway,
+} from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
@@ -196,7 +199,7 @@ export async function executeMutableUpdate(params: {
         [
           `${updateLabel} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a terminal outside the gateway service.`,
         ].join("\n"),
       );
     }
@@ -205,7 +208,7 @@ export async function executeMutableUpdate(params: {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        preManagedServiceStop.blockMessage,
+        formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
       );
     }
   };

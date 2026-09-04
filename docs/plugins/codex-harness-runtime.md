@@ -69,6 +69,10 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+Tool-schema repairs preserve literal property and definition names, including
+`__proto__`. The schema advertised to Codex and the schema used to validate
+OpenClaw tool calls retain the same required fields and constraints.
+
 For a [managed GitHub identity](/gateway/config-tools#toolsgithub), `gateway_exec` uses OpenClaw's private local process-launch credential binding. Native Codex shell instead receives only the non-secret `GH_CONFIG_DIR` and token-clearing overlay; a missing or tokenless profile can still let GitHub CLI fall back to the OS keyring. Status and Gateway-owned publication guarantees do not cover that native shell path. Use `gateway_exec` when launch-bound managed GitHub credentials are required.
 
 ## Recovery after a hard Gateway stop
@@ -94,8 +98,9 @@ or discover descendants that independently reparented before inspection.
 
 Linux reads process identities directly from `/proc`, including the boot ID
 and process start ticks, so Alpine/BusyBox installations do not need `procps`.
-During Linux startup, an empty command line waits within the existing inspection
-deadline while the same live process identity remains valid. Registration still
+Startup identity and command inspection share a 10-second deadline. During Linux
+startup, an empty command line waits within that deadline while the same live
+process identity remains valid. Registration still
 requires a usable command fingerprint; unreadable or changed identities fail.
 macOS uses its native `ps` with a fixed locale and timezone. Registration checks
 inspect only the observer and the relevant parent and child processes; an
@@ -207,6 +212,31 @@ catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat turns use the same Codex Default collaboration mode as
 ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
 scheduled heartbeat user message when present.
+
+## Final answers after settled tool work
+
+For ordinary host-authenticated Codex turns that finish tool work without a
+visible answer, OpenClaw can request a bounded final-answer turn in a private
+temporary home. It uses the completed thread's model selection and the original
+host auth route or resolved profile, rather than selecting a model from outer
+request metadata. The existing environment, dynamic-tool, MCP, and native-hook
+restrictions remain. Completed actions are transcript evidence, not instructions
+to replay. Preserving a native model does not, by itself, disable host-authenticated
+finalization.
+
+A Chat created through Codex Sessions is different: its private supervision
+connection owns native authentication. Stock Codex does not expose a generic
+tool-free summary operation that preserves that connection's account. OpenClaw
+marks this finalization context unavailable instead of choosing host credentials,
+copying native credentials, or starting another native turn. If a final reply is
+required, the host delivers its existing fallback:
+
+> The tool run finished, but no final summary was produced. I did not repeat any completed actions.
+
+The original completed outcome, native binding, and tool receipts remain intact.
+Native turns that return a final answer are delivered normally. The ordinary
+`homeScope: "user"` opt-in retains its documented private host-auth finalization;
+see [Auth and environment isolation](/plugins/codex-harness-reference#auth-and-environment-isolation).
 
 ## Hook boundaries
 

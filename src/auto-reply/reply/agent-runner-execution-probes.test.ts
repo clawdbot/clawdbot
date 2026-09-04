@@ -21,6 +21,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
@@ -555,6 +556,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -566,6 +568,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       }),
     );
 
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       kind: "success",
       fallbackExhausted: true,

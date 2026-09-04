@@ -1,6 +1,14 @@
 // Timestamp tests cover timestamp formatting and timezone fallback behavior.
 import { describe, expect, it } from "vitest";
-import { formatTimestamp } from "./timestamps.js";
+import { formatDiagnosticFilenameTimestamp, formatTimestamp } from "./timestamps.js";
+
+describe("formatDiagnosticFilenameTimestamp", () => {
+  it("formats an ISO timestamp for filenames", () => {
+    expect(formatDiagnosticFilenameTimestamp(new Date("2024-01-15T14:30:45.123Z"))).toBe(
+      "2024-01-15T14-30-45-123Z",
+    );
+  });
+});
 
 describe("formatTimestamp", () => {
   const testDate = new Date("2024-01-15T14:30:45.123Z");

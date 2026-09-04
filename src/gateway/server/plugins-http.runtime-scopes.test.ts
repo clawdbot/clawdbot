@@ -288,9 +288,16 @@ describe("plugin HTTP route runtime scopes", () => {
     { auth: "gateway" as const, authMethod: "trusted-proxy" as const, systemActor: false },
     { auth: "plugin" as const, authMethod: "token" as const, systemActor: false },
   ])(
-    "mints system authority only for authenticated shared-secret gateway routes ($auth/$authMethod)",
+    "preserves system authority only for authenticated shared-secret gateway routes ($auth/$authMethod)",
     async ({ auth, authMethod, systemActor }) => {
+      const authenticatedUserProfile = {
+        profileId: "profile-owner",
+        displayName: "Owner",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
       let observedActor: unknown;
+      let observedProfile: AuthorizedGatewayHttpRequest["authenticatedUserProfile"];
       const handler = createPluginRequestHandler({
         routes: [
           createRoute({
@@ -299,6 +306,8 @@ describe("plugin HTTP route runtime scopes", () => {
             handler: async () => {
               observedActor =
                 getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRoleActor;
+              observedProfile =
+                getPluginRuntimeGatewayRequestScope()?.client?.authenticatedUserProfile;
               return true;
             },
           }),
@@ -309,13 +318,21 @@ describe("plugin HTTP route runtime scopes", () => {
         path: SECURE_HOOK_PATH,
         authContext: {
           gatewayAuthSatisfied: true,
-          gatewayRequestAuth: { authMethod, trustDeclaredOperatorScopes: false },
+          gatewayRequestAuth: {
+            authMethod,
+            trustDeclaredOperatorScopes: false,
+            authenticatedUserProfile,
+            ...(authMethod === "token" || authMethod === "password"
+              ? { operatorRoleActor: { kind: "system" as const } }
+              : {}),
+          },
           gatewayRequestOperatorScopes: ["operator.write"],
         },
       });
 
       expect(handled).toBe(true);
       expect(observedActor).toEqual(systemActor ? { kind: "system" } : undefined);
+      expect(observedProfile).toEqual(auth === "gateway" ? authenticatedUserProfile : undefined);
     },
   );
 

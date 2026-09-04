@@ -165,6 +165,7 @@ export async function assembleHarnessContextEngine(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  appendOnlyRuntimeContext?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -189,7 +190,13 @@ export async function assembleHarnessContextEngine(params: {
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  const messages = stripRuntimeContextCustomMessages(params.messages).slice();
+  // Append-only replay policies keep persisted carriers in the assembled window;
+  // dropping one here would change the prefix bound to later thinking signatures.
+  const messages = (
+    params.appendOnlyRuntimeContext
+      ? params.messages
+      : stripRuntimeContextCustomMessages(params.messages)
+  ).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>

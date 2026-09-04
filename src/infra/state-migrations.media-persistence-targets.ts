@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
@@ -49,6 +50,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   env: NodeJS.ProcessEnv;
 }) {
   const warnings: string[] = [];
+  const externalWarnings: string[] = [];
   const failures: Array<{ path: string; reason: string }> = [];
   const registryRemovals: Array<{ agentId: string; path: string; change?: string }> = [];
   const failure = (pathname: string, reason: string) => {
@@ -128,9 +130,9 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     );
     if (realPath && !isInsideActiveStateDir && !isConfiguredPath) {
       discard(candidate);
-      warnings.push(
-        `Skipped foreign agent database ${pathname}; it is outside the active state directory and is not a configured session store.`,
-      );
+      const warning = `Skipped foreign agent database ${sanitizeForLog(pathname)}; it is outside the active state directory and is not a configured session store.`;
+      warnings.push(warning);
+      externalWarnings.push(warning);
       continue;
     }
     let stat: fs.Stats | undefined;
@@ -164,7 +166,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     seenRealPaths.add(realPath);
     targets.push({ ...candidate, path: pathname, realPath });
   }
-  return { targets, registryRemovals, warnings, failures };
+  return { targets, registryRemovals, warnings, externalWarnings, failures };
 }
 
 /** Migration alone owns cleanup of stale registry entries discovered above. */

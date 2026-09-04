@@ -1164,7 +1164,10 @@ before any further action. Network-controlled tool output and errors retain
 their existing untrusted-content wrapping and sanitization; recovering from a
 failure does not grant new permissions or replay completed side effects.
 
-Parallel nested calls are allowed up to `maxPendingToolCalls`.
+Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
+tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)
+launches, notes, and result waits instead queue for available bridge slots;
+they do not raise that limit or bypass the run's cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 

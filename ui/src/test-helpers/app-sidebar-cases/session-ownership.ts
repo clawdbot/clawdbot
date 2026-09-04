@@ -26,7 +26,7 @@ async function openOwnerMenu(sidebar: SidebarLifecycleState): Promise<HTMLElemen
   return menu;
 }
 
-async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
   const menu = await openOwnerMenu(sidebar);
   expect(menu.querySelector(`[value="${value}"]`)).not.toBeNull();
   menu.dispatchEvent(

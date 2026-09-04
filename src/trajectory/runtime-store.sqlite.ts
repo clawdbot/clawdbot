@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -226,9 +227,9 @@ function readSqliteTrajectoryRuntimeRuns(database: OpenClawAgentDatabase): Traje
       .groupBy(["session_id", "run_id"]),
   ).rows;
   return rows.map((row) => ({
-    newestCreatedAt: normalizeSqliteNumber(row.newest_created_at),
+    newestCreatedAt: sqliteNumber(row.newest_created_at),
     runId: row.run_id,
-    runtimeBytes: normalizeSqliteNumber(row.runtime_bytes),
+    runtimeBytes: sqliteNumber(row.runtime_bytes),
     sessionId: row.session_id,
   }));
 }
@@ -311,7 +312,7 @@ function readNextTrajectorySeq(database: OpenClawAgentDatabase, sessionId: strin
   if (row?.max_seq === null || row?.max_seq === undefined) {
     return 0;
   }
-  return normalizeSqliteNumber(row.max_seq) + 1;
+  return sqliteNumber(row.max_seq) + 1;
 }
 
 function trimSqliteTrajectoryRuntimeWindow(
@@ -363,8 +364,4 @@ function trajectoryJsonlRowBytes(eventJson: string): number {
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {
   return parseDateStringTimestampMs(event.ts);
-}
-
-function normalizeSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
 }

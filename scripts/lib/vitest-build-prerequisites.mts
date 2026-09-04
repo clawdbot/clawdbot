@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
 
 // A private-QA build also satisfies ordinary runtime readers.
 const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
@@ -117,7 +120,14 @@ export function resolveVitestPretestBuildMode(
           // Only project the canonical consumers; config loading and test discovery
           // stay with Vitest. Include-file overrides still intersect emitted filters.
           return cli
-            ? matchesVitestCliSelection(file, included ? [file] : [], cli.args, cli.dir, cli.env)
+            ? matchesVitestCliSelection(
+                file,
+                included ? [file] : [],
+                cli.args,
+                cli.dir,
+                cli.env,
+                includePatterns,
+              )
             : included;
         }),
       )
@@ -211,4 +221,175 @@ export async function runE2eGlobalSetup(
       throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
     }
   }
+}
+
+const require = createRequire(import.meta.url);
+
+type VitestFs = {
+  existsSync(path: string): boolean;
+  symlinkSync?(target: string, path: string, type: "dir" | "junction"): void;
+};
+function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "MODULE_NOT_FOUND" &&
+    error.message.includes("vitest/package.json")
+  );
+}
+
+/**
+ * Builds the actionable dependency-install message when Vitest is unavailable.
+ */
+export function resolveMissingVitestDependencyMessage(
+  baseDir = resolveRepoRoot(import.meta.url),
+  fsImpl: Pick<VitestFs, "existsSync"> = fs,
+): string {
+  const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
+  const reason = hasNodeModules
+    ? "[vitest] Vitest is not installed in node_modules."
+    : "[vitest] node_modules is missing; Vitest cannot be resolved.";
+  return [
+    reason,
+    "Install dependencies before running scripts/run-vitest.mjs:",
+    "  pnpm install --frozen-lockfile",
+    "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+  ].join("\n");
+}
+
+function resolvePathFromBase(value: string, baseDir: string): string {
+  return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+}
+
+function resolvePnpmModulesDir(env: NodeJS.ProcessEnv): string {
+  return env.PNPM_CONFIG_MODULES_DIR?.trim() || env.npm_config_modules_dir?.trim() || "";
+}
+
+function resolveHydratedVitestPackageJson({
+  baseDir,
+  env,
+  fsImpl,
+}: {
+  baseDir: string;
+  env: NodeJS.ProcessEnv;
+  fsImpl: Pick<VitestFs, "existsSync">;
+}): string | null {
+  const modulesDir = resolvePnpmModulesDir(env);
+  if (!modulesDir) {
+    return null;
+  }
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
+  return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
+}
+
+function ensureHydratedNodeModulesSelfLink({
+  hydratedNodeModulesPath,
+  fsImpl,
+  platform,
+}: {
+  hydratedNodeModulesPath: string;
+  fsImpl: VitestFs;
+  platform: NodeJS.Platform;
+}): boolean {
+  if (platform !== "win32") {
+    return true;
+  }
+  const selfLinkPath = path.join(hydratedNodeModulesPath, "node_modules");
+  if (fsImpl.existsSync(selfLinkPath)) {
+    return true;
+  }
+  if (!fsImpl.symlinkSync) {
+    return false;
+  }
+  try {
+    fsImpl.symlinkSync(hydratedNodeModulesPath, selfLinkPath, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHydratedVitestCliEntry({
+  baseDir,
+  env,
+  fsImpl,
+  platform,
+}: {
+  baseDir: string;
+  env: NodeJS.ProcessEnv;
+  fsImpl: VitestFs;
+  platform: NodeJS.Platform;
+}): string | null {
+  const hydratedVitestPackageJson = resolveHydratedVitestPackageJson({ baseDir, env, fsImpl });
+  if (!hydratedVitestPackageJson) {
+    return null;
+  }
+  const hydratedNodeModulesPath = path.dirname(path.dirname(hydratedVitestPackageJson));
+  if (!ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform })) {
+    return null;
+  }
+  const nodeModulesPath = path.join(baseDir, "node_modules");
+  if (fsImpl.existsSync(nodeModulesPath)) {
+    const workspaceVitestCliEntry = path.join(nodeModulesPath, "vitest", "vitest.mjs");
+    return fsImpl.existsSync(workspaceVitestCliEntry) ? workspaceVitestCliEntry : null;
+  }
+  if (!fsImpl.symlinkSync) {
+    return null;
+  }
+  try {
+    fsImpl.symlinkSync(
+      hydratedNodeModulesPath,
+      nodeModulesPath,
+      platform === "win32" ? "junction" : "dir",
+    );
+  } catch {
+    return null;
+  }
+  return path.join(nodeModulesPath, "vitest", "vitest.mjs");
+}
+
+/**
+ * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
+ */
+export function resolveVitestCliEntry({
+  baseDir = resolveRepoRoot(import.meta.url),
+  env = process.env,
+  fsImpl = fs,
+  platform = process.platform,
+  requireResolve = require.resolve.bind(require),
+}: {
+  baseDir?: string;
+  env?: NodeJS.ProcessEnv;
+  fsImpl?: VitestFs;
+  platform?: NodeJS.Platform;
+  requireResolve?: (specifier: string, options?: { paths?: string[] }) => string;
+} = {}): string {
+  const hydratedVitestCliEntry = resolveHydratedVitestCliEntry({
+    baseDir,
+    env,
+    fsImpl,
+    platform,
+  });
+  if (hydratedVitestCliEntry) {
+    return hydratedVitestCliEntry;
+  }
+
+  let vitestPackageJson: string;
+  try {
+    vitestPackageJson = requireResolve("vitest/package.json");
+  } catch (error) {
+    if (isMissingVitestResolveError(error)) {
+      const wrappedError: NodeJS.ErrnoException = new Error(
+        resolveMissingVitestDependencyMessage(baseDir, fsImpl),
+      );
+      wrappedError.code = "OPENCLAW_MISSING_VITEST";
+      throw wrappedError;
+    }
+    throw error;
+  }
+  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 }

@@ -49,11 +49,13 @@ function renderPanelTypeOption(type: SidebarPanelDefinition, slotted = false) {
       >${type.icon}</span
     >
     <span class="side-panel-type-option__label">${type.label}</span>
-    ${type.shortcut
-      ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
-          >${type.shortcut}</kbd
-        >`
-      : nothing}
+    ${
+      type.shortcut
+        ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
+            >${type.shortcut}</kbd
+          >`
+        : nothing
+    }
   `;
 }
 
@@ -73,6 +75,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
+  private panelMounted = false;
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(
@@ -212,11 +215,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
     );
     return html`<div class="rail-header__actions side-panel__actions">
-      ${panelActions
-        ? html`<span class="side-panel__action-group side-panel__action-group--content">
-            ${panelActions}
-          </span>`
-        : nothing}
+      ${
+        panelActions
+          ? html`<span class="side-panel__action-group side-panel__action-group--content">
+              ${panelActions}
+            </span>`
+          : nothing
+      }
       ${this.renderDockControls()}
       <span class="side-panel__action-group side-panel__action-group--layout">
         <openclaw-tooltip .content=${expandLabel}>
@@ -290,7 +295,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           data-panel-slot=${panel.slot}
           ?hidden=${panel.id !== column.activePanelId}
         >
-          ${this.panelTemplates[panel.slot] ?? this.renderEmpty(panel)}
+          ${
+            this.layout.open || panelType(this.panelDefinitions, panel.slot).retainWhenClosed
+              ? (this.panelTemplates[panel.slot] ?? this.renderEmpty(panel))
+              : nothing
+          }
         </div>`,
       )}
     </div>`;
@@ -342,30 +351,46 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderPanel() {
-    if (this.layout.open !== true) {
+    const open = this.layout.open === true;
+    const column = this.layout.columns[0];
+    // Retained app documents own unsaved state. Hide their existing DOM when
+    // minimizing; removing it reloads the iframe and discards that state.
+    if (
+      !open &&
+      (!this.panelMounted ||
+        !column?.panels.some(
+          (panel) => panelType(this.panelDefinitions, panel.slot).retainWhenClosed,
+        ))
+    ) {
+      this.panelMounted = false;
       return nothing;
     }
-    const column = this.layout.columns[0];
+    this.panelMounted = true;
     const dock = sidebarDock(this.layout);
     const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 480}px`;
     const height = this.layout.expanded || dock === "right" ? "100%" : `${column?.height ?? 360}px`;
-    return html`${!this.narrow && !this.layout.expanded && column
-        ? this.renderDivider(column)
-        : nothing}
+    return html`${
+        open && !this.narrow && !this.layout.expanded && column
+          ? this.renderDivider(column)
+          : nothing
+      }
       <section
-        class="sidebar-column side-panel ${this.narrow ? "side-panel--narrow" : ""} ${this.layout
-          .expanded
-          ? "side-panel--expanded"
-          : ""} ${dock === "bottom" ? "side-panel--bottom" : ""}"
+        class="sidebar-column side-panel ${this.narrow ? "side-panel--narrow" : ""} ${
+          this.layout.expanded ? "side-panel--expanded" : ""
+        } ${dock === "bottom" ? "side-panel--bottom" : ""}"
         style=${styleMap({ width, height })}
         aria-label=${t("chat.sidePanel.label")}
+        ?hidden=${!open}
+        ?inert=${!open}
       >
-        ${column?.panels.length
-          ? this.renderHeader(column)
-          : html`<header class="rail-header side-panel__header side-panel__header--empty">
-              <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
-              ${this.renderHeaderActions(null)}
-            </header>`}
+        ${
+          column?.panels.length
+            ? this.renderHeader(column)
+            : html`<header class="rail-header side-panel__header side-panel__header--empty">
+                <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
+                ${this.renderHeaderActions(null)}
+              </header>`
+        }
         ${this.renderBody(column)}
       </section>`;
   }

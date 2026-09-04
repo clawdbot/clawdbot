@@ -141,7 +141,6 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     workerDesktopObserveAvailable,
-    desktopObserveAvailable,
     desktopSessionRegistry,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
@@ -155,9 +154,7 @@ export async function startGatewayCoreRuntime(input: {
     activateRuntimeSecrets,
   } = runtime;
   const pluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
-  if (desktopSessionRegistry) {
-    kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
-  }
+  kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
       ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
@@ -190,8 +187,9 @@ export async function startGatewayCoreRuntime(input: {
             log,
             logDiscovery,
             nodeRegistry,
-            swapBonjourStop: kernel.swapBonjourStop,
+            swapDiscovery: kernel.swapDiscovery,
             pluginRegistry: pluginRuntime.registry,
+            pluginRuntimeClaim: kernel.pluginRuntimeGeneration.currentClaim(),
             broadcast,
             nodeSendToAllSubscribed,
             getPresenceVersion,
@@ -418,7 +416,6 @@ export async function startGatewayCoreRuntime(input: {
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
-        (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (descriptor.name !== "desktop.launch" &&
             descriptor.name !== "worker.desktop.observe" &&
@@ -465,7 +462,7 @@ export async function startGatewayCoreRuntime(input: {
     attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRuntime.registry.gatewayHandlers));
     attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
     kernel.publishMethodSurface(listAttachedGatewayMethods());
-    nodeRegistry.refreshNodePluginTools();
+    nodeRegistry.refreshRuntimePolicy();
   };
   const refreshAttachedGatewayDiscovery = async (
     nextPluginRegistry: typeof pluginRuntime.registry,
@@ -478,30 +475,10 @@ export async function startGatewayCoreRuntime(input: {
       if (!(await claim.waitForUnblocked())) {
         return;
       }
-      const stopPreviousDiscovery = kernel.swapBonjourStop(null);
-      await stopPreviousDiscovery?.().catch((err: unknown) => {
-        logDiscovery.warn(`gateway discovery stop failed before plugin refresh: ${String(err)}`);
-      });
-      const { startGatewayPluginDiscovery } = await loadGatewayStartupEarlyModule();
-      if (!(await claim.waitForUnblocked())) {
-        return;
-      }
-      const stopNextDiscovery = await startGatewayPluginDiscovery({
-        minimalTestGateway,
-        cfgAtStart,
-        port,
-        gatewayTls,
-        gatewayDirectReachable: !isLoopbackHost(bindHost),
-        tailscaleMode,
-        logDiscovery,
-        pluginRegistry: nextPluginRegistry,
-      });
-      if (
-        !(await claim.waitForUnblocked()) ||
-        !claim.publish(() => kernel.swapBonjourStop(stopNextDiscovery))
-      ) {
-        await stopNextDiscovery?.();
-      }
+      await runtimeState.discovery?.update(
+        { gatewayDiscoveryServices: nextPluginRegistry.gatewayDiscoveryServices },
+        claim,
+      );
     } catch (err) {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }

@@ -78,6 +78,7 @@ function createFixture() {
     getMessagingToolSentTargets: vi.fn(() => []),
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
+    getSourceReplyDelivered: vi.fn(() => undefined),
     getPendingToolMediaReply: vi.fn(() => undefined),
     getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
@@ -208,6 +209,7 @@ function createFixture() {
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
     trajectoryRecorder,
+    transcriptPolicy: { appendOnlyRuntimeContext: true },
     transport: {
       effectiveAgentTransport: "sse",
       effectiveExtraParams: {},
@@ -374,12 +376,15 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.runPrompt).toHaveBeenCalledWith(
       expect.objectContaining({
         context: expect.objectContaining({
+          appendOnlyRuntimeContext: true,
           preparedUserTurnMessage: expect.objectContaining({
             content: "hello",
             timestamp: 100,
             __openclaw: { senderName: "Alice" },
           }),
         }),
+        preflight: expect.objectContaining({ appendOnlyRuntimeContext: true }),
+        submission: expect.objectContaining({ appendOnlyRuntimeContext: true }),
         toolPolicy: fixture.input.prepared.promptToolPolicy,
       }),
     );

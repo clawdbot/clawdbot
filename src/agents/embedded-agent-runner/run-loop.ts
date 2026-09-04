@@ -91,6 +91,7 @@ export async function runPreparedEmbeddedLoop(
     () =>
       prepareEmbeddedRunRuntime({
         runParams: params,
+        sessionAdmission: input.sessionAdmission,
         provider,
         modelId,
         agentDir,
@@ -703,6 +704,9 @@ export async function runPreparedEmbeddedLoop(
       return terminalResolution.result;
     }
   } finally {
+    // Successful registration already cleared the marker; every earlier exit
+    // must restore terminal suppression before asynchronous settlement begins.
+    contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
     await settleEmbeddedRun({
       runInput: admittedRunInput,

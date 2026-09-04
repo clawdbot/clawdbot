@@ -441,7 +441,7 @@ export class GatewayBrowserClient {
       client,
       role,
       scopes,
-      authToken: selectedAuth.authBootstrapToken ?? selectedAuth.authToken,
+      authToken: selectedAuth.signatureToken,
       connectNonce,
       connectChallengeTs,
     });
@@ -460,6 +460,7 @@ export class GatewayBrowserClient {
           "approvals",
           "task-suggestions",
           "terminal-offset-seq",
+          "terminal-session-metadata",
           "tool-events",
           "inline-widgets",
           "ui-commands",

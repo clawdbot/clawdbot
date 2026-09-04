@@ -534,13 +534,16 @@ describe("Tool Search", () => {
       }),
     );
     expect(JSON.stringify(manyGroups, null, 2).length).toBeLessThanOrEqual(4_000);
+    let sawRetainedCandidate = false;
     for (const group of manyGroups.results as Array<{
       candidates: Array<{ id: string }>;
       truncated?: true;
     }>) {
       if (group.candidates.length === 0) {
+        expect(sawRetainedCandidate).toBe(false);
         expect(group.truncated).toBe(true);
       } else {
+        sawRetainedCandidate = true;
         expect(group.candidates[0]?.id).toBe(rankedIds[0]);
       }
     }
@@ -980,19 +983,22 @@ describe("Tool Search", () => {
       scenario: "delegation was never provided",
       agentId: "openclaw",
       denyOpenClaw: false,
-      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     },
     {
       scenario: "policy removed delegation",
       agentId: "main",
       denyOpenClaw: true,
-      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     },
     {
       scenario: "delegation remains authorized",
       agentId: "main",
       denyOpenClaw: false,
-      expected: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
     },
   ])(
     "keeps gateway guidance consistent across final and deferred surfaces when $scenario",

@@ -1,5 +1,4 @@
 import type { TSchema } from "typebox";
-// LLM Core type module defines shared TypeScript contracts.
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
 export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
@@ -128,6 +127,8 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
+  maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
@@ -335,12 +336,9 @@ export interface UserMessage {
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
-   * Marks a user message that carries transient current-turn runtime context
-   * (e.g. an OpenClaw runtime-context carrier appended after the active user
-   * turn). Such messages are volatile — present only on the turn they belong to
-   * and stripped on replay — so providers must NOT anchor a prompt-cache
-   * breakpoint on them, or the breakpoint would land on bytes that change every
-   * turn. Anchoring stays on the last stable (non-carrier) user message.
+   * Marks a user message carrying runtime context. Provider replay policy decides
+   * whether the carrier is transient or retained append-only; only retained
+   * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
 }
@@ -672,7 +670,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;

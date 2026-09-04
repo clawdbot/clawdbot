@@ -672,9 +672,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each(["", "2026.8.1-owner-approved"])(
+  it.each(["", "2026.8.1", "2026.9.1"])(
     "reuses strict protected-tag evidence with Telegram waiver %j",
-    (telegramWaiver) => {
+    (version) => {
       const { clone, priorSha } = getSharedRepo();
       const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
       const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
@@ -683,12 +683,12 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         targetSha: priorSha,
         trustedWorkflowRef,
         workflowRef: producerRef,
-        validationInputs: telegramWaiver
+        validationInputs: version
           ? {
               ...DEFAULT_INPUTS,
-              telegramWaiver,
-              targetVersion: "2026.8.1",
-              releasePackageSpec: "openclaw@2026.8.1",
+              telegramWaiver: `${version}-owner-approved`,
+              targetVersion: version,
+              releasePackageSpec: `openclaw@${version}`,
             }
           : DEFAULT_INPUTS,
       });

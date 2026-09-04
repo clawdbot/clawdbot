@@ -570,7 +570,7 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("keeps mixed selected checks on a fully isolated state view", async () => {
+  it("keeps mixed selected checks on an isolated plugin metadata view", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-private-"));
     const stateDir = path.join(rootDir, "operator-state");
     const configPath = path.join(stateDir, "openclaw.json");

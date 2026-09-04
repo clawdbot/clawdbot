@@ -682,7 +682,7 @@ export function createGatewayCloseHandler(
     closeProviderTransportDispatcherPool: () => Promise<void>;
     cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
-    updateCheckStop?: (() => void) | null;
+    updateCheckStop?: (() => Promise<void> | void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
     nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
     maintenance: GatewayMaintenanceHandles | null;
@@ -698,6 +698,7 @@ export function createGatewayCloseHandler(
       socket: { close: (code: number, reason: string) => void };
     }>;
     configReloader: { stop: () => Promise<void> };
+    finishRequestEntries?: () => Promise<void>;
     wss?: WebSocketServer;
     httpServer?: HttpServer;
     httpServers?: HttpServer[];
@@ -726,6 +727,7 @@ export function createGatewayCloseHandler(
       // info, and the completion line below reports duration and outcome.
       shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );
@@ -917,7 +919,6 @@ export function createGatewayCloseHandler(
         () => params.stopTaskRegistryMaintenance?.(),
         warnings,
       );
-      await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
       for (const timer of params.nodePresenceTimers.values()) {
         clearInterval(timer);
       }
@@ -1001,6 +1002,9 @@ export function createGatewayCloseHandler(
           }
         });
       }
+      // Node cleanup replies remain admissible until sockets close. Join their
+      // uncancellable preparation before releasing the remaining process state.
+      await params.finishRequestEntries?.();
       clearSessionTypingState();
       const transportServers =
         params.httpServers && params.httpServers.length > 0
@@ -1042,6 +1046,7 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
+      await params.finishRequestEntries?.();
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.

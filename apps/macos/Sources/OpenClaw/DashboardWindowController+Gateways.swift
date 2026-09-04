@@ -143,7 +143,9 @@ extension DashboardWindowController {
         let alert = NSAlert()
         alert.messageText = "Set \(gatewayName) as primary?"
         alert.informativeText =
-            "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections."
+            "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, " +
+            "and native chat connection. " +
+            "Other saved Gateway windows stay open."
         alert.addButton(withTitle: "Set as Primary")
         alert.addButton(withTitle: "Cancel")
         return alert

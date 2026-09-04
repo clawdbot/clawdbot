@@ -10,6 +10,12 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  connectUserModelAccount,
+  readUserModelAuthProfile,
+} from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
@@ -70,6 +76,7 @@ beforeEach(() => {
 afterEach(async () => {
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -266,6 +273,124 @@ describe("OAuthManagerRefreshError", () => {
 });
 
 describe("createOAuthManager", () => {
+  it.each([
+    { provider: "openai", metadata: undefined },
+    {
+      provider: "xai",
+      metadata: {
+        tokenEndpoint: "https://auth.x.ai/oauth2/token",
+        deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/authorize",
+        issuer: "https://auth.x.ai",
+        authFlow: "device-code",
+      },
+    },
+  ])(
+    "serializes $provider personal refreshes without CLI bootstrap or shared copies",
+    async ({ provider, metadata }) => {
+      await withOAuthAgentDirs("oauth-manager-personal-", async ({ mainAgentDir, agentDir }) => {
+        const owner = ensureProfileForEmail("alice@example.test");
+        const credential = createCredential({
+          provider,
+          ...metadata,
+          expires: Date.now() - 60_000,
+        });
+        const { authProfileId: profileId } = connectUserModelAccount({
+          ownerProfileId: owner.id,
+          credential,
+          assertCurrent() {},
+        });
+        const refreshCredential = vi.fn(async (current: OAuthCredential) => {
+          expect(current).toEqual(credential);
+          return {
+            access: "personal-rotated-access",
+            refresh: "personal-rotated-refresh",
+            expires: Date.now() + 600_000,
+            ...metadata,
+          };
+        });
+        const readBootstrapCredential = vi.fn(() => createCredential());
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, value) => value.access,
+          refreshCredential,
+          readBootstrapCredential,
+          isRefreshTokenReusedError: () => false,
+        });
+        const results = await Promise.all(
+          [mainAgentDir, agentDir].map((targetAgentDir) =>
+            manager.resolveOAuthAccess({
+              store: ensureAuthProfileStore(targetAgentDir, { profileId }),
+              profileId,
+              credential,
+              agentDir: targetAgentDir,
+            }),
+          ),
+        );
+
+        expect(results.map((result) => result?.apiKey)).toEqual([
+          "personal-rotated-access",
+          "personal-rotated-access",
+        ]);
+        expect(refreshCredential).toHaveBeenCalledTimes(1);
+        expect(readBootstrapCredential).not.toHaveBeenCalled();
+        expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
+          access: "personal-rotated-access",
+          refresh: "personal-rotated-refresh",
+          ...metadata,
+        });
+        for (const targetAgentDir of [undefined, mainAgentDir, agentDir]) {
+          expect(
+            ensureAuthProfileStoreWithoutExternalProfiles(targetAgentDir).profiles[profileId],
+          ).toBeUndefined();
+        }
+      });
+    },
+  );
+
+  it("does not overwrite a personal reconnect while a refresh is in flight", async () => {
+    await withOAuthAgentDirs("oauth-manager-personal-reconnect-", async ({ agentDir }) => {
+      const owner = ensureProfileForEmail("alice@example.test");
+      const credential = createCredential({ expires: Date.now() - 60_000, accountId: "workspace" });
+      const { authProfileId: profileId } = connectUserModelAccount({
+        ownerProfileId: owner.id,
+        credential,
+        assertCurrent() {},
+      });
+      const reconnected = createCredential({
+        access: "reconnected-access",
+        refresh: "reconnected-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "workspace",
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, value) => value.access,
+        refreshCredential: async () => {
+          connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential: reconnected,
+            matchesCredential: () => true,
+            assertCurrent() {},
+          });
+          return {
+            access: "stale-refresh-access",
+            refresh: "stale-refresh-token",
+            expires: Date.now() + 600_000,
+          };
+        },
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const resolved = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStore(agentDir, { profileId }),
+        profileId,
+        credential,
+        agentDir,
+      });
+      expect(resolved?.apiKey).toBe("reconnected-access");
+      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(reconnected);
+    });
+  });
+
   it("passes active config to OAuth API-key formatting", async () => {
     const profileId = "openai:oauth";
     const credential = createCredential({ expires: Date.now() + 10 * 60_000 });

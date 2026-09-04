@@ -30,7 +30,7 @@ export type SystemAgentToolOptions = {
   agentId?: string;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
-  /** Delegated proposals require operator UI approval, never a chat reply. */
+  /** The host resolves delegated proposals under session policy, never a chat reply. */
   operatorApprovalOnly?: boolean;
   /**
    * Host-verified consent for THIS turn: true only when the host judged the
@@ -153,9 +153,10 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "configure_gateway",
   "import_memory",
   "configure_model_provider",
+  "manage_model_accounts",
   "open_agent",
   "open_setup",
-  // Mutating actions below require approved=true.
+  // Mutating actions below stage an exact proposal for host authorization.
   "setup",
   "set_default_model",
   "config_set",
@@ -277,6 +278,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       const workspace = readToolStringParam(params, "workspace")?.trim();
       return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
     }
+    case "manage_model_accounts":
+      return { kind: "model-accounts" };
     case "open_agent": {
       const agentId = readToolStringParam(params, "agentId")?.trim();
       const workspace = readToolStringParam(params, "workspace")?.trim();
@@ -369,10 +372,10 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
       "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
-      "Provider/auth/credentials: exit; run `openclaw onboard`. Never request credentials.",
-      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Exact user approval required; then approved=true. Host applies after turn; rechecks inference owner.",
+      "Personal model accounts: manage_model_accounts opens the human-owned account controls; no change is made by the handoff. Shared provider/auth setup: exit; run `openclaw onboard`. Never request credentials.",
+      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
-      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/$include or default-route agent fields; use set_default_model / onboard.",
+      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/$include, plugin install/load policy, default-route model/runtime/params, or agent identity/topology; use set_default_model / onboard.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
@@ -388,6 +391,12 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         // this turn (the wizard itself collects explicit user answers).
         if (options.directiveRef && options.directiveRef.current?.kind !== "approved-operation") {
           options.directiveRef.current = directive;
+        }
+        if (directive.kind === "model-accounts") {
+          return textResult(
+            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there; never request, repeat, or put credentials in chat.`,
+            {},
+          );
         }
         return textResult(
           directive.kind === "channel-setup"
@@ -453,7 +462,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             options.proposalRef.operation = operation;
           }
           const approvalHint = options.operatorApprovalOnly
-            ? `The proposal is registered for operator approval. Do not request conversational approval. ${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+            ? SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF
             : "The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).";
           return textResult(
             `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. ${approvalHint}`,

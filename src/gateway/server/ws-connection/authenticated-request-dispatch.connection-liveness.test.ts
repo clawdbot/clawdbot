@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createGatewayConnectionState } from "../../server-connection-state.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
@@ -52,7 +52,8 @@ describe.sequential("authenticated request connection liveness", () => {
       started.resolve();
       return held.promise;
     });
-    const state = createGatewayConnectionState({ cfg: {} });
+    const state = createGatewayConnectionState({ bootId: "late-subscription", cfg: {} });
+    onTestFinished(() => state.mentionInbox.dispose());
     const client = createOperatorWsClient({
       connId: "late-subscription-connection",
       scopes: ["operator.read"],

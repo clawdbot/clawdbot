@@ -1,8 +1,9 @@
-import { mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { openChatSidePanelType } from "../../e2e/chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -106,6 +107,180 @@ const runningExec = {
 };
 
 suite.define(() => {
+  it("keeps session task rows stable and hides recovered list retries", async () => {
+    const proofDir = createControlUiE2eArtifactDir("chat-tasks-panel-stable-order");
+    const rawVideoDir = path.join(proofDir, "raw-video");
+    await mkdir(rawVideoDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: rawVideoDir, size: { width: 1440, height: 900 } },
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    const activeTasks = Array.from({ length: 5 }, (_, index) => ({
+      id: `task-panel-running-${index + 1}`,
+      taskId: `task-panel-running-${index + 1}`,
+      kind: "subagent",
+      runtime: "subagent",
+      status: "running",
+      title: `Panel running task ${index + 1}`,
+      agentId: "main",
+      sessionKey: chatSessionKey,
+      ownerKey: chatSessionKey,
+      createdAt: baseTime + index * 1_000,
+      startedAt: baseTime + index * 1_000,
+      updatedAt: baseTime + (5 - index) * 10_000,
+      toolUseCount: index + 1,
+      lastToolName: "exec",
+    }));
+    const finishedTasks = [
+      {
+        ...activeTasks[0],
+        id: "task-panel-finished-first",
+        taskId: "task-panel-finished-first",
+        status: "completed",
+        title: "Panel finished first",
+        endedAt: baseTime + 60_000,
+        updatedAt: baseTime + 100_000,
+      },
+      {
+        ...activeTasks[1],
+        id: "task-panel-finished-last",
+        taskId: "task-panel-finished-last",
+        status: "completed",
+        title: "Panel finished last",
+        endedAt: baseTime + 70_000,
+        updatedAt: baseTime + 90_000,
+      },
+    ];
+    const activeParams = {
+      sessionKey: chatSessionKey,
+      agentId: "main",
+      status: ["queued", "running"],
+      limit: 200,
+    };
+    const recentParams = {
+      sessionKey: chatSessionKey,
+      agentId: "main",
+      status: ["completed", "failed", "timed_out", "cancelled"],
+      sortBy: "endedAt",
+      limit: 100,
+    };
+    const listResponses = {
+      cases: [
+        { match: activeParams, response: { tasks: activeTasks } },
+        { match: recentParams, response: { tasks: finishedTasks } },
+      ],
+    };
+    const runningOrder = () =>
+      page
+        .locator('[data-tasks-section="running"] [data-task-id] .chat-tasks-rail__task-title')
+        .allTextContents();
+    const finishedOrder = () =>
+      page
+        .locator('[data-tasks-section="finished"] [data-task-id] .chat-tasks-rail__task-title')
+        .allTextContents();
+    const expectedRunning = activeTasks.map((task) => task.title);
+    const expectedFinished = ["Panel finished last", "Panel finished first"];
+    try {
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [{ type: "text", text: "Session Tasks side panel proof." }],
+            role: "assistant",
+            timestamp: baseTime,
+          },
+        ],
+        methodResponses: { "tasks.list": listResponses },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Session Tasks side panel proof.").waitFor();
+      await openChatSidePanelType(page, "Tasks");
+      const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      await expect.poll(runningOrder).toEqual(expectedRunning);
+      await panel.getByRole("button", { name: "Finished (2)" }).click();
+      await expect.poll(finishedOrder).toEqual(expectedFinished);
+      await page.screenshot({ path: path.join(proofDir, "01-session-panel-order.png") });
+      await page.waitForTimeout(500);
+
+      const updatedTask = {
+        ...activeTasks[4],
+        updatedAt: baseTime + 200_000,
+        toolUseCount: 80,
+        progressSummary: "Activity updated without moving this card",
+      };
+      await gateway.emitGatewayEvent("task", { action: "upserted", task: updatedTask });
+      await panel.getByText(updatedTask.progressSummary).waitFor();
+      expect(await runningOrder()).toEqual(expectedRunning);
+      expect(await finishedOrder()).toEqual(expectedFinished);
+      await page.screenshot({ path: path.join(proofDir, "02-activity-stable.png") });
+      await page.waitForTimeout(500);
+
+      const refresh = panel.getByRole("button", { name: "Refresh background tasks" });
+      const beforeTransient = (await gateway.getRequests("tasks.list")).length;
+      await gateway.deferNext("tasks.list", activeParams);
+      await refresh.click();
+      await expect.poll(() => refresh.isDisabled()).toBe(true);
+      expect(await refresh.locator(".btn__spinner").count()).toBe(1);
+      await page.screenshot({ path: path.join(proofDir, "03-refresh-loading.png") });
+      await expect
+        .poll(async () => gateway.getRequests("tasks.list"))
+        .toHaveLength(beforeTransient + 2);
+      await gateway.rejectDeferred("tasks.list", {
+        code: "UNAVAILABLE",
+        message: "task registry changed during tasks.list; retry",
+        retryable: true,
+      });
+      await expect
+        .poll(async () => gateway.getRequests("tasks.list"))
+        .toHaveLength(beforeTransient + 4);
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      expect(await panel.getByRole("alert").count()).toBe(0);
+      expect(await runningOrder()).toEqual(expectedRunning);
+      await page.screenshot({ path: path.join(proofDir, "04-transient-retry-hidden.png") });
+      await page.waitForTimeout(500);
+
+      let listRequestCount = (await gateway.getRequests("tasks.list")).length;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await gateway.deferNext("tasks.list", activeParams);
+      }
+      await refresh.click();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect
+          .poll(async () => gateway.getRequests("tasks.list"))
+          .toHaveLength(listRequestCount + 2);
+        listRequestCount += 2;
+        await gateway.rejectDeferred("tasks.list", {
+          code: "UNAVAILABLE",
+          message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+          retryable: true,
+        });
+      }
+      const alert = panel.getByRole("alert");
+      await alert.waitFor();
+      expect(await alert.textContent()).toContain(
+        "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+      );
+      await page.screenshot({ path: path.join(proofDir, "05-retries-exhausted.png") });
+      await page.waitForTimeout(500);
+
+      await refresh.click();
+      await expect.poll(() => alert.count()).toBe(0);
+      expect(await runningOrder()).toEqual(expectedRunning);
+      expect(await finishedOrder()).toEqual(expectedFinished);
+      await page.screenshot({ path: path.join(proofDir, "06-recovered.png") });
+      await page.waitForTimeout(500);
+    } finally {
+      await context.close();
+      if (video) {
+        await copyFile(await video.path(), path.join(proofDir, "session-tasks-panel.webm"));
+      }
+      await rm(rawVideoDir, { force: true, recursive: true });
+    }
+  });
+
   it("opens the rail, applies pushed completion, and sends cancel", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     const railFlowDir = path.join(artifactDir, "rail-flow");
@@ -254,7 +429,7 @@ suite.define(() => {
           path: path.join(railFlowDir, "02-task-detail-expanded.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Restore side panel" }).click();
+        await page.getByRole("button", { name: "Collapse", exact: true }).click();
         await expect
           .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
           .toBe("false");

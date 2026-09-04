@@ -199,6 +199,30 @@ esac
     expect(steps.at(-1)?.id).toBe("validate");
   });
 
+  it("keeps the watch direct-node recipe isolated from unrelated plugin fixtures", () => {
+    const steps = resolveUpgradeSurvivorConfigSteps("watchos-direct-node");
+    const intents = steps.map((step) => step.intent);
+
+    expect(intents).toEqual(["update", "gateway", "validate"]);
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("uses password auth for mobile pairing reconnect coverage", () => {
+    const steps = resolveUpgradeSurvivorConfigSteps("mobile-pairing-reconnect");
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+
+    expect(steps.map((step) => step.intent)).toEqual(["update", "gateway", "validate"]);
+    expect(gateway.auth).toEqual({
+      mode: "password",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "GATEWAY_AUTH_PASSWORD_REF",
+      },
+    });
+    expect(gateway.auth).not.toHaveProperty("token");
+  });
+
   it("composes configured plugin installs into the SQLite volume scenario", () => {
     expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
       resolveScenarioConfigSteps("configured-plugin-installs"),
@@ -421,6 +445,7 @@ process.exit(0);
           .split("\n")
           .map((line) => JSON.parse(line));
         expect(summary.skippedIntents).toContain("acpx-openclaw-tools-bridge");
+        expect(summary.acceptedIntents).not.toContain("acpx-openclaw-tools-bridge");
         expect(summary.baselineVersion).toBe("2026.4.21");
         expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
         expect(loggedArgs).not.toContainEqual(
