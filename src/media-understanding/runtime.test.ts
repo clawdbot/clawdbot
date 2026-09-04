@@ -33,6 +33,13 @@ const mocks = vi.hoisted(() => {
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    optimizeImageDescriptionInput: vi.fn(
+      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
+        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
+        fileName: params.fileName,
+        mime: params.mime,
+      }),
+    ),
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
@@ -64,6 +71,13 @@ vi.mock("./image-runtime.js", () => ({
 vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
 }));
+
+vi.mock("./image-input-normalize.js", async () => {
+  const actual = await vi.importActual<typeof import("./image-input-normalize.js")>(
+    "./image-input-normalize.js",
+  );
+  return { ...actual, optimizeImageDescriptionInput: mocks.optimizeImageDescriptionInput };
+});
 
 function requireRunCapabilityRequest(): unknown {
   // File API tests verify the normalized request handed to runCapability, not
@@ -169,6 +183,14 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
+    mocks.optimizeImageDescriptionInput.mockClear();
+    mocks.optimizeImageDescriptionInput.mockImplementation(
+      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
+        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
+        fileName: params.fileName,
+        mime: params.mime,
+      }),
+    );
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -618,7 +640,7 @@ describe("media-understanding runtime", () => {
     ).resolves.toEqual({ text: "generic image ok", model: "vision" });
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith({
-      buffer: Buffer.from("image"),
+      buffer: Buffer.from("optimized:image"),
       fileName: "sample.jpg",
       mime: "image/jpeg",
       provider: "zai",
@@ -670,7 +692,7 @@ describe("media-understanding runtime", () => {
       expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
       expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
         expect.objectContaining({
-          buffer: Buffer.from("jpeg-normalized"),
+          buffer: Buffer.from("optimized:jpeg-normalized"),
           fileName: "sample.bin",
           mime: "image/jpeg",
         }),
@@ -692,7 +714,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("remote-image"),
+        buffer: Buffer.from("optimized:remote-image"),
         fileName: "photo.png",
         mime: "image/png",
       }),
@@ -721,7 +743,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: PNG_1X1,
+        buffer: Buffer.concat([Buffer.from("optimized:"), PNG_1X1]),
         fileName: "photo.jpg",
         mime: "image/png",
       }),
@@ -768,7 +790,7 @@ describe("media-understanding runtime", () => {
     });
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("remote-png"),
+        buffer: Buffer.from("optimized:remote-png"),
         fileName: "png",
         mime: "image/png",
         provider: "zai",
@@ -851,7 +873,7 @@ describe("media-understanding runtime", () => {
       )[0],
       "(describeImage.mock.calls as unknown as Array<\n        [\n          {\n            buffer?: Buffer;\n            fileName?: string;\n            mime?: string;\n            provider?: string;\n            model?: string;\n            prompt?: string;\n            agentDir?: string;\n          },\n        ]\n      >)[0] test invariant",
     );
-    expect(describeImageOptions?.buffer).toEqual(Buffer.from("image-bytes"));
+    expect(describeImageOptions?.buffer).toEqual(Buffer.from("optimized:image-bytes"));
     expect(describeImageOptions?.fileName).toBe("sample.jpg");
     expect(describeImageOptions?.mime).toBe("image/jpeg");
     expect(describeImageOptions?.provider).toBe("gemini");

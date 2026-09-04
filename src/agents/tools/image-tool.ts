@@ -30,9 +30,9 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveImageCompressionModelPolicy } from "../image-compression-policy.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
@@ -444,61 +444,6 @@ function resolveCompressionModelCandidates(params: {
   });
 }
 
-async function resolveCompressionModelPolicyWithHooks(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  skipProviderRuntimeHooks: boolean;
-}): Promise<ImageCompressionModelPolicy> {
-  try {
-    const resolved = await imageToolProviderDeps.resolveModelAsync(
-      params.provider,
-      params.model,
-      params.agentDir,
-      params.cfg,
-      {
-        allowBundledStaticCatalogFallback: true,
-        skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
-        skipAgentDiscovery: true,
-        workspaceDir: params.workspaceDir,
-        ...(params.preparedModelRuntime
-          ? { preparedModelRuntime: params.preparedModelRuntime }
-          : {}),
-      },
-    );
-    return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
-  } catch {
-    return {};
-  }
-}
-
-async function resolveCompressionModelPolicy(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-}): Promise<ImageCompressionModelPolicy> {
-  const staticPolicy = await resolveCompressionModelPolicyWithHooks({
-    ...params,
-    skipProviderRuntimeHooks: true,
-  });
-  if (typeof staticPolicy.maxSidePx === "number" || typeof staticPolicy.maxPixels === "number") {
-    return staticPolicy;
-  }
-  // Catalog augmentation governs row discovery, not model normalization. Missing
-  // limits still need the selected provider's hooks; explicit static values win.
-  const runtimePolicy = await resolveCompressionModelPolicyWithHooks({
-    ...params,
-    skipProviderRuntimeHooks: false,
-  });
-  return { ...runtimePolicy, ...staticPolicy };
-}
-
 async function resolveImageCompressionPolicy(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
@@ -512,13 +457,16 @@ async function resolveImageCompressionPolicy(params: {
   const quality = params.cfg?.agents?.defaults?.imageQuality;
   const models: ImageCompressionModelPolicy[] = await Promise.all(
     modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
-      return resolveCompressionModelPolicy({
+      return resolveImageCompressionModelPolicy({
         cfg: params.cfg,
         provider: candidate.provider,
         model: candidate.model,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         preparedModelRuntime: params.preparedModelRuntime,
+        deps: {
+          resolveModelAsync: imageToolProviderDeps.resolveModelAsync,
+        },
       });
     }),
   );

@@ -6,7 +6,10 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
-import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import {
+  normalizeImageDescriptionInput,
+  optimizeImageDescriptionInput,
+} from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -298,10 +301,19 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     (params.agentId
       ? resolveAgentDir(params.cfg, params.agentId)
       : resolveDefaultAgentDir(params.cfg));
+  const image = await optimizeImageDescriptionInput({
+    ...params.image,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentDir,
+    workspaceDir: params.workspaceDir,
+  });
   return await describeImage({
-    buffer: params.image.buffer,
-    fileName: params.image.fileName,
-    mime: params.image.mime,
+    buffer: image.buffer,
+    fileName: image.fileName ?? params.image.fileName,
+    mime: image.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,

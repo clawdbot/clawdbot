@@ -41,6 +41,7 @@ import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
 import { runFfmpeg } from "../media/media-services.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -58,7 +59,10 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import {
+  normalizeImageDescriptionInput,
+  optimizeImageDescriptionInput,
+} from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   recordLocalAudioBackendObservation,
@@ -789,12 +793,33 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       maxBytes,
     });
+    let optimizedMedia: Awaited<ReturnType<typeof optimizeImageDescriptionInput>>;
+    try {
+      optimizedMedia = await optimizeImageDescriptionInput({
+        ...normalizedMedia,
+        fileName: media.fileName,
+        maxBytes,
+        cfg,
+        provider: requestProviderId,
+        model: modelId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
+    } catch (error) {
+      if (error instanceof ImageOptimizationLimitError) {
+        throw new MediaUnderstandingSkipError(
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${error.maxBytes}`,
+        );
+      }
+      throw error;
+    }
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
-      buffer: normalizedMedia.buffer,
-      fileName: media.fileName,
-      mime: normalizedMedia.mime,
+      buffer: optimizedMedia.buffer,
+      fileName: optimizedMedia.fileName ?? media.fileName,
+      mime: optimizedMedia.mime,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,
