@@ -16,12 +16,12 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-const TOOL_NAME_ALIASES: Record<string, string> = {
-  bash: "exec",
-  "apply-patch": "apply_patch",
+const TOOL_NAME_ALIASES = new Map<string, string>([
+  ["bash", "exec"],
+  ["apply-patch", "apply_patch"],
   // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
-  cron: "automations",
-};
+  ["cron", "automations"],
+]);
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
 type ToolAllowlistWithIntersection = string[] & {
@@ -64,11 +64,9 @@ export function isToolExecutionAllowed(allowNames: readonly string[], toolName: 
   return allowNames.some((name) => normalizeToolPolicyName(name) === target);
 }
 
-export function normalizeToolPolicyName(name: string) {
+export function normalizeToolPolicyName(name: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(name);
-  // Tool names come from config and model tool calls, so inherited keys such as
-  // "constructor" or "__proto__" must not read through to Object.prototype.
-  return Object.hasOwn(TOOL_NAME_ALIASES, normalized) ? TOOL_NAME_ALIASES[normalized] : normalized;
+  return TOOL_NAME_ALIASES.get(normalized) ?? normalized;
 }
 
 /** Checks whether an in-progress prefix can still resolve to an allowed tool or alias. */
@@ -84,9 +82,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
   const allowed = new Set<string>();
   for (const toolName of allowedToolNames) {
     const foldedToolName = normalizeLowercaseStringOrEmpty(toolName);
-    const normalizedToolName = Object.hasOwn(TOOL_NAME_ALIASES, foldedToolName)
-      ? TOOL_NAME_ALIASES[foldedToolName]
-      : foldedToolName;
+    const normalizedToolName = TOOL_NAME_ALIASES.get(foldedToolName) ?? foldedToolName;
     if (normalizedToolName) {
       allowed.add(normalizedToolName);
     }
@@ -101,9 +97,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  const resolvedPrefix = Object.hasOwn(TOOL_NAME_ALIASES, normalizedPrefix)
-    ? TOOL_NAME_ALIASES[normalizedPrefix]
-    : normalizedPrefix;
+  const resolvedPrefix = TOOL_NAME_ALIASES.get(normalizedPrefix) ?? normalizedPrefix;
   if (resolvedPrefix !== normalizedPrefix) {
     for (const toolName of allowed) {
       if (toolName.startsWith(resolvedPrefix)) {
@@ -112,7 +106,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  for (const [alias, toolName] of Object.entries(TOOL_NAME_ALIASES)) {
+  for (const [alias, toolName] of TOOL_NAME_ALIASES) {
     if (alias.startsWith(normalizedPrefix) && allowed.has(toolName)) {
       return true;
     }
