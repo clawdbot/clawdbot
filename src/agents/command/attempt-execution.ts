@@ -1334,6 +1334,7 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),

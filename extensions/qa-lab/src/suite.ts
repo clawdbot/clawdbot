@@ -449,31 +449,24 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
   return files.toSorted((left, right) => left.mtimeMs - right.mtimeMs);
 }
 
-async function waitForStableFileSize(pathName: string) {
-  let lastSize = -1;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const stats = await fs.stat(pathName).catch(() => null);
-    if (stats && stats.size > 0 && stats.size === lastSize) {
-      return stats.size;
-    }
-    lastSize = stats?.size ?? -1;
-    await sleep(250);
-  }
-  const stats = await fs.stat(pathName);
-  return stats.size;
-}
-
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: QaGatewayHandle;
+  gateway: Pick<QaGatewayHandle, "tempRoot" | "pid" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
+  const pid = params.gateway.pid;
+  const assertSameGateway = () => {
+    if (params.gateway.pid !== pid) {
+      throw new Error("Gateway changed during heap snapshot capture");
+    }
+  };
+  const deadlineMs = Date.now() + 20_000;
   await params.gateway.signalProcess("SIGUSR2");
   let snapshotPath: string | undefined;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  while (Date.now() < deadlineMs) {
     const next = (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(
       (file) => !before.has(file.pathName),
     );
@@ -487,7 +480,12 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
     return undefined;
   }
 
-  const bytes = await waitForStableFileSize(snapshotPath);
+  // Node opens the file before synchronous serialization. A same-process RPC after
+  // file appearance cannot respond until the signal handler has closed the writer.
+  assertSameGateway();
+  await params.gateway.call("health", {}, { deadlineMs });
+  assertSameGateway();
+  const { size: bytes } = await fs.stat(snapshotPath);
   const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
   await fs.mkdir(snapshotsDir, { recursive: true });
   const relativePath = path.join(

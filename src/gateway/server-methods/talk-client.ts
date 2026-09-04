@@ -10,6 +10,7 @@ import {
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
@@ -33,7 +34,11 @@ import {
 import { resolveSandboxedSessionCreation } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
-import { closeTalkClientGatewayControlSession } from "../talk-client-gateway-control.js";
+import { prepareTalkClientControlAuthority } from "../talk-client-agent-consult.js";
+import {
+  closeTalkClientGatewayControlSession,
+  resolveTalkAgentConsultAuthority,
+} from "../talk-client-gateway-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
@@ -285,6 +290,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         context,
         clientConnId: client?.connId,
         sessionTarget: target,
+        scope: { kind: "session" },
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
       if (runTarget === null) {
@@ -301,6 +307,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const result = await controlRealtimeVoiceAgentRun({
         sessionKey: target.canonicalKey,
         runTarget,
+        getToolAuthorityOverlay: () =>
+          prepareTalkClientControlAuthority({
+            config: context.getRuntimeConfig(),
+            agentRuntime: createPluginRuntime().agent,
+            sessionTarget: target,
+            source: runTarget.toolAuthoritySource,
+            authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+          }),
         text: params.text,
         mode: params.mode,
       });

@@ -23,6 +23,40 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
+  it.each([
+    { codexErrorInfo: "serverOverloaded", status: 503, code: "OVERLOADED" },
+    { codexErrorInfo: "internalServerError", status: 500 },
+    ...[
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ].map((variant) => ({
+      codexErrorInfo: { [variant]: { httpStatusCode: 503 } },
+      status: 503,
+    })),
+    { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 404 } }, status: 404 },
+  ])(
+    "preserves terminal provider facts for $codexErrorInfo",
+    async ({ codexErrorInfo, ...facts }) => {
+      for (const method of ["error", "turn/completed"] as const) {
+        const projector = await createProjector();
+        const error = { message: "The model is not available.", codexErrorInfo };
+        await projector.handleNotification(
+          forCurrentTurn(
+            method,
+            method === "error"
+              ? { error, willRetry: false }
+              : { turn: { id: TURN_ID, status: "failed", items: [], error } },
+          ),
+        );
+        const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
+        expect(terminal.promptError).toBeInstanceOf(Error);
+        expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
+      }
+    },
+  );
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 

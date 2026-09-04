@@ -1177,6 +1177,7 @@ describe("scripts/test-projects changed-target routing", () => {
           ? [
               "test/scripts/ci-workflow-guards.test.ts",
               "test/scripts/ci-changed-node-test-plan.test.ts",
+              "test/scripts/labeler-size-label.test.ts",
             ]
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
