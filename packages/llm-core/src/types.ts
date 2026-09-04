@@ -117,6 +117,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -271,6 +288,8 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;

@@ -41,7 +41,7 @@ describe("concurrent worker workspace results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
-  it("reports resource cleanup failure after reconciling the completed turn", async () => {
+  it("reports cleanup failure and reclaims the inputs before the next turn without skills", async () => {
     const remote = path.join(await fs.realpath(root), "remote");
     const source = path.join(root, "source");
     await fs.mkdir(remote);
@@ -67,11 +67,13 @@ describe("concurrent worker workspace results", () => {
       claimId: "cleanup-failure",
       runId: inputTurn.runId,
     });
+    let failCleanup = true;
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       runWorkspaceCommand: async (command) => {
-        if (JSON.parse(command.input!).op === "cleanup") {
+        if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
+          failCleanup = false;
           return {
             code: 1,
             stdout: "",
@@ -114,6 +116,34 @@ describe("concurrent worker workspace results", () => {
       }),
     ).rejects.toThrow("Skill resource cleanup failed");
     expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+
+    const leftovers = await fs.readdir(remote);
+    expect(leftovers).toHaveLength(1);
+    const nextTurn = turn("cleanup-recovery");
+    const nextClaim = placements.claimTurn({
+      ...sessionTarget,
+      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      claimId: "cleanup-recovery",
+      runId: nextTurn.runId,
+    });
+    let executed = false;
+    await executeRemoteExecTurn({
+      environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
+      onHandoff: () => {},
+      placement,
+      placements,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      turn: nextTurn,
+      turnClaim: nextClaim,
+      localWorkspaceDir: root,
+      runLocal: async () => {
+        expect(await fs.readdir(remote)).toEqual([]);
+        executed = true;
+        return { meta: { durationMs: 1 } };
+      },
+    });
+    expect(executed).toBe(true);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 

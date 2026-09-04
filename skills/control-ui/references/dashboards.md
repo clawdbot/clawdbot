@@ -6,7 +6,7 @@
 | ----------------------- | --------------------------- | -------------------------------------- |
 | Session row             | `sessions_list`, `sessions` | Find, label, group, pin, archive       |
 | Board snapshot          | `dashboard read`            | Current session only                   |
-| Tabs and layout         | `dashboard`                 | Create, rename, reorder, focus, dock   |
+| Tabs and layout         | `dashboard`                 | Create, rename, reorder, focus, expand |
 | Custom HTML/SVG         | `show_widget`               | Set `pin: true`; update by stable name |
 | Trusted plugin widget   | `dashboard widget_put`      | Requires an advertised `pluginKind`    |
 | Visible browser state   | Browser-control tool        | Inspect, click, type, screenshot       |
@@ -18,13 +18,16 @@
 2. Create tabs only when the existing structure does not fit.
 3. Put each widget on its final tab with a stable name.
 4. Move and resize after content exists.
-5. Configure the chat dock.
-6. Pin the session.
-7. Focus the intended tab.
+5. Pin the session.
+6. Focus the intended tab.
+7. Choose a split or expanded dashboard panel.
 8. Read again, then verify the rendered UI.
 
-The Dashboard tool's focus and dock commands need a connected Control UI. They
-can return unavailable even though board storage is healthy.
+The Dashboard tool's focus and presentation commands need a connected Control
+UI. They can return unavailable even though board storage is healthy.
+`focus_tab` opens the side panel. Call `set_presentation` after focusing the tab:
+`presentation: "expanded"` expands it; `"split"` restores a split view using the
+current panel layout.
 
 ## Updating content
 
@@ -41,24 +44,27 @@ change creates a new revision and may invalidate prior capability approval.
 Use `dashboard widget_put` only for registered plugin kinds. It is not a second
 HTML-authoring path.
 
-## Face and sidebar behavior
+## Dashboard panel and sidebar behavior
 
 The session is the durable sidebar object. A board is not a separate session or
 navigation page.
 
 - `sessions patch` can pin and organize the session.
 - `dashboard focus_tab` broadcasts a focus command. A connected Control UI
-  switches to Dashboard and persists the face preference for that session.
-- The human can also choose Chat, Split, or Dashboard in the session header.
-- Sessions whose stored preference is Dashboard appear under `/dashboards`.
+  opens the dashboard panel and saves the session's dashboard preference.
+- **Expand side panel** fills the task area; **Collapse** brings chat back beside
+  the dashboard. Closing the panel returns to chat alone.
+- Sessions with a stored board appear in the `/dashboards` gallery, regardless
+  of their saved view. Selecting a card opens its owning chat with the dashboard
+  panel expanded.
 
-The active tab and remembered dock placement are per-device UI state. The
-Chat/Dashboard preference is server-side session state.
+The active tab and side-panel layout are per-device UI state. The dashboard
+preference is server-side session state.
 
 ## Verification checklist
 
 - Correct session key and label.
-- Expected Dashboard face and tab.
+- Expected dashboard panel and tab.
 - Stable widget names, correct owners, and current revisions.
 - Layout is usable at desktop and narrow widths when relevant.
 - Widget frame loaded; no sandbox-origin or ticket error.

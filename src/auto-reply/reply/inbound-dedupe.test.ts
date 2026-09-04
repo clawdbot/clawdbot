@@ -2,7 +2,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import { claimInboundDedupe, commitInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -33,6 +33,34 @@ describe("inbound dedupe", () => {
     expect(claimKey({ ...sharedInboundContext, MessageThreadId: 77 })).toBe(
       claimKey({ ...sharedInboundContext, MessageThreadId: "77" }),
     );
+  });
+
+  it.each([
+    { CommandSource: "native", CommandBody: "/stop", CommandAuthorized: true },
+    { CommandSource: "text", CommandBody: "/steer keep working", CommandAuthorized: true },
+  ] as const)("admits each explicit target of one $CommandSource command once", (command) => {
+    const firstTarget = {
+      ...sharedInboundContext,
+      ...command,
+      MessageThreadId: "thread-1",
+      CommandTargetSessionKey: "agent:main:discord:channel:c1",
+    };
+    const firstClaim = claimInboundDedupe(firstTarget);
+    expect(firstClaim.status).toBe("claimed");
+    if (firstClaim.status !== "claimed") {
+      throw new Error("expected the first command target to be admitted");
+    }
+    commitInboundDedupe(firstClaim.key);
+
+    const secondClaim = claimInboundDedupe({
+      ...firstTarget,
+      CommandTargetSessionKey: "agent:main:discord:channel:c1:thread:thread-1",
+    });
+    expect(secondClaim.status).toBe("claimed");
+    expect(claimInboundDedupe(firstTarget)).toEqual({
+      status: "duplicate",
+      key: firstClaim.key,
+    });
   });
 
   it("shares claim/release state across distinct module instances", async () => {

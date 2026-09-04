@@ -24,7 +24,6 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
@@ -67,7 +66,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
@@ -379,15 +378,13 @@ export class ChatPane extends ChatPaneLayoutRender {
         ? () => this.context.placementStartup.retry(state.sessionKey)
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
+      runActive: hasDirectSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard: this.progressCard.card,
-      progressCardHasActiveRun: Boolean(
-        state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
-      ),
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,

@@ -1,5 +1,9 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { appendAgentRunFailure } from "./agent-run-result.js";
 import {
   applyCliSessionBindingResult,
   assertCliSessionBindingResultCommitAllowed,
@@ -70,6 +74,24 @@ async function patchCliSessionBindingInStore(
   return committed;
 }
 
+/** A rejected continuity write cannot erase completed effects or reopen model fallback. */
+export async function settleCliSessionResult(
+  result: EmbeddedAgentRunResult,
+  settle: () => Promise<void>,
+): Promise<EmbeddedAgentRunResult> {
+  try {
+    await settle();
+    return result;
+  } catch (error) {
+    const detail = redactSensitiveText(formatErrorMessageForDisplay(error), { mode: "tools" });
+    const diagnostic = truncateUtf16Safe(
+      `CLI session continuity could not be saved: ${detail}`,
+      1_024,
+    );
+    return appendAgentRunFailure(result, diagnostic);
+  }
+}
+
 /** Publish native continuity before the placement owner releases its session lane. */
 export async function persistCliSessionBindingResult(
   params: CliSessionStoreTarget & {
@@ -78,23 +100,26 @@ export async function persistCliSessionBindingResult(
     assertSettlementCurrent: () => void;
     abortSignal?: AbortSignal;
   },
-): Promise<void> {
-  if (!params.expectedSession) {
-    return undefined;
+): Promise<EmbeddedAgentRunResult> {
+  const expectedSession = params.expectedSession;
+  if (!expectedSession) {
+    return params.result;
   }
-  await patchCliSessionBindingInStore({
-    ...params,
-    expectedSession: params.expectedSession,
-    preserveActivity: true,
-    skipMaintenance: true,
-    update: (entry) =>
-      applyCliSessionBindingResult(entry, params.provider, params.result.meta.agentMeta),
-    assertCommitAllowed: () =>
-      assertCliSessionBindingResultCommitAllowed(
-        params.result.meta.agentMeta,
-        params.assertSettlementCurrent,
-        params.abortSignal,
-      ),
+  return await settleCliSessionResult(params.result, async () => {
+    await patchCliSessionBindingInStore({
+      ...params,
+      expectedSession,
+      preserveActivity: true,
+      skipMaintenance: true,
+      update: (entry) =>
+        applyCliSessionBindingResult(entry, params.provider, params.result.meta.agentMeta),
+      assertCommitAllowed: () =>
+        assertCliSessionBindingResultCommitAllowed(
+          params.result.meta.agentMeta,
+          params.assertSettlementCurrent,
+          params.abortSignal,
+        ),
+    });
   });
 }
 

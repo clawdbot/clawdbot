@@ -69,18 +69,6 @@ type VitestCommandOutcome = {
 
 type ShardTiming = NonNullable<ReturnType<typeof createShardTimingSample>>;
 
-function isWrapperMetadataRequest(args: string[]) {
-  for (const arg of args) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === "--help" || arg === "-h") {
-      return true;
-    }
-  }
-  return false;
-}
-
 function printHelp() {
   console.log(`Usage: node --import tsx scripts/test-projects.mts [--changed <base>] [--watch] [targets...] [-- vitest-args...]
 
@@ -289,7 +277,7 @@ async function runVitestSpecs(
 export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
   const suiteStartedAt = performance.now();
   const args = process.argv.slice(2);
-  if (isWrapperMetadataRequest(args)) {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     printHelp();
     return;
   }

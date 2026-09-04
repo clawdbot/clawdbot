@@ -1147,23 +1147,30 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
-  it("restores Slack assistant DM thread context from Slack message metadata", async () => {
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
-        {
-          user: "B1",
-          metadata: {
-            event_type: "assistant_thread_context",
-            event_payload: {
-              channel_id: "C999",
-              team_id: "T1",
-              enterprise_id: "E1",
-            },
+  it("restores Slack assistant DM thread context from root-only Slack metadata", async () => {
+    const messages = [
+      {
+        user: "B1",
+        ts: "10.000",
+        metadata: {
+          event_type: "assistant_thread_context",
+          event_payload: {
+            channel_id: "C999",
+            team_id: "T1",
+            enterprise_id: "E1",
           },
         },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
+      },
+    ];
+    const replies = vi.fn(
+      async ({ oldest, inclusive }: { oldest?: string; inclusive?: boolean }) => ({
+        messages: messages.filter(
+          (message) =>
+            !oldest || Number(message.ts) > Number(oldest) || (message.ts === oldest && inclusive),
+        ),
+        response_metadata: { next_cursor: "" },
+      }),
+    );
     const ctx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
@@ -1184,13 +1191,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     assertPrepared(prepared);
     const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
-    expect(replies).toHaveBeenCalledWith({
-      channel: "D123",
-      ts: "10.000",
-      oldest: "10.000",
-      include_all_metadata: true,
-      limit: 4,
-    });
+    expect(replies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D123",
+        ts: "10.000",
+        include_all_metadata: true,
+        limit: 4,
+      }),
+    );
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
     expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
     expect(prepared.forcedReplyThreadTs).toBe("10.000");

@@ -1,21 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
+import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatch.js";
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  claimPendingAgentQuestionAnswerFromCaller,
   registerPendingAgentQuestion,
   runAgentHarnessGatewayQuestion,
-  type AgentHarnessQuestionGatewayCall,
 } from "./gateway-question.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { withQuestionGateway } from "./gateway-question.test-support.js";
 
 const questions = [
   {
@@ -28,6 +22,124 @@ const questions = [
 ] as const;
 
 describe("gateway harness questions", () => {
+  it("leaves an aborted caller without a pending question to ordinary admission", async () => {
+    const source = new AbortController();
+    source.abort();
+    const persist = vi.fn();
+
+    await expect(
+      claimPendingAgentQuestionAnswerFromCaller({
+        sessionKey: "agent:main:no-pending-question",
+        text: "Continue",
+        caller: {
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
+          messageProvider: "webchat",
+        },
+        assertSourceCurrent: () => source.signal.throwIfAborted(),
+        persist,
+      }),
+    ).resolves.toBe(false);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { change: "open", cancel: false },
+    { change: "closed", cancel: false },
+    { change: "reassigned", cancel: false },
+    { change: "closed", cancel: true },
+    { change: "consumed", cancel: false },
+  ] as const)(
+    "rechecks $change source authority at real question dispatch (cancel=$cancel)",
+    async ({ change, cancel }) => {
+      await withQuestionGateway(async (fixture) => {
+        const source = new AbortController();
+        const originalOwner = {};
+        let currentOwner = originalOwner;
+        const assertCurrent = createMessageInjectionAuthority(
+          () => !source.signal.aborted && currentOwner === originalOwner,
+        );
+        const authority = {
+          kind: "source-bound" as const,
+          assertCurrent: () => {
+            assertCurrent();
+            fixture.backingRun.signal.throwIfAborted();
+          },
+        };
+        const questionId = "ask_66666666666666666666666666666666";
+        const sessionKey = "agent:main:dispatch-authority";
+        const promptDelivered = createDeferred();
+        const run = runAgentHarnessGatewayQuestion({
+          questionId,
+          sessionKey,
+          runId: "live-backing-run",
+          questions,
+          timeoutMs: 60_000,
+          signal: fixture.backingRun.signal,
+          delivery: { onBlockReply: async () => promptDelivered.resolve() },
+        });
+        await Promise.all([fixture.waitStarted, promptDelivered.promise]);
+        const hello = fixture.holdNextHello();
+        const attempt = cancel
+          ? cancelPendingAgentQuestionForSession({
+              sessionKey,
+              resolvedBy: "image-reply",
+              authority,
+            })
+          : claimPendingAgentQuestionAnswer({ sessionKey, text: "Old source answer", authority });
+        const outcome = attempt.then(
+          (accepted) => ({ accepted }),
+          (error: unknown) => ({ error }),
+        );
+        await hello.entered;
+        expect(fixture.manager.get(questionId)?.status).toBe("pending");
+        expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual([]);
+        if (change === "closed") {
+          source.abort();
+        } else if (change === "reassigned") {
+          currentOwner = {};
+        } else if (change === "consumed") {
+          // Closure after the canonical transition must not reopen an accepted
+          // answer for steering replay, even before its RPC response arrives.
+          fixture.onResolved(() => source.abort());
+        }
+        hello.release();
+        const result = await outcome;
+        expect(fixture.backingRun.signal.aborted).toBe(false);
+        const revokedBeforeDispatch = change === "closed" || change === "reassigned";
+        if (revokedBeforeDispatch) {
+          expect
+            .soft(fixture.requests.filter((frame) => frame.method === "question.resolve"))
+            .toEqual([]);
+          expect.soft(fixture.manager.get(questionId)?.status).toBe("pending");
+          expect.soft(result).toHaveProperty("error");
+          // Keep the same question and backing run: a rejected old source must
+          // release its local reservation so a later valid input can answer.
+          const later = await claimPendingAgentQuestionAnswer({
+            sessionKey,
+            text: "Current source answer",
+            authority: { kind: "source-bound", assertCurrent: () => {} },
+          });
+          expect.soft(later).toBe(true);
+          expect.soft(await run).toEqual({
+            status: "answered",
+            answers: { answers: { answer: ["Current source answer"] } },
+          });
+        } else {
+          expect(result).toEqual({ accepted: true });
+          expect(await run).toEqual({
+            status: "answered",
+            answers: { answers: { answer: ["Old source answer"] } },
+          });
+          expect(
+            fixture.requests.filter((frame) => frame.method === "question.resolve"),
+          ).toHaveLength(1);
+        }
+      });
+    },
+  );
+
   it("does not request a gateway question when the session reservation conflicts", async () => {
     const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();
     const reservation = registerPendingAgentQuestion({
@@ -55,7 +167,7 @@ describe("gateway harness questions", () => {
       questionId: "ask_00000000000000000000000000000000",
       sessionKey: "agent:main:dispose-before-attach",
       questions,
-      gatewayCall: vi.fn(),
+      gatewayCall: vi.fn<AgentHarnessQuestionGatewayCall>(),
     });
     const answer = claimPendingAgentQuestionAnswer({
       sessionKey: "agent:main:dispose-before-attach",
@@ -68,7 +180,7 @@ describe("gateway harness questions", () => {
   });
 
   it("reserves the session and suppresses a prompt cancelled during registration", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const calls: Array<{ method: string; params: unknown }> = [];
     let resolveCount = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
@@ -142,7 +254,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns an answer that wins a registration cancellation race", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const answers = { answers: { answer: ["Continue"] } };
     let resolveCount = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
@@ -216,9 +328,9 @@ describe("gateway harness questions", () => {
     ).resolves.toEqual({ status: "answered", answers });
   });
 
-  it("buffers a plain-text reply while gateway registration is pending", async () => {
-    const registration = deferred<{ id: string }>();
-    const answer = deferred<{
+  it("accepts a plain-text reply waiting for gateway registration", async () => {
+    const registration = createDeferred<{ id: string }>();
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();
@@ -268,7 +380,7 @@ describe("gateway harness questions", () => {
   });
 
   it("releases a claimed reply when gateway registration fails", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
       if (method === "question.request") {
         return await registration.promise;
@@ -297,7 +409,7 @@ describe("gateway harness questions", () => {
   });
 
   it("accepts a later text answer after cancellation fails", async () => {
-    const answer = deferred<{
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();
@@ -360,7 +472,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
-    const answer = deferred<{
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();
