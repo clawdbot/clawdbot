@@ -22,7 +22,11 @@ export class MemoryIndexDatabase {
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
-  constructor(readonly db: DatabaseSync) {}
+  constructor(
+    readonly db: DatabaseSync,
+    readonly release: () => void = () => closeMemoryDatabase(db),
+    readonly readOnly = false,
+  ) {}
 }
 
 // One process-lifetime container; stores belong only to their awaited rebuild.

@@ -121,6 +121,7 @@ export class IncognitoAgentDatabasePathCollisionError extends Error {
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+const databaseBorrowers = new WeakMap<DatabaseSync, Set<object>>();
 const incognitoDatabases = new WeakSet<OpenClawAgentDatabase>();
 let incognitoDatabaseGeneration = 0;
 const cachedDatabaseOpenFailures = new Map<string, unknown>();
@@ -233,20 +234,13 @@ export function openOpenClawAgentDatabase(
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   const incognito = isIncognitoOpenClawAgentSqlitePath(pathname, databaseOptions);
   // A live successful cache entry is authoritative; failed entries remain only for disposal.
-  const cached = cachedDatabases.get(pathname);
-  if (cached?.db.isOpen) {
-    if (cachedDatabaseOpenFailures.has(pathname)) {
-      throw cachedDatabaseOpenFailures.get(pathname);
-    }
-    if (cached.agentId !== agentId) {
-      throw new Error(
-        `OpenClaw agent database ${pathname} is already open for agent ${cached.agentId}; requested agent ${agentId}.`,
-      );
-    }
+  const opened = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+  if (opened) {
     cachedDatabases.delete(pathname);
-    cachedDatabases.set(pathname, cached);
-    return cached;
+    cachedDatabases.set(pathname, opened);
+    return opened;
   }
+  const cached = cachedDatabases.get(pathname);
   if (incognito) {
     // The sentinel has no reachable durable owner, so doctor cannot safely migrate a collision.
     // Refuse operator-created state instead of silently shadowing it with volatile writes.
@@ -260,7 +254,8 @@ export function openOpenClawAgentDatabase(
     }
     // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
     // and no directory, lease, registry row, WAL sidecar, or file write may be created.
-    const db = openNodeSqliteDatabase(":memory:");
+    const db = openNodeSqliteDatabase(":memory:", { allowExtension: !process.permission });
+    db.enableLoadExtension(false);
     configureSqlitePreSchemaPragmas(db, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
@@ -323,7 +318,10 @@ export function openOpenClawAgentDatabase(
     // Free a slot before constructing the new handle: under real descriptor
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
-    const db = openNodeSqliteDatabase(pathname);
+    // Node's permission model forbids extension-capable constructors. Otherwise,
+    // trusted borrowers load native extensions only in synchronous sections.
+    const db = openNodeSqliteDatabase(pathname, { allowExtension: !process.permission });
+    db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
     // Eviction churn must avoid migration/convergence and registry busy waits.
@@ -474,6 +472,24 @@ export function runOpenClawAgentWriteTransaction<T>(
 
 let unregisterExitClose: (() => void) | null = null;
 
+/** Retain the exact verified connection across awaits; explicit disposal still revokes it. */
+export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOptions): {
+  db: DatabaseSync;
+  release: () => void;
+} {
+  const { db } = openOpenClawAgentDatabase(options);
+  const borrowers = databaseBorrowers.get(db) ?? new Set<object>();
+  const borrower = {};
+  borrowers.add(borrower);
+  databaseBorrowers.set(db, borrowers);
+  return {
+    db,
+    release: () => {
+      borrowers.delete(borrower);
+    },
+  };
+}
+
 function closeCachedOpenClawAgentDatabase(
   database: OpenClawAgentDatabase,
   options: { eviction?: boolean } = {},
@@ -492,15 +508,14 @@ function closeCachedOpenClawAgentDatabase(
 }
 
 function evictLruAgentDatabaseHandles(): void {
-  // Callers re-fetch handles from this cache at each operation entry and use
-  // them within one synchronous section, so eviction can never close a handle
-  // mid-use; a handle retained across an eviction-triggering open goes stale.
+  // Synchronous callers re-fetch at operation entry. Borrowers retain the exact
+  // connection across awaits, including prepared statements and loaded extensions.
   while (cachedDatabases.size >= OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP) {
     let evicted = false;
     for (const [pathname, database] of cachedDatabases) {
       // A synchronous transaction owns its handle through COMMIT or ROLLBACK;
       // closing it here would violate the transaction commit-section contract.
-      if (database.db.isTransaction) {
+      if (database.db.isTransaction || databaseBorrowers.get(database.db)?.size) {
         continue;
       }
       // Classification is recorded at open; re-deriving the sentinel path here
@@ -523,16 +538,12 @@ function evictLruAgentDatabaseHandles(): void {
       break;
     }
     if (!evicted) {
-      // Every handle is mid-transaction: sync commit sections bound concurrent
-      // transactions at call-nesting depth, so this stays a pathological safety
-      // valve; exceeding the cap beats failing an unrelated agent's open.
-      agentDbLog.warn(
-        "agent database handle cap exceeded; all cached handles are in transactions",
-        {
-          cap: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
-          openHandles: cachedDatabases.size,
-        },
-      );
+      // Live borrows, incognito state, and transactions cannot be evicted.
+      // Their owners release them; an unrelated agent must still be able to open.
+      agentDbLog.warn("agent database handle cap exceeded; all cached handles are retained", {
+        cap: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
+        openHandles: cachedDatabases.size,
+      });
       return;
     }
   }
