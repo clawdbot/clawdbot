@@ -40,8 +40,8 @@ function draft(modelContext: string): BrowserAnnotationDraft {
 
 describe("browser annotation admission", () => {
   it("includes the candidate in both the four-card and 8,000-character bounds", () => {
-    expect(canAdmitBrowserAnnotation([], "x".repeat(8_000))).toBe(true);
-    expect(canAdmitBrowserAnnotation([], "x".repeat(8_001))).toBe(false);
+    expect(canAdmitBrowserAnnotation([], "x".repeat(7_900))).toBe(true);
+    expect(canAdmitBrowserAnnotation([], "\\".repeat(4_000))).toBe(false);
     expect(
       canAdmitBrowserAnnotation(
         [annotation("one"), annotation("two"), annotation("three")],

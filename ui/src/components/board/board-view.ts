@@ -9,6 +9,7 @@ import {
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
   boardChromeRowPx,
+  boardGridItemsForWidgets,
   effectiveBoardWidgetRows,
   FINE_POINTER_QUERY,
   layout,
@@ -30,6 +31,7 @@ import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
 import { renderBoardTabs } from "./board-tabs.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
+import type { CanvasElementAnnotation } from "./board-widget-commenter.ts";
 import "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
@@ -58,25 +60,6 @@ function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
     );
 }
 
-function itemsForWidgets(
-  widgets: readonly BoardWidget[],
-  contentHeights: ReadonlyMap<string, number>,
-  fitAutoContent = false,
-): BoardGridItem[] {
-  const chromeRowPx = boardChromeRowPx();
-  return widgets.map((widget) => ({
-    name: widget.name,
-    w: widget.sizeW,
-    h: effectiveBoardWidgetRows(
-      widget,
-      contentHeights.get(widget.name),
-      chromeRowPx,
-      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
-    ),
-    order: widget.position,
-  }));
-}
-
 class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) snapshot?: BoardSnapshot;
   @property({ attribute: false }) activeTabId = "";
@@ -86,6 +69,9 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
   @property({ type: Boolean }) fitAutoContent = false;
+  @property({ type: Boolean }) commentMode = false;
+  @property({ attribute: false }) commentAnnotations: readonly CanvasElementAnnotation[] = [];
+  @property({ type: Number }) commentEpoch = 0;
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -103,8 +89,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   private readonly contentHeights = new Map<string, number>();
   // Hybrid devices flip pointer capability live (mouse dock/undock); CSS moves
   // the bar between overlay and in-flow, so auto-height rows must re-layout.
-  private readonly finePointerQuery =
-    typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
+  private readonly finePointerQuery = globalThis.matchMedia?.(FINE_POINTER_QUERY) ?? null;
   private readonly handlePointerModeChange = () => this.requestUpdate();
 
   override connectedCallback(): void {
@@ -331,7 +316,10 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, tab.tabId), this.contentHeights);
+    const items = boardGridItemsForWidgets(
+      orderedWidgets(snapshot, tab.tabId),
+      this.contentHeights,
+    );
     this.gesture = {
       dropValid: false,
       mode,
@@ -500,7 +488,10 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (!snapshot) {
       return;
     }
-    const items = itemsForWidgets(orderedWidgets(snapshot, widget.tabId), this.contentHeights);
+    const items = boardGridItemsForWidgets(
+      orderedWidgets(snapshot, widget.tabId),
+      this.contentHeights,
+    );
     const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
     if (!moved || moved.order === widget.position) {
       return;
@@ -567,7 +558,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       `;
     }
     const items =
-      this.previewItems ?? itemsForWidgets(widgets, this.contentHeights, this.fitAutoContent);
+      this.previewItems ??
+      boardGridItemsForWidgets(widgets, this.contentHeights, this.fitAutoContent);
     const rects = layout(items, this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined);
     for (const rect of rects) {
       if (!this.stableCellOrder.has(rect.name)) {
@@ -613,6 +605,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .busy=${this.mutationPending}
                 .canMutate=${this.canMutate}
                 .canGrant=${this.canGrant}
+                .commentMode=${this.commentMode && this.active}
+                .commentAnnotations=${this.commentAnnotations.filter(
+                  (annotation) => annotation.widgetName === widget.name,
+                )}
+                .commentEpoch=${this.commentEpoch}
               ></openclaw-board-widget-cell>
             `;
           },

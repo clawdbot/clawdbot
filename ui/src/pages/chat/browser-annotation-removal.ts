@@ -1,7 +1,7 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { showToast, type ToastOptions } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
-import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
+import { canAdmitBrowserAnnotations } from "./browser-annotation-admission.ts";
 
 type BrowserAnnotationRemovalHost = {
   getOwner: () => object | undefined;
@@ -18,26 +18,38 @@ type BrowserAnnotationRemovalDependencies = {
   releasePayload?: (attachmentId: string) => void;
 };
 
-/** Removes one annotation package while the shared toast owns its bounded Undo lifetime. */
-export function removeBrowserAnnotationWithUndo(
+/** Removes annotation packages while one shared toast owns their bounded Undo lifetime. */
+export function removeBrowserAnnotationsWithUndo(
   host: BrowserAnnotationRemovalHost,
-  attachment: ChatAttachment,
+  attachments: readonly ChatAttachment[],
   labels: { removed: string; undo: string; undoUnavailable: string },
   dependencies: BrowserAnnotationRemovalDependencies = {},
 ): boolean {
-  if (!attachment.browserAnnotation) {
+  const modelContexts = attachments.flatMap((attachment) =>
+    attachment.browserAnnotation ? [attachment.browserAnnotation.modelContext] : [],
+  );
+  if (attachments.length === 0 || modelContexts.length !== attachments.length) {
     return false;
   }
-  const modelContext = attachment.browserAnnotation.modelContext;
+  const ids = new Set(attachments.map((attachment) => attachment.id));
+  if (ids.size !== attachments.length) {
+    return false;
+  }
   const sourceOwner = host.getOwner();
   const sourceSessionKey = host.getSessionKey();
   const current = host.getAttachments();
-  const sourceIndex = current.findIndex((candidate) => candidate.id === attachment.id);
-  if (sourceIndex < 0) {
+  const sourceEntries = attachments
+    .map((attachment) => ({
+      attachment,
+      index: current.findIndex((candidate) => candidate.id === attachment.id),
+    }))
+    .toSorted((left, right) => left.index - right.index);
+  const firstEntry = sourceEntries[0];
+  if (!firstEntry || sourceEntries.some((entry) => entry.index < 0)) {
     return false;
   }
 
-  host.setAttachments(current.filter((candidate) => candidate.id !== attachment.id));
+  host.setAttachments(current.filter((candidate) => !ids.has(candidate.id)));
   host.requestUpdate();
   host.focusComposer();
 
@@ -48,7 +60,9 @@ export function removeBrowserAnnotationWithUndo(
       return;
     }
     settled = true;
-    releasePayload(attachment.id);
+    for (const attachment of attachments) {
+      releasePayload(attachment.id);
+    }
   };
   const presentToast = dependencies.presentToast ?? showToast;
   const presented = presentToast({
@@ -63,24 +77,28 @@ export function removeBrowserAnnotationWithUndo(
         return;
       }
       const latest = host.getAttachments();
-      if (latest.some((candidate) => candidate.id === attachment.id)) {
+      if (latest.some((candidate) => ids.has(candidate.id))) {
         settled = true;
+        for (const attachment of attachments) {
+          if (!latest.some((candidate) => candidate.id === attachment.id)) {
+            releasePayload(attachment.id);
+          }
+        }
         return;
       }
-      if (!canAdmitBrowserAnnotation(latest, modelContext)) {
+      if (!canAdmitBrowserAnnotations(latest, modelContexts)) {
         finalizeRemoval();
         presentToast({ message: labels.undoUnavailable });
         return;
       }
       settled = true;
-      const insertionIndex = Math.min(sourceIndex, latest.length);
-      host.setAttachments([
-        ...latest.slice(0, insertionIndex),
-        attachment,
-        ...latest.slice(insertionIndex),
-      ]);
+      const restored = [...latest];
+      for (const entry of sourceEntries) {
+        restored.splice(Math.min(entry.index, restored.length), 0, entry.attachment);
+      }
+      host.setAttachments(restored);
       host.requestUpdate();
-      host.focusRestoredAnnotation(attachment.id);
+      host.focusRestoredAnnotation(firstEntry.attachment.id);
     },
     onDismiss: (reason) => {
       if (reason !== "action") {

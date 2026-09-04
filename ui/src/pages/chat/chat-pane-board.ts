@@ -3,6 +3,12 @@ import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { CanvasElementAnnotationEvent } from "../../components/board/board-widget-commenter.ts";
+import {
+  dispatchBrowserAnnotation,
+  type BrowserAnnotationDispatchResult,
+} from "../../components/browser/browser-annotation.ts";
+import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -24,12 +30,14 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import {
   ensureBoardViewElement,
   ensureWorkboardCardChipElement,
   renderBoardSessionSurface,
   type WorkboardCardChipProps,
 } from "./board-session-surface.ts";
+import { canAdmitBrowserAnnotations } from "./browser-annotation-admission.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
@@ -45,6 +53,125 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
+  protected canvasAnnotationTarget(board: ResolvedBoardView): string {
+    return `${this.resolveBoardSessionKey(board.snapshot.sessionKey)}\u0000${board.activeTabId}`;
+  }
+
+  protected canvasAnnotations(target: string) {
+    return this.canvasAnnotationsByTarget[target] ?? [];
+  }
+
+  protected canvasCommentAvailable(board: ResolvedBoardView): boolean {
+    return board.snapshot.widgets.some(
+      (widget) =>
+        widget.tabId === board.activeTabId &&
+        widget.contentKind === "html" &&
+        widget.grantState !== "pending" &&
+        widget.grantState !== "rejected",
+    );
+  }
+
+  protected canvasAnnotationEpoch(target: string): number {
+    return this.canvasAnnotationEpochByTarget[target] ?? 0;
+  }
+
+  protected toggleCanvasAnnotationMode(target: string): void {
+    this.canvasCommentTarget = this.canvasCommentTarget === target ? "" : target;
+  }
+
+  protected exitCanvasAnnotationMode(target: string): void {
+    if (this.canvasCommentTarget === target) {
+      this.canvasCommentTarget = "";
+    }
+  }
+
+  protected discardCanvasAnnotations(target: string): void {
+    const { [target]: _discarded, ...remaining } = this.canvasAnnotationsByTarget;
+    this.canvasAnnotationsByTarget = remaining;
+    // Clear and Send synchronously retire captures started against the prior batch;
+    // otherwise their async snapshots could repopulate an intentionally empty target.
+    this.canvasAnnotationEpochByTarget = {
+      ...this.canvasAnnotationEpochByTarget,
+      [target]: this.canvasAnnotationEpoch(target) + 1,
+    };
+  }
+
+  protected receiveCanvasAnnotation(target: string, event: CanvasElementAnnotationEvent): void {
+    const state = this.state;
+    const board = this.resolveBoardView();
+    const currentTarget = this.canvasAnnotationTarget(board);
+    // Snapshot capture is async; revalidate the presentation owner here so a
+    // retained or switched pane cannot adopt the result into another Board.
+    if (
+      !state ||
+      !this.visuallyPresented ||
+      !isSidebarSlotVisible(state.sidebarLayout, "dashboard") ||
+      this.canvasCommentTarget !== target ||
+      currentTarget !== target ||
+      event.detail.captureEpoch !== this.canvasAnnotationEpoch(target)
+    ) {
+      return;
+    }
+    const annotations = this.canvasAnnotations(target);
+    const candidate = event.detail;
+    if (
+      !candidate?.draft ||
+      !canAdmitBrowserAnnotations(state.chatAttachments, [
+        ...annotations.map((annotation) => annotation.draft.modelContext),
+        candidate.draft.modelContext,
+      ])
+    ) {
+      return;
+    }
+    event.preventDefault();
+    this.canvasAnnotationsByTarget = {
+      ...this.canvasAnnotationsByTarget,
+      [target]: [...annotations, candidate],
+    };
+  }
+
+  protected sendCanvasAnnotations(target: string): void {
+    const state = this.state;
+    const annotations = this.canvasAnnotations(target);
+    if (
+      !state ||
+      this.canvasAnnotationTarget(this.resolveBoardView()) !== target ||
+      annotations.length === 0
+    ) {
+      return;
+    }
+    if (
+      !canAdmitBrowserAnnotations(
+        state.chatAttachments,
+        annotations.map((annotation) => annotation.draft.modelContext),
+      )
+    ) {
+      showToast({ message: t("browser.annotationLimitReached") });
+      return;
+    }
+    const remaining = [];
+    let failure: BrowserAnnotationDispatchResult | null = null;
+    for (const annotation of annotations) {
+      const result = dispatchBrowserAnnotation(annotation.draft);
+      if (result === "accepted") {
+        continue;
+      }
+      failure ??= result;
+      remaining.push(annotation);
+    }
+    if (remaining.length > 0) {
+      this.canvasAnnotationsByTarget = { ...this.canvasAnnotationsByTarget, [target]: remaining };
+      showToast({
+        message: t(
+          failure === "rejected" ? "browser.annotationLimitReached" : "browser.noChatTarget",
+        ),
+      });
+      return;
+    }
+    this.discardCanvasAnnotations(target);
+    this.exitCanvasAnnotationMode(target);
+  }
+
   protected commitSidebarLayout(layout: SidebarLayout): void {
     const state = this.state;
     if (!state) {
@@ -333,6 +460,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const commentTarget = this.canvasAnnotationTarget(board);
+    const commentAnnotations = this.canvasAnnotations(commentTarget);
+    const commentEpoch = this.canvasAnnotationEpoch(commentTarget);
     const shouldRender = board.hasBoard && Boolean(sessionKey);
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
@@ -342,6 +472,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         activeTabId: board.activeTabId,
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
+        commentMode: this.canvasCommentTarget === commentTarget,
+        commentAnnotations,
+        commentEpoch,
+        onAnnotationAdded: (event) => this.receiveCanvasAnnotation(commentTarget, event),
         callbacks: {
           appViewGeneration: board.provider.appViewGeneration,
           applyOps: (ops) => board.provider.applyOps(ops),

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerCanvasAnnotationEnglish } from "../../ui/src/i18n/locales/en-canvas-annotation.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
@@ -29,6 +30,7 @@ const sourceFiles = [
   "en.ts",
   "en-agents.ts",
   "en-activity.ts",
+  "en-canvas-annotation.ts",
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
@@ -54,6 +56,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
     },
+    registerCanvasAnnotationEnglish.catalog,
     registerActivityEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerMeetingsEnglish.catalog,

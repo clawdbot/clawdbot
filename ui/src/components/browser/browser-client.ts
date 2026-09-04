@@ -54,6 +54,8 @@ export type BrowserInspectedNode = {
   tag: string;
   id: string;
   classes: string[];
+  /** Stable page-reported CSS path when the inspector can provide one. */
+  selector?: string;
   role: string;
   name: string;
   /** Bounding rect in remote CSS viewport pixels. */

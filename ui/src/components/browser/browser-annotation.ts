@@ -3,8 +3,11 @@
 // agent knows what was marked up.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
+import { registerCanvasAnnotationEnglish } from "../../i18n/locales/en-canvas-annotation.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
+
+registerCanvasAnnotationEnglish();
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
 type AnnotationPoint = { x: number; y: number };
@@ -22,6 +25,12 @@ export type BrowserAnnotationDraft = {
     displayUrl: string;
     markedRegionCount: number;
     inspectedElement: boolean;
+    /** Operator-authored feedback attached to an inspected element. */
+    comment?: string;
+    /** Bounded page-reported selector used only for annotation presentation. */
+    selector?: string;
+    /** Bounded page-reported tag used only for annotation presentation. */
+    elementTag?: string;
   };
   /** PNG data URL of the screenshot with the markup composited in. */
   dataUrl: string;
@@ -134,7 +143,8 @@ function describeInspectedNode(node: BrowserInspectedNode): string {
     .join("");
   const tag = sanitizeSelectorToken(node.tag) || "element";
   const id = sanitizeSelectorToken(node.id);
-  const selector = `${tag}${id ? `#${id}` : ""}${classes}`;
+  const fallbackSelector = `${tag}${id ? `#${id}` : ""}${classes}`;
+  const selector = sanitizePageText(node.selector ?? "", 500) || fallbackSelector;
   const sanitizedName = sanitizePageText(node.name, ANNOTATION_TITLE_MAX_LENGTH);
   const name = sanitizedName ? ` "${sanitizedName}"` : "";
   const role = node.role ? ` (role=${sanitizePageText(node.role, 40)})` : "";

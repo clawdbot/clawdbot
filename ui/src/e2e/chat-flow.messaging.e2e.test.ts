@@ -830,7 +830,8 @@ suite.define(() => {
           }),
         );
       });
-      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
+      const annotationGroup = page.getByRole("group", { name: "1 annotation" });
+      await annotationGroup.waitFor();
 
       await composer.fill("/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
@@ -863,7 +864,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
+      await annotationGroup.waitFor();
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);

@@ -59,6 +59,9 @@ export function receiveBrowserAnnotation(
         displayUrl: detail.card.displayUrl,
         markedRegionCount: detail.card.markedRegionCount,
         inspectedElement: detail.card.inspectedElement,
+        ...(detail.card.comment ? { comment: detail.card.comment } : {}),
+        ...(detail.card.selector ? { selector: detail.card.selector } : {}),
+        ...(detail.card.elementTag ? { elementTag: detail.card.elementTag } : {}),
       },
     },
   ];

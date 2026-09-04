@@ -1,5 +1,7 @@
 /** Pure order-and-size layout for the session dashboard board. */
 
+import type { BoardWidget } from "./types.ts";
+
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
@@ -27,6 +29,25 @@ type BoardGridCell = {
 };
 
 export type BoardGridDirection = "left" | "right" | "up" | "down";
+
+export function boardGridItemsForWidgets(
+  widgets: readonly BoardWidget[],
+  contentHeights: ReadonlyMap<string, number>,
+  fitAutoContent = false,
+): BoardGridItem[] {
+  const chromeRowPx = boardChromeRowPx();
+  return widgets.map((widget) => ({
+    name: widget.name,
+    w: widget.sizeW,
+    h: effectiveBoardWidgetRows(
+      widget,
+      contentHeights.get(widget.name),
+      chromeRowPx,
+      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+    ),
+    order: widget.position,
+  }));
+}
 
 type BoardGridPreview = {
   items: BoardGridItem[];

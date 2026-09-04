@@ -54,6 +54,62 @@ async function openDashboard(page: Page): Promise<void> {
   await page.locator(".board-session-surface").waitFor();
 }
 
+async function openCommenterBoard(page: Page) {
+  const origin = new URL(controlUi.baseUrl).origin;
+  const documentHtml = buildWidgetDocument(
+    "Release dashboard",
+    `<style>
+      body { min-height: 320px; padding: 32px; background: var(--surface); }
+      .panel { max-width: 520px; padding: 28px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+      button { margin-top: 20px; }
+      #edge-target { position: fixed; inset: 2px auto auto 2px; width: 10px; height: 10px; margin: 0; padding: 0; }
+    </style>
+    <button id="edge-target" aria-label="Edge target"></button>
+    <main class="panel">
+      <h1>Release dashboard</h1>
+      <p>Review the candidate before promotion.</p>
+      <button id="save-profile" class="primary">Promote release</button>
+    </main>`,
+  );
+  const frameUrl = `${origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/release-dashboard/index.html?bt=ticket`;
+  await page.route("**/__openclaw__/board/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: documentHtml }),
+  );
+  const gateway = await installMockGateway(page, {
+    sessionKey,
+    featureMethods: ["board.get", "chat.metadata", "chat.send", "chat.startup"],
+    methodResponses: {
+      "board.get": {
+        sessionKey,
+        revision: 1,
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+        widgets: [
+          {
+            name: "release-dashboard",
+            tabId: "main",
+            title: "Release dashboard",
+            contentKind: "html",
+            sizeW: 8,
+            sizeH: 6,
+            heightMode: "fixed",
+            position: 0,
+            grantState: "none",
+            revision: 1,
+            frameUrl,
+            viewTicket: "ticket",
+            viewTicketTtlMs: 1_200_000,
+            viewGeneration: "0123456789abcdef0123456789abcdef",
+            sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
+            sandboxPort,
+          },
+        ],
+      },
+    },
+  });
+  await openDashboard(page);
+  return gateway;
+}
+
 describeControlUiE2e("Control UI dashboard A2UI", () => {
   beforeAll(async () => {
     execFileSync(process.execPath, ["extensions/canvas/scripts/bundle-a2ui.mjs"], {
@@ -104,6 +160,209 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       });
     }
     await controlUi?.close();
+  });
+
+  it("comments on a specific shared Canvas HTML element from the Dashboard side panel", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    const proofDir = recordProof ? createControlUiE2eArtifactDir("canvas-element-commenter") : "";
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+      viewport: { width: 1280, height: 800 },
+      ...(recordProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+        : {}),
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    const video = page.video();
+    const gateway = await openCommenterBoard(page);
+    const outer = page.locator(".board-widget__frame");
+    await outer.waitFor();
+    const outerFrame = await outer.elementHandle().then((handle) => handle?.contentFrame());
+    await expect.poll(() => outerFrame?.childFrames().length ?? 0).toBe(1);
+    const widgetFrame = outerFrame!.childFrames()[0]!;
+    const target = widgetFrame.locator("#save-profile");
+    await target.waitFor();
+    if (recordProof) {
+      await page.screenshot({ path: path.join(proofDir, "inactive.png") });
+    }
+
+    const dashboardHeader = page.locator(".side-panel__header");
+    const toggle = dashboardHeader.getByRole("button", { name: "Annotate page" });
+    expect(
+      await page
+        .locator(".chat-pane__header-trailing")
+        .getByRole("button", {
+          name: "Annotate page",
+        })
+        .count(),
+    ).toBe(0);
+    await toggle.click();
+    await page.locator("[data-canvas-comment-overlay]").waitFor();
+    await dashboardHeader.getByRole("button", { name: "Exit annotate mode" }).waitFor();
+    const edgeBounds = await widgetFrame.locator("#edge-target").boundingBox();
+    expect(edgeBounds).not.toBeNull();
+    await page.mouse.move(
+      edgeBounds!.x + edgeBounds!.width / 2,
+      edgeBounds!.y + edgeBounds!.height / 2,
+    );
+    await expect
+      .poll(() => page.locator(".board-widget__comment-label").textContent())
+      .toContain("#edge-target");
+    const edgeHighlightBounds = await page
+      .locator(".board-widget__comment-highlight")
+      .boundingBox();
+    expect(edgeHighlightBounds).not.toBeNull();
+    expect(Math.abs(edgeHighlightBounds!.x - edgeBounds!.x)).toBeLessThan(2);
+    expect(Math.abs(edgeHighlightBounds!.y - edgeBounds!.y)).toBeLessThan(2);
+    if (recordProof) {
+      await page.screenshot({ path: path.join(proofDir, "annotating.png") });
+      await page.waitForTimeout(600);
+    }
+    const targetBounds = await target.boundingBox();
+    expect(targetBounds).not.toBeNull();
+    await page.mouse.move(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    await expect
+      .poll(() => page.locator(".board-widget__comment-label").textContent())
+      .toContain("#save-profile");
+    if (recordProof) {
+      await page.waitForTimeout(900);
+    }
+    await page.mouse.click(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    const commentInput = page.getByRole("textbox", {
+      name: "Comment on selected Canvas element",
+    });
+    await commentInput.fill("Make this action less prominent.");
+    if (recordProof) {
+      await page.screenshot({ path: path.join(proofDir, "comment-editor.png") });
+      await page.waitForTimeout(700);
+    }
+    await page.getByRole("button", { name: "Comment on selected Canvas element" }).click();
+    const stageAnnotations = dashboardHeader.getByRole("button", {
+      name: "Send to chat",
+    });
+    await expect.poll(() => stageAnnotations.isEnabled()).toBe(true);
+    expect(await page.locator(".chat-browser-annotation-group").count()).toBe(0);
+    await page.keyboard.press("Escape");
+    await toggle.click();
+    await page.mouse.click(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    await commentInput.fill("This in-flight capture must be discarded.");
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>(".board-widget__comment-submit")?.click();
+      document.querySelector<HTMLButtonElement>('[aria-label="Clear"]')?.click();
+    });
+    await expect.poll(() => page.locator(".board-widget__comment-marker").count()).toBe(0);
+    await page.waitForTimeout(100);
+    expect(await page.locator(".board-widget__comment-marker").count()).toBe(0);
+
+    await page.mouse.click(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    await commentInput.fill("Make this action less prominent.");
+    await page.getByRole("button", { name: "Comment on selected Canvas element" }).click();
+    await expect.poll(() => stageAnnotations.isEnabled()).toBe(true);
+    if (recordProof) {
+      await page.screenshot({ path: path.join(proofDir, "annotation-toolbar.png") });
+      await page.waitForTimeout(900);
+    }
+    await stageAnnotations.click();
+    const annotationGroup = page.locator(".chat-browser-annotation-group");
+    await annotationGroup.waitFor();
+    await annotationGroup.locator(".chat-browser-annotation-group__summary").hover();
+    const annotationPopover = annotationGroup.locator(".chat-browser-annotation-group__popover");
+    await expect
+      .poll(() => annotationPopover.getAttribute("aria-label"))
+      .toBe("Browser annotation");
+    await annotationPopover.getByText("#save-profile", { exact: true }).waitFor();
+    await annotationPopover
+      .getByText("Make this action less prominent.", { exact: true })
+      .waitFor();
+    await annotationPopover.locator("img").waitFor();
+    if (recordProof) {
+      await page.screenshot({ path: path.join(proofDir, "composer-hover.png") });
+      await page.waitForTimeout(900);
+    }
+
+    const composer = page.locator(
+      ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+    );
+    await composer.fill("Please apply this feedback.");
+    if (recordProof) {
+      await page.waitForTimeout(700);
+    }
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+    const sent = (await gateway.getRequests("chat.send"))[0]?.params as { message?: unknown };
+    expect(sent.message).toContain("Make this action less prominent.");
+    expect(sent.message).toContain("#save-profile");
+    await page.getByText("Please apply this feedback.", { exact: true }).waitFor();
+    expect(await page.getByText("I annotated the page", { exact: false }).count()).toBe(0);
+    await page.waitForTimeout(recordProof ? 1_000 : 100);
+
+    await page.close();
+    if (recordProof && video) {
+      await video.saveAs(path.join(proofDir, "canvas-element-commenter.webm"));
+    }
+    await context.close();
+    contexts.delete(context);
+  });
+
+  it("drops a Canvas capture when its originating Board becomes inactive", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+      viewport: { width: 1280, height: 800 },
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    await openCommenterBoard(page);
+    await page
+      .locator(".side-panel__header")
+      .getByRole("button", { name: "Annotate page" })
+      .click();
+    await page.locator("[data-canvas-comment-overlay]").waitFor();
+
+    const outerFrame = await page
+      .locator(".board-widget__frame")
+      .elementHandle()
+      .then((handle) => handle?.contentFrame());
+    await expect.poll(() => outerFrame?.childFrames().length ?? 0).toBe(1);
+    const targetBounds = await outerFrame!.childFrames()[0]!.locator("#save-profile").boundingBox();
+    expect(targetBounds).not.toBeNull();
+    await page.mouse.move(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    await expect
+      .poll(() => page.locator(".board-widget__comment-label").textContent())
+      .toContain("#save-profile");
+    await page.mouse.click(
+      targetBounds!.x + targetBounds!.width / 2,
+      targetBounds!.y + targetBounds!.height / 2,
+    );
+    await page
+      .getByRole("textbox", { name: "Comment on selected Canvas element" })
+      .fill("This capture must stay with its originating Board.");
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>(".board-widget__comment-submit")?.click();
+      document.querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
+    });
+
+    await page.locator(".board-session-surface").waitFor({ state: "hidden" });
+    await expect.poll(() => page.locator(".board-widget__comment-marker").count()).toBe(0);
+    expect(await page.locator(".chat-browser-annotation-group").count()).toBe(0);
+    await page.close();
+    await context.close();
+    contexts.delete(context);
   });
 
   for (const colorScheme of ["dark", "light"] as const) {

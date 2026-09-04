@@ -1,4 +1,5 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { composeBrowserAnnotationEnvelope } from "./browser-annotation-context.ts";
 
 const MAX_BROWSER_ANNOTATION_ATTACHMENTS = 4;
 const MAX_BROWSER_ANNOTATION_CONTEXT_CHARS = 8_000;
@@ -8,9 +9,17 @@ export function canAdmitBrowserAnnotation(
   attachments: readonly ChatAttachment[],
   modelContext: string,
 ): boolean {
-  let annotationCount = 1;
-  let contextLength = modelContext.length;
-  if (contextLength > MAX_BROWSER_ANNOTATION_CONTEXT_CHARS) {
+  return canAdmitBrowserAnnotations(attachments, [modelContext]);
+}
+
+/** Applies the composer limits atomically before a staged annotation batch is admitted. */
+export function canAdmitBrowserAnnotations(
+  attachments: readonly ChatAttachment[],
+  modelContexts: readonly string[],
+): boolean {
+  let annotationCount = modelContexts.length;
+  const contexts = [...modelContexts];
+  if (annotationCount > MAX_BROWSER_ANNOTATION_ATTACHMENTS) {
     return false;
   }
   for (const attachment of attachments) {
@@ -19,13 +28,10 @@ export function canAdmitBrowserAnnotation(
       continue;
     }
     annotationCount += 1;
-    contextLength += annotation.modelContext.length;
-    if (
-      annotationCount > MAX_BROWSER_ANNOTATION_ATTACHMENTS ||
-      contextLength > MAX_BROWSER_ANNOTATION_CONTEXT_CHARS
-    ) {
+    contexts.push(annotation.modelContext);
+    if (annotationCount > MAX_BROWSER_ANNOTATION_ATTACHMENTS) {
       return false;
     }
   }
-  return true;
+  return composeBrowserAnnotationEnvelope(contexts).length <= MAX_BROWSER_ANNOTATION_CONTEXT_CHARS;
 }

@@ -237,6 +237,46 @@ export function buildWidgetDocument(
     'addEventListener("message",event=>{if(event.source===window.parent&&event.data?.type==="openclaw:widget-chat-host")' +
     'document.documentElement.classList.add("openclaw-chat-host");});})();</script>';
   /*
+   * Element inspection is presentation-only: it returns bounded DOM facts to
+   * the embedding parent and grants no widget or Gateway authority. Capture
+   * DOM primitives before widget code so inspection follows the rendered DOM.
+   * The resulting facts remain page-reported and are bounded again by the host.
+   */
+  const inspectionBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
+    "const listen=window.addEventListener.bind(window);const hit=document.elementFromPoint.bind(document);" +
+    "const getRect=Element.prototype.getBoundingClientRect;const getAttr=Element.prototype.getAttribute;" +
+    'const getParent=Object.getOwnPropertyDescriptor(Node.prototype,"parentElement")?.get;' +
+    'const getPrevious=Object.getOwnPropertyDescriptor(Element.prototype,"previousElementSibling")?.get;' +
+    'const getText=Object.getOwnPropertyDescriptor(Node.prototype,"textContent")?.get;' +
+    'const getTag=Object.getOwnPropertyDescriptor(Element.prototype,"tagName")?.get;' +
+    "const escape=CSS.escape.bind(CSS);const stringify=String;const unshift=Array.prototype.unshift;" +
+    'const clean=value=>stringify(value??"").replace(/\\s+/g," ").trim();' +
+    'const selectorFor=element=>{const id=clean(getAttr.call(element,"id"));if(id)return "#"+escape(id).slice(0,120);' +
+    "const parts=[];let current=element;for(let depth=0;current&&depth<6;depth++){" +
+    'const tag=clean(getTag?.call(current)).toLowerCase()||"element";' +
+    'const testId=clean(getAttr.call(current,"data-testid"));let part=testId?tag+"[data-testid=\\\""+escape(testId).slice(0,120)+"\\\"]":tag;' +
+    "if(!testId&&getPrevious){let sibling=getPrevious.call(current);let index=1;while(sibling){" +
+    "if(clean(getTag?.call(sibling)).toLowerCase()===tag)index++;sibling=getPrevious.call(sibling);}" +
+    'if(index>1)part+=":nth-of-type("+index+")";}unshift.call(parts,part);current=getParent?.call(current);}' +
+    'return parts.join(" > ").slice(0,500);};' +
+    'listen("message",event=>{if(event.source!==parent)return;const data=event.data;' +
+    'if(!data||data.type!=="openclaw:widget-inspect-request"||typeof data.id!=="string"||data.id.length>128||' +
+    'typeof data.x!=="number"||!Number.isFinite(data.x)||typeof data.y!=="number"||!Number.isFinite(data.y))return;' +
+    'const element=hit(data.x,data.y);if(!element){post({type:"openclaw:widget-inspect-result",id:data.id,node:null},"*");return;}' +
+    'const box=getRect.call(element);const label=clean(getAttr.call(element,"aria-label")||getAttr.call(element,"alt")||getAttr.call(element,"title"));' +
+    'const text=clean(getText?.call(element)).slice(0,240);const className=clean(getAttr.call(element,"class"));' +
+    'const scrollX=window.scrollX||0;const scrollY=window.scrollY||0;post({type:"openclaw:widget-inspect-result",id:data.id,node:{' +
+    'tag:clean(getTag?.call(element)).toLowerCase().slice(0,40),id:clean(getAttr.call(element,"id")).slice(0,120),' +
+    'classes:className.split(" ").filter(Boolean).slice(0,6).map(value=>value.slice(0,80)),selector:selectorFor(element),' +
+    'role:clean(getAttr.call(element,"role")).slice(0,80),name:(label||text).slice(0,120),' +
+    "rect:{x:box.x+scrollX,y:box.y+scrollY,width:box.width,height:box.height}," +
+    "viewportRect:{x:box.x,y:box.y,width:box.width,height:box.height}," +
+    "documentSize:{width:Math.max(1,document.body?.scrollWidth||document.documentElement.scrollWidth)," +
+    "height:Math.max(1,document.body?.scrollHeight||document.documentElement.scrollHeight)}," +
+    'focusable:typeof element.tabIndex==="number"&&element.tabIndex>=0}},"*");});})();</script>';
+  /*
    * Snapshot requests come from the embedding parent and replies return only
    * there. Capture the response channel and rendering primitives before widget
    * code can patch them; the widget still owns the document being rendered.
@@ -299,5 +339,5 @@ export function buildWidgetDocument(
     : "'none'";
   const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${inspectionBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
 }

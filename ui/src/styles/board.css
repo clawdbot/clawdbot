@@ -330,6 +330,119 @@ openclaw-board-widget-cell {
   width: 100%;
 }
 
+.board-widget__body > openclaw-board-widget-commenter {
+  inset: 0;
+  position: absolute;
+}
+
+.board-widget__body--card > openclaw-board-widget-commenter {
+  inset: var(--widget-frame-inset);
+}
+
+.board-widget__comment-overlay {
+  cursor: crosshair;
+  inset: 0;
+  overflow: hidden;
+  position: absolute;
+  z-index: 6;
+}
+
+.board-widget__comment-highlight {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 80%);
+  pointer-events: none;
+  position: absolute;
+}
+
+.board-widget__comment-label {
+  background: var(--accent-fill);
+  border-radius: 5px;
+  color: var(--accent-fg);
+  font-size: 11px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  padding: 4px 7px;
+  pointer-events: none;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: 10px;
+  white-space: nowrap;
+}
+
+.board-widget__comment-marker {
+  position: absolute;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 2px solid white;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.board-widget__comment-editor {
+  position: absolute;
+  display: grid;
+  width: min(320px, calc(100% - 16px));
+  min-height: 50px;
+  grid-template-columns: 24px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 25px;
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 30%);
+  cursor: default;
+}
+
+.board-widget__comment-editor-icon {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.board-widget__comment-editor-icon svg,
+.board-widget__comment-submit svg {
+  width: 18px;
+  height: 18px;
+}
+
+.board-widget__comment-editor input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.board-widget__comment-submit {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+}
+
+.board-widget__comment-submit:disabled {
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
 .board-widget__plugin-loading,
 .board-widget__disabled-plugin,
 .workboard-widget__state {

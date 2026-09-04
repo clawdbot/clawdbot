@@ -274,6 +274,77 @@ openclaw-chat-sidebar-region,
   stroke-linejoin: round;
 }
 
+.canvas-annotation-launcher {
+  position: relative;
+}
+
+.canvas-annotation-launcher__count {
+  position: absolute;
+  inset-block-start: -2px;
+  inset-inline-end: -2px;
+  display: grid;
+  min-width: 14px;
+  height: 14px;
+  place-items: center;
+  padding-inline: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.canvas-annotation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.canvas-annotation-toolbar__state,
+.canvas-annotation-toolbar__send {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.canvas-annotation-toolbar__state {
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.canvas-annotation-toolbar__state svg {
+  width: 15px;
+  height: 15px;
+}
+
+.canvas-annotation-toolbar__send {
+  padding: 0 5px 0 11px;
+  background: var(--accent);
+  color: white;
+}
+
+.canvas-annotation-toolbar__send:disabled {
+  opacity: 0.45;
+}
+
+.canvas-annotation-toolbar__count {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding-inline: 5px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 22%);
+  font-size: 10px;
+}
+
 .sidebar-column__divider {
   --resize-handle-line-inline: 100%;
   z-index: 2;

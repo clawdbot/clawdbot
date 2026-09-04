@@ -1,14 +1,16 @@
 import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderPanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
 } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCanvasAnnotationEnglish } from "../../i18n/locales/en-canvas-annotation.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -28,6 +30,8 @@ import type { SidebarContent } from "./components/chat-sidebar.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
+registerCanvasAnnotationEnglish();
+
 type SidebarPanelDefinitionParams = {
   state: ChatPageHost;
   themeMode: "dark" | "light";
@@ -44,6 +48,13 @@ type SidebarPanelDefinitionParams = {
     target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
   ) => void;
   dashboard: TemplateResult | typeof nothing;
+  canvasCommentAvailable: boolean;
+  canvasCommentMode: boolean;
+  canvasAnnotationCount: number;
+  onToggleCanvasComment: () => void;
+  onExitCanvasComment: () => void;
+  onDiscardCanvasComments: () => void;
+  onSendCanvasComments: () => void;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
   detailOpen: boolean;
@@ -90,6 +101,94 @@ const SIDEBAR_PANEL_LOADING_VARIANTS = {
   terminal: "terminal",
   workspace: "files",
 } satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
+
+const CANVAS_ANNOTATION_GLYPH = strokeIcon(
+  svg`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <path d="M12 7v6" />
+    <path d="M9 10h6" />`,
+);
+
+function renderCanvasCommentAction(params: {
+  available: boolean;
+  active: boolean;
+  count: number;
+  onToggle: () => void;
+  onExit: () => void;
+  onDiscard: () => void;
+  onSend: () => void;
+}): TemplateResult {
+  if (!params.active) {
+    const label = t("browser.annotate");
+    return html`<openclaw-tooltip .content=${label}>
+      <button
+        class="rail-header__action canvas-annotation-launcher"
+        type="button"
+        data-canvas-comment-toggle
+        aria-label=${label}
+        aria-pressed="false"
+        ?disabled=${!params.available}
+        @click=${params.onToggle}
+      >
+        ${CANVAS_ANNOTATION_GLYPH}
+        ${
+          params.count > 0
+            ? html`<span class="canvas-annotation-launcher__count">${params.count}</span>`
+            : nothing
+        }
+      </button>
+    </openclaw-tooltip>`;
+  }
+  return html`<div
+    class="canvas-annotation-toolbar"
+    role="toolbar"
+    aria-label=${t("chat.board.annotating")}
+  >
+    <openclaw-tooltip .content=${t("browser.annotateDone")}>
+      <button
+        class="rail-header__action"
+        type="button"
+        data-canvas-comment-exit
+        aria-label=${t("browser.annotateDone")}
+        @click=${params.onExit}
+      >
+        ${icons.x}
+      </button>
+    </openclaw-tooltip>
+    <openclaw-tooltip .content=${t("browser.annotateClear")}>
+      <button
+        class="rail-header__action"
+        type="button"
+        data-canvas-comment-discard
+        aria-label=${t("browser.annotateClear")}
+        ?disabled=${params.count === 0}
+        @click=${params.onDiscard}
+      >
+        ${icons.trash}
+      </button>
+    </openclaw-tooltip>
+    <button
+      class="canvas-annotation-toolbar__state"
+      type="button"
+      data-canvas-comment-toggle
+      aria-label=${t("browser.annotate")}
+      aria-pressed="true"
+      @click=${params.onToggle}
+    >
+      ${icons.messageSquare}<span>${t("chat.board.annotating")}</span>
+    </button>
+    <button
+      class="canvas-annotation-toolbar__send"
+      type="button"
+      data-canvas-comment-send
+      aria-label=${t("browser.annotateSend")}
+      ?disabled=${params.count === 0}
+      @click=${params.onSend}
+    >
+      ${t("chat.runControls.send")}
+      <span class="canvas-annotation-toolbar__count">${params.count}</span>
+    </button>
+  </div>`;
+}
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -287,6 +386,19 @@ export function sidebarPanelDefinitions(
     }),
     definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
       available: params?.dashboard !== nothing,
+      ...(params
+        ? {
+            headerAction: renderCanvasCommentAction({
+              available: params.canvasCommentAvailable,
+              active: params.canvasCommentMode,
+              count: params.canvasAnnotationCount,
+              onToggle: params.onToggleCanvasComment,
+              onExit: params.onExitCanvasComment,
+              onDiscard: params.onDiscardCanvasComments,
+              onSend: params.onSendCanvasComments,
+            }),
+          }
+        : {}),
     }),
   ];
 }

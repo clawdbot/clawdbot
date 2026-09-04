@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { ToastOptions } from "../../lib/toast.ts";
-import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts";
+import { removeBrowserAnnotationsWithUndo } from "./browser-annotation-removal.ts";
 
 const labels = {
   removed: "Removed",
@@ -50,6 +50,35 @@ function createHost(initial: ChatAttachment[]) {
 }
 
 describe("browser annotation removal", () => {
+  it("removes and restores a grouped batch atomically at its original positions", () => {
+    const first = annotation("first");
+    const second = annotation("second");
+    const ordinaryBefore = { id: "ordinary-before", mimeType: "image/png" };
+    const ordinaryBetween = { id: "ordinary-between", mimeType: "image/png" };
+    const original = [ordinaryBefore, first, ordinaryBetween, second];
+    const state = createHost(original);
+    let toast: ToastOptions | undefined;
+    const releasePayload = vi.fn();
+
+    expect(
+      removeBrowserAnnotationsWithUndo(state.host, [first, second], labels, {
+        presentToast: (options) => {
+          toast = options;
+          return true;
+        },
+        releasePayload,
+      }),
+    ).toBe(true);
+    expect(state.attachments()).toEqual([ordinaryBefore, ordinaryBetween]);
+
+    toast?.onDismiss?.("action");
+    toast?.onAction?.();
+
+    expect(state.attachments()).toEqual(original);
+    expect(state.host.focusRestoredAnnotation).toHaveBeenCalledWith(first.id);
+    expect(releasePayload).not.toHaveBeenCalled();
+  });
+
   it("preserves siblings and restores the complete package once at its original position", () => {
     const ordinary = { id: "ordinary", mimeType: "image/png" };
     const first = annotation("first");
@@ -59,7 +88,7 @@ describe("browser annotation removal", () => {
     const releasePayload = vi.fn();
 
     expect(
-      removeBrowserAnnotationWithUndo(state.host, first, labels, {
+      removeBrowserAnnotationsWithUndo(state.host, [first], labels, {
         presentToast: (options) => {
           toast = options;
           return true;
@@ -85,7 +114,7 @@ describe("browser annotation removal", () => {
       const state = createHost([target]);
       let toast: ToastOptions | undefined;
       const releasePayload = vi.fn();
-      removeBrowserAnnotationWithUndo(state.host, target, labels, {
+      removeBrowserAnnotationsWithUndo(state.host, [target], labels, {
         presentToast: (options) => {
           toast = options;
           return true;
@@ -106,7 +135,7 @@ describe("browser annotation removal", () => {
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
     const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
+    removeBrowserAnnotationsWithUndo(state.host, [target], labels, {
       presentToast: (options) => {
         toast = options;
         return true;
@@ -128,7 +157,7 @@ describe("browser annotation removal", () => {
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
     const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
+    removeBrowserAnnotationsWithUndo(state.host, [target], labels, {
       presentToast: (options) => {
         toast = options;
         return true;
@@ -155,7 +184,7 @@ describe("browser annotation removal", () => {
     ]);
     const toasts: ToastOptions[] = [];
     const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
+    removeBrowserAnnotationsWithUndo(state.host, [target], labels, {
       presentToast: (options) => {
         toasts.push(options);
         return true;
@@ -178,7 +207,7 @@ describe("browser annotation removal", () => {
     const state = createHost([target]);
     const releasePayload = vi.fn();
 
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
+    removeBrowserAnnotationsWithUndo(state.host, [target], labels, {
       presentToast: () => false,
       releasePayload,
     });

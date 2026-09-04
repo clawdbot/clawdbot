@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -35,6 +36,11 @@ import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+
+function expectAnnotationPrompt(message: unknown, contexts: string[], userText: string): void {
+  expect(message).toContain(JSON.stringify({ annotations: contexts }));
+  expect(stripInboundMetadata(String(message))).toBe(userText);
+}
 
 beforeEach(() => {
   installOutboxBrowserStorage();
@@ -190,42 +196,6 @@ describe("structured Goal admission", () => {
   });
 });
 
-describe("composeBrowserAnnotationContext", () => {
-  it("materializes an annotation-only message", () => {
-    const attachment = createBrowserAnnotationAttachment("only", "Inspect the marked region.");
-
-    expect(composeBrowserAnnotationContext("", [attachment])).toBe("Inspect the marked region.");
-  });
-
-  it("prepends annotation context to the user's draft", () => {
-    const attachment = createBrowserAnnotationAttachment("mixed", "Browser context");
-
-    expect(composeBrowserAnnotationContext("Please fix this", [attachment])).toBe(
-      "Browser context\n\nPlease fix this",
-    );
-  });
-
-  it("preserves attachment order across two annotations", () => {
-    const first = createBrowserAnnotationAttachment("first", "First context");
-    const second = createBrowserAnnotationAttachment("second", "Second context");
-
-    expect(composeBrowserAnnotationContext("Compare them", [first, second])).toBe(
-      "First context\n\nSecond context\n\nCompare them",
-    );
-  });
-
-  it("omits context for an annotation removed before submit", () => {
-    const removed = createBrowserAnnotationAttachment("removed", "Removed context");
-    const remaining = createBrowserAnnotationAttachment("remaining", "Remaining context");
-    const attachments = [removed, remaining];
-    attachments.splice(0, 1);
-
-    expect(composeBrowserAnnotationContext("Continue", attachments)).toBe(
-      "Remaining context\n\nContinue",
-    );
-  });
-});
-
 describe("handleSendChat browser annotation context", () => {
   it("sends an annotation without requiring user-authored text", async () => {
     const attachment = createBrowserAnnotationAttachment("annotation-only", "Inspect this page");
@@ -236,7 +206,7 @@ describe("handleSendChat browser annotation context", () => {
 
     await handleSendChat(host);
 
-    expect(findChatSendPayload(host).message).toBe("Inspect this page");
+    expectAnnotationPrompt(findChatSendPayload(host).message, ["Inspect this page"], "");
   });
 
   it("routes /new before materializing annotation context", async () => {
@@ -307,7 +277,7 @@ describe("handleSendChat browser annotation context", () => {
 
     await handleSendChat(host);
 
-    expect(findChatSendPayload(host).message).toBe("Review the page\n\nwait");
+    expectAnnotationPrompt(findChatSendPayload(host).message, ["Review the page"], "wait");
     expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
@@ -335,7 +305,11 @@ describe("handleSendChat browser annotation context", () => {
     await handleSendChat(host);
 
     const modelPrompt = findChatSendPayload(host);
-    expect(modelPrompt.message).toBe("Review the annotated page\n\nExplain the highlighted issue");
+    expectAnnotationPrompt(
+      modelPrompt.message,
+      ["Review the annotated page"],
+      "Explain the highlighted issue",
+    );
     expect(modelPrompt.attachments).toEqual([expect.objectContaining({ mimeType: "image/png" })]);
     expect(host.chatAttachments).toEqual([]);
   });
@@ -460,7 +434,11 @@ describe("handleSendChat browser annotation context", () => {
 
     await handleSendChat(host);
 
-    expect(findChatSendPayload(host).message).toBe("Review the annotated page\n\n/review-this");
+    expectAnnotationPrompt(
+      findChatSendPayload(host).message,
+      ["Review the annotated page"],
+      "/review-this",
+    );
   });
 
   it.each(["annotation", "home"])(
@@ -489,7 +467,7 @@ describe("handleSendChat browser annotation context", () => {
       const expected =
         source === "home"
           ? "🔎 @Alex Use the marked area\n\nStable browser context"
-          : "Stable browser context\n\n🔎 @Alex Use the marked area";
+          : composeBrowserAnnotationContext("🔎 @Alex Use the marked area", [attachment]);
       const expectedMentions = [
         {
           profileId: "profile-alex",
@@ -536,10 +514,11 @@ describe("handleSendChat browser annotation context", () => {
 
 describe("human mention submission", () => {
   it("keeps only selected recipients after annotation and reply prefixes", async () => {
+    const annotation = createBrowserAnnotationAttachment("mention", "Unselected @Other context");
     const host = makeChatHost({
       chatMessage: "  🔎 @Alex please review  ",
       chatMentions: [{ profileId: "profile-alex", start: 5, end: 10 }],
-      chatAttachments: [createBrowserAnnotationAttachment("mention", "Unselected @Other context")],
+      chatAttachments: [annotation],
       chatReplyTarget: {
         messageId: "synthetic-reply",
         text: "Unselected @Other quote",
@@ -551,8 +530,8 @@ describe("human mention submission", () => {
 
     await handleSendChat(host);
 
-    const expected =
-      "> **Reader:** Unselected @Other quote\n\nUnselected @Other context\n\n🔎 @Alex please review\n\nUnselected @Other work context";
+    const prompt = composeBrowserAnnotationContext("🔎 @Alex please review", [annotation]);
+    const expected = `> **Reader:** Unselected @Other quote\n\n${prompt}\n\nUnselected @Other work context`;
     expect(findChatSendPayload(host)).toMatchObject({
       message: expected,
       mentions: [

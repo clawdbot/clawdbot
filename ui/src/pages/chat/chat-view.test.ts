@@ -6484,7 +6484,7 @@ describe("chat attachment picker", () => {
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
   });
 
-  it("renders multiple browser annotations as bounded, accessible cards", () => {
+  it("renders multiple browser annotations as one bounded, accessible preview", () => {
     const annotations: ChatAttachment[] = [
       {
         id: "annotation-title",
@@ -6496,6 +6496,9 @@ describe("chat attachment picker", () => {
           displayUrl: "shop.example.test/checkout",
           markedRegionCount: 2,
           inspectedElement: true,
+          comment: "Keep the checkout action visible.",
+          selector: "#checkout",
+          elementTag: "button",
         },
       },
       {
@@ -6513,74 +6516,84 @@ describe("chat attachment picker", () => {
     ];
 
     const container = renderChatView({ attachments: annotations });
-    const cards = container.querySelectorAll<HTMLElement>(
-      ".chat-attachment-thumb--browser-annotation",
+    const group = requireElement(
+      container,
+      '.chat-browser-annotation-group[aria-label="2 annotations"]',
+      "browser annotation group",
     );
+    const items = group.querySelectorAll<HTMLElement>(".chat-browser-annotation-group__item");
 
-    expect(cards).toHaveLength(2);
-    expect(cards[0]?.dataset.attachmentId).toBe("annotation-title");
-    expect(cards[0]?.getAttribute("role")).toBe("group");
-    expect(cards[0]?.getAttribute("aria-label")).toBe(
-      "Browser annotation: Checkout page with a deliberately long title",
+    expect(items).toHaveLength(2);
+    expect(group.querySelector(".chat-browser-annotation-group__summary")?.textContent).toContain(
+      "2 annotations",
     );
-    expect(cards[0]?.querySelector("img")?.getAttribute("alt")).toBe("Browser annotation preview");
-    expect(cards[0]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
-      "Checkout page with a deliberately long title",
-    );
-    expect(cards[0]?.querySelector(".chat-browser-annotation-card__meta")?.textContent).toContain(
-      "2 marked regions",
-    );
-    expect(cards[0]?.textContent).not.toContain("Element inspected");
-    expect(cards[1]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
-      "docs.example.test/narrow-layout",
-    );
-    expect(cards[1]?.textContent).toContain("1 marked region");
-    expect(cards[1]?.textContent).not.toContain("Element inspected");
     expect(
-      cards[0]?.querySelector(
-        '[aria-label="Remove browser annotation: Checkout page with a deliberately long title"]',
-      ),
+      group
+        .querySelector(".chat-browser-annotation-group__summary")
+        ?.getAttribute("data-attachment-id"),
+    ).toBe("annotation-title");
+    expect(group.querySelector('[aria-label="Browser annotation"]')).not.toBeNull();
+    expect(items[0]?.querySelector("img")?.getAttribute("alt")).toBe("Browser annotation preview");
+    expect(items[0]?.querySelector("code")?.textContent).toBe("button");
+    expect(items[0]?.textContent).toContain("#checkout");
+    expect(items[0]?.textContent).toContain("Keep the checkout action visible.");
+    expect(items[1]?.textContent).toContain("docs.example.test/narrow-layout");
+    expect(
+      group.querySelector('[aria-label="Remove browser annotation: 2 annotations"]'),
     ).toBeInstanceOf(HTMLButtonElement);
-    for (const card of cards) {
-      expect(card.querySelector(".chat-browser-annotation-card__preview")).not.toBeNull();
-      expect(card.querySelector(".chat-browser-annotation-card__body")).not.toBeNull();
-    }
   });
 
-  it("delegates browser annotation removal without releasing its payload", () => {
-    const attachment = registerChatAttachmentPayload({
+  it("delegates grouped annotation removal atomically without releasing its payloads", () => {
+    const first = registerChatAttachmentPayload({
       attachment: {
-        id: "annotation-remove",
-        fileName: "annotation.png",
+        id: "annotation-remove-first",
+        fileName: "annotation-first.png",
         mimeType: "image/png",
         browserAnnotation: {
-          modelContext: "Context",
+          modelContext: "First context",
           title: "Account settings",
           displayUrl: "example.test/settings",
           markedRegionCount: 0,
           inspectedElement: false,
         },
       },
-      dataUrl: "data:image/png;base64,YW5ub3RhdGlvbg==",
-      file: new File(["annotation"], "annotation.png", { type: "image/png" }),
+      dataUrl: "data:image/png;base64,Zmlyc3Q=",
+      file: new File(["first"], "annotation-first.png", { type: "image/png" }),
     });
-    const onRemoveAttachment = vi.fn();
+    const second = registerChatAttachmentPayload({
+      attachment: {
+        id: "annotation-remove-second",
+        fileName: "annotation-second.png",
+        mimeType: "image/png",
+        browserAnnotation: {
+          modelContext: "Second context",
+          title: "Profile settings",
+          displayUrl: "example.test/profile",
+          markedRegionCount: 0,
+          inspectedElement: false,
+        },
+      },
+      dataUrl: "data:image/png;base64,c2Vjb25k",
+      file: new File(["second"], "annotation-second.png", { type: "image/png" }),
+    });
+    const onRemoveAnnotations = vi.fn();
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({
-      attachments: [attachment],
+      attachments: [first, second],
       onAttachmentsChange,
-      onRemoveAttachment,
+      onRemoveAnnotations,
     });
 
     requireElement(
       container,
-      '[aria-label="Remove browser annotation: Account settings"]',
+      '[aria-label="Remove browser annotation: 2 annotations"]',
       "browser annotation remove button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onRemoveAttachment).toHaveBeenCalledWith(attachment);
+    expect(onRemoveAnnotations).toHaveBeenCalledWith([first, second]);
     expect(onAttachmentsChange).not.toHaveBeenCalled();
-    expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(first)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(second)).not.toBeNull();
   });
 
   it("keeps ordinary attachment removal immediate when an annotation callback exists", () => {
@@ -6593,12 +6606,12 @@ describe("chat attachment picker", () => {
       dataUrl: "data:image/png;base64,b3JkaW5hcnk=",
       file: new File(["ordinary"], "ordinary.png", { type: "image/png" }),
     });
-    const onRemoveAttachment = vi.fn();
+    const onRemoveAnnotations = vi.fn();
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({
       attachments: [attachment],
       onAttachmentsChange,
-      onRemoveAttachment,
+      onRemoveAnnotations,
     });
 
     requireElement(
@@ -6607,7 +6620,7 @@ describe("chat attachment picker", () => {
       "ordinary attachment remove button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onRemoveAttachment).not.toHaveBeenCalled();
+    expect(onRemoveAnnotations).not.toHaveBeenCalled();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });

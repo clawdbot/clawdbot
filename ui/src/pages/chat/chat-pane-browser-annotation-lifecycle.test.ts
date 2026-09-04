@@ -470,9 +470,11 @@ describe("staged attachment composer adoption", () => {
 
     (
       pane as TestChatPane & {
-        removeBrowserAnnotation: (attachment: (typeof state.chatAttachments)[number]) => void;
+        removeBrowserAnnotations: (
+          attachments: readonly (typeof state.chatAttachments)[number][],
+        ) => void;
       }
-    ).removeBrowserAnnotation(annotation);
+    ).removeBrowserAnnotations([annotation]);
     await toastHost.updateComplete;
     expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).not.toBeNull();

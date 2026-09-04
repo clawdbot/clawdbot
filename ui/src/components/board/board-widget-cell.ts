@@ -36,11 +36,13 @@ import {
   renderBoardWidgetPending,
   renderBoardWidgetRejected,
 } from "./board-widget-cell-render.ts";
+import type { CanvasElementAnnotation } from "./board-widget-commenter.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 import "../tooltip.ts";
 import "../web-awesome.ts";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
+const loadBoardWidgetCommenter = () => import("./board-widget-commenter.ts");
 
 export type BoardWidgetCellCallbacks = {
   appViewGeneration: () => number;
@@ -80,6 +82,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
+  @property({ type: Boolean }) commentMode = false;
+  @property({ attribute: false }) commentAnnotations: readonly CanvasElementAnnotation[] = [];
+  @property({ type: Number }) commentEpoch = 0;
 
   @state() private actionError = "";
   @state() private actionPending = false;
@@ -132,6 +137,19 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           this.widget?.contentKind === "mcp-app",
         );
       }
+    }
+    if (changed.has("commentMode") && this.commentMode) {
+      // Element inspection and image composition are only needed in annotation mode;
+      // keep them out of the default Board/chat startup graph.
+      void ensureCustomElementDefined(
+        "openclaw-board-widget-commenter",
+        loadBoardWidgetCommenter,
+      ).catch((error: unknown) => {
+        if (this.commentMode) {
+          this.actionError = formatUiError(error);
+          this.requestUpdate();
+        }
+      });
     }
     this.syncPluginRenderer();
   }
@@ -484,6 +502,19 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""} ${presentation === "card" ? "board-widget__body--card" : ""}`}
         >
           ${body}
+          ${
+            this.commentMode && widget.contentKind === "html" && !bodyErrored
+              ? html`<openclaw-board-widget-commenter
+                  active
+                  .annotations=${this.commentAnnotations}
+                  .captureEpoch=${this.commentEpoch}
+                  .sessionKey=${this.sessionKey}
+                  .title=${label}
+                  .widgetName=${widget.name}
+                  .widgetRevision=${widget.revision}
+                ></openclaw-board-widget-commenter>`
+              : nothing
+          }
           ${
             this.actionError && widget.grantState !== "pending"
               ? html`<div class="board-widget__error-overlay">
