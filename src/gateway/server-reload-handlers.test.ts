@@ -240,7 +240,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     sharedGatewaySessionGenerationState: { current: undefined, required: null },
     clients: [],
     reconcileRuntimePolicy: vi.fn(),
-    commitTerminalConfig: vi.fn(),
+    commitRuntimePolicy: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
     configRevisionProjector: params.configRevisionProjector ?? {
@@ -874,7 +874,7 @@ function createManagedRestartSequenceHarness(
         });
       }
     }),
-    commitTerminalConfig: terminalPolicy.commitConfig,
+    commitRuntimePolicy: terminalPolicy.commitConfig,
     acceptTerminalConfig: terminalPolicy.acceptConfig,
     sharedGatewaySessionGenerationState,
     requestRecoveryRestart,
@@ -1045,7 +1045,7 @@ async function runManagedOwnershipScenario(params: {
     resolveAccepted = resolve;
   });
   const acceptTerminalConfig = vi.fn(() => resolveAccepted?.());
-  const commitTerminalConfig = vi.fn();
+  const commitRuntimePolicy = vi.fn();
   const prepareTerminalConfig = vi.fn();
   const reconcileRuntimePolicy = vi.fn();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
@@ -1131,7 +1131,7 @@ async function runManagedOwnershipScenario(params: {
     activateRuntimeSecrets: activateRuntimeSecrets as never,
     prepareTerminalConfig,
     reconcileRuntimePolicy,
-    commitTerminalConfig,
+    commitRuntimePolicy,
     acceptTerminalConfig,
     requestRecoveryRestart,
   });
@@ -1143,7 +1143,7 @@ async function runManagedOwnershipScenario(params: {
     return {
       acceptTerminalConfig,
       activateRuntimeSecrets,
-      commitTerminalConfig,
+      commitRuntimePolicy,
       configA,
       configB,
       prepareTerminalConfig,
@@ -1184,7 +1184,7 @@ async function withManagedChannelSecretFixture(
     failStart: () => void;
     recoverDuringPreparation: () => void;
     prepareCount: () => number;
-    commitTerminalConfig: ReturnType<typeof vi.fn>;
+    commitRuntimePolicy: ReturnType<typeof vi.fn>;
     requestRecoveryRestart: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ) {
@@ -1331,7 +1331,7 @@ async function withManagedChannelSecretFixture(
     { activatePreparedSnapshotIfCurrent },
   );
   const writeListenerRef = createConfigWriteListenerRef();
-  const commitTerminalConfig = vi.fn();
+  const commitRuntimePolicy = vi.fn();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   let currentSource = initialSource;
   let revision = 0;
@@ -1346,7 +1346,7 @@ async function withManagedChannelSecretFixture(
     startChannel: manager.startChannel,
     stopChannel: manager.stopChannel,
     activateRuntimeSecrets,
-    commitTerminalConfig,
+    commitRuntimePolicy,
     requestRecoveryRestart,
   });
   try {
@@ -1395,7 +1395,7 @@ async function withManagedChannelSecretFixture(
         recoverNextPreparation = true;
       },
       prepareCount: () => preparationCount,
-      commitTerminalConfig,
+      commitRuntimePolicy,
       requestRecoveryRestart,
     });
   } finally {
@@ -1429,7 +1429,7 @@ describe("managed channel credential publication", () => {
         expect(accounts?.ada?.running).toBe(!cold);
         expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(next);
         expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-        expect(fixture.commitTerminalConfig).toHaveBeenCalledOnce();
+        expect(fixture.commitRuntimePolicy).toHaveBeenCalledOnce();
         if (cold) {
           expect(listActiveDegradedSecretOwners()).toContainEqual(
             expect.objectContaining({ ownerId: "mattermost:ada", degradationState: "cold" }),
@@ -1470,7 +1470,7 @@ describe("managed channel credential publication", () => {
         true,
       );
       expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(fixture.commitTerminalConfig).toHaveBeenCalledOnce();
+      expect(fixture.commitRuntimePolicy).toHaveBeenCalledOnce();
     });
   });
 
@@ -1589,7 +1589,7 @@ describe("managed channel credential publication", () => {
       expect(fixture.stops).toEqual([]);
       expect(fixture.starts).toEqual([]);
       expect(listActiveDegradedSecretOwners()).toEqual([]);
-      expect(fixture.commitTerminalConfig).toHaveBeenCalledOnce();
+      expect(fixture.commitRuntimePolicy).toHaveBeenCalledOnce();
     });
   });
 
@@ -1608,7 +1608,7 @@ describe("managed channel credential publication", () => {
         );
         // Restart emission follows asynchronous secret preflight, after the write receipt.
         await waitForFast(() => expect(fixture.requestRecoveryRestart).toHaveBeenCalledOnce());
-        expect(fixture.commitTerminalConfig).toHaveBeenCalledOnce();
+        expect(fixture.commitRuntimePolicy).toHaveBeenCalledOnce();
       });
     },
   );
@@ -1631,7 +1631,7 @@ describe("managed reload transaction ownership", () => {
     expect(result.reloadPlugins).not.toHaveBeenCalled();
     expect(result.setState).not.toHaveBeenCalled();
     expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
-    expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
+    expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
     expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
     const resolved = result.resolvedConfigs.at(-1);
     expect(resolved?.gateway?.auth?.token).toBe("new-shared-token");
@@ -1708,7 +1708,7 @@ describe("managed reload transaction ownership", () => {
     // Hot plans rebuild prepared owners. Advancing the stamp in place is reserved for no-op plans.
     expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
     expect(result.activateRuntimeSecrets).toHaveBeenCalledOnce();
-    expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
+    expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
     expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
     expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
     expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
@@ -1729,7 +1729,7 @@ describe("managed reload transaction ownership", () => {
       const result = await runManagedOwnershipScenario({ kind, queueRevert: true });
 
       expect(result.activateRuntimeSecrets).toHaveBeenCalledOnce();
-      expect(result.commitTerminalConfig).not.toHaveBeenCalled();
+      expect(result.commitRuntimePolicy).not.toHaveBeenCalled();
       expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
       expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
       expect(result.reconcileRuntimePolicy).not.toHaveBeenCalled();
@@ -4543,7 +4543,7 @@ describe("gateway Gmail hot reload handlers", () => {
     );
     const heartbeatRunner = { stop: vi.fn(), updateConfig: vi.fn() };
     const acceptTerminalConfig = vi.fn();
-    const commitTerminalConfig = vi.fn();
+    const commitRuntimePolicy = vi.fn();
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
       readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next")) as never,
@@ -4554,7 +4554,7 @@ describe("gateway Gmail hot reload handlers", () => {
           cronState: createTestCronState(),
         }),
       activateRuntimeSecrets: activateRuntimeSecrets as never,
-      commitTerminalConfig,
+      commitRuntimePolicy,
       acceptTerminalConfig,
     });
     const registeredWriteListener = writeListenerRef.current;
@@ -4587,7 +4587,7 @@ describe("gateway Gmail hot reload handlers", () => {
       retireRejectedRestart: true,
     });
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
-    expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
+    expect(commitRuntimePolicy).toHaveBeenCalledWith(nextConfig);
     await reloader.stop();
   });
 
@@ -4964,7 +4964,7 @@ describe("gateway Gmail hot reload handlers", () => {
       activateRuntimeSecrets: activateRuntimeSecrets as never,
       prepareTerminalConfig,
       reconcileRuntimePolicy,
-      commitTerminalConfig: terminalPolicy.commitConfig,
+      commitRuntimePolicy: terminalPolicy.commitConfig,
       acceptTerminalConfig: terminalPolicy.acceptConfig,
       restartRecoveryAvailable: false,
     });
@@ -5116,7 +5116,7 @@ describe("gateway Gmail hot reload handlers", () => {
           policy.prepareConfig(config, { restartPending: plan.restartGateway }),
         reconcileRuntimePolicy: () =>
           manager.closeDisallowedAgents((agentId) => policy.resolve(agentId).ok),
-        commitTerminalConfig: policy.commitConfig,
+        commitRuntimePolicy: policy.commitConfig,
         acceptTerminalConfig: policy.acceptConfig,
         requestRecoveryRestart,
       });
@@ -5254,7 +5254,7 @@ describe("gateway Gmail hot reload handlers", () => {
       prepareTerminalConfig: (plan, nextConfig) => {
         terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
       },
-      commitTerminalConfig: terminalPolicy.commitConfig,
+      commitRuntimePolicy: terminalPolicy.commitConfig,
       acceptTerminalConfig,
       requestRecoveryRestart,
     });
@@ -5801,7 +5801,7 @@ describe("gateway Gmail hot reload handlers", () => {
       }),
       { activatePreparedSnapshotIfCurrent },
     );
-    const commitTerminalConfig = vi.fn();
+    const commitRuntimePolicy = vi.fn();
     type ReloadOutcome = { status: "promoted" } | { status: "failed"; message: string };
     let settleReload: ((outcome: ReloadOutcome) => void) | undefined;
     const reloadOutcome = new Promise<ReloadOutcome>((resolve) => {
@@ -5827,7 +5827,7 @@ describe("gateway Gmail hot reload handlers", () => {
       setState,
       logReload,
       activateRuntimeSecrets: activateRuntimeSecrets as never,
-      commitTerminalConfig,
+      commitRuntimePolicy,
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -5853,7 +5853,7 @@ describe("gateway Gmail hot reload handlers", () => {
         initialSnapshotRevision,
       );
       expect(setState).toHaveBeenCalledOnce();
-      expect(commitTerminalConfig).toHaveBeenCalledOnce();
+      expect(commitRuntimePolicy).toHaveBeenCalledOnce();
       expect(promoteSnapshot).toHaveBeenCalledOnce();
       expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
     } finally {
@@ -7314,7 +7314,7 @@ describe("deferred channel reload abort generation", () => {
         { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
       ]);
       const writeListenerRef = createConfigWriteListenerRef();
-      const commitTerminalConfig = vi.fn();
+      const commitRuntimePolicy = vi.fn();
       const setState = vi.fn();
       const startChannel = vi.fn(async () => new Map());
       const stopChannel = vi.fn(async () => {});
@@ -7351,7 +7351,7 @@ describe("deferred channel reload abort generation", () => {
         readSnapshot,
         subscribeToWrites: captureConfigWriteListener(writeListenerRef),
         logReload,
-        commitTerminalConfig,
+        commitRuntimePolicy,
         setState,
         startChannel,
         stopChannel,
@@ -7393,7 +7393,7 @@ describe("deferred channel reload abort generation", () => {
         expect(setState).not.toHaveBeenCalled();
         expect(stopChannel).not.toHaveBeenCalled();
         expect(startChannel).not.toHaveBeenCalled();
-        expect(commitTerminalConfig).not.toHaveBeenCalled();
+        expect(commitRuntimePolicy).not.toHaveBeenCalled();
 
         if (outcome === "lifecycle stop") {
           const stopping = reloader.stop();
@@ -7426,12 +7426,12 @@ describe("deferred channel reload abort generation", () => {
           );
           if (outcome === "same write") {
             expect(setState).toHaveBeenCalledOnce();
-            expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
+            expect(commitRuntimePolicy).toHaveBeenCalledWith(nextConfig);
             expect(stopChannel).toHaveBeenCalledOnce();
             expect(startChannel).toHaveBeenCalledOnce();
             expect(logReload.error).not.toHaveBeenCalled();
           } else {
-            expect(commitTerminalConfig).not.toHaveBeenCalled();
+            expect(commitRuntimePolicy).not.toHaveBeenCalled();
           }
         }
       } finally {
@@ -7477,7 +7477,7 @@ describe("deferred channel reload abort generation", () => {
       const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
       const writeListenerRef = createConfigWriteListenerRef();
       const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
-      const commitTerminalConfig = vi.fn();
+      const commitRuntimePolicy = vi.fn();
       const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const watchedConfig = successor === "newer admitted write" ? initialConfig : nextConfig;
       const continuePlugin = createDeferred();
@@ -7514,7 +7514,7 @@ describe("deferred channel reload abort generation", () => {
           }
           return makePluginReloadResult({ activeChannels: new Set(["whatsapp"]) });
         },
-        commitTerminalConfig,
+        commitRuntimePolicy,
         logReload,
         requestRecoveryRestart,
       });
@@ -7571,10 +7571,10 @@ describe("deferred channel reload abort generation", () => {
             expect.anything(),
           );
           expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).not.toHaveBeenCalled();
-          expect(commitTerminalConfig).toHaveBeenCalledWith(nextConfig);
+          expect(commitRuntimePolicy).toHaveBeenCalledWith(nextConfig);
           if (successorRequest) {
             await expect(successorRequest).resolves.toBe("applied");
-            expect(commitTerminalConfig).toHaveBeenLastCalledWith(initialConfig);
+            expect(commitRuntimePolicy).toHaveBeenLastCalledWith(initialConfig);
           }
         }
         expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(watchedConfig);

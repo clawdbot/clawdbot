@@ -397,7 +397,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
         }),
         userId: "blocked-user",
         username: "blocked",
@@ -410,7 +410,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
           allowFrom: {
             discord: ["user:allowed-user"],
           },
@@ -423,7 +423,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
           allowFrom: {
             discord: ["user:allowed-user"],
           },
@@ -463,7 +463,7 @@ describe("createDiscordNativeCommand option wiring", () => {
         }),
       } as never,
       cfg: createAllowedGuildAutocompleteConfig({
-        ownerAllowFrom: ["user:owner-user"],
+        ownerAllowFrom: ["discord:owner-user"],
       }),
       discordConfig: {
         groupPolicy: "allowlist",

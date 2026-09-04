@@ -379,7 +379,8 @@ suite.define(() => {
       await modelScroller.evaluate((element) => {
         element.scrollTop = 0;
       });
-      await modelScroller.hover();
+      // The wheel owns this scroll assertion; Playwright must not scroll ancestors first.
+      await modelScroller.hover({ scroll: "none" });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
       await page.mouse.wheel(0, -5_000);
       await page.waitForTimeout(100);
