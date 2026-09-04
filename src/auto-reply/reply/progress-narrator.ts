@@ -228,6 +228,8 @@ function createProgressNarrator(params: {
       );
       return;
     }
+    // An event or completion wakeup inherits urgency from the timer it replaces.
+    immediate ||= retryImmediate;
     clearRetryTimer();
     if (inFlight) {
       pendingImmediate ||= immediate;
