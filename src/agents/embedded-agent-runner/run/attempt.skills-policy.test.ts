@@ -157,10 +157,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       snapshots.push(captureToolSurface(params));
       return { meta: { durationMs: 1 } };
     });
-    const reviewCandidate = await createExperienceReviewCandidate(runId, [], {
-      workspaceDir,
-      modelId: "gpt-test",
-    });
+    const reviewCandidate = await createExperienceReviewCandidate(
+      runId,
+      [{ role: "user", content: "Inspect the available tools.", timestamp: 1 }],
+      { workspaceDir, modelId: "gpt-test" },
+    );
     reviewCandidate.ctx.foregroundPromptContext = foregroundPromptContext;
     reviewCandidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
     await runSkillExperienceReview(reviewCandidate, {
@@ -299,7 +300,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         status: "rejected",
         reason: {
           message:
-            "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.",
+            "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.",
         },
       },
     ]);

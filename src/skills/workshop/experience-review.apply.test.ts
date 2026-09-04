@@ -13,6 +13,7 @@ import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.
 import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -38,10 +39,7 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-type ExperienceReviewFixture = Omit<
-  ExperienceReviewCandidate,
-  "ctx" | "source" | "sessionManager"
-> & {
+type ExperienceReviewFixture = Omit<ExperienceReviewCandidate, "ctx" | "source"> & {
   ctx: Omit<ExperienceReviewCandidate["ctx"], "agentId"> & { agentId?: string };
 };
 
@@ -64,11 +62,21 @@ async function captureReviewFixture(
   if (!created.ok) {
     throw new Error(`Could not create review source: ${created.error}`);
   }
+  const terminal = SessionManager.open(
+    source,
+    fixture.ctx.workspaceDir,
+  ).appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "Review the completed fixture.",
+    timestamp: Date.now(),
+  });
+  if (!terminal.anchor) {
+    throw new Error("Review fixture requires a completed message");
+  }
   return {
     ...fixture,
     ctx: { ...fixture.ctx, agentId },
-    source,
-    sessionManager: SessionManager.openModelContext(source, { cwd: fixture.ctx.workspaceDir }),
+    source: terminal.anchor,
   };
 }
 
@@ -187,7 +195,9 @@ describe("experience review auto apply", () => {
           status: "pending",
         });
         await expect(
-          fs.stat(path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md")),
+          fs.stat(
+            path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md"),
+          ),
         ).rejects.toMatchObject({ code: "ENOENT" });
         expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
           outcome: "failed",
@@ -229,18 +239,76 @@ describe("experience review auto apply", () => {
     try {
       await expect(
         runCapturedExperienceReview(candidate, { getCurrentConfig: () => ({}) }),
-      ).rejects.toThrow("source session was deleted or replaced");
+      ).rejects.toThrow("Completed-turn transcript anchor changed");
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(registration).toHaveBeenCalledOnce();
       expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
       expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
-        error: "Error: Skill experience review source session was deleted or replaced.",
+        error: "WorkerTaskError: Completed-turn transcript anchor changed",
       });
     } finally {
       registration.mockRestore();
     }
   });
+
+  it.each(["session", "transcript"] as const)(
+    "rejects a changed %s after context preparation",
+    async (change) => {
+      const workspaceDir = await tempDirs.make("openclaw-experience-source-rotation-");
+      const candidate = await captureReviewFixture({
+        ctx: {
+          sessionId: "foreground-session",
+          sessionKey: "agent:main:source-rotation",
+          workspaceDir,
+          modelProviderId: "openai",
+          modelId: "gpt-test",
+          foregroundPromptContext: foregroundPromptContext(workspaceDir),
+        },
+        config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+      });
+      const readContext = SessionManager.openModelContextAsync.bind(SessionManager);
+      const contextRead = vi
+        .spyOn(SessionManager, "openModelContextAsync")
+        .mockImplementationOnce(async (...args) => {
+          const pendingContext = readContext(...args);
+          if (change === "session") {
+            await upsertSessionEntryCore(candidate.source, {
+              sessionId: "replacement-session",
+              updatedAt: Date.now(),
+            });
+          }
+          const context = await pendingContext;
+          if (change === "transcript") {
+            SessionManager.open(candidate.source).removeTrailingEntries(
+              (entry) => entry.type === "message",
+            );
+          }
+          return context;
+        });
+      runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+      try {
+        await expect(
+          runCapturedExperienceReview(candidate, { getCurrentConfig: () => candidate.config }),
+        ).rejects.toThrow(
+          change === "session"
+            ? "source session was deleted or replaced"
+            : "Completed-turn transcript anchor changed",
+        );
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(
+          SessionManager.openModelContext(candidate.source).buildSessionContext().messages,
+        ).toEqual(
+          change === "session"
+            ? [expect.objectContaining({ role: "user", content: "Review the completed fixture." })]
+            : [],
+        );
+      } finally {
+        contextRead.mockRestore();
+      }
+    },
+  );
+
   it("does not occupy the foreground session lane", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");
     const foregroundSessionKey = "agent:main:main";

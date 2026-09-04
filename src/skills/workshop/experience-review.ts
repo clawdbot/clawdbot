@@ -3,8 +3,10 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -143,8 +145,16 @@ async function runSkillExperienceReviewInner(
   });
   try {
     abortSignal.throwIfAborted();
+    const sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
+      cwd: workspaceDir,
+      through: candidate.source,
+      signal: abortSignal,
+    });
+    abortSignal.throwIfAborted();
+    const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
+    abortSignal.throwIfAborted();
     // Deleting or replacing the source session must not revive its captured evidence.
-    // This reads identity only, never the newer transcript that the review must exclude.
+    // Check after asynchronous preparation; a replacement can retain the old transcript.
     const sourceEntry = loadSessionEntryReadOnly({
       ...candidate.source,
       hydrateSkillPromptRefs: false,
@@ -153,12 +163,11 @@ async function runSkillExperienceReviewInner(
     if (sourceEntry?.sessionId !== candidate.source.sessionId) {
       throw new Error("Skill experience review source session was deleted or replaced.");
     }
-    const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
-    abortSignal.throwIfAborted();
     const existingSkills = listWritableWorkshopSkillSummaries({
       config,
       agentId: foregroundPromptContext.agentId,
     });
+    validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
     const run = () =>
       runSkillWorkshopReview({
         reviewKind: "experience",
@@ -167,7 +176,7 @@ async function runSkillExperienceReviewInner(
         sessionKey: reviewSession.sessionKey,
         // Delivery authority closes with the foreground turn and cannot be reused by this fork.
         messageActionTurnCapability: undefined,
-        sessionManager: candidate.sessionManager,
+        sessionManager,
         sessionPersistence: "detached",
         workspaceDir,
         config,

@@ -235,7 +235,7 @@ export function createExperienceReviewMessages(modelId: string) {
   return { positiveMessages, learnableMessages, negativeMessages, interruptedMessages };
 }
 
-export async function createExperienceReviewSource(
+export async function createExperienceReviewCandidate(
   runId: string,
   messages: Message[],
   options: {
@@ -245,7 +245,7 @@ export async function createExperienceReviewSource(
     apiKey?: string;
     turnAborted?: boolean;
   },
-): Promise<Omit<ExperienceReviewCandidate, "sessionManager">> {
+): Promise<ExperienceReviewCandidate> {
   const { workspaceDir, modelId } = options;
   const sessionId = `live-skill-review-${runId}`;
   const sessionKey = `agent:main:${sessionId}`;
@@ -311,7 +311,7 @@ export async function createExperienceReviewSource(
       plugins: { allow: ["openai"] },
     },
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),
-  } satisfies Omit<ExperienceReviewCandidate, "source" | "sessionManager">;
+  } satisfies Omit<ExperienceReviewCandidate, "source">;
   const target = await resolveAgentRunSessionTarget({
     agentId: "main",
     config: result.config,
@@ -327,23 +327,16 @@ export async function createExperienceReviewSource(
   if (!created.ok) {
     throw new Error(`Failed to create live review session: ${created.error}`);
   }
+  const session = SessionManager.open(target, workspaceDir);
+  let source;
   for (const message of messages) {
-    SessionManager.appendMessageToTranscript(target, message, { config: result.config });
+    source = session.appendMessageWithTranscriptAnchor(message, { config: result.config }).anchor;
+  }
+  if (!source) {
+    throw new Error("Review fixture requires a completed message");
   }
   return {
     ...result,
-    source: target,
-  };
-}
-
-export async function createExperienceReviewCandidate(
-  ...params: Parameters<typeof createExperienceReviewSource>
-): Promise<ExperienceReviewCandidate> {
-  const candidate = await createExperienceReviewSource(...params);
-  return {
-    ...candidate,
-    sessionManager: SessionManager.openModelContext(candidate.source, {
-      cwd: candidate.ctx.workspaceDir,
-    }),
+    source,
   };
 }

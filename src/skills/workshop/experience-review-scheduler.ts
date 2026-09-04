@@ -1,8 +1,7 @@
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
-import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
@@ -53,10 +52,7 @@ export type SkillExperienceReviewParams = {
   ctx: ExperienceReviewAgentContext;
   usedSkills?: readonly RunSkillUsage[];
   config: OpenClawConfig;
-  source?: {
-    target: SessionTranscriptRuntimeTarget;
-    captureContext: (workspaceDir: string) => SessionManager;
-  };
+  source?: TranscriptEntryAnchor;
 };
 
 export type ExperienceReviewCandidate = {
@@ -72,8 +68,7 @@ export type ExperienceReviewCandidate = {
     modelId: string;
   };
   config: OpenClawConfig;
-  source: SessionTranscriptRuntimeTarget;
-  sessionManager: SessionManager;
+  source: TranscriptEntryAnchor;
   usedSkills?: readonly RunSkillUsage[];
   turnAborted?: boolean;
 };
@@ -245,9 +240,6 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (!source || !modelProviderId || !modelId) {
         return;
       }
-      // Capture while the producer still owns its completed turn. Reading after
-      // the idle wait would pair this run's metadata with a later turn's evidence.
-      const sessionManager = source.captureContext(workspaceDir);
       if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
         const oldest = pendingBySession.entries().next().value;
         if (oldest) {
@@ -259,10 +251,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
       const candidate: ExperienceReviewCandidate = {
         ctx: {
-          agentId: source.target.agentId,
+          agentId: source.agentId,
           runId: params.ctx.runId,
-          sessionKey: source.target.sessionKey,
-          sessionId: source.target.sessionId,
+          sessionKey: source.sessionKey,
+          sessionId: source.sessionId,
           workspaceDir,
           modelProviderId,
           modelId,
@@ -271,8 +263,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           foregroundPromptContext: params.ctx.foregroundPromptContext,
         },
         config: params.config,
-        source: source.target,
-        sessionManager,
+        source: { ...source },
         usedSkills: params.usedSkills ? [...params.usedSkills] : undefined,
         turnAborted: !params.event.success,
       };

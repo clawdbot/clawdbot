@@ -191,7 +191,7 @@ describeLive("skill experience review live OpenAI eval", () => {
     // on a loaded machine.
     const { loadAgentRuntimePluginRegistryHandle } =
       await import("../../agents/runtime-plugins.js");
-    const warmupCandidate = await candidate("warmup", []);
+    const warmupCandidate = await candidate("warmup", positiveMessages());
     loadAgentRuntimePluginRegistryHandle({
       config: warmupCandidate.config ?? {},
       workspaceDir,
@@ -210,7 +210,7 @@ describeLive("skill experience review live OpenAI eval", () => {
       const reviewCandidate = await candidate(runId, messages, { turnAborted });
       const before = await listSkillProposals({ config: reviewCandidate.config, agentId: "main" });
       const startedAt = Date.now();
-      const observation = await observeExperienceReview(reviewCandidate.sessionManager, () =>
+      const observation = await observeExperienceReview(() =>
         runSkillExperienceReview(reviewCandidate, {
           getCurrentConfig: () => reviewCandidate.config,
         }),

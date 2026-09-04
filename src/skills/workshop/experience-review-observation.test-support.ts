@@ -1,14 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as responsesEgress from "../../../packages/ai/src/transports/openai-responses-prompt-observer-internal.js";
-import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 
-export async function observeExperienceReview(session: SessionManager, run: () => Promise<void>) {
+export async function observeExperienceReview(run: () => Promise<void>) {
+  let session: SessionManager | undefined;
   const requests: Array<{ toolNames: string[]; outputs: unknown[] }> = [];
+  const openModelContext = SessionManager.openModelContextAsync.bind(SessionManager);
   const createEgressObserver = responsesEgress.createResponsesPromptEgressObserver;
   // Keep the actual runner and transport. Silent reviews suppress public assistant events;
   // the detached transcript and final provider request own the facts this smoke needs.
+  const sessionSpy = vi
+    .spyOn(SessionManager, "openModelContextAsync")
+    .mockImplementation(async (...args) => {
+      session = await openModelContext(...args);
+      return session;
+    });
   const providerSpy = vi
     .spyOn(responsesEgress, "createResponsesPromptEgressObserver")
     .mockImplementation((...args) => {
@@ -30,6 +38,9 @@ export async function observeExperienceReview(session: SessionManager, run: () =
     });
   try {
     await run();
+    if (!session) {
+      throw new Error("Review did not acquire model context");
+    }
     const messages = session.buildSessionContext().messages;
     const review = messages.slice(messages.findLastIndex((message) => message.role === "user") + 1);
     const final = review.findLast((message) => message.role === "assistant");
@@ -45,5 +56,6 @@ export async function observeExperienceReview(session: SessionManager, run: () =
     };
   } finally {
     providerSpy.mockRestore();
+    sessionSpy.mockRestore();
   }
 }

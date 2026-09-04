@@ -5,7 +5,6 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   createNestedToolActivity,
   projectNestedToolActivityForHooks,
@@ -68,13 +67,15 @@ function completedRun(
     },
     config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
     source: {
-      target: {
-        agentId: options.agentId ?? "main",
-        sessionId: "session-1",
-        sessionKey: options.sessionKey ?? "agent:main:main",
-        storePath: "/session-store",
-      },
-      captureContext: () => SessionManager.inMemory("/workspace"),
+      agentId: options.agentId ?? "main",
+      sessionId: "session-1",
+      sessionKey: options.sessionKey ?? "agent:main:main",
+      storePath: "/session-store",
+      entryId: "completed-message",
+      generation: "generation-1",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
     },
   };
 }
@@ -85,15 +86,14 @@ function captureCandidate(params: SkillExperienceReviewParams): ExperienceReview
     ctx: {
       ...params.ctx,
       agentId: params.ctx.foregroundPromptContext.agentId,
-      sessionId: source.target.sessionId,
-      sessionKey: source.target.sessionKey,
+      sessionId: source.sessionId,
+      sessionKey: source.sessionKey,
       workspaceDir: params.ctx.workspaceDir!,
       modelProviderId: params.ctx.modelProviderId!,
       modelId: params.ctx.modelId!,
     },
     config: params.config,
-    source: source.target,
-    sessionManager: source.captureContext(params.ctx.workspaceDir!),
+    source,
   };
 }
 
@@ -552,6 +552,8 @@ describe("skill experience review prompt", () => {
     expect(prompt).toContain("this message starts a review pass");
     expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
     expect(prompt).toContain("One mutation at most, smallest mutation first");
+    expect(prompt).toContain("revise the best matching draft before creating another");
+    expect(prompt).toContain("support_files and link them from the procedure");
     expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
     expect(prompt).toContain("Reading and preparing do not spend the mutation");
     expect(prompt).toContain("reads and updates only skills generated in the Workshop directory");

@@ -32,7 +32,6 @@ import { runSkillExperienceReview } from "./experience-review.js";
 import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
-  createExperienceReviewSource,
 } from "./experience-review.test-support.js";
 import {
   getSkillProposalRunProgress,
@@ -152,7 +151,7 @@ describe("Workshop experience review through the real provider and tool owners",
           missingSessionKey: "resolve-existing",
         });
         loadAgentRuntimePluginRegistryHandle({ config: candidate.config, workspaceDir });
-        const reviewFinished = createDeferred<void>();
+        const reviewFinished = createDeferred();
         const idleCallbacks: Array<() => void> = [];
         const scheduler = createSkillExperienceReviewScheduler({
           isSystemActive: () => false,
@@ -184,10 +183,7 @@ describe("Workshop experience review through the real provider and tool owners",
           }),
         ];
         try {
-          const source = {
-            target,
-            captureContext: (cwd: string) => SessionManager.openModelContext(target, { cwd }),
-          };
+          const source = candidate.source;
           scheduler.schedule({
             event: { messages, success: true },
             ctx,
@@ -302,7 +298,7 @@ describe("Workshop experience review through the real provider and tool owners",
             });
           }
           const replay = sanitizeToolUseResultPairingForModel(messages, true);
-          const candidate = await createExperienceReviewSource(runId, messages, {
+          const candidate = await createExperienceReviewCandidate(runId, messages, {
             workspaceDir,
             modelId,
             baseUrl: `${baseUrl}/v1`,
@@ -333,21 +329,18 @@ describe("Workshop experience review through the real provider and tool owners",
             return originalParse(text, reviver);
           });
           let observation: Awaited<ReturnType<typeof observeExperienceReview>> | undefined;
+          const failedReview = scenario === "failed" || scenario === "rejected";
           try {
-            const sessionManager = SessionManager.openModelContext(candidate.source, {
-              cwd: workspaceDir,
-            });
-            const run = observeExperienceReview(sessionManager, () =>
-              runSkillExperienceReview(
-                { ...candidate, sessionManager },
-                {
-                  getCurrentConfig: () => candidate.config,
-                },
-              ),
+            const run = observeExperienceReview(() =>
+              runSkillExperienceReview(candidate, {
+                getCurrentConfig: () => candidate.config,
+              }),
             );
-            if (scenario === "failed") {
+            if (failedReview) {
               await expect(run).rejects.toThrow(
-                "provider rejected the request schema or tool payload",
+                scenario === "failed"
+                  ? "provider rejected the request schema or tool payload"
+                  : "Skill Workshop failed",
               );
             } else {
               observation = await run;
@@ -416,7 +409,7 @@ describe("Workshop experience review through the real provider and tool owners",
             expect(proposals).toEqual([]);
             expect(progress.mutationCount).toBe(0);
             expect(outcome).toMatchObject({
-              outcome: scenario === "failed" ? "failed" : "nothing",
+              outcome: failedReview ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
               const toolOutput = requests[1]?.input?.find(
@@ -426,23 +419,18 @@ describe("Workshop experience review through the real provider and tool owners",
               expect(toolOutput?.output).toContain("required");
             }
           }
-          if (scenario !== "failed") {
+          if (!failedReview) {
             expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
             expect(observation).toBeDefined();
-            const decision = () =>
-              assertExperienceReviewDecision({
-                observation: observation!,
-                messages: replay,
-                progress,
-                proposals,
-                outcome,
-                startedAt,
-              });
-            if (scenario === "rejected") {
-              expect(decision).toThrow();
-            } else {
-              expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
-            }
+            const decision = assertExperienceReviewDecision({
+              observation: observation!,
+              messages: replay,
+              progress,
+              proposals,
+              outcome,
+              startedAt,
+            });
+            expect(decision).toBe(scenario === "proposed" ? "proposed" : "abstained");
           }
         },
       );
