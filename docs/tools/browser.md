@@ -233,6 +233,10 @@ opened by the user, or otherwise have unknown ownership. The
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
 
+OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
+tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
+remote and attach-only profiles do not use it.
+
 For host-local opens, ownership with a stable native CDP target and browser
 identity is stored in the shared SQLite state. Those records survive a Gateway
 restart and remain eligible for `/new` and other session lifecycle cleanup;
