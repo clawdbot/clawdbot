@@ -171,6 +171,11 @@ can overstate the live context window. Context displays and diagnostics use
 the latest prompt snapshot (`promptTokens`, or the last model call when no
 prompt snapshot is available) for `context.used`.
 
+The Control UI Usage page shows estimates from the session's latest recorded
+context report. System, skills, tools, and file counts can overlap, so they are
+shown separately without a combined total or a percentage of date-range usage.
+Use `/status` for the current context-window snapshot.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:

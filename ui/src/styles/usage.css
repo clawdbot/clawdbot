@@ -1385,7 +1385,6 @@
 
 .legend-dot,
 .cost-segment,
-.context-segment,
 .ts-bar {
   transition:
     opacity 0.18s var(--ease-out),
@@ -1410,7 +1409,6 @@
 .cost-segment.input,
 .legend-dot.input,
 .ts-bar.input,
-.context-segment.files,
 .legend-dot.files {
   background: var(--ok);
   fill: var(--ok);
@@ -1419,7 +1417,6 @@
 .cost-segment.cache-write,
 .legend-dot.cache-write,
 .ts-bar.cache-write,
-.context-segment.tools,
 .legend-dot.tools {
   background: var(--warn);
   fill: var(--warn);
@@ -1428,19 +1425,16 @@
 .cost-segment.cache-read,
 .legend-dot.cache-read,
 .ts-bar.cache-read,
-.context-segment.skills,
 .legend-dot.skills {
   background: var(--info);
   fill: var(--info);
 }
 
-.context-segment.system,
 .legend-dot.system {
   background: var(--accent);
 }
 
-.cost-breakdown-total,
-.context-total {
+.cost-breakdown-total {
   font-size: 12px;
   color: var(--text);
 }
@@ -1705,15 +1699,6 @@
 
 .context-weight-desc {
   font-size: 12px;
-}
-
-.context-stacked-bar {
-  display: flex;
-  min-height: 18px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
 }
 
 .context-legend {

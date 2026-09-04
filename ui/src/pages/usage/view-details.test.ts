@@ -67,6 +67,7 @@ function mount(
     timeZone?: "local" | "utc";
   } = {},
   errors: {
+    usage?: UsageSessionEntry["usage"];
     timeSeries?: string;
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[];
@@ -86,7 +87,11 @@ function mount(
   const container = document.createElement("div");
   render(
     renderSessionDetailPanel(
-      { ...session(), contextWeight: errors.contextWeight },
+      {
+        ...session(),
+        ...("usage" in errors ? { usage: errors.usage } : {}),
+        contextWeight: errors.contextWeight,
+      },
       { points },
       false,
       status(errors.timeSeries),
@@ -321,99 +326,126 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).toContain("Showing stale data");
   });
 
-  it("preserves context-category order, sorted cards, expansion, and callbacks", () => {
-    const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
-      source: "run",
-      generatedAt: 0,
-      systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
-      skills: {
-        promptChars: 100,
-        entries: Array.from({ length: 5 }, (_, index) => ({
-          name: `skill-${index}`,
-          blockChars: (index + 1) * 10,
-        })),
-      },
-      tools: {
-        listChars: 20,
-        schemaChars: 30,
-        entries: [
-          { name: "smaller-tool", summaryChars: 4, schemaChars: 6 },
-          { name: "larger-tool", summaryChars: 8, schemaChars: 12 },
+  it.each([
+    ["uncached input", { input: 1000, cacheRead: 0, cacheWrite: 0, totalTokens: 1400 }],
+    ["cached input", { input: 100, cacheRead: 100, cacheWrite: 800, totalTokens: 1400 }],
+    ["cache-write-only input", { input: 0, cacheRead: 0, cacheWrite: 1000, totalTokens: 1400 }],
+    [
+      "multiple calls",
+      { input: 200, output: 800, cacheRead: 200, cacheWrite: 1600, totalTokens: 2800 },
+    ],
+    ["zero usage", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }],
+    ["missing usage", null],
+  ] as const)(
+    "preserves recorded context components without adding overlapping totals for %s",
+    (_name, usage) => {
+      const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
+        source: "run",
+        generatedAt: 0,
+        systemPrompt: { chars: 400, projectContextChars: 80, nonProjectContextChars: 320 },
+        skills: {
+          promptChars: 100,
+          entries: Array.from({ length: 5 }, (_, index) => ({
+            name: `skill-${index}`,
+            blockChars: (index + 1) * 10,
+          })),
+        },
+        tools: {
+          listChars: 20,
+          schemaChars: 30,
+          entries: [
+            { name: "smaller-tool", summaryChars: 4, schemaChars: 6 },
+            { name: "larger-tool", summaryChars: 8, schemaChars: 12 },
+          ],
+        },
+        injectedWorkspaceFiles: [
+          {
+            name: "small.md",
+            path: "/small.md",
+            missing: false,
+            rawChars: 10,
+            injectedChars: 10,
+            truncated: false,
+          },
+          {
+            name: "large.md",
+            path: "/large.md",
+            missing: false,
+            rawChars: 30,
+            injectedChars: 30,
+            truncated: false,
+          },
+          {
+            name: "AGENTS.md",
+            path: "/AGENTS.md",
+            missing: false,
+            rawChars: 100,
+            injectionStatus: "native_unverified",
+            injectedChars: null,
+            truncated: null,
+          },
         ],
-      },
-      injectedWorkspaceFiles: [
+      };
+      const onToggleContextExpanded = vi.fn();
+      const container = mount(
+        [],
+        null,
+        null,
+        "total",
+        {},
         {
-          name: "small.md",
-          path: "/small.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 10,
-          truncated: false,
+          contextWeight,
+          onToggleContextExpanded,
+          usage: usage ? { ...session().usage!, ...usage } : null,
         },
-        {
-          name: "large.md",
-          path: "/large.md",
-          missing: false,
-          rawChars: 30,
-          injectedChars: 30,
-          truncated: false,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/AGENTS.md",
-          missing: false,
-          rawChars: 100,
-          injectionStatus: "native_unverified",
-          injectedChars: null,
-          truncated: null,
-        },
-      ],
-    };
-    const onToggleContextExpanded = vi.fn();
-    const container = mount(
-      [],
-      null,
-      null,
-      "total",
-      {},
-      { contextWeight, onToggleContextExpanded },
-    );
-    const categories = ["system", "skills", "tools", "files"];
+      );
+      const categories = ["system", "skills", "tools", "files"];
 
-    expect(
-      [...container.querySelectorAll(".context-stacked-bar .context-segment")].map((segment) =>
-        categories.find((category) => segment.classList.contains(category)),
-      ),
-    ).toEqual(categories);
-    const cards = [...container.querySelectorAll(".context-breakdown-card")];
-    expect(
-      cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
-    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
-    expect(
-      [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["skill-4", "skill-3", "skill-2", "skill-1"]);
-    expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
-      "larger-tool",
-    );
-    const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
-    expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
-      "large.md",
-      "small.md",
-      "AGENTS.md",
-    ]);
-    expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
-    expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
-    container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
-    expect(onToggleContextExpanded).toHaveBeenCalledOnce();
+      expect(
+        [...container.querySelectorAll(".context-legend .legend-dot")].map((segment) =>
+          categories.find((category) => segment.classList.contains(category)),
+        ),
+      ).toEqual(categories);
+      const cards = [...container.querySelectorAll(".context-breakdown-card")];
+      expect(
+        cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
+      ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
+      expect(
+        [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
+          (entry) => entry.textContent,
+        ),
+      ).toEqual(["skill-4", "skill-3", "skill-2", "skill-1"]);
+      expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
+        "larger-tool",
+      );
+      const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
+      expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
+        "large.md",
+        "small.md",
+        "AGENTS.md",
+      ]);
+      expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
+      expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
+      container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
+      expect(onToggleContextExpanded).toHaveBeenCalledOnce();
 
-    const expanded = mount([], null, null, "total", {}, { contextWeight, contextExpanded: true });
-    expect(
-      expanded
-        .querySelectorAll(".context-breakdown-card")[0]
-        ?.querySelectorAll(".context-breakdown-item"),
-    ).toHaveLength(5);
-    expect(expanded.querySelector(".context-breakdown-more")).toBeNull();
-  });
+      const expanded = mount([], null, null, "total", {}, { contextWeight, contextExpanded: true });
+      expect(
+        expanded
+          .querySelectorAll(".context-breakdown-card")[0]
+          ?.querySelectorAll(".context-breakdown-item"),
+      ).toHaveLength(5);
+      expect(expanded.querySelector(".context-breakdown-more")).toBeNull();
+      expect(
+        [...container.querySelectorAll(".context-legend .legend-item")].map((entry) =>
+          entry.textContent?.replaceAll(/\s+/g, " ").trim(),
+        ),
+      ).toEqual(["Sys ~100", "Skills ~25", "Tools ~13", "Files ~10"]);
+      expect(container.querySelector(".context-weight-desc")?.textContent).toContain(
+        "Recorded context estimates. Components may overlap.",
+      );
+      expect(container.querySelector(".context-total")).toBeNull();
+      expect(container.querySelector(".context-stacked-bar")).toBeNull();
+    },
+  );
 });
