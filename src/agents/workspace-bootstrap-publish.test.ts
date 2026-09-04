@@ -89,6 +89,52 @@ describe("bootstrap publication atomicity", () => {
     expect(await fs.readFile(agentsPath, "utf-8")).toBe("WINNER\n");
   });
 
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "reuses an established read-only workspace without creating bootstrap files",
+    async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-readonly-");
+      const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
+      for (const name of files) {
+        await fs.writeFile(path.join(tempDir, name), `Authored ${name}\n`);
+      }
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      await fs.chmod(tempDir, 0o555);
+
+      try {
+        await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+        for (const name of files) {
+          expect(await fs.readFile(path.join(tempDir, name), "utf8")).toBe(`Authored ${name}\n`);
+        }
+        expect((await fs.readdir(tempDir)).toSorted()).toEqual(files.toSorted());
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "preserves an existing dangling bootstrap symlink in a read-only workspace",
+    async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-dangling-");
+      const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+      await fs.symlink("missing.md", agentsPath);
+      await fs.chmod(tempDir, 0o555);
+
+      try {
+        await expect(workspace.publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(
+          false,
+        );
+        expect(await fs.readlink(agentsPath)).toBe("missing.md");
+        expect(await fs.readdir(tempDir)).toEqual([DEFAULT_AGENTS_FILENAME]);
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")("publishes through a workspace symlink", async () => {
     const root = await makeTempWorkspace("openclaw-workspace-alias-");
     const workspaceDir = path.join(root, "workspace");

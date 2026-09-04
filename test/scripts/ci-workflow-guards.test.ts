@@ -122,6 +122,7 @@ const readCiWorkflow = (() => {
 function evaluateWorkflowExpression(
   expression: unknown,
   context: {
+    action?: string;
     // Runner routing keys off contributor trust, so pull-request cases default
     // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
@@ -132,9 +133,11 @@ function evaluateWorkflowExpression(
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
+    headSha?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
@@ -145,10 +148,14 @@ function evaluateWorkflowExpression(
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
+    runId?: number;
+    runNumber?: number;
+    sha?: string;
     steps?: Record<string, { outputs: Record<string, string> }>;
     targetContextRef?: string;
     targetRef?: string;
     useGithubHostedRunners?: boolean;
+    workflow?: string;
     workflowSha?: string;
     workflowToken?: string;
   },
@@ -172,6 +179,8 @@ function evaluateWorkflowExpression(
       Array.isArray(haystack)
         ? haystack.includes(needle)
         : String(haystack).includes(String(needle)),
+    endsWith: (value: unknown, suffix: unknown) =>
+      String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
     format: (value: string, ...args: unknown[]) =>
       value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
@@ -182,15 +191,24 @@ function evaluateWorkflowExpression(
       repository: context.repository,
       ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
+      run_id: context.runId,
+      run_number: context.runNumber,
+      sha: context.sha,
+      workflow: context.workflow,
       workflow_sha: context.workflowSha,
       token: context.workflowToken,
       event:
         context.headRepository || context.eventName === "pull_request"
           ? {
+              action: context.action,
               pull_request: {
                 author_association: context.authorAssociation ?? "CONTRIBUTOR",
                 draft: context.draft ?? false,
-                head: { repo: { full_name: context.headRepository ?? context.repository } },
+                number: context.pullRequestNumber,
+                head: {
+                  sha: context.headSha,
+                  repo: { full_name: context.headRepository ?? context.repository },
+                },
               },
             }
           : {},
@@ -2399,12 +2417,10 @@ NODE
       ).toMatch(/^(?:ubuntu|windows|macos)-/u);
     }
 
-    for (const jobName of ["macos-node", "macos-swift"]) {
-      expect(
-        workflow.jobs[jobName]["runs-on"],
-        `${jobName} retries must escape stalled Blacksmith macOS capacity`,
-      ).toContain("github.run_attempt > 1");
-    }
+    expect(
+      workflow.jobs["macos-node"]["runs-on"],
+      "macOS Node retries must escape stalled Blacksmith capacity",
+    ).toContain("github.run_attempt > 1");
   });
 
   it.each([
@@ -2492,11 +2508,12 @@ NODE
     },
   );
 
-  it("starts iOS builds and screenshots directly on verified hosted capacity", () => {
+  it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
       expect(workflow.jobs[jobName]["runs-on"], jobName).toBe("macos-26");
     }
+    expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
 
   it("serializes the shared Swift package suite on hosted macOS retries", () => {
@@ -4208,35 +4225,294 @@ NODE
     expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
   });
 
-  it("pipelines canonical main CI across two non-canceling slots", () => {
-    const workflow = readCiWorkflow();
+  describe("CI workflow admission", () => {
+    type EventContext = Parameters<typeof evaluateWorkflowExpression>[1];
+    type AdmissionRun = {
+      context: EventContext;
+      group: string;
+      state: "pending" | "running" | "cancelling" | "cancelled" | "completed" | "skipped";
+      eligibleJobs?: string[];
+    };
+    const guardedJobs = ["preflight", "security-fast", "ci-gate"];
+    const event = (runId: number, overrides: Partial<EventContext> = {}): EventContext => ({
+      eventName: "pull_request",
+      action: "ready_for_review",
+      draft: false,
+      pullRequestNumber: 7,
+      headSha: "a".repeat(40),
+      sha: "b".repeat(40),
+      ref: "refs/pull/7/merge",
+      repository: "openclaw/openclaw",
+      workflow: "CI",
+      runAttempt: 1,
+      runId,
+      runNumber: runId,
+      ...overrides,
+    });
 
-    expect(workflow.concurrency.group).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}",
+    function admissionDriver() {
+      const workflow = readCiWorkflow();
+      const runs: AdmissionRun[] = [];
+      const active = (run: AdmissionRun) => run.state === "running" || run.state === "cancelling";
+      return {
+        admit(context: EventContext): AdmissionRun {
+          if (context.eventName === "pull_request") {
+            expect(workflow.on.pull_request.types).toContain(context.action);
+          }
+          const group: string = evaluateWorkflowExpression(workflow.concurrency.group, context);
+          const cancel = evaluateWorkflowExpression(
+            workflow.concurrency["cancel-in-progress"],
+            context,
+          );
+          // GitHub replaces pending work even without active cancellation:
+          // https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+          for (const previous of runs.filter(
+            (run) => run.group.toLowerCase() === group.toLowerCase(),
+          )) {
+            if (previous.state === "pending") {
+              previous.state = "cancelled";
+            }
+            if (active(previous) && cancel) {
+              previous.state = "cancelling";
+            }
+          }
+          const run: AdmissionRun = { context, group, state: "pending" };
+          runs.push(run);
+          return run;
+        },
+        start(run: AdmissionRun) {
+          if (
+            run.state !== "pending" ||
+            runs.some((other) => other.group === run.group && active(other))
+          ) {
+            return;
+          }
+          // Admission precedes job conditions. This probes eligibility, not the job DAG.
+          run.eligibleJobs = guardedJobs.filter((job) => {
+            const condition: string = workflow.jobs[job].if;
+            return evaluateWorkflowExpression(
+              condition.startsWith("${{") ? condition : `\${{ ${condition} }}`,
+              run.context,
+            );
+          });
+          run.state = run.eligibleJobs.length ? "running" : "skipped";
+        },
+        finish(run: AdmissionRun) {
+          expect(active(run)).toBe(true);
+          run.state = run.state === "cancelling" ? "cancelled" : "completed";
+        },
+        cancel(run: AdmissionRun) {
+          run.state = "cancelled";
+        },
+      };
+    }
+
+    // Synthetic admission orders, not recovered webhook payloads.
+    it.each(
+      ["opened", "reopened", "synchronize"].flatMap((action) =>
+        ["pending", "running"].map((state) => ({ action, state })),
+      ),
+    )("preserves $state ready CI after a delayed draft $action", ({ action, state }) => {
+      const scheduler = admissionDriver();
+      const predecessor = scheduler.admit(event(1, { action: "opened" }));
+      scheduler.start(predecessor);
+      const ready = scheduler.admit(event(2));
+      if (state === "running") {
+        scheduler.finish(predecessor);
+        scheduler.start(ready);
+      }
+      expect(ready.state).toBe(state);
+      const lateDraft = scheduler.admit(event(3, { action, draft: true }));
+      expect(ready.state, "late draft displaced runnable ready CI").toBe(state);
+      scheduler.start(lateDraft);
+      expect(lateDraft.state).toBe("skipped");
+      expect(lateDraft.eligibleJobs).toEqual([]);
+      const anotherDraft = scheduler.admit(event(4, { action, draft: true }));
+      expect(anotherDraft.group).not.toBe(lateDraft.group);
+      expect(lateDraft.group).not.toBe(ready.group);
+      if (state === "pending") {
+        expect(ready.eligibleJobs).toBeUndefined();
+        scheduler.start(ready);
+        expect(ready.state).toBe("pending");
+        scheduler.finish(predecessor);
+        scheduler.start(ready);
+      }
+      expect(ready.state).toBe("running");
+      expect(ready.eligibleJobs).toEqual(guardedJobs);
+    });
+
+    it("admits ready CI after the forward draft-to-ready sequence", () => {
+      const scheduler = admissionDriver();
+      const draft = scheduler.admit(event(1, { action: "opened", draft: true }));
+      scheduler.start(draft);
+      expect(draft.eligibleJobs).toEqual([]);
+      expect(draft.state).toBe("skipped");
+      const ready = scheduler.admit(event(2));
+      scheduler.start(ready);
+      expect(ready.group).toBe("CI-v7-7");
+      expect(ready.eligibleJobs).toEqual(guardedJobs);
+    });
+
+    it.each(["pending", "running"])(
+      "converted_to_draft cancels %s CI and skips its jobs",
+      (state) => {
+        const scheduler = admissionDriver();
+        const previous = scheduler.admit(event(1));
+        scheduler.start(previous);
+        const ready = state === "pending" ? scheduler.admit(event(2)) : previous;
+        const converted = scheduler.admit(event(3, { action: "converted_to_draft", draft: true }));
+        expect(converted.group).toBe("CI-v7-7");
+        expect(ready.state).toBe(state === "pending" ? "cancelled" : "cancelling");
+        expect(previous.state).toBe("cancelling");
+        scheduler.finish(previous);
+        scheduler.start(converted);
+        expect(converted.state).toBe("skipped");
+        expect(converted.eligibleJobs).toEqual([]);
+      },
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' }}",
+
+    it.each(["pending", "running"])(
+      "a newer non-draft head supersedes %s CI only for its PR",
+      (state) => {
+        const scheduler = admissionDriver();
+        const otherPr = scheduler.admit(
+          event(1, { pullRequestNumber: 8, ref: "refs/pull/8/merge" }),
+        );
+        scheduler.start(otherPr);
+        const old = scheduler.admit(event(2));
+        if (state === "running") {
+          scheduler.start(old);
+        }
+        const next = scheduler.admit(
+          event(3, {
+            action: "synchronize",
+            headSha: "c".repeat(40),
+            sha: "d".repeat(40),
+          }),
+        );
+        expect(next.group).toBe(old.group);
+        expect(old.state).toBe(state === "pending" ? "cancelled" : "cancelling");
+        expect(otherPr.state).toBe("running");
+        if (state === "running") {
+          scheduler.finish(old);
+        }
+        scheduler.start(next);
+        expect(next.eligibleJobs).toEqual(guardedJobs);
+      },
     );
-    expect(workflow.jobs["runner-admission"]).toBeUndefined();
-    const preflight = workflow.jobs.preflight;
-    expect(preflight.needs).toBeUndefined();
-    expect(preflight.env?.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBeUndefined();
-    const steps = preflight.steps as Array<{ if?: string; name?: string; run?: string }>;
-    expect(steps.some((step) => step.name === "Record debounce epoch")).toBe(false);
-    expect(steps.some((step) => step.name === "Debounce canonical main fan-out")).toBe(false);
-    expect(workflow.jobs["security-fast"].needs).toBeUndefined();
+
+    it("isolates manual dispatches on the same target from each other and PR CI", () => {
+      const scheduler = admissionDriver();
+      const ready = scheduler.admit(event(1));
+      scheduler.start(ready);
+      const manual = [2, 3].map((runId) =>
+        scheduler.admit(
+          event(runId, {
+            eventName: "workflow_dispatch",
+            targetRef: "a".repeat(40),
+          }),
+        ),
+      );
+      for (const run of manual) {
+        scheduler.start(run);
+        expect(run.state).toBe("running");
+        expect(run.eligibleJobs).toEqual(guardedJobs);
+      }
+      expect(manual.map((run) => run.group)).toEqual(["CI-manual-v1-2", "CI-manual-v1-3"]);
+      expect(ready.state).toBe("running");
+    });
+
+    it.each(["pending", "running"])(
+      "passive drafts do not resurrect explicitly cancelled %s CI",
+      (state) => {
+        const scheduler = admissionDriver();
+        const ready = scheduler.admit(event(1));
+        if (state === "running") {
+          scheduler.start(ready);
+        }
+        scheduler.cancel(ready);
+        const draft = scheduler.admit(event(2, { action: "synchronize", draft: true }));
+        scheduler.start(draft);
+        scheduler.start(ready);
+        expect(ready.state).toBe("cancelled");
+        expect(draft.state).toBe("skipped");
+        expect(draft.eligibleJobs).toEqual([]);
+        expect(
+          evaluateWorkflowExpression(readCiWorkflow().jobs["ci-gate"].if, {
+            ...ready.context,
+            cancelled: ready.state === "cancelled",
+          }),
+        ).toBe(false);
+      },
+    );
+
+    it("pipelines canonical main across two non-canceling slots with coalesced pending work", () => {
+      const workflow = readCiWorkflow();
+      const scheduler = admissionDriver();
+      const push = (runId: number) =>
+        event(runId, {
+          eventName: "push",
+          ref: "refs/heads/main",
+          sha: runId.toString(16).padStart(40, "0"),
+        });
+      for (let digit = 0; digit < 10; digit++) {
+        expect(evaluateWorkflowExpression(workflow.concurrency.group, push(100 + digit))).toBe(
+          `CI-v8-refs/heads/main-${digit % 2 === 0 ? "a" : "b"}`,
+        );
+        expect(
+          evaluateWorkflowExpression(workflow.concurrency["cancel-in-progress"], push(100 + digit)),
+        ).toBe(false);
+      }
+      const active = [20, 21].map((id) => scheduler.admit(push(id)));
+      active.forEach((run) => scheduler.start(run));
+      const pending = [22, 23].map((id) => scheduler.admit(push(id)));
+      const newest = [24, 25].map((id) => scheduler.admit(push(id)));
+      expect(active.map((run) => run.state)).toEqual(["running", "running"]);
+      expect(pending.map((run) => run.state)).toEqual(["cancelled", "cancelled"]);
+      for (const run of newest) {
+        scheduler.start(run);
+        expect(run.state).toBe("pending");
+        expect(run.eligibleJobs).toBeUndefined();
+      }
+      scheduler.finish(active[0]!);
+      newest.forEach((run) => scheduler.start(run));
+      expect(newest.map((run) => run.state)).toEqual(["running", "pending"]);
+      scheduler.finish(active[1]!);
+      scheduler.start(newest[1]!);
+      expect(newest.map((run) => run.state)).toEqual(["running", "running"]);
+      expect(workflow.jobs["runner-admission"]).toBeUndefined();
+      expect(workflow.jobs.preflight.needs).toBeUndefined();
+      expect(workflow.jobs["security-fast"].needs).toBeUndefined();
+    });
+
+    it.each([
+      ["openclaw/openclaw", "refs/heads/topic", "CI-v7-refs/heads/topic"],
+      ["contributor/fork", "refs/heads/main", `CI-v7-refs/heads/main-${"b".repeat(40)}`],
+      ["contributor/fork", "refs/heads/topic", `CI-v7-refs/heads/topic-${"b".repeat(40)}`],
+    ])("preserves push grouping for %s on %s", (repository, ref, group) => {
+      const workflow = readCiWorkflow();
+      const context = event(1, { eventName: "push", repository, ref });
+      expect(evaluateWorkflowExpression(workflow.concurrency.group, context)).toBe(group);
+      expect(evaluateWorkflowExpression(workflow.concurrency["cancel-in-progress"], context)).toBe(
+        false,
+      );
+    });
   });
 
-  it.each([false, true])(
-    "composes dedicated contract coverage before precise planning (build=%s)",
-    (buildImpact) => {
+  it.each([
+    { buildImpact: false, uiE2e: false },
+    { buildImpact: true, uiE2e: true },
+  ])(
+    "composes dedicated suite coverage before precise planning (build=$buildImpact, UI=$uiE2e)",
+    ({ buildImpact, uiE2e }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName: "pull_request",
         changedPaths: [buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts"],
+        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: String(uiE2e) },
         changedPlannerSource: `
         export const createChangedNodeTestShards = (_paths, options = {}) => {
-          console.log("dedicated-coverage:" + JSON.stringify(options.dedicatedContractShards ?? null));
+          console.log("dedicated-coverage:" + JSON.stringify(options));
           return ${
             buildImpact
               ? "[]"
@@ -4264,7 +4540,21 @@ NODE
         manifest.output.split("\n").find((line) => line.startsWith("dedicated-coverage:")),
         "precise planner coverage input",
       );
-      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual(dedicated);
+      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
+        dedicatedContractShards: dedicated,
+        dedicatedUiE2e: uiE2e,
+      });
+      for (const job of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${readCiWorkflow().jobs[job].if} }}`, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: manifest.outputs,
+          }),
+          job,
+        ).toBe(uiE2e);
+      }
       const nodeRows = JSON.parse(
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
       ).include;
@@ -4758,7 +5048,6 @@ setImmediate(() => {
       "control-ui-performance": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
       "macos-node": "macos-15",
-      "macos-swift": "macos-26",
       "native-i18n": "ubuntu-24.04",
       "pnpm-store-warmup": "ubuntu-24.04",
       preflight: "ubuntu-24.04",
@@ -4780,7 +5069,6 @@ setImmediate(() => {
       "checks-ui-e2e-real-gateway": "blacksmith-16vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-32vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "macos-swift": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
@@ -4978,7 +5266,6 @@ setImmediate(() => {
     const expectedHostedTimeouts = {
       android: 35,
       "build-artifacts": 35,
-      "macos-swift": 30,
     } as const;
     const routeDependentTimeoutJobs = Object.entries(jobs)
       .filter(([, job]) => {
@@ -5081,27 +5368,6 @@ setImmediate(() => {
           `${label}: ${task}`,
         ).toBe(task === "build-play" && runner === "ubuntu-24.04" ? 35 : 20);
       }
-    }
-
-    const macosSwift = workflow.jobs["macos-swift"];
-    for (const [authorAssociation, runner, timeout] of [
-      ["NONE", "macos-26", 30],
-      ["FIRST_TIME_CONTRIBUTOR", "macos-26", 30],
-      ["CONTRIBUTOR", "blacksmith-12vcpu-macos-26", 20],
-    ] as const) {
-      const forkContext = {
-        ...canonicalPullRequest,
-        authorAssociation,
-        headRepository: "contributor/openclaw",
-      };
-      expect(
-        evaluateWorkflowExpression(macosSwift["runs-on"], forkContext),
-        authorAssociation,
-      ).toBe(runner);
-      expect(
-        evaluateWorkflowExpression(macosSwift["timeout-minutes"], forkContext),
-        authorAssociation,
-      ).toBe(timeout);
     }
   });
 
@@ -15968,6 +16234,65 @@ it("pins generated publisher and maturity owners before credentials and selected
   }
 });
 
+it("reports stale Linux release requests before selected code runs", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const job = workflow.jobs.validate_release;
+  const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
+  const requestSha = "a".repeat(40);
+  const requestRun = {
+    repository: { full_name: "openclaw/openclaw" },
+    event: "workflow_dispatch",
+    name: "Linux App Release Request",
+    head_branch: "main",
+    head_sha: requestSha,
+    conclusion: "success",
+  };
+  const github = {
+    repository: "openclaw/openclaw",
+    workflow_sha: requestSha,
+    event: { workflow_run: requestRun },
+  };
+  const admitted = (context: typeof github) => runInNewContext(job.if, { github: context });
+  expect(admitted({ ...github, repository: "untrusted/openclaw" })).toBe(false);
+  for (const changedRun of [
+    { repository: { full_name: "untrusted/openclaw" } },
+    { event: "push" },
+    { name: "Another workflow" },
+    { head_branch: "topic" },
+    { conclusion: "failure" },
+  ]) {
+    expect(admitted({ ...github, event: { workflow_run: { ...requestRun, ...changedRun } } })).toBe(
+      false,
+    );
+  }
+  for (const workflowSha of ["b".repeat(40), requestSha]) {
+    expect(admitted({ ...github, workflow_sha: workflowSha })).toBe(true);
+    expect(requestStep.name).toBe("Validate trusted release request");
+    const output = path.join(tempDirs.make("openclaw-linux-request-"), "output");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["-c", expectDefined(requestStep.run, "request validation")], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_OUTPUT: output,
+        REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=false",
+        REQUEST_HEAD_SHA: requestSha,
+        WORKFLOW_SHA: workflowSha,
+      },
+    });
+    const matching = workflowSha === requestSha;
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(matching ? 0 : 1);
+    expect(readFileSync(output, "utf8")).toBe(
+      matching ? "release_tag=v2026.8.2\ndesktop_test_bundles=false\n" : "",
+    );
+    if (!matching) {
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request",
+      );
+    }
+  }
+});
+
 it("pins simple release admission owners before selected checkout and preserves Git contracts", () => {
   const pinned = {
     name: "Prepare Git owner",
@@ -16038,9 +16363,6 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.head_branch == 'main'",
-  );
-  expect(linux.jobs.validate_release.if).toContain(
-    "github.event.workflow_run.head_sha == github.workflow_sha",
   );
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.conclusion == 'success'",
@@ -16118,6 +16440,8 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(releaseRequest.env).toEqual({
     REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
+    REQUEST_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
+    WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
   expect(releaseRequest.run).toContain("Release request title does not match");
   expect(releaseRequest.run).toContain('echo "release_tag=${BASH_REMATCH[1]}"');
@@ -16130,6 +16454,8 @@ it("pins simple release admission owners before selected checkout and preserves 
       ...process.env,
       GITHUB_OUTPUT: requestOutput,
       REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true",
+      REQUEST_HEAD_SHA: "a".repeat(40),
+      WORKFLOW_SHA: "a".repeat(40),
     },
   });
   expect(acceptedRequest.status, `${acceptedRequest.stdout}${acceptedRequest.stderr}`).toBe(0);
@@ -16142,6 +16468,8 @@ it("pins simple release admission owners before selected checkout and preserves 
       ...process.env,
       GITHUB_OUTPUT: requestOutput,
       REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true extra",
+      REQUEST_HEAD_SHA: "a".repeat(40),
+      WORKFLOW_SHA: "a".repeat(40),
     },
   });
   expect(rejectedRequest.status).toBe(1);

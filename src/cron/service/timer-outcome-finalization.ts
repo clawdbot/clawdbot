@@ -4,6 +4,7 @@ import {
   CronRunReceiptRevisionError,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
@@ -149,19 +150,15 @@ export async function finalizeCompletedCronRunOutcomes(
             },
           }),
         );
-      const transactionHooks =
+      const transactionHooks: CronStoreTransactionHooks | undefined =
         receiptHooks.length > 0
           ? {
-              beforeWrite: (
-                database: Parameters<NonNullable<(typeof receiptHooks)[number]["beforeWrite"]>>[0],
-              ) => {
+              beforeWrite: (database) => {
                 for (const hooks of receiptHooks) {
                   hooks.beforeWrite?.(database);
                 }
               },
-              afterWrite: (
-                database: Parameters<NonNullable<(typeof receiptHooks)[number]["afterWrite"]>>[0],
-              ) => {
+              afterWrite: (database) => {
                 for (const hooks of receiptHooks) {
                   hooks.afterWrite?.(database);
                 }

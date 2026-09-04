@@ -283,18 +283,19 @@ describe("Gateway/node MCP real-process stress", () => {
 
         descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
         const streamable = descriptorFor(descriptors, "streamableHttp");
+        // The fixture admits both HTTP requests before expiring their shared session.
         const expired = await Promise.allSettled([
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
           invokeNodeMcpPayload({
             gateway,
             nodeId,
             descriptor: streamable,
-            marker: "expire-session",
+            marker: "expire-concurrent-session",
           }),
         ]);
         expect(expired.every((result) => result.status === "rejected")).toBe(true);

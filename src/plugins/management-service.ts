@@ -96,7 +96,10 @@ import {
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
 import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import {
+  createInstalledPluginEnabledPredicate,
+  isInstalledPluginEnabled,
+} from "./installed-plugin-index.js";
 import {
   resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
@@ -341,17 +344,12 @@ function resolveManagedPluginDiagnostics(
   config: OpenClawConfig,
 ): PluginDiagnostic[] {
   const dependencies = getManagedPluginCache().dependencyStatus;
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
   const { diagnostics } = projectPluginDependencyHealth({
     plugins: snapshot.index.plugins.map((record) => {
       const manifest = snapshot.byPluginId.get(record.pluginId);
-      const enabled = isInstalledPluginEnabled(snapshot.index, record.pluginId, config);
-      const tracksDependencies = tracksPluginDependencyStatus({
-        origin: record.origin,
-        pluginId: record.pluginId,
-        packageName: record.packageName,
-        packageBuild: record.packageBuild,
-      });
-      if (manifest && tracksDependencies && !dependencies.has(manifest)) {
+      const enabled = isEnabled(record.pluginId);
+      if (manifest && !dependencies.has(manifest) && tracksPluginDependencyStatus(record)) {
         dependencies.set(
           manifest,
           buildPluginDependencyStatus({
@@ -873,8 +871,14 @@ export const listManagedPlugins = withManagedPluginCache(
     const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
+    // Hosted loading can yield; prepare this phase from the current config.
+    const isEnabled = createInstalledPluginEnabledPredicate(
+      metadata.index.plugins,
+      params.config,
+      env,
+    );
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
-      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config, env);
+      const enabled = isEnabled(record.pluginId);
       const manifest = metadata.byPluginId.get(record.pluginId);
       const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);

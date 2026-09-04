@@ -466,6 +466,18 @@ suite.define(() => {
           });
           await gateway.waitForRequest("plugins.controlUi.list");
           await expectLoading();
+          expect(
+            await page.evaluate(() => ({
+              contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
+              manager: Boolean(customElements.get("openclaw-plugin-manager")),
+            })),
+          ).toEqual({ contributions: false, manager: true });
+          expect(
+            await page
+              .locator("openclaw-plugin-contributions")
+              .first()
+              .evaluate((element) => getComputedStyle(element).display),
+          ).toBe("contents");
           await gateway.resolveDeferred("plugins.controlUi.list");
           await bootstrapRequested.promise;
           await expectLoading();
@@ -485,6 +497,7 @@ suite.define(() => {
             release();
           });
           await page.getByRole("heading", { name: "Fixture revision pending" }).waitFor();
+          await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
           expect(
             await pluginPage.getByRole("status", { name: "Loading…", exact: true }).count(),
           ).toBe(0);

@@ -97,14 +97,7 @@ export async function spawnSubagentDirect(
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const requesterSessionKey = ctx.agentSessionKey;
   const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-  let requestedAgentId = params.agentId?.trim();
-  const requestResolution = resolveSubagentSpawnRequest(params, ctx, {
-    initial: requestedAgentId,
-    applyDefault(agentId) {
-      requestedAgentId = agentId;
-      return requestedAgentId;
-    },
-  });
+  const requestResolution = resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
   }

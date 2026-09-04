@@ -1,8 +1,9 @@
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -88,12 +89,13 @@ suite.define(() => {
       sessionKey,
     });
     const card = page.locator('[data-progress-card-placement="composer"]');
-    const captureLifecycleState = async (fileName: string) => {
+    const captureLifecycleState = async (fileName: string, surface = card) => {
       if (captureUiProofEnabled) {
         await page.waitForTimeout(250);
-      }
-      await captureProof(page, fileName);
-      if (captureUiProofEnabled) {
+        await writeFile(
+          path.join(suite.artifactDir, "session-progress-live-placement", fileName),
+          await takeControlUiViewportScreenshot(page, surface, [surface]),
+        );
         await page.waitForTimeout(500);
       }
     };
@@ -147,7 +149,7 @@ suite.define(() => {
           settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
         )
         .toBe(true);
-      await captureLifecycleState("01-setting-enabled.png");
+      await captureLifecycleState("01-setting-enabled.png", settingRow);
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const runOneId = await send("Run the first progress cycle");

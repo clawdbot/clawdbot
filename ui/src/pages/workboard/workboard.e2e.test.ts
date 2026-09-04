@@ -14,6 +14,7 @@ import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -285,12 +286,14 @@ async function captureScreenshot(
   page: Page,
   artifacts: ProofArtifacts,
   name: string,
+  surface = page.locator(".shell"),
+  content: readonly Locator[] = [page.locator(".workboard-page-title")],
 ): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
   const screenshotPath = path.join(artifacts.directory, `${name}.png`);
-  await page.screenshot({ fullPage: true, path: screenshotPath });
+  await writeFile(screenshotPath, await takeControlUiViewportScreenshot(page, surface, content));
   artifacts.screenshots.push(screenshotPath);
 }
 
@@ -404,7 +407,10 @@ suite.define(() => {
       await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
       await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
       await setWorkboardDraftField(createForm, "Labels", "ui, proof");
-      await captureScreenshot(writable.page, artifacts, "02-create-dialog");
+      await captureScreenshot(writable.page, artifacts, "02-create-dialog", createDialog, [
+        createForm.getByLabel("Title"),
+        createForm.getByLabel("Notes"),
+      ]);
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
       await createForm.getByRole("button", { name: /^Create$/u }).click();
       const createRequest = await waitForNextRequest(
@@ -500,7 +506,13 @@ suite.define(() => {
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
-      await captureScreenshot(writable.page, artifacts, "05-detail-actions");
+      await captureScreenshot(
+        writable.page,
+        artifacts,
+        "05-detail-actions",
+        writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
+        [details.getByRole("button", { name: "Open session" })],
+      );
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
@@ -587,7 +599,13 @@ suite.define(() => {
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "08-lifecycle-review");
+      await captureScreenshot(
+        writable.page,
+        artifacts,
+        "08-lifecycle-review",
+        writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
+        [details.getByText("Moved to Review")],
+      );
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 

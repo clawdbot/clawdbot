@@ -1,8 +1,11 @@
 import type { ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -21,12 +24,17 @@ vi.mock("./defaults.js", async (importOriginal) => ({
   resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
 }));
 
-import { LLAMA_SERVER_BUILD, LLAMA_SERVER_COMMIT } from "./llama-server-assets.js";
+import {
+  LLAMA_SERVER_BUILD,
+  LLAMA_SERVER_COMMIT,
+  type LlamaServerAsset,
+} from "./llama-server-assets.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
+  sha256File,
 } from "./llama-server-install.js";
 
 type FileHandle = Awaited<ReturnType<typeof fs.open>>;
@@ -110,6 +118,94 @@ function installWriteFileThroughWrite(handle: FileHandle): void {
   }) as typeof handle.writeFile;
 }
 
+describe("cached file integrity", () => {
+  it("reuses unchanged verified bytes but detects replacement, edits, and deletion", async () => {
+    const { destination } = await createDestination();
+    const original = Buffer.from("GGUFverified");
+    const digest = createHash("sha256").update(original).digest("hex");
+    await fs.writeFile(destination, original);
+    let scans = 0;
+    const createReadStream = nodeFs.createReadStream.bind(nodeFs);
+    vi.spyOn(nodeFs, "createReadStream").mockImplementation((...args) => {
+      scans += 1;
+      return createReadStream(...args);
+    });
+    injectFileHandle((handle) => {
+      const stream = handle.createReadStream.bind(handle);
+      handle.createReadStream = (...args) => {
+        scans += 1;
+        return stream(...args);
+      };
+    });
+
+    expect(await sha256File(destination)).toBe(digest);
+    expect(await sha256File(destination)).toBe(digest);
+    expect(scans).toBe(1);
+    // Preserve length and mtime: inode/ctime changes must still invalidate verification.
+    const previous = await fs.stat(destination);
+    const replacement = `${destination}.replacement`;
+    await fs.writeFile(replacement, "GGUFcorrupt!");
+    await fs.utimes(replacement, previous.atime, previous.mtime);
+    await fs.rename(replacement, destination);
+    expect(await sha256File(destination)).not.toBe(digest);
+    await fs.writeFile(destination, original);
+    expect(await sha256File(destination)).toBe(digest);
+    await fs.rm(destination);
+    await expect(sha256File(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(scans).toBe(3);
+  });
+
+  it.each(["replacement", "cancellation"] as const)(
+    "does not retain a digest after %s during the scan",
+    async (mode) => {
+      const { destination } = await createDestination();
+      const replacement = `${destination}.replacement`;
+      await fs.writeFile(destination, Buffer.alloc(2 * 1024 * 1024, 1));
+      await fs.writeFile(replacement, "replacement bytes");
+      const controller = new AbortController();
+      injectFileHandle((handle) => {
+        const createReadStream = handle.createReadStream.bind(handle);
+        handle.createReadStream = (...args) => {
+          const stream = createReadStream(...args);
+          stream.once("data", () => {
+            if (mode === "cancellation") {
+              controller.abort();
+            } else {
+              nodeFs.renameSync(replacement, destination);
+            }
+          });
+          return stream;
+        };
+      });
+      await expect(sha256File(destination, controller.signal)).rejects.toThrow(
+        mode === "cancellation" ? /abort/iu : "File changed during integrity verification",
+      );
+      vi.restoreAllMocks();
+      const actual = createHash("sha256")
+        .update(await fs.readFile(destination))
+        .digest("hex");
+      expect(await sha256File(destination)).toBe(actual);
+    },
+  );
+
+  it("reuses the download's verified publication without reading it again", async () => {
+    const { destination } = await createDestination();
+    const payload = Buffer.from("GGUFdownload");
+    const digest = createHash("sha256").update(payload).digest("hex");
+    mockDownload(payload);
+    await downloadVerifiedFile({
+      url: "https://downloads.example/model.gguf",
+      destination,
+      expectedSha256: digest,
+    });
+    const directScan = vi.spyOn(nodeFs, "createReadStream");
+    const opened = vi.spyOn(fs, "open");
+    expect(await sha256File(destination)).toBe(digest);
+    expect(directScan).not.toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
+  });
+});
+
 describe("downloadVerifiedFile", () => {
   it("persists complete chunks before reporting progress under positive short writes", async () => {
     const payload = Buffer.from("short writes must not truncate verified downloads");
@@ -190,6 +286,35 @@ describe("downloadVerifiedFile", () => {
 });
 
 describe("ensureLlamaServerInstalled", () => {
+  it("cancels a queued setup without cancelling another installation or poisoning reuse", async () => {
+    const command = await createInstalledServer();
+    const started = createDeferred<void>();
+    const versionReply = createDeferred<string>();
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        started.resolve();
+        void versionReply.promise.then((output) => callback(null, output, ""));
+      },
+    );
+    const first = ensureLlamaServerInstalled();
+    await started.promise;
+    const controller = new AbortController();
+    const queued = ensureLlamaServerInstalled({ signal: controller.signal });
+    controller.abort();
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    versionReply.resolve(
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+    await expect(first).resolves.toMatchObject({ command });
+    await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
+    expect(mocks.execFile).toHaveBeenCalledTimes(2);
+  });
+
   it("accepts only the pinned build and commit from the version line", async () => {
     const command = await createInstalledServer();
     mockVersionOutput(
@@ -209,4 +334,146 @@ describe("ensureLlamaServerInstalled", () => {
       `expected b${LLAMA_SERVER_BUILD} (${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
     );
   });
+
+  it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
+    "publishes the complete CUDA installation only after verification: %s",
+    async (outcome) => {
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "llama-cuda-install-")),
+      );
+      tempRoots.push(root);
+      mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+      const source = selectLlamaServerAsset("win32", "x64", {
+        kind: "cuda",
+        devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
+      });
+      const runtime = source.dependencies![0]!;
+      const serverZip = new JSZip()
+        .file(source.executable, "server")
+        .file("ggml-cuda.dll", "backend");
+      const runtimeZip = new JSZip();
+      for (const file of runtime.files) {
+        if (outcome !== "missing-runtime" || file !== "cudart64_12.dll") {
+          runtimeZip.file(file, `runtime:${file}`);
+        }
+      }
+      const serverBytes = await serverZip.generateAsync({ type: "nodebuffer" });
+      const runtimeBytes = await runtimeZip.generateAsync({ type: "nodebuffer" });
+      const asset: LlamaServerAsset = {
+        ...source,
+        sha256: createHash("sha256").update(serverBytes).digest("hex"),
+        dependencies: [
+          {
+            ...runtime,
+            sha256:
+              outcome === "corrupt-runtime"
+                ? "0".repeat(64)
+                : createHash("sha256").update(runtimeBytes).digest("hex"),
+          },
+        ],
+      };
+      const controller = new AbortController();
+      const release = vi.fn();
+      mocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => {
+        const payload = url.endsWith(runtime.name) ? runtimeBytes : serverBytes;
+        return { response: new Response(new Uint8Array(payload)), release };
+      });
+      const validatedFiles: string[][] = [];
+      mocks.execFile.mockImplementation(
+        (
+          command: string,
+          args: string[],
+          _options: unknown,
+          callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+        ) => {
+          void fs.readdir(path.dirname(command)).then((files) => {
+            validatedFiles.push(files);
+            const stdout =
+              args[0] === "--version"
+                ? `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`
+                : outcome === "no-device"
+                  ? "Available devices:\n  (none)"
+                  : "Available devices:\n  CUDA0: Test GPU (12288 MiB, 11264 MiB free)";
+            callback(null, stdout, "");
+          });
+        },
+      );
+      const result = ensureLlamaServerInstalled({
+        asset,
+        signal: controller.signal,
+        onProgress: () => {
+          if (outcome === "cancelled") {
+            controller.abort();
+          }
+        },
+      });
+      const { command, installDir } = resolveManagedLlamaServerPaths(asset);
+      if (outcome === "ready") {
+        await expect(result).resolves.toMatchObject({ command, asset: { backend: "cuda" } });
+        for (const file of runtime.files) {
+          expect(await fs.readFile(path.join(installDir, file), "utf8")).toBe(`runtime:${file}`);
+        }
+        expect(validatedFiles.length).toBeGreaterThan(0);
+        expect(
+          validatedFiles.every((files) => runtime.files.every((file) => files.includes(file))),
+        ).toBe(true);
+      } else {
+        const expected = {
+          "corrupt-runtime": /SHA-256 mismatch/u,
+          "missing-runtime": /regular file cudart64_12\.dll/u,
+          "no-device": /could not initialize an NVIDIA CUDA device/u,
+          cancelled: /abort/iu,
+        }[outcome];
+        await expect(result).rejects.toThrow(expected);
+        await expect(fs.stat(command)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
+      expect(
+        mocks.fetchWithSsrFGuard.mock.calls.every(([request]) => !request.url.includes("win-cpu")),
+      ).toBe(true);
+    },
+  );
+});
+
+describe("CUDA runtime selection", () => {
+  it.each([
+    ["551.78", 5, true],
+    ["580.1", 8.9, true],
+    ["551.77", 8.6, false],
+    ["535.1", 8.6, false],
+    ["unknown", 8.6, false],
+    ["580.1", 3.5, false],
+  ] as const)(
+    "checks the upstream driver and device contract for %s / SM %s",
+    (driverVersion, computeCapability, supported) => {
+      const choose = () =>
+        selectLlamaServerAsset("win32", "x64", {
+          kind: "cuda",
+          devices: [{ driverVersion, computeCapability }],
+        });
+      if (supported) {
+        mocks.resolveLlamaCppDataDir.mockReturnValue(os.tmpdir());
+        const asset = choose();
+        expect(asset.backend).toBe("cuda");
+        expect(asset.dependencies?.[0]?.files).toContain("cudart64_12.dll");
+        expect(resolveManagedLlamaServerPaths(asset).command).not.toBe(
+          resolveManagedLlamaServerPaths(selectLlamaServerAsset("win32", "x64")).command,
+        );
+      } else {
+        expect(choose).toThrow(/driver 551\.78/u);
+      }
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "does not silently replace unavailable CUDA on %s/arm64 with CPU",
+    (platform) => {
+      expect(() =>
+        selectLlamaServerAsset(platform, "arm64", {
+          kind: "cuda",
+          devices: [{ driverVersion: "580.1" }],
+        }),
+      ).toThrow(/No verified CUDA/u);
+    },
+  );
 });

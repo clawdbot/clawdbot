@@ -26,6 +26,7 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
+import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
@@ -169,6 +170,7 @@ function nodeBuildConfig(
   return {
     ...config,
     dts: declarations,
+    hooks: createDeclarationBoundaryHooks(config.hooks),
     env,
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
@@ -256,6 +258,7 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
   return {
     ...config,
     dts: TSDOWN_DECLARATIONS,
+    hooks: createDeclarationBoundaryHooks(config.hooks),
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
     name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,

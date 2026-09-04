@@ -189,7 +189,9 @@ suite.define(() => {
               ),
           ).toBe(true);
         }
-        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`);
+        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`, menu, [
+          actions.first(),
+        ]);
         expect(
           await page.evaluate(() => {
             const portal = document.querySelector<HTMLElement>(".chat-reply-context-menu");

@@ -114,7 +114,7 @@ function resolveManifestPluginSourcePath(params: {
   rootDir: string;
   manifestPath: string;
   pluginId: string;
-  entryName: "providerCatalogEntry";
+  entryName: "providerCatalogEntry" | "capabilityCatalogEntry";
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
@@ -128,7 +128,7 @@ function resolveManifestPluginSourcePath(params: {
     });
   };
 
-  if (path.isAbsolute(params.entry)) {
+  if (!params.entry || path.isAbsolute(params.entry)) {
     pushDiagnostic();
     return undefined;
   }
@@ -485,6 +485,18 @@ function buildRecord(params: {
           diagnostics: params.diagnostics,
         })
       : undefined,
+    capabilityCatalogSource:
+      params.manifest.capabilityCatalogEntry === undefined
+        ? undefined
+        : (resolveManifestPluginSourcePath({
+            rootDir: params.candidate.rootDir,
+            manifestPath: params.manifestPath,
+            pluginId,
+            entryName: "capabilityCatalogEntry",
+            entry: params.manifest.capabilityCatalogEntry,
+            rejectHardlinks: params.rejectHardlinks,
+            diagnostics: params.diagnostics,
+          }) ?? null),
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,

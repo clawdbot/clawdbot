@@ -11,6 +11,7 @@ import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import * as gatewayStore from "./gateway-store.ts";
+import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 
@@ -61,6 +62,80 @@ describe("normalizeLegacyTerminalViewLocation", () => {
 });
 
 describe("bootstrapApplication", () => {
+  it("starts native notifications before Gateway use and preserves synchronous permission requests", async () => {
+    const previousUrl = window.location.href;
+    const previousSettings = loadSettings();
+    const promptKey = "openclaw.control.notificationsAutoPrompt.v1";
+    const previousPrompt = localStorage.getItem(promptKey);
+    localStorage.removeItem(promptKey);
+    window.history.replaceState({}, "", "/focus/terminal");
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
+    vi.stubGlobal("__OPENCLAW_NATIVE_NOTIFICATIONS__", { permission: "notDetermined" });
+    const runtime = bootstrapApplication();
+    const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {
+      expect(runtime.context.nativeNotifications?.snapshot.permission).toBe("notDetermined");
+      expect(postMessage).toHaveBeenCalledWith({ type: "status" });
+    });
+
+    try {
+      expect(postMessage).not.toHaveBeenCalled();
+      await runtime.start();
+      expect(startGateway).toHaveBeenCalledOnce();
+      const button = document.createElement("button");
+      button.addEventListener("click", () => {
+        autoPromptNotificationsOnSend(runtime.context);
+        expect(postMessage).toHaveBeenLastCalledWith({ type: "request-permission" });
+      });
+      button.click();
+      const listener = vi.fn();
+      runtime.context.nativeNotifications?.subscribe(listener);
+      runtime.stop();
+      postMessage.mockClear();
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-notifications-status", {
+          detail: { permission: "denied", test: null },
+        }),
+      );
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      startGateway.mockRestore();
+      vi.unstubAllGlobals();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+      if (previousPrompt === null) {
+        localStorage.removeItem(promptKey);
+      } else {
+        localStorage.setItem(promptKey, previousPrompt);
+      }
+    }
+  });
+
+  it("does not install native notification listeners when stop wins startup", async () => {
+    const previousUrl = window.location.href;
+    const previousSettings = loadSettings();
+    window.history.replaceState({}, "", "/focus/terminal");
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
+    const runtime = bootstrapApplication();
+    try {
+      const starting = runtime.start();
+      runtime.stop();
+      await starting;
+      window.dispatchEvent(new Event("focus"));
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(runtime.context.nativeNotifications).toBeNull();
+    } finally {
+      runtime.stop();
+      vi.unstubAllGlobals();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
   it.each([
     { pathname: "/settings/model-providers", routeId: "model-providers", warmed: true },
     { pathname: "/operator/settings/model-providers", routeId: "model-providers", warmed: true },

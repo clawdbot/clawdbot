@@ -28,6 +28,50 @@ const model: Model = {
 };
 
 it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)(
+  "%s keeps retained runtime carriers with their own users when steering is appended",
+  (_name, convert) => {
+    const user = (content: string) => ({ role: "user" as const, content, timestamp: 1 });
+    const answer = (text: string): AssistantMessage => ({
+      ...createOpenAIResponsesAssistantOutput(model),
+      content: [{ type: "text", text }],
+    });
+    const context: Context = {
+      messages: [
+        user("first"),
+        { ...user("first context"), runtimeContextCarrier: true },
+        answer("first answer"),
+        user("second"),
+        { ...user("second context"), runtimeContextCarrier: true },
+        answer("second answer"),
+      ],
+    };
+    const original = structuredClone(context);
+    const prefix = convert(model, context, new Set(["openai"]));
+    const withSteering = convert(
+      model,
+      { messages: [...context.messages, user("steering")] },
+      new Set(["openai"]),
+    );
+    expect(withSteering.slice(0, prefix.length)).toEqual(prefix);
+    expect(withSteering).toMatchObject(
+      [
+        "first",
+        "first context",
+        "first answer",
+        "second",
+        "second context",
+        "second answer",
+        "steering",
+      ].map((text) => ({ content: [{ text }] })),
+    );
+    expect(context).toEqual(original);
+  },
+);
+
+it.each([
   ["provider early result", convertProviderResponsesMessages, true, false],
   ["provider late result", convertProviderResponsesMessages, false, false],
   ["transport early result", convertResponsesMessages, true, false],

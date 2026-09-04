@@ -26,6 +26,7 @@ describe("write-unified-entry-dts", () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/lib/record-shared.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",

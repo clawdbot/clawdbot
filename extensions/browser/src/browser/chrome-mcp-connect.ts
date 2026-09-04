@@ -1,4 +1,6 @@
 // Connects Chrome MCP transports and bounds handshake/readiness waits.
+import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -16,7 +18,7 @@ import {
   redactChromeMcpLocalPathForDiagnostic,
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
-import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
+import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
 import {
   closeTrackedChromeMcpSession,
   refreshChromeMcpCleanupProcess,
@@ -47,8 +49,9 @@ async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
 
 async function createRealSession(
   profileName: string,
-  options: NormalizedChromeMcpProfileOptions = normalizeChromeMcpOptions(),
+  options: NormalizedChromeMcpProfileOptions,
 ): Promise<ChromeMcpSession> {
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
@@ -62,39 +65,59 @@ async function createRealSession(
     {},
   );
   // Capture before connect starts the subprocess so failed handshakes retain stderr.
-  const stderrTail = drainStderr(transport);
+  const getStderr = drainStderr(transport);
+  const closeTransport = transport.close.bind(transport);
+  let spawned = false;
   const session: ChromeMcpSession = {
     client,
     transport,
+    closeTransport: () => {
+      spawned ||= transport.pid !== null;
+      return closeTransport();
+    },
     ready: Promise.resolve(),
     processCleanup: { status: "open" },
   };
-  const requireSession = () => session;
+  // Initialize failure also makes the SDK close its transport. Capture descendants
+  // before that native close clears the PID, and let every caller join this owner.
+  const closeSession = () => {
+    const closing = closeTrackedChromeMcpSession(cacheKey, session);
+    void closing.catch(() => {});
+    return closing;
+  };
+  transport.close = closeSession;
+  // SDK initialize failure discards client.close(); return the handled owner promise directly.
+  client.close = closeSession;
   const ready = (async () => {
     try {
       await withChromeMcpHandshakeTimeout(
         (async () => {
           await client.connect(transport);
-          await refreshChromeMcpCleanupProcess(requireSession());
+          await refreshChromeMcpCleanupProcess(session);
           const tools = await client.listTools();
           if (!tools.tools.some((tool) => tool.name === "list_pages")) {
             throw new Error("Chrome MCP server did not expose the expected navigation tools.");
           }
-          await refreshChromeMcpCleanupProcess(requireSession());
+          await refreshChromeMcpCleanupProcess(session);
         })(),
       );
     } catch (err) {
-      // Initialize rejection can precede stderr delivery. Report its final tail
-      // without delaying cleanup or replacing the attach error with a log failure.
-      void stderrTail
-        .then((stderr) => {
-          if (stderr) {
-            log.warn(
-              `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
-            );
-          }
-        })
-        .catch(() => {});
+      try {
+        await transport.close();
+        // The SDK's final SIGKILL can return before stdio closes. Tree cleanup
+        // must finish first, since descendants may still hold this pipe open.
+        const stderr = transport.stderr;
+        if (spawned && stderr instanceof Readable) {
+          await finished(stderr, { readable: true, writable: false, cleanup: true });
+        }
+      } finally {
+        const stderr = getStderr();
+        if (stderr) {
+          log.warn(
+            `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
+          );
+        }
+      }
       const targetLabel = options.browserUrl
         ? `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(options.browserUrl) ?? options.browserUrl)})`
         : options.userDataDir

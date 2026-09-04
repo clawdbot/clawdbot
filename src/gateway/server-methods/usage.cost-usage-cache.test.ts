@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   loadCostUsageSummaryFromCache: vi.fn(),
@@ -44,6 +47,48 @@ describe("costUsageCache bounded growth", () => {
     mocks.loadCostUsageSummaryFromCache.mockResolvedValue(createSummary());
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    testApi.costUsageCache.clear();
+  });
+
+  it("retains a stale refresh after its cache entry is replaced", async () => {
+    const owner = new AsyncWorkScope();
+    const replacementOwner = new AsyncWorkScope();
+    const gate = createDeferredCore<ReturnType<typeof createSummary>>();
+    const params = { startMs: 1, endMs: 2, agentId: "main", config: {} };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const first = await owner.track(() => testApi.loadCostUsageSummaryCached(params));
+    clock.mockReturnValue(31_000);
+    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(gate.promise);
+    let refresh: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    let drained = false;
+    try {
+      const stale = await owner.track(() => testApi.loadCostUsageSummaryCached(params));
+      expect(stale).toEqual(first);
+      // Keep the original producer joinable even against the broken owner on red.
+      refresh = Array.from(testApi.costUsageCache.values())[0]?.inFlight;
+      expect(refresh).toBeDefined();
+      await replacementOwner.track(() =>
+        testApi.loadCostUsageSummaryCached({ ...params, config: {} }),
+      );
+      await replacementOwner.drain();
+      expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(3);
+      closing = owner.drain().then(() => {
+        drained = true;
+      });
+      await nextTurn();
+      expect(drained).toBe(false);
+    } finally {
+      gate.resolve(createSummary());
+      await refresh;
+      await closing;
+      await Promise.all([owner.drain(), replacementOwner.drain()]);
+    }
+    expect(drained).toBe(true);
+  });
+
   it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
     const config = {
       agents: { entries: { main: { default: true } } },
@@ -83,35 +128,38 @@ describe("costUsageCache bounded growth", () => {
     const config = {
       agents: { entries: { main: { default: true } } },
     } as OpenClawConfig;
-    const pending = new Promise<ReturnType<typeof createSummary>>(() => {});
-    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(pending);
+    const pending = createDeferredCore<ReturnType<typeof createSummary>>();
+    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(pending.promise);
 
     const inFlight = testApi.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
     });
-    await Promise.resolve();
+    let repeated: typeof inFlight | undefined;
+    try {
+      await Promise.resolve();
+      for (let i = 0; i < 256; i++) {
+        const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
+        await testApi.loadCostUsageSummaryCached({
+          startMs,
+          endMs: startMs + DAY_MS - 1,
+          config,
+        });
+      }
 
-    for (let i = 0; i < 256; i++) {
-      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-      await testApi.loadCostUsageSummaryCached({
-        startMs,
-        endMs: startMs + DAY_MS - 1,
+      repeated = testApi.loadCostUsageSummaryCached({
+        startMs: 1,
+        endMs: 2,
         config,
       });
+      await Promise.resolve();
+
+      expect(testApi.costUsageCache.has("agent:main:1-2:gateway")).toBe(true);
+      expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
+    } finally {
+      pending.resolve(createSummary());
+      await Promise.all([inFlight, repeated]);
     }
-
-    const repeated = testApi.loadCostUsageSummaryCached({
-      startMs: 1,
-      endMs: 2,
-      config,
-    });
-    await Promise.resolve();
-
-    expect(testApi.costUsageCache.has("agent:main:1-2:gateway")).toBe(true);
-    expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
-    void inFlight.catch(() => {});
-    void repeated.catch(() => {});
   });
 });

@@ -19,7 +19,7 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
@@ -770,7 +770,6 @@ export function appendModelIdentitySystemPrompt(params: {
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   runtimeCwd?: string;
-  defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -1544,7 +1543,7 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     ...(hasProcess
       ? buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions)
@@ -1576,7 +1575,6 @@ function buildRuntimeLine(
   runtimeInfo?: SystemPromptRuntimeInfo,
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
-  defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
@@ -1613,7 +1611,6 @@ function buildRuntimeLine(
             : "none"
         }`
       : "",
-    `thinking=${defaultThinkLevel ?? "off"}`,
   ]
     .filter(Boolean)
     .join(" | ")}`;

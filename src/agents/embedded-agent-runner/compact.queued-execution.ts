@@ -21,6 +21,7 @@ import {
   type ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -51,6 +52,25 @@ export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
 };
+
+export function createQueuedCompactionAbortedResult(): EmbeddedAgentCompactResult {
+  return { ok: false, compacted: false, reason: "compaction aborted" };
+}
+
+export async function withQueuedCompactionCancellationResult(
+  params: Pick<CompactEmbeddedAgentSessionParams, "abortSignal">,
+  run: () => Promise<EmbeddedAgentCompactResult>,
+): Promise<EmbeddedAgentCompactResult> {
+  try {
+    return await run();
+  } catch (error) {
+    const signal = params.abortSignal;
+    if (!signal?.aborted || (!isAbortError(error) && error !== signal.reason)) {
+      throw error;
+    }
+    return createQueuedCompactionAbortedResult();
+  }
+}
 
 export function projectQueuedCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
@@ -186,7 +206,7 @@ export async function executeQueuedContextEngineCompaction(input: {
       let checkpointSnapshotRetained = false;
       try {
         if (params.abortSignal?.aborted) {
-          return { ok: false, compacted: false, reason: "compaction aborted" };
+          return createQueuedCompactionAbortedResult();
         }
         assertActive();
         // When the context engine owns compaction, its compact() implementation
@@ -239,7 +259,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           }
         }
         if (params.abortSignal?.aborted) {
-          return { ok: false, compacted: false, reason: "compaction aborted" };
+          return createQueuedCompactionAbortedResult();
         }
         assertActive();
         // Preserve the delegate's progress-aware watchdog and bound other engines.

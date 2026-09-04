@@ -1,7 +1,9 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -314,11 +316,61 @@ suite.define(() => {
     expect(await stream.textContent()).not.toContain("Saved opening.");
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     if (captureProof) {
+      await writeFile(
+        path.join(artifactDir, "restored-inflight-tail.png"),
+        await takeControlUiViewportScreenshot(currentPage, currentPage.locator(".shell"), [stream]),
+      );
+    }
+  });
+
+  it("queues an exact-run Stop while offline and replays it after reconnecting", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:main";
+    const gateway = await installMockGateway(currentPage, { sessionKey });
+
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await currentPage.locator(".agent-chat__input textarea").fill("keep this run stoppable");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;
+    expect(typeof runId).toBe("string");
+    const stop = currentPage.getByRole("button", { name: "Stop generating" });
+    await stop.waitFor({ state: "visible" });
+    const composer = currentPage.locator(".agent-chat__input textarea");
+
+    await gateway.setOnline(false);
+    await expect
+      .poll(() =>
+        currentPage.evaluate(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+          };
+          return app.runtime?.context.gateway.snapshot.phase;
+        }),
+      )
+      .toBe("reconnecting");
+    await stop.waitFor({ state: "visible" });
+    expect(await stop.isEnabled()).toBe(true);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       await currentPage.screenshot({
-        path: path.join(artifactDir, "restored-inflight-tail.png"),
+        path: path.join(suite.artifactDir, "offline-stop-visible.png"),
         fullPage: true,
       });
     }
+
+    await stop.click();
+    expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    await composer.fill("keep this draft");
+    expect(await composer.inputValue()).toBe("keep this draft");
+
+    await gateway.setOnline(true);
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ runId, sessionKey });
+    await stop.waitFor({ state: "detached" });
+    expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
+    expect(await composer.inputValue()).toBe("keep this draft");
   });
 
   it("shows compaction savings and live working time", async () => {

@@ -647,222 +647,87 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it.each(["GET", "HEAD"] as const)(
-    "revalidates assistant media ETags before ranges for %s",
-    async (method) => {
+  it.each(["atomic replacement", "in-place rewrite"] as const)(
+    "serves changed assistant media after a same-size %s preserves its modification time",
+    async (mutation) => {
       await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-conditional-",
+        prefix: "ui-media-mutable-",
         fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const filePath = path.join(tmpRoot, "sample.bin");
+          const original = Buffer.from("original media bytes");
+          const replacement = Buffer.from("replaced media bytes");
+          const modified = new Date("2025-01-01T00:00:00.000Z");
+          await fs.writeFile(filePath, original);
+          await fs.utimes(filePath, modified, modified);
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`;
           const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
-
-          const conditional = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: {
-              "if-none-match": `W/${String(etag)}`,
-              range: "bytes=0-3",
-              "if-range": '"stale"',
-            },
-          });
-
-          expect(conditional.handled).toBe(true);
-          expect(conditional.res.statusCode).toBe(304);
-          expect(conditional.setHeader).toHaveBeenCalledWith("ETag", etag);
-          expect(conditional.setHeader).not.toHaveBeenCalledWith(
-            "Content-Length",
-            expect.anything(),
+          const headers = { authorization: "Bearer test-token" };
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth, headers });
+          const etag = String(
+            initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1] ??
+              '"cached-version"',
           );
-          expect(conditional.end).toHaveBeenCalledWith();
+          const lastModified = modified.toUTCString();
+          const replacementPath =
+            mutation === "atomic replacement" ? path.join(tmpRoot, "next.bin") : filePath;
+          await fs.writeFile(replacementPath, replacement);
+          await fs.utimes(replacementPath, modified, modified);
+          if (replacementPath !== filePath) {
+            await fs.rename(replacementPath, filePath);
+          }
+          const stat = await fs.stat(filePath);
+          expect(stat.size).toBe(original.length);
+          expect(stat.mtimeMs).toBe(modified.getTime());
+          expect(await fs.readFile(filePath)).toEqual(replacement);
+
+          for (const method of ["GET", "HEAD"] as const) {
+            for (const condition of [
+              { "if-none-match": etag },
+              { "if-modified-since": lastModified },
+              { range: "bytes=0-3", "if-range": etag },
+              { range: "bytes=0-3", "if-range": lastModified },
+            ]) {
+              const current = await runAssistantMediaRequest({
+                url,
+                method,
+                auth,
+                headers: { ...headers, ...condition },
+              });
+              expect
+                .soft(current.res.statusCode, `${method} ${JSON.stringify(condition)}`)
+                .toBe(200);
+              expect.soft(current.setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
+              expect
+                .soft(current.setHeader)
+                .not.toHaveBeenCalledWith("Last-Modified", expect.anything());
+            }
+          }
+          const ranged = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { ...headers, range: "bytes=0-3" },
+          });
+          expect(ranged.res.statusCode).toBe(206);
+          expect(ranged.setHeader).toHaveBeenCalledWith(
+            "Content-Range",
+            `bytes 0-3/${replacement.length}`,
+          );
+          for (const method of ["GET", "HEAD"] as const) {
+            const exists = await runAssistantMediaRequest({
+              url,
+              method,
+              auth,
+              headers: { ...headers, "if-none-match": "*", range: "bytes=0-3" },
+            });
+            expect(exists.res.statusCode).toBe(304);
+            expect(exists.end).toHaveBeenCalledWith();
+            expect(exists.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+          }
         },
       });
     },
   );
-
-  it.each(["GET", "HEAD"] as const)(
-    "revalidates assistant media with If-Modified-Since before ranges for %s",
-    async (method) => {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-modified-since-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const lastModified = initial.setHeader.mock.calls.find(
-            ([name]) => name === "Last-Modified",
-          )?.[1];
-          expect(lastModified).toEqual(expect.any(String));
-
-          const unchanged = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: {
-              "if-modified-since": String(lastModified),
-              range: "bytes=0-3",
-              "if-range": '"stale"',
-            },
-          });
-
-          expect(unchanged.res.statusCode).toBe(304);
-          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-          expect(unchanged.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
-          expect(unchanged.end).toHaveBeenCalledWith();
-        },
-      });
-    },
-  );
-
-  it.each(["GET", "HEAD"] as const)(
-    "ignores duplicate assistant-media dates discarded by normalized Node headers for %s",
-    async (method) => {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-duplicate-modified-since-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          const lastModified = String(
-            initial.setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1],
-          );
-
-          const duplicate = await runAssistantMediaRequest({
-            url,
-            method,
-            auth,
-            headers: { "if-modified-since": lastModified },
-            distinctHeaders: {
-              "if-modified-since": [lastModified, "not-an-http-date"],
-            },
-          });
-
-          expect(duplicate.res.statusCode).toBe(200);
-          expect(duplicate.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-        },
-      });
-    },
-  );
-
-  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
-    await withAllowedAssistantMediaRoot({
-      prefix: "ui-media-if-range-date-",
-      fn: async (tmpRoot) => {
-        const filePath = path.join(tmpRoot, "photo.png");
-        const body = Buffer.from("assistant-media-bytes");
-        const modified = new Date("2025-07-08T18:40:00.789Z");
-        await fs.writeFile(filePath, body);
-        await fs.utimes(filePath, modified, modified);
-        const lastModified = (await fs.stat(filePath)).mtime.toUTCString();
-        const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-        const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-
-        const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-        expect(initial.res.statusCode).toBe(200);
-        expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-
-        const partial = await runAssistantMediaRequest({
-          url,
-          method: "GET",
-          auth,
-          headers: { range: "bytes=0-8", "if-range": lastModified },
-        });
-        expect(partial.res.statusCode).toBe(206);
-        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-        expect(partial.setHeader).toHaveBeenCalledWith(
-          "Content-Range",
-          `bytes 0-8/${body.byteLength}`,
-        );
-
-        const future = await runAssistantMediaRequest({
-          url,
-          method: "GET",
-          auth,
-          headers: {
-            range: "bytes=0-8",
-            "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
-          },
-        });
-        expect(future.res.statusCode).toBe(200);
-        expect(future.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
-      },
-    });
-  });
-
-  it("bounds future-dated assistant media validators across conditional response plans", async () => {
-    const nowMs = Math.floor(Date.now() / 1000) * 1000;
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-    try {
-      await withAllowedAssistantMediaRoot({
-        prefix: "ui-media-future-mtime-",
-        fn: async (tmpRoot) => {
-          const filePath = path.join(tmpRoot, "photo.png");
-          const body = Buffer.from("future-assistant-media");
-          const future = new Date(nowMs + 60_000);
-          await fs.writeFile(filePath, body);
-          await fs.utimes(filePath, future, future);
-          const futureLastModified = (await fs.stat(filePath)).mtime.toUTCString();
-          const expectedLastModified = new Date(nowMs).toUTCString();
-          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
-          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
-
-          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
-          expect(initial.res.statusCode).toBe(200);
-          expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-
-          const partial = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: "bytes=0-5", "if-range": expectedLastModified },
-          });
-          expect(partial.res.statusCode).toBe(206);
-          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-
-          const futureRange = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: "bytes=0-5", "if-range": futureLastModified },
-          });
-          expect(futureRange.res.statusCode).toBe(200);
-
-          const unchanged = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { "if-none-match": String(etag) },
-          });
-          expect(unchanged.res.statusCode).toBe(304);
-          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
-
-          const unsatisfiable = await runAssistantMediaRequest({
-            url,
-            method: "GET",
-            auth,
-            headers: { range: `bytes=${body.byteLength}-` },
-          });
-          expect(unsatisfiable.res.statusCode).toBe(416);
-          expect(unsatisfiable.setHeader).toHaveBeenCalledWith(
-            "Last-Modified",
-            expectedLastModified,
-          );
-        },
-      });
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
 
   it("returns 202 while assistant playback media is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
