@@ -146,7 +146,7 @@ struct PairingGatewayOwnershipTests {
                     if delivery == "push" { fixture.nextListGate.setValue(gate) }
                     let socket = try #require(fixture.session.latestTask())
                     try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-                    socket.emitReceiveSuccessOnce(.string(
+                    socket.emitReceiveSuccess(.string(
                         #"""
                         {"type":"event","event":"node.pair.requested",
                          "payload":\#(PairingGatewayFixture.pendingRequest(requiresAdmin: delivery == "push")),"seq":1}
