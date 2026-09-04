@@ -1,4 +1,5 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
@@ -13,6 +14,10 @@ import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+
+// Gateway shutdown preparation and CLI command imports load this before turns.
+// The process-owned sweep must not retain its first requesting turn.
+const runInMcpManagerContext = AsyncLocalStorage.snapshot();
 
 type ManagerCreateInFlight = {
   promise: Promise<SessionMcpRuntime>;
@@ -203,6 +208,11 @@ export function createSessionMcpRuntimeManagerLifecycle(
       if (nowMs - runtime.lastUsedAt < DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS) {
         continue;
       }
+      // Requester work runs outside the runtime lease. Keep its current
+      // transport until the chain records the refreshed runtime.
+      if (store.requesterWorkChains.has(runtimeKey)) {
+        continue;
+      }
       store.runtimesBySessionId.delete(runtimeKey);
       store.connectionMetaByRuntimeKey.delete(runtimeKey);
       expired.push(runtime);
@@ -247,8 +257,12 @@ export function createSessionMcpRuntimeManagerLifecycle(
       .toSorted((a, b) => a.runtime.lastUsedAt - b.runtime.lastUsedAt)
       .slice(0, overflow);
     for (const { runtimeKey, runtime } of evictable) {
-      // Serialize with in-flight work on that key so eviction cannot clobber a
-      // concurrent reuse or install for the same requester.
+      // Do not queue opportunistic eviction behind active requester work: that
+      // would dispose the runtime the work just refreshed.
+      if (store.requesterWorkChains.has(runtimeKey)) {
+        continue;
+      }
+      // Claim the idle key before yielding so later requester work follows disposal.
       await runExclusiveOnRuntimeKey(runtimeKey, async () => {
         const current = store.runtimesBySessionId.get(runtimeKey);
         if (current !== runtime || (current.activeLeases ?? 0) > 0) {
@@ -279,7 +293,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
     if (!store.enableIdleSweepTimer || store.idleSweepIntervalMs <= 0 || store.idleSweepTimer) {
       return;
     }
-    store.idleSweepTimer = setInterval(queueIdleSweep, store.idleSweepIntervalMs);
+    store.idleSweepTimer = runInMcpManagerContext(() =>
+      setInterval(queueIdleSweep, store.idleSweepIntervalMs),
+    );
     store.idleSweepTimer.unref?.();
   };
 

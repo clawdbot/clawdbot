@@ -19,11 +19,9 @@ import {
   resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
-  type SessionEntry,
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -52,6 +50,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
+import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
 import {
   createGatewaySessionStoreDiscoveryCache,
   type GatewaySessionStoreCache,
@@ -62,21 +61,21 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionsListDefaultsAgentId,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import {
-  collectTrackedActiveSessionRuns,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import {
   createSessionPlacementBatchProjector,
   readSessionPlacementFields,
 } from "./session-placement-read-projection.js";
+import { listFilter } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
@@ -211,6 +210,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
+    const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, p.agentId);
+    const modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+      agentId: defaultsAgentId,
+      callerScopes: client?.connect?.scopes ?? [],
+      cfg,
+    }).target;
     const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list.model_catalog",
       async () => {
@@ -275,12 +280,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
-          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
-          const entryFilter =
-            visibilityFilter || options.excludedKeys?.size
-              ? (key: string, entry: SessionEntry) =>
-                  !options.excludedKeys?.has(key) && (visibilityFilter?.(key, entry) ?? true)
-              : undefined;
+          const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
+          const selectionRuns = p.search?.trim()
+            ? createVisibleActiveSessionRunProjector(context)
+            : undefined;
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
@@ -292,6 +295,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 store: loaded.store,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
+                ...(selectionRuns
+                  ? {
+                      projectActiveRun: (key, entry, agentId) =>
+                        selectionRuns({
+                          requestedKey: key,
+                          canonicalKey: key,
+                          sessionId: entry.sessionId,
+                          agentId,
+                          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+                        }),
+                    }
+                  : {}),
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
                 ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
@@ -300,6 +315,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               phase: "sessions.list",
             },
           );
+          result.defaults = { ...result.defaults, modelSelectionTarget };
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
@@ -318,7 +334,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,
-                  projection: "list",
                   sessionKey: session.key,
                   storeCache: sharingStoreCache,
                   targetDiscoveryCache,
@@ -382,29 +397,25 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
-          const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
-          const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-          // Row building and sharing resolution yielded; publication owns fresh caller facts.
+          const projectActiveRun = createVisibleActiveSessionRunProjector(context);
+          // These rows are unpublished; decorate them with fresh caller facts after the yields.
           const sharing = prepareSessionSharing({ client, cfg });
-          const sessions = measureDiagnosticsTimelineSpanSync(
+          measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
-            () => {
-              return result.sessions.map((session, index) => {
+            () =>
+              result.sessions.forEach((session, index) => {
                 const sharingTarget = sharingTargets[index];
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
                   : "shared";
-                const activeRunState = resolveVisibleActiveSessionRunState({
-                  context,
+                const activeRunState = projectActiveRun({
                   requestedKey: session.key,
                   canonicalKey: session.key,
                   sessionId: session.sessionId,
                   agentId: session.agentId,
                   defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
-                  trackedActiveRuns,
-                  projectedAgentRunIndex,
                 });
-                return Object.assign({}, session, {
+                Object.assign(session, {
                   visibility,
                   ...(sharingTarget
                     ? {
@@ -416,17 +427,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         ),
                       }
                     : {}),
-                  hasActiveRun: activeRunState.active,
-                  ...(activeRunState.active
-                    ? { status: activeRunState.status ?? ("running" as const) }
-                    : {}),
+                  ...projectGatewaySessionActiveRun(activeRunState, session.status),
                   ...projectPlacement(session.sessionId),
                   ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }
                     : {}),
                 });
-              });
-            },
+              }),
             {
               config: cfg,
               phase: "sessions.list",
@@ -439,15 +446,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           // visibility, ownership, membership, and operator roles may all drift.
           const currentVisibilityFilter = sharing.entryFilter;
           const visibleSessions = currentVisibilityFilter
-            ? sessions.filter((_, index) => {
+            ? result.sessions.filter((_, index) => {
                 const target = sharingTargets[index];
                 return target ? currentVisibilityFilter(target.storeKey, target.entry) : false;
               })
-            : sessions;
-          if (visibleSessions.length !== sessions.length) {
+            : result.sessions;
+          if (visibleSessions.length !== result.sessions.length) {
             const visibleKeys = new Set(visibleSessions.map((session) => session.key));
             const excludedKeys = new Set(options.excludedKeys);
-            for (const session of sessions) {
+            for (const session of result.sessions) {
               if (!visibleKeys.has(session.key)) {
                 excludedKeys.add(session.key);
               }
@@ -629,11 +636,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       store,
       key: target.canonicalKey,
       entry,
+      agentId: target.agentId,
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
     });
-    respond(true, { session: { ...row, ...readSessionPlacementFields(context, row.sessionId) } });
+    Object.assign(row, readSessionPlacementFields(context, row.sessionId));
+    respond(true, { session: row });
   },
   "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {

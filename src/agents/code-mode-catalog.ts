@@ -69,11 +69,11 @@ function selectEffectiveEntries(entries: readonly CompactCatalogEntry[]): Compac
   return [...winners.values()];
 }
 
-/** Canonical host projection shared by the prompt, guest bindings, and bridge routing. */
-export function createCodeModeCatalogProjection(
+/** Canonical callable names shared by the prompt, guest bindings, and bridge routing. */
+export function createCodeModeCatalogBindings(
   entries: readonly CompactCatalogEntry[],
   options?: { reservedNames?: Iterable<string> },
-) {
+): CodeModeCatalogBinding[] {
   const used = new Set([...RESERVED_GLOBAL_NAMES, ...(options?.reservedNames ?? [])]);
   const candidates = selectEffectiveEntries(entries)
     .map((entry) => {
@@ -99,6 +99,15 @@ export function createCodeModeCatalogProjection(
     bindings.push({ id, source, name, label, description, input, output, callableName });
   }
   bindings.sort((left, right) => left.callableName.localeCompare(right.callableName));
+  return bindings;
+}
+
+/** Execution owns guest copies and routing maps; prompt construction needs only bindings. */
+export function createCodeModeCatalogProjection(
+  entries: readonly CompactCatalogEntry[],
+  options?: { reservedNames?: Iterable<string> },
+) {
+  const bindings = createCodeModeCatalogBindings(entries, options);
   return {
     bindings,
     guestBindings: bindings.map(({ id: _id, ...binding }) => binding),

@@ -1320,16 +1320,16 @@ describe("local SQLite snapshot repository", () => {
         linkedArtifactPath = path.resolve(String(target));
       }
     });
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       if (
         linkedArtifactPath &&
         !failedInspection &&
-        path.resolve(String(filePath)) === linkedArtifactPath
+        path.resolve(String(args[0])) === linkedArtifactPath
       ) {
         failedInspection = true;
         throw Object.assign(new Error("post-link inspection failed"), { code: "EIO" });
       }
-      return await originalLstat(filePath);
+      return await originalLstat(...args);
     });
 
     await withRestoredSpies([lstatSpy, linkSpy], async () => {

@@ -1,6 +1,7 @@
+import path from "node:path";
 // Vision skip tests cover auto image-model selection and text-only model
 // rejection across bundled provider metadata.
-import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -101,24 +102,6 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   setActivePluginRegistry(pluginRegistry, cacheKey);
 }
 
-type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
-
-function requireDecisionAttachment(result: CapabilityResult, index: number) {
-  const attachment = result.decision.attachments[index];
-  if (!attachment) {
-    throw new Error(`expected media-understanding decision attachment ${index}`);
-  }
-  return attachment;
-}
-
-function requireCapabilityOutput(result: CapabilityResult, index: number) {
-  const output = result.outputs[index];
-  if (!output) {
-    throw new Error(`expected media-understanding output ${index}`);
-  }
-  return output;
-}
-
 describe("runCapability image skip", () => {
   beforeAll(async () => {
     vi.doMock("../agents/prepared-model-catalog.js", () => {
@@ -158,7 +141,10 @@ describe("runCapability image skip", () => {
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("skipped");
       expect(result.decision.attachments).toHaveLength(1);
-      const attachment = requireDecisionAttachment(result, 0);
+      const attachment = expectDefined(
+        result.decision.attachments[0],
+        "media decision attachment 0",
+      );
       expect(attachment.attachmentIndex).toBe(0);
       const attempt = attachment.attempts[0];
       if (!attempt) {
@@ -589,7 +575,7 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "openrouter",
@@ -778,14 +764,17 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "ollama",
           model: "qwen2.5vl:7b",
           text: "ok qwen2.5vl:7b",
         });
-        const attachment = requireDecisionAttachment(result, 0);
+        const attachment = expectDefined(
+          result.decision.attachments[0],
+          "media decision attachment 0",
+        );
         expect(attachment.attempts).toEqual([
           expect.objectContaining({
             type: "provider",
@@ -923,7 +912,7 @@ describe("runCapability image skip", () => {
           });
 
           expect(result.decision.outcome).toBe("success");
-          expect(requireCapabilityOutput(result, 0)).toEqual({
+          expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
             kind: "image.description",
             attachmentIndex: 0,
             provider: "minimax-portal",
@@ -989,7 +978,7 @@ describe("runCapability image skip", () => {
 
           expect(result.decision.outcome).toBe("success");
           expect(seenProviders).toEqual(["minimax-cn"]);
-          expect(requireCapabilityOutput(result, 0)).toEqual({
+          expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
             kind: "image.description",
             attachmentIndex: 0,
             provider: "minimax-cn",
@@ -1060,7 +1049,7 @@ describe("runCapability image skip", () => {
 
         expect(result.decision.outcome).toBe("success");
         expect(seenModel).toBe("MiniMax-VL-01");
-        expect(requireCapabilityOutput(result, 0)).toMatchObject({
+        expect(expectDefined(result.outputs[0], "media output 0")).toMatchObject({
           provider: "minimax",
           model: "MiniMax-VL-01",
           text: "vlm ok",
@@ -1118,7 +1107,7 @@ describe("runCapability image skip", () => {
 
         expect(result.decision.outcome).toBe("success");
         expect(seenProviders).toEqual(["google"]);
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "google",
@@ -1244,7 +1233,7 @@ describe("runCapability image skip", () => {
           });
 
           expect(result.decision.outcome).toBe("success");
-          expect(requireCapabilityOutput(result, 0)).toMatchObject({
+          expect(expectDefined(result.outputs[0], "media output 0")).toMatchObject({
             provider: "workspace-vision",
             model: "vision-v1",
             text: "workspace auth ok",
@@ -1307,7 +1296,7 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.provider).toBe("openrouter");
         expect(output.model).toBe("auto");
         expect(output.text).toBe("openrouter ok");

@@ -12,18 +12,20 @@ import rawThreadResumeResponseSchema from "./protocol-generated/json/v2/ThreadRe
 import rawThreadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
 import rawTurnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
 import rawTurnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
-import type {
-  CodexDynamicToolCallParams,
-  CodexErrorNotification,
-  CodexModelListResponse,
-  CodexThread,
-  CodexThreadForkResponse,
-  CodexThreadForkParams,
-  CodexThreadResumeResponse,
-  CodexThreadStartResponse,
-  CodexTurn,
-  CodexTurnCompletedNotification,
-  CodexTurnStartResponse,
+import {
+  isJsonObject,
+  type CodexDynamicToolCallParams,
+  type CodexErrorNotification,
+  type CodexModelListResponse,
+  type CodexThread,
+  type CodexThreadForkResponse,
+  type CodexThreadForkParams,
+  type CodexThreadItem,
+  type CodexThreadResumeResponse,
+  type CodexThreadStartResponse,
+  type CodexTurn,
+  type CodexTurnCompletedNotification,
+  type CodexTurnStartResponse,
 } from "./protocol.js";
 
 type ValidationError = {
@@ -377,6 +379,34 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
     normalizeTurnStartResponse(value),
   );
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
+}
+
+/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+export function assertCodexPassiveTurnItems(
+  items: readonly CodexThreadItem[],
+  prompt: string,
+  taskLabel: string,
+): void {
+  let promptEchoSeen = false;
+  for (const item of items) {
+    if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (item.type === "userMessage" && !promptEchoSeen) {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const input = content[0];
+      if (
+        content.length === 1 &&
+        isJsonObject(input) &&
+        input.type === "text" &&
+        input.text === prompt
+      ) {
+        promptEchoSeen = true;
+        continue;
+      }
+    }
+    throw new Error(`Codex ${taskLabel} returned unexpected native item: ${item.type}`);
+  }
 }
 
 /** Reads Codex dynamic-tool call params, returning undefined for invalid payloads. */

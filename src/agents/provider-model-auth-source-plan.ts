@@ -64,7 +64,7 @@ export function classifyProviderModelAuthSource(
       };
 }
 
-type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "user-lock";
+type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "runtime-binding";
 
 type ProviderModelAuthAutomaticProfiles =
   | { kind: "empty"; explicitOrder: boolean }

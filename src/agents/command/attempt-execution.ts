@@ -21,7 +21,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -37,10 +37,12 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import type { StopReason } from "../../llm/types.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
   buildPersistedUserTurnMessage,
@@ -57,7 +59,11 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -73,7 +79,9 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
+import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -81,6 +89,7 @@ import {
 } from "../cli-session.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
+import { resolveDelegationCapability } from "../delegation-capability.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -90,17 +99,21 @@ import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-tu
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
+import {
+  createAgentRunSupersededAbortError,
+  resolveAgentRunAbortLifecycleFields,
+} from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   isSubagentAnnounceCompletionHandoff,
@@ -116,7 +129,6 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
-  clearCliSessionInStore,
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
@@ -228,6 +240,7 @@ type PersistTextTurnTranscriptParams = {
     api: string;
     provider: string;
     model: string;
+    stopReason: StopReason;
     usage?: TranscriptUsage;
   };
 };
@@ -390,7 +403,7 @@ async function persistTextTurnTranscript(
         provider: params.assistant.provider,
         model: params.assistant.model,
         usage: resolveTranscriptUsage(params.assistant.usage),
-        stopReason: "stop",
+        stopReason: params.assistant.stopReason,
         timestamp: Date.now(),
       },
       ...(prepareAssistantTranscriptMessage
@@ -440,6 +453,7 @@ async function persistTextTurnTranscript(
       // SAFETY: The typed user-write hook above is the only producer of this batch's user row.
       persistedUser.message as PersistedUserTurnMessage,
       persistedUser.anchor,
+      { appended: persistedUser.appended },
     );
   }
   const assistantTranscript = turn.messages.find(
@@ -478,6 +492,7 @@ export async function persistAcpTurnTranscript(params: {
   assistantIdempotencyKey?: string;
   expectedSessionId?: string;
   finalText: string;
+  terminalOutcome: AgentRunTerminalOutcome;
   sessionId: string;
   sessionKey: string;
   sessionFile?: string;
@@ -489,6 +504,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
 }): Promise<PersistTextTurnTranscriptResult> {
+  const outcome = classifyAgentRunTerminalOutcome(params.terminalOutcome);
   return await persistTextTurnTranscript({
     ...params,
     ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
@@ -496,6 +512,7 @@ export async function persistAcpTurnTranscript(params: {
       api: "openai-responses",
       provider: "openclaw",
       model: "acp-runtime",
+      stopReason: outcome === "success" ? "stop" : outcome === "failure" ? "error" : "aborted",
     },
   });
 }
@@ -534,6 +551,7 @@ export async function persistCliTurnTranscript(params: {
       api: "cli",
       provider,
       model,
+      stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
       usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
@@ -562,6 +580,8 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  preserveCliSessionBinding?: boolean;
+  classifyResult?: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -616,7 +636,7 @@ export function runAgentAttempt(params: {
     }
   };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
+  const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -738,8 +758,11 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const pinnedHarnessId = isRawModelRun
+    ? undefined
+    : resolveSessionPinnedHarnessId(params.sessionEntry);
   const locksSessionRuntimeOverride =
-    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
+    pinnedHarnessId !== undefined && sessionRuntimeOverride === pinnedHarnessId;
   const sessionCliRuntime =
     sessionRuntimeOverride &&
     !locksSessionRuntimeOverride &&
@@ -863,127 +886,150 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
-    params.deferredLifecycle?.handoffToCli();
-    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
-    const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
-    const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
-      ? resizeExecApprovalContinuationPrompt({
-          prompt: params.body,
-          range: params.opts.execApprovalContinuationPromptRange,
-          maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-        })
-      : params.body;
-    const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
-      ? resolveFallbackRetryPrompt({
-          body: cliContinuationBody,
-          isFallbackRetry: params.isFallbackRetry,
-          sessionHasHistory: params.sessionHasHistory,
-          priorContextPrelude: claudeCliFallbackPrelude,
-        })
-      : resolvedPrompt;
-    const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
-      ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-      : effectivePrompt;
-    const cliTranscriptPrompt =
-      continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
-        ? continuationTranscriptBody
-        : resizeExecApprovalContinuationPrompt({
-            prompt: continuationTranscriptBody,
-            range: continuationTranscriptPromptRange,
-            maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-          });
-    params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
-      cliTranscriptPrompt ?? cliContinuationBody,
-    );
-    const cliPrompt =
-      params.opts.inputProvenance?.kind === "inter_session"
-        ? cliEffectivePrompt
-        : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
-    const cliModelPrompt = appendGitCoauthorContext(cliPrompt, params.opts.gitCoauthorAttribution);
-    const cliPersistencePrompt = params.opts.gitCoauthorAttribution
-      ? (cliTranscriptPrompt ?? cliPrompt)
-      : cliTranscriptPrompt;
-    const mutableCliSessionStore =
-      params.sessionKey && params.sessionStore && params.storePath
-        ? {
-            sessionKey: params.sessionKey,
-            sessionStore: params.sessionStore,
-            storePath: params.storePath,
-          }
-        : undefined;
-    const resolveReusableCliSessionBinding = async () => {
-      const hasManagedClaudeLiveSession = Boolean(
-        isClaudeCliProvider(cliExecutionProvider) &&
-        cliSessionBinding?.sessionId &&
-        hasCliLiveSession({
-          backendId: cliExecutionProvider,
-          agentAccountId: params.runContext.accountId,
-          agentId: params.sessionAgentId,
-          authProfileId: cliSessionBinding.authProfileId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-        }),
-      );
-      if (
-        !isClaudeCliProvider(cliExecutionProvider) ||
-        !cliSessionBinding?.sessionId ||
-        hasManagedClaudeLiveSession ||
-        (await claudeCliSessionTranscriptHasContent({
-          sessionId: cliSessionBinding.sessionId,
-          workspaceDir: cliProcessCwd,
-        }))
-      ) {
-        return cliSessionBinding;
-      }
-
-      log.warn(
-        `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
-      );
-
-      if (mutableCliSessionStore) {
-        params.sessionEntry =
-          (await clearCliSessionInStore({
-            provider: cliExecutionProvider,
-            ...mutableCliSessionStore,
-          })) ?? params.sessionEntry;
-      }
-
-      // The store is already cleared above, so no stale --resume can leak to a
-      // later turn. Still return the bound id as the reuse candidate: prepare
-      // re-detects the missing transcript, keeps useResume=false, and arms
-      // raw-transcript reseed from prior OpenClaw history. Returning undefined
-      // strips the candidate and starves reseed, losing warm-stdin continuity.
-      return cliSessionBinding;
-    };
-    const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
-    const runCliWithSession = async (
-      nextCliSessionId: string | undefined,
-      activeCliSessionBinding = cliSessionBinding,
-    ) => {
-      const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
-      const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+    const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
+    return withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? params.sessionId,
         agentId: params.sessionAgentId,
-      });
-      const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
-      if (forkCliSessionOnResume && !supportsCliSessionFork) {
-        throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
-      }
-      const forkStoreParams =
-        supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
-          ? {
-              provider: cliExecutionProvider,
-              expectedCliSessionId: nextCliSessionId,
-              ...mutableCliSessionStore,
-            }
-          : undefined;
-      return withLocalSessionPlacementTurnAdmission(
-        {
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey ?? params.sessionId,
-          agentId: params.sessionAgentId,
-          runId: params.runId,
-        },
-        async () => {
+        runId: params.runId,
+      },
+      async (assertSettlementCurrent) => {
+        if (params.sessionKey && params.storePath) {
+          params.sessionEntry = loadSessionEntry({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            readConsistency: "latest",
+          });
+          if (
+            params.sessionEntry?.sessionId !== params.sessionId ||
+            params.sessionEntry.lifecycleRevision !== expectedLifecycleRevision
+          ) {
+            throw createAgentRunSupersededAbortError();
+          }
+        }
+        params.deferredLifecycle?.handoffToCli();
+        const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+        const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+        const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
+          ? resizeExecApprovalContinuationPrompt({
+              prompt: params.body,
+              range: params.opts.execApprovalContinuationPromptRange,
+              maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+            })
+          : params.body;
+        const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
+          ? resolveFallbackRetryPrompt({
+              body: cliContinuationBody,
+              isFallbackRetry: params.isFallbackRetry,
+              sessionHasHistory: params.sessionHasHistory,
+              priorContextPrelude: claudeCliFallbackPrelude,
+            })
+          : resolvedPrompt;
+        const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
+          ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
+          : effectivePrompt;
+        const cliTranscriptPrompt =
+          continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
+            ? continuationTranscriptBody
+            : resizeExecApprovalContinuationPrompt({
+                prompt: continuationTranscriptBody,
+                range: continuationTranscriptPromptRange,
+                maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+              });
+        params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
+          cliTranscriptPrompt ?? cliContinuationBody,
+        );
+        const cliPrompt =
+          params.opts.inputProvenance?.kind === "inter_session"
+            ? cliEffectivePrompt
+            : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
+        const cliModelPrompt = appendGitCoauthorContext(
+          cliPrompt,
+          params.opts.gitCoauthorAttribution,
+        );
+        const cliPersistencePrompt = params.opts.gitCoauthorAttribution
+          ? (cliTranscriptPrompt ?? cliPrompt)
+          : cliTranscriptPrompt;
+        const mutableCliSessionStore =
+          params.sessionKey && params.sessionStore && params.storePath
+            ? {
+                sessionKey: params.sessionKey,
+                sessionStore: params.sessionStore,
+                storePath: params.storePath,
+                expectedSessionId: params.sessionId,
+                assertCommitAllowed: assertSettlementCurrent,
+              }
+            : undefined;
+        const resolveReusableCliSessionBinding = async () => {
+          const hasManagedClaudeLiveSession = Boolean(
+            isClaudeCliProvider(cliExecutionProvider) &&
+            cliSessionBinding?.sessionId &&
+            hasCliLiveSession({
+              backendId: cliExecutionProvider,
+              agentAccountId: params.runContext.accountId,
+              agentId: params.sessionAgentId,
+              authProfileId: cliSessionBinding.authProfileId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            }),
+          );
+          if (
+            !isClaudeCliProvider(cliExecutionProvider) ||
+            !cliSessionBinding?.sessionId ||
+            hasManagedClaudeLiveSession ||
+            (await claudeCliSessionTranscriptHasContent({
+              sessionId: cliSessionBinding.sessionId,
+              workspaceDir: cliProcessCwd,
+            }))
+          ) {
+            return cliSessionBinding;
+          }
+
+          log.warn(
+            `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
+          );
+
+          if (mutableCliSessionStore) {
+            params.sessionEntry =
+              (await clearCliSessionInStore({
+                provider: cliExecutionProvider,
+                ...mutableCliSessionStore,
+              })) ?? params.sessionEntry;
+          }
+
+          // The store is already cleared above, so no stale --resume can leak to a
+          // later turn. Still return the bound id as the reuse candidate: prepare
+          // re-detects the missing transcript, keeps useResume=false, and arms
+          // raw-transcript reseed from prior OpenClaw history. Returning undefined
+          // strips the candidate and starves reseed, losing warm-stdin continuity.
+          return cliSessionBinding;
+        };
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
+        const runCliWithSession = async (
+          nextCliSessionId: string | undefined,
+          activeCliSessionBinding = cliSessionBinding,
+        ) => {
+          const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+          const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+            agentId: params.sessionAgentId,
+          });
+          const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
+          if (forkCliSessionOnResume && !supportsCliSessionFork) {
+            throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
+          }
+          const forkStoreParams =
+            supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
+              ? {
+                  provider: cliExecutionProvider,
+                  expectedCliSessionId: nextCliSessionId,
+                  ...mutableCliSessionStore,
+                  assertCommitAllowed: () => {
+                    assertSettlementCurrent();
+                    (params.deferredLifecycle?.signal ?? params.opts.abortSignal)?.throwIfAborted();
+                  },
+                }
+              : undefined;
           return await runCliAgent({
             preparedRunAdmission: params.preparedRunAdmission,
             sessionId: params.sessionId,
@@ -1019,6 +1065,7 @@ export function runAgentAttempt(params: {
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
@@ -1095,6 +1142,17 @@ export function runAgentAttempt(params: {
               runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
             ),
+            // This loop is the command-origin sibling of the auto-reply fallback
+            // candidate, so its CLI grant needs the same delegation gate; the
+            // inputs match the tool state this invocation actually runs with.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: params.opts.inputProvenance,
+                disableTools,
+                toolsAllow: runtimeToolsAllow,
+              }),
+            ),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
@@ -1168,45 +1226,71 @@ export function runAgentAttempt(params: {
                 }
               : {}),
           });
-        },
-      );
-    };
-    return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
-      try {
-        return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
-      } catch (err) {
-        const failedCliSessionBinding = getCliSessionBinding(
-          params.sessionEntry,
-          cliExecutionProvider,
-        );
-        const failedCliSessionId = failedCliSessionBinding?.sessionId;
-        if (
-          isClaudeCliProvider(cliExecutionProvider) &&
-          shouldClearFailedCliSessionBinding({
-            error: err,
-            binding: failedCliSessionBinding,
-            hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
-              params.sessionKey,
-              mediaTaskIdsBefore,
-            ),
-          }) &&
-          failedCliSessionId &&
-          mutableCliSessionStore
-        ) {
-          log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
+        };
+        const activeCliSessionBinding = await resolveReusableCliSessionBinding();
+        let result: EmbeddedAgentRunResult;
+        try {
+          result = await runCliWithSession(
+            activeCliSessionBinding?.sessionId,
+            activeCliSessionBinding,
           );
+        } catch (err) {
+          const failedCliSessionBinding = getCliSessionBinding(
+            params.sessionEntry,
+            cliExecutionProvider,
+          );
+          const failedCliSessionId = failedCliSessionBinding?.sessionId;
+          if (
+            isClaudeCliProvider(cliExecutionProvider) &&
+            shouldClearFailedCliSessionBinding({
+              error: err,
+              binding: failedCliSessionBinding,
+              hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+                params.sessionKey,
+                mediaTaskIdsBefore,
+              ),
+            }) &&
+            failedCliSessionId &&
+            mutableCliSessionStore
+          ) {
+            log.warn(
+              `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
+            );
 
-          params.sessionEntry =
-            (await clearCliSessionInStore({
-              provider: cliExecutionProvider,
-              expectedCliSessionId: failedCliSessionId,
-              ...mutableCliSessionStore,
-            })) ?? params.sessionEntry;
+            params.sessionEntry =
+              (await clearCliSessionInStore({
+                provider: cliExecutionProvider,
+                expectedCliSessionId: failedCliSessionId,
+                ...mutableCliSessionStore,
+              })) ?? params.sessionEntry;
+          }
+          throw err;
         }
-        throw err;
-      }
-    });
+        const classification = params.classifyResult?.(result);
+        if (
+          !params.preserveCliSessionBinding &&
+          (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
+        ) {
+          return await persistCliSessionBindingResult({
+            provider: cliExecutionProvider,
+            result,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            sessionStore: params.sessionStore,
+            expectedSession: params.sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
+          });
+        }
+        return result;
+      },
+      {
+        lifecycleGeneration: params.lifecycleGeneration,
+        abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
+        trigger: "user",
+        inputProvenance: params.opts.inputProvenance,
+      },
+    );
   }
 
   const embeddedModelPrompt = appendGitCoauthorContext(
@@ -1250,10 +1334,11 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
-    agentHarnessId: embeddedAgentHarnessOverride,
+    agentHarnessId: pinnedHarnessId,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
@@ -1303,6 +1388,7 @@ export function runAgentAttempt(params: {
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
+    skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
@@ -1496,7 +1582,7 @@ function resolveAcpToolTerminalReason(
   return "failed";
 }
 
-function resolveAcpLifecycleEndFields(
+export function resolveAcpLifecycleEndFields(
   signal: AbortSignal | undefined,
   stopReason?: string,
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
@@ -1752,6 +1838,7 @@ function emitAcpTerminalLifecycle(
 ) {
   const data = {
     ...terminal,
+    executionSettled: true,
     ...(params.completionSource ? { completionSource: params.completionSource } : {}),
   };
   const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
@@ -1776,9 +1863,7 @@ export function emitAcpLifecycleEnd(params: {
   sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
-  abortSignal?: AbortSignal;
-  stopReason?: string;
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
   terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
   completionSource?: "reply-dispatch";
@@ -1786,17 +1871,16 @@ export function emitAcpLifecycleEnd(params: {
   finalizeAcpToolsForRun(
     params.toolTracker,
     params.runId,
-    resolveAcpToolTerminalReason(
-      params.abortSignal,
-      params.stopReason,
-      undefined,
-      params.resultStatus,
-    ),
+    params.endFields.stopReason === "timeout"
+      ? "timed_out"
+      : params.endFields.aborted
+        ? "cancelled"
+        : "failed",
   );
   return emitAcpTerminalLifecycle(params, {
     phase: "end",
     endedAt: Date.now(),
-    ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+    ...params.endFields,
     ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }

@@ -14,6 +14,7 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
 import type { CachedRuntimeState } from "./manager.runtime-handle-cache.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
 import {
@@ -151,7 +152,10 @@ export async function resolveManagerRuntimeCapabilities(params: {
       for (const key of extractRuntimeStatusConfigOptionKeys(status)) {
         normalizedKeys.add(key);
       }
-    } catch {
+    } catch (error) {
+      if (isAcpOwnerRepairRequired(error)) {
+        throw error;
+      }
       // Status-derived option keys are an optional refinement. Keep the
       // capability result usable for runtimes that expose controls but cannot
       // answer status before a turn.

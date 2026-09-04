@@ -24,3 +24,10 @@ export function resolveNpmJsonEntries(value: unknown): unknown[] {
   }
   return [value];
 }
+
+/** npm 12 keeps scalar view results in an array; exact-package reads require one value. */
+export function resolveNpmJsonString(value: unknown): string {
+  const entries = resolveNpmJsonEntries(value);
+  const entry = entries.length === 1 ? entries[0] : undefined;
+  return typeof entry === "string" ? entry.trim() : "";
+}

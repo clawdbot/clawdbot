@@ -12,13 +12,24 @@ function makeRepository(): { root: string; commit: string } {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-apple-release-source-"));
   tempDirs.push(root);
   execFileSync("git", ["init", "--quiet"], { cwd: root });
-  execFileSync("git", ["config", "user.email", "release-test@openclaw.test"], { cwd: root });
-  execFileSync("git", ["config", "user.name", "OpenClaw Release Test"], { cwd: root });
   writeFileSync(path.join(root, "tracked.txt"), "clean\n", "utf8");
   execFileSync("git", ["add", "tracked.txt"], { cwd: root });
-  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "initial"], {
-    cwd: root,
-  });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.email=release-test@openclaw.test",
+      "-c",
+      "user.name=OpenClaw Release Test",
+      "commit",
+      "--quiet",
+      "-m",
+      "initial",
+    ],
+    { cwd: root },
+  );
   const commit = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",

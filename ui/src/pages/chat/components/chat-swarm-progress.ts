@@ -231,13 +231,15 @@ export function renderChatSwarmProgress({
                 (task) => html`
                   <div class="chat-swarm__task" role="listitem">
                     <span class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}>
-                      ${task.status === "done"
-                        ? icons.check
-                        : task.status === "failed"
-                          ? icons.alertTriangle
-                          : task.status === "running"
-                            ? icons.loader
-                            : icons.clock}
+                      ${
+                        task.status === "done"
+                          ? icons.check
+                          : task.status === "failed"
+                            ? icons.alertTriangle
+                            : task.status === "running"
+                              ? icons.loader
+                              : icons.clock
+                      }
                     </span>
                     <span class="chat-swarm__task-name">${task.label}</span>
                     <span class="chat-swarm__task-duration">${task.duration}</span>

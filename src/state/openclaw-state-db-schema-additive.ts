@@ -314,6 +314,19 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
   `);
 }
 
+/** First personal publication write only; status and old readers leave this surface dormant. */
+export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_personal_publication_requests (",
+  );
+  const marker = "ON github_personal_publication_requests(status, updated_at_ms, request_id);";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Personal GitHub publication schema marker is missing.");
+  }
+  db.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical lazy additive DDL only.
+}
+
 /**
  * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
  *

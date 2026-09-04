@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  prependAuthProfilePin,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
@@ -46,7 +47,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
@@ -212,7 +213,9 @@ export function prepareAgentRuntimeAuth(
 ): PreparedAgentRuntimeAuth {
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
-    params.sessionAuthProfileSource === "user" ? requestedProfileId : undefined;
+    params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
+      ? requestedProfileId
+      : undefined;
   const harnessOwnsOpenAIAuth =
     params.harnessId?.trim().toLowerCase() === "codex" ||
     params.harnessRuntime?.trim().toLowerCase() === "codex";
@@ -283,7 +286,7 @@ export function prepareAgentRuntimeAuth(
   const providerBindingSuppressesProfiles =
     (providerBinding.kind === "literal" && explicitConfigApiKeyAuth) ||
     providerHasUsableMarker ||
-    (providerHasApiKeySecretRef && explicitConfigApiKeyAuth);
+    providerHasApiKeySecretRef;
   const providerBindingNeedsNonProfileFallback =
     providerHasDirectMaterial && !providerBindingSuppressesProfiles;
   // Explicit auth owns the physical route; apiKey is only its bearer material.
@@ -308,17 +311,10 @@ export function prepareAgentRuntimeAuth(
           forModel: params.modelId,
           readinessMode: "read-only",
         });
-  const automaticOrderResolution = userPinnedProfileId
-    ? {
-        ...resolvedAutomaticOrder,
-        profileIds: [
-          userPinnedProfileId,
-          ...resolvedAutomaticOrder.profileIds.filter(
-            (profileId) => profileId !== userPinnedProfileId,
-          ),
-        ],
-      }
-    : resolvedAutomaticOrder;
+  const automaticOrderResolution = prependAuthProfilePin(
+    resolvedAutomaticOrder,
+    userPinnedProfileId,
+  );
   const providerPreferredProfileId =
     harnessAllowsAuthProfileForwarding &&
     !selectedProfileId &&

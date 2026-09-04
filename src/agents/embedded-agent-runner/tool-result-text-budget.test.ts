@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { toolResultFitsBudget } from "../tool-result-limits.js";
 import {
   estimateToolResultTextChars,
   sliceToolResultTextTailToBudget,
@@ -16,6 +17,19 @@ describe("tool-result text budgets", () => {
     expect(estimateToolResultTextChars("hello", options)).toBe(10);
     expect(estimateToolResultTextChars("你好", options)).toBe(8);
     expect(estimateToolResultTextChars("ab你好", options)).toBe(12);
+  });
+
+  it.each([
+    ["abc", 3, 6],
+    ["漢a", 5, 6],
+    ["𠀀a", 17, 18],
+    ["🌍a", 3, 6],
+  ])("checks both budget boundaries for %s", (text, maxChars, maxContextChars) => {
+    expect(toolResultFitsBudget(text, { maxChars, maxContextChars })).toBe(true);
+    expect(toolResultFitsBudget(text, { maxChars: maxChars - 1, maxContextChars })).toBe(false);
+    expect(toolResultFitsBudget(text, { maxChars, maxContextChars: maxContextChars - 1 })).toBe(
+      false,
+    );
   });
 
   it("finds prefix and tail cuts on complete UTF-16 boundaries", () => {

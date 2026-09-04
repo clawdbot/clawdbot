@@ -31,7 +31,7 @@ describe("openai gpt-live model detection", () => {
 
   it("advertises only curated /v1/live models", () => {
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
-    expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Boulder-Alpha ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel(" Gpt-Live-1-Codex ")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
   });

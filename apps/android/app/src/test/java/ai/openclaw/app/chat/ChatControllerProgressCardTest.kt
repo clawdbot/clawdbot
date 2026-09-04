@@ -9,8 +9,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerProgressCardTest {
   private data class StartedRun(
     val controller: ChatController,
@@ -30,11 +33,12 @@ class ChatControllerProgressCardTest {
   private suspend fun TestScope.startRun(progressCardAdvertised: Boolean?): StartedRun {
     val gateway = ScriptedGateway(chatControllerTestJson)
     gateway.respondChatSend(status = "started")
+    gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
     val controller =
       newController(gateway) { method ->
         if (method == "progressCard.get") progressCardAdvertised else true
       }
-    controller.handleGatewayEvent("health", null)
+    controller.load("main")
     runCurrent()
     assertTrue(controller.sendMessageAwaitAcceptance("make a plan", "off", emptyList()))
     return StartedRun(controller, gateway, requireNotNull(gateway.lastRunId))
@@ -283,7 +287,7 @@ class ChatControllerProgressCardTest {
       val controller = newController(gateway)
       controller.handleGatewayEvent("progressCard.changed", changedEvent("main", "1"))
       runCurrent()
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
       runCurrent()
       assertTrue(controller.sendMessageAwaitAcceptance("go", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -321,11 +325,15 @@ class ChatControllerProgressCardTest {
               releaseOldFetch.await()
             }
           }
+
           "other" -> {
             newFetchStarted.complete(Unit)
             releaseNewFetch.await()
           }
-          else -> error("unexpected session")
+
+          else -> {
+            error("unexpected session")
+          }
         }
       }
       val controller = newController(gateway)

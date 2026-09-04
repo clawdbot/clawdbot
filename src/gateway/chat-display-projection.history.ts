@@ -13,6 +13,7 @@ import {
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
@@ -361,10 +362,10 @@ function isDuplicateChannelFinalDeliveryMirror(
 }
 
 export function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
-  return messages.filter(
-    (message): message is Record<string, unknown> =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
+  return messages.flatMap((message) => {
+    const record = readRecord(message);
+    return record ? [projectAssistantDisplayContent(record)] : [];
+  });
 }
 
 export function filterVisibleProjectedHistoryMessages(

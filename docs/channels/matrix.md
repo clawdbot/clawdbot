@@ -14,7 +14,7 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 openclaw plugins install @openclaw/matrix
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/matrix` or `npm:@openclaw/matrix`. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
@@ -274,6 +274,17 @@ Matrix uses the shared audio media provider under `tools.media.audio`, such as O
 - The attachment is marked as already transcribed so downstream media tools do not transcribe it again.
 - Set `tools.media.audio.enabled: false` to disable audio transcription globally.
 
+## Reply controls and presentations
+
+Buttons and selection lists in agent replies include readable fallback text and
+structured content under `com.openclaw.presentation`. Stock Matrix clients show
+the text; OpenClaw-aware clients can render the structured controls. Replies that
+contain only controls still produce a room message.
+
+For replies with multiple attachments, the first event carries the controls.
+Streamed replies retain them in the finalized edit. When a table or chart cannot
+be rendered natively, an authored text fallback is preserved.
+
 ## Approval metadata
 
 Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific content under the `com.openclaw.approval` key. Stock clients still render the text body; OpenClaw-aware clients can read the structured approval id, kind, state, decisions, and exec/plugin details.
@@ -339,7 +350,11 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Manual config equivalent:
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+
+Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
+
+Manual config equivalent:
 
 ```json5
 {

@@ -7,18 +7,10 @@ import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   type SessionArchivedFilter,
   type SessionListOptions,
-  type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
 export type SessionsRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
-  sessions: ApplicationContext["sessions"];
-  result: SessionListSnapshot["result"];
-  loading: boolean;
-  error: string | null;
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
 };
@@ -30,6 +22,7 @@ type SessionsPageListFilters = {
   includeUnknown: boolean;
   statusFilter: SessionArchivedFilter;
   deepLinkSessionKey?: string | null;
+  search?: string;
 };
 
 function routeOptions(location: RouteLocation) {
@@ -56,7 +49,9 @@ export function sessionsPageListQuery(
   return {
     limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
     ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey ? { search: deepLinkSessionKey } : {}),
+    ...(deepLinkSessionKey || filters.search?.trim()
+      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
+      : {}),
     includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
     includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
     includeDerivedTitles: false,
@@ -70,34 +65,10 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const sessions = context.sessions;
-  const options = routeOptions(location);
-  const query = sessionsPageListQuery(context, {
-    limit: SESSIONS_PAGE_DEFAULT_LIMIT,
-    includeGlobal: true,
-    includeUnknown: false,
-    statusFilter: options.statusFilter,
-    deepLinkSessionKey: options.expandedSessionKey,
-  });
-  let snapshot = sessions.listSnapshot(query);
-  await Promise.all([
-    !snapshot.result && !snapshot.loading
-      ? sessions.refreshList({ ...query, force: true })
-      : undefined,
-    context.runtimeConfig.ensureLoaded().catch(() => undefined),
-  ]);
-  snapshot = sessions.listSnapshot(query);
-  return {
-    gateway,
-    gatewaySnapshot,
-    sessions,
-    result: snapshot.result,
-    loading: snapshot.loading,
-    error: snapshot.error,
-    ...options,
-  };
+  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+  // The mounted page owns list issuance, including scope/status navigation
+  // during a search. Prefetching here bypasses its single in-flight request.
+  return routeOptions(location);
 }
 
 export const page = definePage({

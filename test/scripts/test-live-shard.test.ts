@@ -491,6 +491,8 @@ describe("scripts/test-live-shard", () => {
 
   it.each([
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     [
       "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
       "OPENCLAW_LIVE_OPENAI_COMPACTION",

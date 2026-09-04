@@ -14,23 +14,24 @@ type OperationOutcome =
       status: "pending";
     };
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function settleWithin(
   promise: Promise<unknown>,
   timeoutMs: number,
 ): Promise<OperationOutcome> {
-  return await Promise.race([
-    promise.then(
-      () => ({ status: "resolved" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    ),
-    delay(timeoutMs).then(() => ({ status: "pending" as const })),
-  ]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      ),
+      new Promise<OperationOutcome>((resolve) => {
+        timeout = setTimeout(() => resolve({ status: "pending" }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function expectTimeoutRejection(promise: Promise<unknown>, timeoutMs: number): Promise<void> {

@@ -510,7 +510,7 @@ describe("agent command restart recovery ownership", () => {
         },
         run,
       }),
-    ).rejects.toThrow("changed while starting work");
+    ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     expect(run).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,17 @@
-import type { CrabboxWorkerNodeEnrollment } from "./crabbox-worker-node-enrollment.js";
+import type {
+  CrabboxWorkerNodeEnrollment,
+  CrabboxWorkerNodeRuntimePreparation,
+} from "./crabbox-worker-node-enrollment.js";
+
+export function createWorkerArchiveFixture(): CrabboxWorkerNodeRuntimePreparation["workerBundle"] {
+  return {
+    url: "https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/worker",
+    token: "synthetic-worker-archive-token",
+    sha256: "b".repeat(64),
+    bytes: 100,
+    packageRelativePath: `worker-artifacts/${"b".repeat(64)}.tgz`,
+  };
+}
 
 export function createNodeBootstrapFixture(
   overrides: Partial<CrabboxWorkerNodeEnrollment["nodeBootstrap"]> = {},

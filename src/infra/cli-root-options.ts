@@ -106,6 +106,22 @@ export function getCommandPositionalsWithRootOptions(
   argv: readonly string[],
   options: CommandPositionalsParseOptions,
 ): string[] | null {
+  return parseCommandArgsWithRootOptions(argv, options, false);
+}
+
+/** Preserve the leaf's raw arguments after consuming its root and parent options. */
+export function getCommandArgsWithRootOptions(
+  argv: readonly string[],
+  options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
+): string[] | null {
+  return parseCommandArgsWithRootOptions(argv, options, true);
+}
+
+function parseCommandArgsWithRootOptions(
+  argv: readonly string[],
+  options: CommandPositionalsParseOptions,
+  returnTail: boolean,
+): string[] | null {
   const args = argv.slice(2);
   const booleanFlags = new Set(options.booleanFlags ?? []);
   const valueFlags = new Set(options.valueFlags ?? []);
@@ -149,6 +165,9 @@ export function getCommandPositionalsWithRootOptions(
         return null;
       }
       commandIndex += 1;
+      if (returnTail && commandIndex === options.commandPath.length) {
+        return args.slice(index + 1);
+      }
       continue;
     }
     positionals.push(arg);

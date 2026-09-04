@@ -28,6 +28,8 @@ function createProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
     connected: true,
     loading: false,
     snapshot: null,
+    pluginCatalog: null,
+    pluginIconUrls: {},
     lastError: null,
     lastSuccessAt: null,
     pairingLoading: false,

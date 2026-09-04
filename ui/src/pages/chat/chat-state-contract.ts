@@ -1,9 +1,9 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
+import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
@@ -19,7 +19,7 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
+  chatSubmissions?: ApplicationChatSubmissions;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   sessionKey: string;
@@ -39,6 +39,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatSending: boolean;
   chatMessage: string;
+  chatMentions?: readonly HumanMention[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
@@ -74,4 +75,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
+  /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
+  transcriptLoadingChanged?: () => void;
 };

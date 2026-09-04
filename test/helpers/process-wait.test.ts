@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -158,8 +159,8 @@ child.once('close', (_code, signal) => {
           await waitForDead(controller.pid, 2_000);
         }
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }

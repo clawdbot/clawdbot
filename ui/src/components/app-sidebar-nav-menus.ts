@@ -125,7 +125,7 @@ type SidebarMenuNavigationHandlers = {
 };
 
 type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
-  position: SidebarMenuPosition | null;
+  position: SidebarMenuPosition;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
   sidebarEntries: readonly string[];
@@ -165,9 +165,6 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
 
 export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const moreRoutes = sidebarMoreRoutes(params.sidebarEntries).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
@@ -216,7 +213,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 }
 
 type SidebarCustomizeMenuParams = {
-  position: SidebarMenuPosition | null;
+  position: SidebarMenuPosition;
   sidebarEntries: readonly string[];
   preferencesBrowserOnly: boolean;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
@@ -231,9 +228,6 @@ type SidebarCustomizeMenuParams = {
 
 export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-pin-editor-menu"
@@ -267,11 +261,13 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
       <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-      ${params.preferencesBrowserOnly
-        ? html`<div class="sidebar-customize-menu__provenance" role="note">
-            ${t("quickSettings.personal.browserOnly")}
-          </div>`
-        : nothing}
+      ${
+        params.preferencesBrowserOnly
+          ? html`<div class="sidebar-customize-menu__provenance" role="note">
+              ${t("quickSettings.personal.browserOnly")}
+            </div>`
+          : nothing
+      }
       ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
         const visible = params.sidebarEntries.includes(
           serializeSidebarEntry({ type: "route", route: routeId }),
@@ -290,9 +286,14 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           </wa-dropdown-item>
         `;
       })}
-      ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
-        ? params.workboardRenderers?.renderCustomize(params.workboardBoards, params.sidebarEntries)
-        : nothing}
+      ${
+        params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
+          ? params.workboardRenderers?.renderCustomize(
+              params.workboardBoards,
+              params.sidebarEntries,
+            )
+          : nothing
+      }
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>

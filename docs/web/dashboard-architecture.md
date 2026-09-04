@@ -7,27 +7,29 @@ title: "Dashboard Architecture"
 doc-schema-version: 1
 ---
 
-Session dashboards are the persistent widget face of a session. This reference
-covers their ownership, sandbox and capability boundaries, storage, and Gateway
-protocol. For the operator workflow, see [Session Dashboards](/web/dashboards);
-for the widget authoring API, see [Show widget](/tools/show-widget).
+Session dashboards are persistent widget boards attached to a session. This
+reference covers their ownership, sandbox and capability boundaries, storage,
+and Gateway protocol. For the operator workflow, see
+[Session Dashboards](/web/dashboards); for the widget authoring API, see
+[Show widget](/tools/show-widget).
 
 ## Vision
 
 A dashboard turns the session into a workbench: the agent renders interactive
-widgets, the user pins them onto a persistent board, and chat docks beside the
-board or hides. The board and conversation remain part of the same session.
+widgets, the user pins them onto a persistent board, and the board can occupy
+either the main area or a side panel alongside chat. Focusing the main view gives
+it the full task area. The board and conversation remain part of the same session.
 
 Principles:
 
-- **A board is a face of a session, not a new object.** Every session (thread)
-  has two faces: the transcript and the board. A session with no pinned widgets
-  is plain chat. Pin one widget and the board exists. Boards inherit the
-  session's identity, agent ownership, naming, pinning, and lifecycle. There is
-  no `dashboard_create`, no board registry, no separate ACL model.
+- **A board belongs to a session; it is not a new workspace.** A session with no
+  pinned widgets is plain chat. Pin one widget and the board exists in that
+  session's Dashboard view. Boards inherit the session's identity, agent
+  ownership, naming, pinning, and lifecycle. There is no `dashboard_create`, no
+  board registry, and no separate ACL model.
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
-  visible tab, dock or hide the chat.
+  visible tab, and request split or expanded presentation.
 - **Native, not embedded.** The board is Lit components in the Control UI shell
   (the same design system as the rest of the app). Only widget _content_ is
   sandboxed in iframes. No URL bar, no browser chrome.
@@ -40,15 +42,15 @@ Principles:
 
 ## Concepts
 
-| Concept             | Definition                                                                                                                                                        |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                        |
-| Board               | The widget face of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                 |
-| Tab                 | A presentation page of a board: which widgets, their arrangement, and the chat dock state (`left`/`right`/`bottom`/`hidden`). Boards start with one implicit tab. |
-| Widget              | Named, sandboxed HTML/JS program owned by the session. Addressed as `sessionKey` + `name`. Updated in place by name.                                              |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                      |
-| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                         |
-| Pin (session)       | Existing sidebar pinning of sessions. A pinned session with a board opens on its board face.                                                                      |
+| Concept             | Definition                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                         |
+| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript). |
+| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                           |
+| Widget              | Named, sandboxed HTML/JS program owned by the session. Addressed as `sessionKey` + `name`. Updated in place by name.                               |
+| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).       |
+| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                          |
+| Pin (session)       | Existing sidebar pinning of sessions. Opening a pinned session restores that browser's saved task layout.                                          |
 
 ## UX flows
 
@@ -57,18 +59,28 @@ Principles:
   on the session's board. The agent can pass `pin: true` to do the same. A
   channel presenter can instead make the same core document visible on the
   current transport.
-- **Board view:** a session with a board gets a view switch (Chat / Split /
-  Dashboard). Split = tab strip (only when >1 tab) + fluid grid + docked chat
-  pane; Dashboard is the same without the chat. The chat dock is resizable and
-  movable (left/right/bottom) via the switch's dock picker. Per-tab dock state
-  is remembered.
+- **Board view:** the first pinned widget opens a resizable dashboard side panel
+  beside chat. The task toolbar's **Swap** button exchanges the main view and
+  active side-panel content, including Chat, Dashboard, Browser, Terminal,
+  Files, and Review. Its tooltip names the two views. The same toolbar's
+  **Layout** menu positions the side panel left, right, or below. **Focus** in
+  the main pane header gives that view the full task area; **Restore split**
+  restores the side panel.
+  Later board updates preserve the user's current layout. Closing the Dashboard
+  tab removes only its view; closing the whole side panel hides it without
+  changing the main view.
+- **Layout ownership:** the browser stores the arrangement per session, including
+  the main view, active side tab, dock position, dimensions, and focus state.
+  Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly
+  make Dashboard main and focus it. Placement changes reuse the mounted content
+  so widget frames, browser views, terminals, and chat drafts survive a swap.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
 - **Reset warning:** `/new` / `/reset` on a board-bearing session asks for
   confirmation in the web UI ("context resets, the dashboard stays") and keeps
   the board.
-- **Sidebar:** pinned sessions render their board face when they have one.
+- **Sidebar:** opening a pinned session restores its saved task arrangement.
   The Home session's board is the default "agent dashboard".
 - **Interactions** (three tiers, see below): silent state events, visible
   prompt sends, and automation triggers.
@@ -80,8 +92,8 @@ Principles:
    session notice (same mechanism as group-activity notices). No agent turn is
    started; the model sees accumulated notices on its next run.
 2. **Prompts (explicit talk).** `bridge.sendPrompt(text)` — requires user
-   activation; sends a visible user message into the session (the docked chat
-   shows it). Rate-limited; each send is user-confirmed unless the widget holds
+   activation; sends a visible user message into the owning session. Rate-limited;
+   each send is user-confirmed unless the widget holds
    the `prompt` capability grant.
 3. **Automation.** `bridge.runAction(name, args)` — fires a manifest-declared
    action. Initial verb set: `cron.trigger` (run an existing cron job now) and
@@ -203,6 +215,51 @@ with `operator.write`; invalid declarations fail the plugin load. The validated
 registry is rebuilt only with plugin lifecycle changes, while widget grants
 remain per-widget and byte-and-revision-bound.
 
+`show_widget` uses this validated active registry for bounded author discovery,
+including complete descriptions and action parameter schemas where available.
+It never loads plugins merely to describe their dashboard capabilities.
+
+### Authenticated GitHub reads
+
+Core's existing GitHub identity and HTTP owners serve `github.actions.runs`
+through `board.data.read`. The closed parameter contract constructs only the
+repository or workflow run-list operation at `api.github.com`. Authorization
+requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant;
+network-origin grants never supply GitHub identity authority. Approval discloses
+that Actions metadata, including private repository data accessible to the
+agent, is shared with the widget/session audience.
+
+Author guidance is conditional on a usable connected agent identity, not a
+tool-construction-time probe. `board.widget.put` verifies and revalidates that
+identity before saving HTML (including materialized Canvas documents) or
+registered widgets declaring this host capability. The same preparation owner
+serves pinning and reads, including source-config preview-credential scrubbing
+and OAuth refresh. Caller cancellation and session mutation authorization are
+rechecked before persistence; failure leaves existing content and grants intact.
+MCP App tool names use their own contract and do not trigger this preflight.
+
+The board capability owner carries the canonical agent/session privately and
+rechecks the live Gateway, ticket generation, widget revision and grant across
+awaits for both data and action paths. GitHub selects the agent override, System,
+or native identity using the existing credential owner and OAuth refresh
+service. Read authority additionally revalidates selection and credential
+rotation before fetch and before returning data. This does not change the
+personal publication broker or its admitted credential-snapshot semantics.
+
+Authenticated reads never use preview authentication or anonymous retry.
+Redirects are refused. Only this Actions read permits an upstream body up to
+1 MiB; other GitHub JSON callers retain their 256 KiB default. The owner validates
+and projects at most 30 runs into a small response, without raw repository
+objects or secrets. A Gateway-local cache holds at most 32 successful results
+for 30 seconds; at most 32 concurrent callers can prepare or await reads.
+The shared transport caches only validated projections under its captured
+credential scope; this internal cache write is not delivery to a widget.
+Every caller, including the initiator, followers, and cache hits, revalidates its
+own live authority before delivery. Removing one caller does not invalidate
+another authorized caller's result, and failed transport reads are not cached
+as success. See the
+[authoring contract and example](/tools/show-widget#read-github-actions-runs).
+
 ### Modeled residual: WebRTC data channels
 
 The sandbox CSP emits the proposed `webrtc 'block'` directive, but
@@ -311,22 +368,30 @@ Events (in `EVENT_SCOPE_GUARDS`, read scope):
 - `board.changed { sessionKey, revision, widget? }` — persisted state changed;
   UI refetches (and reloads one iframe when `widget` is present).
 - `board.command { sessionKey, command }` — transient UI drive (agent switches
-  the visible tab, toggles chat dock) — the `ui.command` pattern.
+  the visible tab or dashboard panel presentation) — the `ui.command` pattern.
 
 Widget bytes are served over the authenticated HTTP surface, not the socket.
 
 ## Agent tools
 
-Three tools total (core; `show_widget` is exposed only for an `inline-widgets`
-client or one unambiguous matching current-channel presenter):
+Three tools total (core; `show_widget` is exposed for an `inline-widgets`
+client, one unambiguous matching current-channel presenter, or a persistent-session
+automation whose server-authored tool policy explicitly allows pinned-only authoring):
 
 - `show_widget { title, widget_code, kind?, name?, pin?, size?, tab?, after?,
 presentation?, capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
   includes active registered kinds; `pin` places it on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
+  Headless scheduled authoring requires `pin: true`, cannot select a presentation
+  target, and is unavailable to detached cron-run sessions.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
-  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
-  `unpin`, `focus_tab`, `set_chat_dock`.
+  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
+  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
+  Presentation is `split` or `expanded`; `expanded` makes Dashboard main and
+  focuses it, while `split` reveals Dashboard using the current arrangement and
+  brings chat alongside when Dashboard is main. The Control UI owns the side
+  panel's dock position. The tool maps presentation onto the existing
+  `set_chat_dock` wire command without changing the Gateway protocol.
 - The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The

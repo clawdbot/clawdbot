@@ -83,6 +83,8 @@ describe("check-dependency-pins", () => {
         linked: "link:../linked",
         local: "file:../local",
         gitPinned: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
+        gitPinnedPath:
+          "github:owner/repo#0123456789abcdef0123456789abcdef01234567&path:packages/pkg",
         tarballPinned:
           "https://codeload.github.com/owner/repo/tar.gz/0123456789abcdef0123456789abcdef01234567",
       },
@@ -101,6 +103,7 @@ describe("check-dependency-pins", () => {
       `overrides:
   exact: 1.2.3
   alias: "npm:@scope/real-package@2.3.4"
+  parent>unused-adapter: "-"
 packageExtensions:
   parent@1.0.0:
     dependencies:
@@ -123,7 +126,11 @@ packageExtensions:
         wildcard: "*",
         tag: "latest",
         broad: ">=1 <2",
+        malformedSemver: "01.2.3",
         gitFloating: "github:owner/repo#main",
+        fragmentlessGitPath:
+          "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        invalidRemoval: "-",
       },
     });
     writeJson(path.join(dir, "extensions", "demo", "package.json"), {
@@ -160,9 +167,22 @@ packageExtensions:
       {
         file: "package.json",
         section: "dependencies",
+        name: "malformedSemver",
+        spec: "01.2.3",
+      },
+      {
+        file: "package.json",
+        section: "dependencies",
         name: "gitFloating",
         spec: "github:owner/repo#main",
       },
+      {
+        file: "package.json",
+        section: "dependencies",
+        name: "fragmentlessGitPath",
+        spec: "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+      },
+      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
     ]);
   });
 

@@ -6,6 +6,10 @@ import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
 
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
+const QuestionResolutionIdSchema = withSince(
+  "2026.8",
+  Type.String({ minLength: 1, maxLength: 128 }),
+);
 // UI chip/tag display cap shared by every question input and output shape.
 const QuestionHeaderSchema = Type.String({ maxLength: 12 });
 const QuestionSecretStoreAllowedHostsSchema = Type.Array(
@@ -99,11 +103,16 @@ export const QuestionRequestResultSchema = closedObject({
 export const QuestionWaitAnswerParamsSchema = closedObject({
   id: NonEmptyString,
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  includeResolutionId: Type.Optional(withSince("2026.8", Type.Boolean())),
 });
 
 export const QuestionWaitAnswerResultSchema = Type.Union([
   closedObject({ status: Type.Literal("pending") }),
-  closedObject({ status: Type.Literal("answered"), answers: QuestionAnswersSchema }),
+  closedObject({
+    status: Type.Literal("answered"),
+    answers: QuestionAnswersSchema,
+    resolutionId: Type.Optional(QuestionResolutionIdSchema),
+  }),
   closedObject({ status: Type.Literal("cancelled") }),
   closedObject({ status: Type.Literal("expired") }),
 ]);
@@ -116,6 +125,7 @@ export const QuestionResolveParamsSchema = Type.Union([
       withSince("2026.8", QuestionSecretStoreAllowedHostsSchema),
     ),
     resolvedBy: Type.Optional(NonEmptyString),
+    resolutionId: Type.Optional(QuestionResolutionIdSchema),
   }),
   closedObject({
     id: NonEmptyString,

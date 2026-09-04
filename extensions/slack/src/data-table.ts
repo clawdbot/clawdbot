@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationTableFallbackText } from "./presentation-fallback.js";
+import { renderSlackRichText } from "./rich-text.js";
 
 const SLACK_DATA_TABLE_COLUMNS_MAX = 20;
 const SLACK_DATA_TABLE_ROWS_MAX = 100;
@@ -51,72 +52,6 @@ function countCharacters(value: string): number {
   return Array.from(value).length;
 }
 
-function readRichTextLeaf(record: Record<string, unknown>): string {
-  if (record.type === "text" && typeof record.text === "string") {
-    return record.text;
-  }
-  const text = readNonEmptyString(record.text);
-  if (text) {
-    return text;
-  }
-  switch (record.type) {
-    case "link":
-      return readNonEmptyString(record.url) ?? "";
-    case "user": {
-      const userId = readNonEmptyString(record.user_id);
-      return userId ? `<@${userId}>` : "";
-    }
-    case "channel": {
-      const channelId = readNonEmptyString(record.channel_id);
-      return channelId ? `<#${channelId}>` : "";
-    }
-    case "usergroup": {
-      const usergroupId = readNonEmptyString(record.usergroup_id);
-      return usergroupId ? `<!subteam^${usergroupId}>` : "";
-    }
-    case "broadcast": {
-      const range = readNonEmptyString(record.range);
-      return range ? `<!${range}>` : "";
-    }
-    case "emoji": {
-      const name = readNonEmptyString(record.name);
-      return name ? `:${name}:` : "";
-    }
-    case "date":
-      return readNonEmptyString(record.fallback) ?? "";
-    default:
-      return "";
-  }
-}
-
-function readRichTextElements(value: unknown, separator = ""): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const rawElement of value) {
-    const element = asOptionalRecord(rawElement);
-    if (!element) {
-      continue;
-    }
-    if (Array.isArray(element.elements)) {
-      const rendered = readRichTextElements(
-        element.elements,
-        element.type === "rich_text_list" ? "\n" : "",
-      );
-      if (rendered) {
-        parts.push(rendered);
-      }
-      continue;
-    }
-    const rendered = readRichTextLeaf(element);
-    if (rendered) {
-      parts.push(rendered);
-    }
-  }
-  return parts.join(separator);
-}
-
 function readSlackBasicTableCell(value: unknown): string {
   const cell = asOptionalRecord(value);
   if (!cell) {
@@ -134,7 +69,7 @@ function readSlackBasicTableCell(value: unknown): string {
     }
     return typeof cell.value === "string" ? cell.value : "";
   }
-  return cell.type === "rich_text" ? readRichTextElements(cell.elements, "\n") : "";
+  return cell.type === "rich_text" ? renderSlackRichText(cell.elements, "table", "\n") : "";
 }
 
 function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
@@ -179,7 +114,7 @@ function readSlackDataTableCell(value: unknown, allowRichText: boolean): string 
       : undefined;
   }
   if (allowRichText && cell.type === "rich_text") {
-    return readNonEmptyString(readRichTextElements(cell.elements));
+    return readNonEmptyString(renderSlackRichText(cell.elements, "table"));
   }
   return undefined;
 }
@@ -371,9 +306,7 @@ function escapeCompactFallbackCell(value: string): string {
 }
 
 function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
-  // escapeSlackMrkdwn doubles backslashes before the TSV layer escapes row delimiters.
-  const escaped = mrkdwnSafe ? escapeSlackMrkdwn(value) : value.replaceAll("\\", "\\\\");
-  return escaped.replaceAll("\t", "\\t").replaceAll("\r", "\\r").replaceAll("\n", "\\n");
+  return escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(value) : value);
 }
 
 function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {

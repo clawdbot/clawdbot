@@ -1,12 +1,12 @@
 // Transcript projection reconciliation owner. Gateway startup awaits it;
 // request paths may only schedule it and return a bounded retryable response.
 import { randomInt } from "node:crypto";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   openOpenClawAgentDatabase,
@@ -67,21 +67,6 @@ type ActivePreparedProjection = {
 
 function reconcileKey(params: OpenClawAgentDatabaseOptions): string {
   return resolveOpenClawAgentSqlitePath(params);
-}
-
-function resolveSessionTranscriptReconcileWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(
-      path.join(distRoot, "config", "sessions", "session-transcript-reconcile.worker.js"),
-    );
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./session-transcript-reconcile.worker${extension}`, currentModuleUrl);
 }
 
 function yieldToGateway(): Promise<void> {
@@ -226,7 +211,7 @@ export async function reconcileSessionTranscriptIndexes(
   if (!needsWorker) {
     return { reconciledSessions: 0 };
   }
-  const workerUrl = resolveSessionTranscriptReconcileWorkerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile);
   const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const input: SessionTranscriptReconcileWorkerInput = {
     agentId: params.agentId,

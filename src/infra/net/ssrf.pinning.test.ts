@@ -8,6 +8,7 @@ import {
   type LookupFn,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   SsrFBlockedError,
 } from "./ssrf.js";
 
@@ -231,6 +232,46 @@ describe("ssrf pinning", () => {
         policy: { hostnameAllowlist: ["*.example.com"] },
       }),
     ).rejects.toThrow(/allowlist/i);
+  });
+
+  it.each([
+    ["tracker.example.com", "tracker.example.com"],
+    ["outside.example.net", "outside.example.net"],
+    ["[::1]", "::1"],
+    [" TRACKER.Example.COM... ", " tracker.example.com. "],
+    ["ads.example.com", "*.example.com"],
+    ["pixel.ads.example.com", " *.EXAMPLE.COM. "],
+    ["xn--bcher-kva.example", "XN--BCHER-KVA.EXAMPLE."],
+  ])("blocks configured pattern %s / %s before DNS and allow rules", async (hostname, pattern) => {
+    const lookupFn = createPublicLookupMock();
+    const policy = resolveSsrFPolicyForUrl(new URL("https://tracker.example.com"), {
+      blockedHostnames: [pattern],
+      allowedHostnames: [hostname.trim()],
+      allowedOrigins: ["https://tracker.example.com"],
+      hostnameAllowlist: ["*.example.com", "*.example"],
+      dangerouslyAllowPrivateNetwork: true,
+    });
+
+    const result = resolvePinnedHostnameWithPolicy(hostname, { lookupFn, policy });
+    await expect(result).rejects.toThrow(SsrFBlockedError);
+    await expect(result).rejects.toThrow(/configured blocklist.*blockedHostnames/);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["example.com", ["*.example.com"]],
+    ["notexample.com", ["*.example.com"]],
+    ["example.com.evil.test", ["*.example.com"]],
+    ["safe.example.net", ["tracker.example.com"]],
+    ["example.com", []],
+    ["example.com", undefined],
+  ])("leaves unblocked host %s reachable with %j", async (hostname, blockedHostnames) => {
+    await expect(
+      resolvePinnedHostnameWithPolicy(hostname, {
+        lookupFn: createPublicLookupMock(),
+        policy: { blockedHostnames },
+      }),
+    ).resolves.toMatchObject({ hostname, addresses: ["93.184.216.34"] });
   });
 
   it.each([

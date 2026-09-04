@@ -320,6 +320,11 @@ would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.
 
+Narration belongs to the current turn. Ending or replacing that turn cancels its
+pending utility-model request and prevents late results from updating the draft.
+Tool activity that accumulates during a narration request is reconsidered when
+that request finishes, so an eligible status update needs no additional event.
+
 ### Line limits
 
 Limit how many lines stay visible (default 8):

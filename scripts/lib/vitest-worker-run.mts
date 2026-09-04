@@ -71,7 +71,6 @@ export function createVitestWorkerRun() {
       const manifest: VitestWorkerManifest = JSON.parse(
         fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
       );
-      verifyVitestWorkerArtifacts(directory, manifest);
       console.error(
         `[vitest-workers] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
       );
@@ -81,16 +80,16 @@ export function createVitestWorkerRun() {
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
     borrow<T>(child: ChildProcess, completion: Promise<T>): Promise<T> {
-      let requested = false;
+      let request: Promise<void> | undefined;
       const onMessage = (message: unknown) => {
-        if (message !== VITEST_WORKER_PREPARE_REQUEST || requested) {
+        if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
           return;
         }
-        requested = true;
-        void (async () => {
+        request = (async () => {
           let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
           try {
-            await prepare();
+            const manifest = await prepare();
+            await verifyVitestWorkerArtifacts(directory, manifest);
             if (disposal) {
               throw new Error("Compiled subprocess owner is closing");
             }
@@ -118,8 +117,17 @@ export function createVitestWorkerRun() {
           child.off("message", onMessage);
         }
       })();
-      borrowers.push(joined);
-      void joined.catch(() => {});
+      // Child completion must let callers reach disposal to cancel compilation.
+      // The owner still joins admission reads before releasing their generation.
+      const ownedCompletion = (async () => {
+        try {
+          await joined;
+        } finally {
+          await request;
+        }
+      })();
+      borrowers.push(ownedCompletion);
+      void ownedCompletion.catch(() => {});
       return joined;
     },
     dispose(): Promise<void> {
@@ -136,7 +144,8 @@ export function createVitestWorkerRun() {
             throw channelError;
           }
           if (fs.existsSync(path.join(directory, "manifest.json"))) {
-            verifyVitestWorkerArtifacts(directory);
+            console.error("[vitest-workers] verifying completed generation before cleanup");
+            await verifyVitestWorkerArtifacts(directory);
           }
         } finally {
           if (uncertain || !compilerJoined) {
@@ -144,7 +153,8 @@ export function createVitestWorkerRun() {
               `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : "borrower"} join failed`,
             );
           } else {
-            fs.rmSync(directory, { recursive: true, force: true });
+            // Large generations must not block signal delivery during final cleanup.
+            await fs.promises.rm(directory, { recursive: true, force: true });
           }
         }
       })());

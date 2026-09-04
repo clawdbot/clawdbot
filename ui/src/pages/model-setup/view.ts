@@ -1,23 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import { renderModelSetupFailure, renderConfiguredModel } from "./configured-model.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
-import {
-  focusSelectedManualProvider,
-  handleManualProviderKeydown,
-  handleManualProviderSelect,
-  type WebAwesomeSelectEvent,
-} from "./provider-picker.ts";
+import { manualProviderName, renderManualProviderPicker } from "./provider-picker.ts";
 import type {
   ModelSetupActivationState,
   ModelSetupPageState,
@@ -32,13 +25,12 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
-type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
 type ModelSetupViewProps = {
   page: ModelSetupPageState;
   activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
-  wizardMode: "auth" | "prepare";
+  wizardMode: "auth" | "prepare" | "activate";
   wizardValue: unknown;
   canAdmin: boolean;
   canVerify: boolean;
@@ -134,11 +126,13 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                   @click=${() => props.onActivateCandidate(candidate)}
                 >
                   <span>
-                    ${testing
-                      ? t("modelSetup.candidates.testingButton")
-                      : failure
-                        ? t("modelSetup.candidates.retry")
-                        : t("modelSetup.candidates.testAndUse")}
+                    ${
+                      testing
+                        ? t("modelSetup.candidates.testingButton")
+                        : failure
+                          ? t("modelSetup.candidates.retry")
+                          : t("modelSetup.candidates.testAndUse")
+                    }
                   </span>
                 </button>
               </div>
@@ -215,28 +209,32 @@ function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupD
                 </div>
               </div>
               <div class="model-setup__row-actions">
-                ${authOption
-                  ? html`<button
-                      type="button"
-                      class="btn primary"
-                      ?disabled=${props.actionsDisabled}
-                      @click=${() => props.onStartAuth(authOption)}
-                    >
-                      ${t("modelSetup.unavailable.signIn", {
-                        provider: authOption.groupLabel ?? authOption.label,
-                      })}
-                    </button>`
-                  : nothing}
-                ${manualProvider
-                  ? html`<button
-                      type="button"
-                      class="btn"
-                      ?disabled=${props.actionsDisabled}
-                      @click=${() => props.onUseManualProvider(manualProvider.id)}
-                    >
-                      ${t("modelSetup.unavailable.useApiKey")}
-                    </button>`
-                  : nothing}
+                ${
+                  authOption
+                    ? html`<button
+                        type="button"
+                        class="btn primary"
+                        ?disabled=${props.actionsDisabled}
+                        @click=${() => props.onStartAuth(authOption)}
+                      >
+                        ${t("modelSetup.unavailable.signIn", {
+                          provider: authOption.groupLabel ?? authOption.label,
+                        })}
+                      </button>`
+                    : nothing
+                }
+                ${
+                  manualProvider
+                    ? html`<button
+                        type="button"
+                        class="btn"
+                        ?disabled=${props.actionsDisabled}
+                        @click=${() => props.onUseManualProvider(manualProvider.id)}
+                      >
+                        ${t("modelSetup.unavailable.useApiKey")}
+                      </button>`
+                    : nothing
+                }
                 <button
                   type="button"
                   class="btn"
@@ -271,9 +269,11 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
         ?disabled=${props.actionsDisabled}
         @click=${() => props.onStartAuth(option)}
       >
-        ${option.kind === "device-code"
-          ? t("modelSetup.signIn.pair")
-          : t("modelSetup.signIn.signIn")}
+        ${
+          option.kind === "device-code"
+            ? t("modelSetup.signIn.pair")
+            : t("modelSetup.signIn.signIn")
+        }
       </button>
     </div>
   `;
@@ -294,19 +294,21 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
         <h2>${t("modelSetup.signIn.title")}</h2>
       </div>
       <div class="model-setup__rows">${featured.map((option) => renderAuthRow(props, option))}</div>
-      ${more.length
-        ? html`<details
-            class="model-setup__more"
-            .open=${props.moreSignInOpen}
-            @toggle=${(event: Event) =>
-              props.onMoreSignInToggle((event.currentTarget as HTMLDetailsElement).open)}
-          >
-            <summary>${t("modelSetup.signIn.more")}</summary>
-            <div class="model-setup__rows">
-              ${more.map((option) => renderAuthRow(props, option))}
-            </div>
-          </details>`
-        : nothing}
+      ${
+        more.length
+          ? html`<details
+              class="model-setup__more"
+              .open=${props.moreSignInOpen}
+              @toggle=${(event: Event) =>
+                props.onMoreSignInToggle((event.currentTarget as HTMLDetailsElement).open)}
+            >
+              <summary>${t("modelSetup.signIn.more")}</summary>
+              <div class="model-setup__rows">
+                ${more.map((option) => renderAuthRow(props, option))}
+              </div>
+            </details>`
+          : nothing
+      }
     </section>
   `;
 }
@@ -352,93 +354,6 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
   `;
 }
 
-function manualProviderName(provider: ManualProvider): string {
-  return provider.groupLabel?.trim() || provider.label;
-}
-
-function manualProviderMethod(provider: ManualProvider): string | undefined {
-  const method = provider.label.trim();
-  return method === manualProviderName(provider) ? undefined : method;
-}
-
-function renderManualProviderPicker(
-  props: ModelSetupViewProps,
-  result: SystemAgentSetupDetectResult,
-  provider: ManualProvider | undefined,
-) {
-  const providerMethod = provider ? manualProviderMethod(provider) : undefined;
-  const triggerLabel = provider
-    ? [manualProviderName(provider), providerMethod].filter(Boolean).join(", ")
-    : t("modelSetup.manual.selectProvider");
-  return html`
-    <wa-dropdown
-      class="model-setup-provider-select"
-      placement="bottom-start"
-      aria-label=${t("modelSetup.manual.provider")}
-      @wa-select=${(event: WebAwesomeSelectEvent) =>
-        handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)}
-      @wa-after-show=${focusSelectedManualProvider}
-      @keydown=${handleManualProviderKeydown}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="model-setup-provider-select__trigger"
-        aria-label=${`${t("modelSetup.manual.provider")}: ${triggerLabel}`}
-        ?disabled=${props.actionsDisabled || result.manualProviders.length === 0}
-      >
-        ${provider
-          ? renderProviderIcon(props, provider, "model-setup__icon--picker")
-          : html`<span class="model-setup-provider-select__placeholder-icon" aria-hidden="true">
-              ${icons.key}
-            </span>`}
-        <span class="model-setup-provider-select__copy">
-          <strong>
-            ${provider ? manualProviderName(provider) : t("modelSetup.manual.selectProvider")}
-          </strong>
-          ${provider
-            ? providerMethod
-              ? html`<span>${providerMethod}</span>`
-              : nothing
-            : html`<span>${t("modelSetup.manual.selectProviderHint")}</span>`}
-        </span>
-        <span class="model-setup-provider-select__chevron" aria-hidden="true">
-          ${icons.chevronDown}
-        </span>
-      </button>
-      ${result.manualProviders.map((entry) => {
-        const selected = entry.id === props.manualProviderId;
-        const entryMethod = manualProviderMethod(entry);
-        const accessibleLabel = [manualProviderName(entry), entryMethod, entry.hint]
-          .filter(Boolean)
-          .join(", ");
-        return html`
-          <wa-dropdown-item
-            class="model-setup-provider-select__option"
-            data-manual-provider=${entry.id}
-            ?data-selected=${selected}
-            aria-label=${accessibleLabel}
-            .value=${entry.id}
-            type="checkbox"
-            .checked=${selected}
-            ?disabled=${props.actionsDisabled}
-            ${ref((element) => syncDropdownItemRadio(element, selected))}
-          >
-            <span slot="icon">
-              ${renderProviderIcon(props, entry, "model-setup__icon--picker")}
-            </span>
-            <span class="model-setup-provider-select__copy">
-              <strong>${manualProviderName(entry)}</strong>
-              ${entryMethod ? html`<span>${entryMethod}</span>` : nothing}
-              ${entry.hint ? html`<small>${entry.hint}</small>` : nothing}
-            </span>
-          </wa-dropdown-item>
-        `;
-      })}
-    </wa-dropdown>
-  `;
-}
-
 function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
@@ -455,9 +370,11 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
         </div>
         <label class="field">
           <span>
-            ${provider
-              ? t("modelSetup.manual.accessValueFor", { provider: manualProviderName(provider) })
-              : t("modelSetup.manual.accessValue")}
+            ${
+              provider
+                ? t("modelSetup.manual.accessValueFor", { provider: manualProviderName(provider) })
+                : t("modelSetup.manual.accessValue")
+            }
           </span>
           <input
             class="input"
@@ -474,18 +391,22 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
           ${icons.shieldCheck}
           <span>${t("modelSetup.manual.verifyHint")}</span>
         </div>
-        ${props.manualError
-          ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
-          : nothing}
+        ${
+          props.manualError
+            ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
+            : nothing
+        }
         <button
           type="button"
           class="btn primary"
           ?disabled=${props.actionsDisabled || !props.manualProviderId}
           @click=${props.onManualConnect}
         >
-          ${testing
-            ? t("modelSetup.candidates.testingButton")
-            : t("modelSetup.manual.connectAndVerify")}
+          ${
+            testing
+              ? t("modelSetup.candidates.testingButton")
+              : t("modelSetup.manual.connectAndVerify")
+          }
         </button>
       </div>
     </section>
@@ -559,9 +480,11 @@ function renderLoadingSection(params: {
             <div class="model-setup__row model-setup__loading-row">
               <span class="model-setup__loading-icon skeleton"></span>
               <span class="model-setup__loading-copy">
-                ${index === 0 && params.status
-                  ? html`<span class="model-setup__loading-status">${params.status}</span>`
-                  : html`<span class="skeleton skeleton-line skeleton-line--medium"></span>`}
+                ${
+                  index === 0 && params.status
+                    ? html`<span class="model-setup__loading-status">${params.status}</span>`
+                    : html`<span class="skeleton skeleton-line skeleton-line--medium"></span>`
+                }
                 <span class="skeleton skeleton-line skeleton-line--long"></span>
               </span>
               <span class="model-setup__loading-action skeleton"></span>
@@ -582,13 +505,15 @@ function renderLoading(modelConfigured: boolean) {
       aria-label=${t("modelSetup.loading")}
     >
       <div class="model-setup__loading-sections" aria-hidden="true">
-        ${modelConfigured
-          ? renderLoadingSection({
-              title: t("modelSetup.verify.title"),
-              className: "model-setup__loading-section--selected",
-              status: t("modelSetup.loading"),
-            })
-          : nothing}
+        ${
+          modelConfigured
+            ? renderLoadingSection({
+                title: t("modelSetup.verify.title"),
+                className: "model-setup__loading-section--selected",
+                status: t("modelSetup.loading"),
+              })
+            : nothing
+        }
         ${renderLoadingSection({
           title: t("modelSetup.candidates.title"),
           className: "model-setup__loading-section--candidates",
@@ -639,40 +564,54 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           <h1>${t("modelSetup.heading")}</h1>
           <p>${t("modelSetup.intro")}</p>
         </div>
-        ${props.page.phase === "ready" &&
-        !props.page.result.configuredModel &&
-        props.activation.phase !== "success" &&
-        props.canAdmin &&
-        !props.gatewayTooOld
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${props.actionsDisabled}
-              @click=${props.onDetect}
-            >
-              ${t("modelSetup.checkAgain")}
-            </button>`
-          : nothing}
+        ${
+          props.page.phase === "ready" &&
+          !props.page.result.configuredModel &&
+          props.activation.phase !== "success" &&
+          props.canAdmin &&
+          !props.gatewayTooOld
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${props.onDetect}
+              >
+                ${t("modelSetup.checkAgain")}
+              </button>`
+            : nothing
+        }
       </div>
-      ${props.canAdmin && !props.gatewayTooOld
-        ? renderActivationFeedback(props.activation)
-        : nothing}
-      ${props.refreshWarning
-        ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
-        : nothing}
-      ${props.activationUnresolved && !props.actionsDisabled && props.activation.phase !== "success"
-        ? html`<div class="model-setup__recovery">
-            <p>${t("modelSetup.recovery.unknown")}</p>
-            ${props.page.phase === "ready" && props.page.result.configuredModel && props.canVerify
-              ? html`<button type="button" class="btn primary" @click=${props.onUseCurrentModel}>
-                  ${t("modelSetup.recovery.useCurrent")}
-                </button>`
-              : nothing}
-            <button type="button" class="btn" @click=${props.onDetect}>
-              ${t("modelSetup.checkAgain")}
-            </button>
-          </div>`
-        : nothing}
+      ${
+        props.canAdmin && !props.gatewayTooOld
+          ? renderActivationFeedback(props.activation)
+          : nothing
+      }
+      ${
+        props.refreshWarning
+          ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+          : nothing
+      }
+      ${
+        props.activationUnresolved && !props.actionsDisabled && props.activation.phase !== "success"
+          ? html`<div class="model-setup__recovery">
+              <p>${t("modelSetup.recovery.unknown")}</p>
+              ${
+                props.page.phase === "ready" && props.page.result.configuredModel && props.canVerify
+                  ? html`<button
+                      type="button"
+                      class="btn primary"
+                      @click=${props.onUseCurrentModel}
+                    >
+                      ${t("modelSetup.recovery.useCurrent")}
+                    </button>`
+                  : nothing
+              }
+              <button type="button" class="btn" @click=${props.onDetect}>
+                ${t("modelSetup.checkAgain")}
+              </button>
+            </div>`
+          : nothing
+      }
       ${body}
     </div>
     ${renderModelSetupWizard({
@@ -685,14 +624,16 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       onCancel: props.onWizardCancel,
       onClose: props.onWizardClose,
     })}
-    ${props.activation.phase === "success"
-      ? renderModelSetupSuccessDialog(
-          props.activation,
-          props.onOpenChat,
-          props.onSuccessClose,
-          props.firstRun,
-        )
-      : nothing}
+    ${
+      props.activation.phase === "success"
+        ? renderModelSetupSuccessDialog(
+            props.activation,
+            props.onOpenChat,
+            props.onSuccessClose,
+            props.firstRun,
+          )
+        : nothing
+    }
   `;
   return html`
     <section class="content-header">

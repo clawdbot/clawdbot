@@ -5,10 +5,7 @@ import {
   parsePairingString,
 } from "./relay-core.js";
 import { isTabSelected } from "./relay-tab-groups.js";
-
-function isValidTabId(value) {
-  return Number.isSafeInteger(value) && value >= 0;
-}
+import { isValidTabId } from "./tab-eligibility.js";
 
 function errorResponse(sendResponse, error) {
   sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });

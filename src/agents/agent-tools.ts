@@ -9,6 +9,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
@@ -68,7 +69,10 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
-import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  bindCronManagementGrant,
+} from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -84,6 +88,7 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
+import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
@@ -93,12 +98,6 @@ import {
   resolveSessionPermissionExecPolicy,
 } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
@@ -129,6 +128,7 @@ import {
 } from "./tools/cron-tool.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -186,6 +186,11 @@ type OpenClawCodingToolsOptions = {
   messageProvider?: string;
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
   messageChannel?: string;
+  /**
+   * How this run shows a blocking question tool's prompt. Left unset by harnesses
+   * whose tool lifecycle reserves the prompt for them.
+   */
+  questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   /** Out-of-band plugin bindings attached by the run initiator. */
@@ -220,6 +225,7 @@ type OpenClawCodingToolsOptions = {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  requesterThinkingLevel?: ThinkLevel;
   /** Exact admitted run instance for lifecycle-bound subprocess capabilities. */
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
@@ -552,7 +558,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
     mutationRoot: sandboxRoot ?? workspaceRoot,
-    workspaceDir: workspaceRoot,
+    workspaceDir: sandboxRoot ?? workspaceRoot,
+    resolvePath: sandboxFsBridge
+      ? (filePath) =>
+          resolveSandboxFileIdentity({
+            bridge: sandboxFsBridge,
+            filePath,
+            cwd: sandboxRoot,
+            signal: options?.abortSignal,
+          })
+      : undefined,
     resolveOriginClass: () =>
       options?.senderIsOwner === false || options?.isTurnTainted?.() === true
         ? "untrusted"
@@ -623,14 +638,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     imageSanitization,
     modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    ...(includeBaseCodingTools
-      ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }
-      : {}),
-    baseToolFactories: {
-      createEditTool,
-      createReadTool,
-      createWriteTool,
-    },
     applyPatchEnabled,
     applyPatchWorkspaceOnly,
     execDefaults: {
@@ -664,8 +671,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,
       sessionStore: options?.config?.session?.store,
-      mainKey: options?.config?.session?.mainKey,
-      sessionScope: options?.config?.session?.scope,
       eventRouting: resolveEventSessionRoutingPolicy({
         cfg: options?.config,
         sessionKey: options?.runSessionKey ?? options?.sessionKey,
@@ -694,12 +699,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     recordToolPrepStage: options?.recordToolPrepStage,
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
-  // A fresh exact-run capability authorizes only automation creation. Keep every
+  const cronManagementGrant = bindCronManagementGrant(options?.runId);
+  // Exact-run capabilities authorize only their automation operations. Keep every
   // other owner-only control-plane tool denied for senderless operator turns.
   const ownerOnlyCoreToolDenylist =
     options?.senderIsOwner === false
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (toolName) => toolName !== AUTOMATIONS_TOOL_NAME || !cronCreatorAuthorityResolver,
+          (toolName) =>
+            toolName !== AUTOMATIONS_TOOL_NAME ||
+            !(cronCreatorAuthorityResolver || cronManagementGrant),
         )
       : [];
   const ownerOnlyCoreToolPolicy =
@@ -828,15 +836,17 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+            requesterThinkingLevel: options?.requesterThinkingLevel,
             sessionPermissionPolicy,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
             execOverrides: {
-              host: options?.exec?.host ?? execConfig.host,
-              mode: effectiveExecPolicy.mode,
+              host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
+              mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
               security: effectiveExecPolicy.security,
-              ask: effectiveExecPolicy.ask,
+              ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId

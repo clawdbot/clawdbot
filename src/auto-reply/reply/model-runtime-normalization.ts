@@ -32,7 +32,7 @@ export function resolveRuntimeNormalization(
 ): RuntimeModelNormalization {
   return {
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: (metadataSnapshot ?? readRuntimeNormalizationMetadataSnapshot(cfg))?.plugins,
+    manifestPlugins: metadataSnapshot ?? readRuntimeNormalizationMetadataSnapshot(cfg),
   };
 }
 

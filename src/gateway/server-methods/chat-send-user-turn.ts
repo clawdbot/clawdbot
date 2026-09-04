@@ -1,12 +1,9 @@
 import path from "node:path";
-import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -15,12 +12,14 @@ import {
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -83,114 +82,12 @@ function buildChatSendPromptMedia(
   return media.length > 0 ? media : undefined;
 }
 
-function buildChatSendMessageContext(params: {
-  agentId: string;
-  cfg?: OpenClawConfig;
-  client: GatewayRequestHandlerOptions["client"];
-  clientInfo?: GatewayClientInfo;
-  clientRunId: string;
-  mediaPathOffloadPaths: string[];
-  mediaPathOffloadTypes: string[];
-  mediaPathOffloadWorkspaceDir?: string;
-  originatingRoute: AdmittedChatSend["originatingRoute"];
-  parsedMessage: string;
-  sessionKey: string;
-  suppressCommandInterpretation: boolean;
-  systemInputProvenance?: InputProvenance;
-  systemProvenanceReceipt?: string;
-  toolBindings?: Readonly<Record<string, unknown>>;
-}) {
-  const commandBody = params.parsedMessage;
-  const commandSource =
-    !params.suppressCommandInterpretation && params.parsedMessage.trim().startsWith("/")
-      ? "text"
-      : undefined;
-  const messageForAgent = params.systemProvenanceReceipt
-    ? [params.systemProvenanceReceipt, params.parsedMessage].filter(Boolean).join("\n\n")
-    : params.parsedMessage;
-  const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(params.client?.connect?.device?.id);
-  const queuedFollowupOwnerConnId = normalizeOptionalChatText(params.client?.connId);
-  const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
-    ? `device:${queuedFollowupOwnerDeviceId}`
-    : queuedFollowupOwnerConnId
-      ? `connection:${queuedFollowupOwnerConnId}`
-      : undefined;
-  const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
-    params.originatingRoute;
-  const creation = resolveOperatorSessionCreation(params.client);
-  const sandbox = params.cfg ? resolveCreatorSandbox(params.cfg, creation) : undefined;
-  // Current and historical turns must reach the single LLM timestamp boundary
-  // with identical bare text. Stamping this live turn would bust the prompt cache.
-  const ctx: MsgContext = {
-    Body: messageForAgent,
-    BodyForAgent: messageForAgent,
-    BodyForCommands: commandBody,
-    RawBody: params.parsedMessage,
-    CommandBody: commandBody,
-    InputProvenance: params.systemInputProvenance,
-    SessionKey: params.sessionKey,
-    AgentId: params.agentId,
-    Provider: INTERNAL_MESSAGE_CHANNEL,
-    Surface: INTERNAL_MESSAGE_CHANNEL,
-    OriginatingChannel: originatingChannel,
-    OriginatingTo: originatingTo,
-    ExplicitDeliverRoute: explicitDeliverRoute,
-    AccountId: accountId,
-    MessageThreadId: messageThreadId,
-    ChatType: "direct",
-    ...(commandSource ? { CommandSource: commandSource } : {}),
-    CommandAuthorized: !params.suppressCommandInterpretation,
-    CommandTurn: commandSource
-      ? {
-          kind: "text-slash",
-          source: commandSource,
-          authorized: true,
-          body: commandBody,
-        }
-      : {
-          kind: "normal",
-          source: "message",
-          authorized: false,
-          body: commandBody,
-        },
-    ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
-    MessageSid: params.clientRunId,
-    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
-    ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-    ...(!isOperatorUiClient(params.clientInfo)
-      ? {
-          SenderId: params.clientInfo?.id,
-          SenderName: params.clientInfo?.displayName,
-          SenderUsername: params.clientInfo?.displayName,
-        }
-      : {}),
-    GatewayClientScopes: params.client?.connect?.scopes ?? [],
-    GatewayClientCaps: params.client?.connect?.caps ?? [],
-    GatewayRunToolBindings: params.toolBindings,
-  };
-  if (params.mediaPathOffloadPaths.length > 0) {
-    // Pre-staged offloads must use structured facts and marker text so the
-    // dispatch path renders their prompt note without staging them a second time.
-    ctx.media = params.mediaPathOffloadPaths.map((pathValue, index) => ({
-      path: pathValue,
-      contentType: params.mediaPathOffloadTypes[index],
-      workspaceDir: params.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
-    }));
-  }
-  return {
-    accountId,
-    ctx,
-    isInternalTextSlashCommandTurn: commandSource === "text",
-    queuedFollowupOwnerKey,
-  };
-}
-
-/** Assemble transcript media and the portable inbound context after chat.send ACK. */
+/** Assemble transcript media and the portable inbound context after attachment preparation. */
 export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
-    | "normalizedAttachments"
+    | "inboundMessage"
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
     | "systemProvenanceReceipt"
@@ -202,6 +99,7 @@ export function prepareChatSendUserTurn(params: {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  getConfig?: () => OpenClawConfig;
   userTurn: ChatSendUserTurnInputController;
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
@@ -238,32 +136,89 @@ export function prepareChatSendUserTurn(params: {
         )
       : Promise.resolve([]);
   void pluginBoundMediaPromise.catch(() => undefined);
-  const messageContext = buildChatSendMessageContext({
-    agentId: session.agentId,
-    cfg: session.cfg,
-    client,
-    clientInfo: request.clientInfo,
-    clientRunId: session.clientRunId,
-    mediaPathOffloadPaths: attachments.mediaPathOffloadPaths,
-    mediaPathOffloadTypes: attachments.mediaPathOffloadTypes,
-    mediaPathOffloadWorkspaceDir: attachments.mediaPathOffloadWorkspaceDir,
-    originatingRoute: admission.originatingRoute,
-    parsedMessage: attachments.parsedMessage,
-    sessionKey: session.sessionKey,
-    suppressCommandInterpretation: request.suppressCommandInterpretation,
-    systemInputProvenance: request.systemInputProvenance,
-    systemProvenanceReceipt: request.systemProvenanceReceipt,
-    toolBindings: request.toolBindings,
-  });
+  // Generated media hints belong to the prompt and reset payload, not command arguments.
+  const commandBody = request.inboundMessage;
+  const commandSource =
+    !request.suppressCommandInterpretation && commandBody.trim().startsWith("/")
+      ? "text"
+      : undefined;
+  const messageForAgent = request.systemProvenanceReceipt
+    ? [request.systemProvenanceReceipt, attachments.parsedMessage].filter(Boolean).join("\n\n")
+    : attachments.parsedMessage;
+  const queuedFollowupOwnerDeviceId = normalizeOptionalChatText(client?.connect?.device?.id);
+  const queuedFollowupOwnerConnId = normalizeOptionalChatText(client?.connId);
+  const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
+    ? `device:${queuedFollowupOwnerDeviceId}`
+    : queuedFollowupOwnerConnId
+      ? `connection:${queuedFollowupOwnerConnId}`
+      : undefined;
+  const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
+    admission.originatingRoute;
+  const creation = request.systemInputProvenance
+    ? resolveOperatorSessionCreation(client)
+    : prepareSkillLibrarySessionCreation(
+        client,
+        params.getConfig ?? session.cfg ?? {},
+        resolveOperatorSessionCreation(client),
+      );
+  const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
+  // Current and historical turns must reach the single LLM timestamp boundary
+  // with identical bare text. Stamping this live turn would bust the prompt cache.
+  const ctx: MsgContext = {
+    Body: messageForAgent,
+    BodyForAgent: messageForAgent,
+    BodyForCommands: commandBody,
+    RawBody: attachments.parsedMessage,
+    CommandBody: commandBody,
+    InputProvenance: request.systemInputProvenance,
+    SessionKey: session.sessionKey,
+    AgentId: session.agentId,
+    OriginatingTo: originatingTo,
+    ExplicitDeliverRoute: explicitDeliverRoute,
+    AccountId: accountId,
+    MessageThreadId: messageThreadId,
+    ...(commandSource ? { CommandSource: commandSource } : {}),
+    CommandAuthorized: !request.suppressCommandInterpretation,
+    CommandTurn: commandSource
+      ? {
+          kind: "text-slash",
+          source: commandSource,
+          authorized: true,
+          body: commandBody,
+        }
+      : {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: commandBody,
+        },
+    ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
+    MessageSid: session.clientRunId,
+    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
+    ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
+    GatewayRunToolBindings: request.toolBindings,
+  };
+  if (attachments.mediaPathOffloadPaths.length > 0) {
+    // Pre-staged offloads must use structured facts and marker text so the
+    // dispatch path renders their prompt note without staging them a second time.
+    ctx.media = attachments.mediaPathOffloadPaths.map((pathValue, index) => ({
+      path: pathValue,
+      contentType: attachments.mediaPathOffloadTypes[index],
+      workspaceDir: attachments.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
+    }));
+  }
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
     type.startsWith("image/"),
   );
   const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
   if (participant) {
-    prepareSessionParticipantInput(messageContext.ctx, participant, userTurn.baseInput.timestamp);
+    prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
-    ...messageContext,
+    accountId,
+    ctx,
+    isInternalTextSlashCommandTurn: commandSource === "text",
+    queuedFollowupOwnerKey,
     pluginBoundMediaPromise,
     replyOptionImages: mediaPathOffloadsIncludeImages
       ? undefined

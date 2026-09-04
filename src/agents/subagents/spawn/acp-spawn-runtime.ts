@@ -169,6 +169,7 @@ export async function initializeAcpSpawnRuntime(params: {
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
     clone: false,
   });
   const sessionId = sessionEntry?.sessionId;
@@ -186,6 +187,7 @@ export async function initializeAcpSpawnRuntime(params: {
   const initialized = await getAcpSessionManager().initializeSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
     agent: params.targetAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
