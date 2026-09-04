@@ -84,19 +84,23 @@ describe("prepared model runtime reload auth adoption", () => {
     const readInput = { ...input, config: nextConfig };
     const published = await prepareModelRuntimeSnapshot(readInput);
 
-    let requestReadSettled = false;
+    const discoveryStarted = createDeferred();
+    mocks.runPreparedModelCatalogWorker.mockImplementation(() => {
+      discoveryStarted.resolve();
+      return liveBuild.promise;
+    });
     const requestRead = loadPreparedModelCatalogOwnerSnapshot({
       ...readInput,
       readOnly: true,
-    }).then(() => {
-      requestReadSettled = true;
     });
-    mocks.runPreparedModelCatalogWorker.mockImplementation(() => liveBuild.promise);
-    for (let i = 0; i < 5; i += 1) {
-      await Promise.resolve();
-    }
     try {
-      expect(requestReadSettled).toBe(true);
+      // Discovery stays withheld so an ordinary read must finish without starting it.
+      await expect(
+        Promise.race([
+          requestRead.then(() => "read"),
+          discoveryStarted.promise.then(() => "discovery"),
+        ]),
+      ).resolves.toBe("read");
       expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
     } finally {
       liveBuild.resolve({ entries: [model], routeVariants: [model] });
