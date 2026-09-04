@@ -905,6 +905,35 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it.each([
+    [
+      "treats store SecretRef provider apiKey as configured for gemini/google",
+      "gemini",
+      "google",
+      "GOOGLE_API_KEY",
+    ],
+    [
+      "treats store SecretRef provider apiKey as configured for openai",
+      "openai",
+      "openai",
+      "OPENAI_API_KEY",
+    ],
+  ])("%s", async (_name, provider, authProvider, secretId) => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    const config = {
+      models: {
+        providers: {
+          [authProvider]: {
+            apiKey: { source: "store", provider: "default", id: secretId },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await runConfiguredMemorySearch(provider, config);
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["resolves provider auth from the default agent directory", "gemini", "google", "GEMINI"],
     [
       "resolves mistral auth for explicit mistral embedding provider",

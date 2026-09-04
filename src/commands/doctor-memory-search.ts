@@ -849,6 +849,9 @@ async function hasApiKeyForProvider(
 ): Promise<boolean> {
   const authProviderId = MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.get(provider) ?? provider;
   if (
+    hasConfiguredMemorySecretInput(
+      findNormalizedProviderValue(cfg.models?.providers, authProviderId)?.apiKey,
+    ) ||
     resolveEnvApiKey(authProviderId) ||
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
   ) {
