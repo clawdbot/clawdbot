@@ -239,7 +239,7 @@ describe("echo cache — reply_to_guid reflections", () => {
     const decision = await resolveDecision({ message, echoCache });
 
     if (expectedKind === "drop") {
-      expect(decision).toEqual({ kind: "drop", reason: "echo" });
+      expect(decision).toEqual({ kind: "drop", reason: "self-chat echo" });
     } else {
       expect(decision.kind).toBe("dispatch");
     }

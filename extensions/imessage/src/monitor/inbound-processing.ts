@@ -740,7 +740,7 @@ export async function resolveIMessageInboundDecision(params: {
       params.logVerbose?.(
         describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
-      return { kind: "drop", reason: "echo" };
+      return { kind: "drop", reason: hasReplyToEcho ? "self-chat echo" : "echo" };
     }
   }
 
