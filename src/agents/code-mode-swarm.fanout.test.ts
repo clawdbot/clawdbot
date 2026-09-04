@@ -101,37 +101,69 @@ describe("Swarm pipeline backpressure", () => {
     },
   );
 
-  it("releases a canceled timer slot without changing queued collector arguments", async () => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
-    });
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: `
+  it.each([false, true])(
+    "preserves queued collector arguments and structured=%s results",
+    async (structured) => {
+      const config = resolveCodeModeConfig({
+        tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
+      });
+      let result = await testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: `
           const timer = setTimeout(() => { throw new Error("canceled timer fired"); }, 60_000);
-          const options = { label: "original" };
+          const options = { label: "original", ...(${structured} ? { schema: { type: "object" } } : {}) };
           const collector = agents.run("Queued research", options);
           options.label = "changed";
+          if (${structured}) delete options.schema;
+          else options.schema = { type: "object" };
           clearTimeout(timer);
           return await collector;
         `,
-        config,
-        catalog: [],
-        swarmEnabled: true,
-      },
-      10_000,
-    );
-    expect(result).toMatchObject({
-      status: "waiting",
-      canceledRequestIds: ["bridge:sleep:1"],
-      pendingRequests: [
-        {
-          id: "bridge:agentSpawn:1",
-          method: "agentSpawn",
-          args: ["Queued research", { label: "original" }],
+          config,
+          catalog: [],
+          swarmEnabled: true,
         },
-      ],
-    });
-  });
+        10_000,
+      );
+      expect(result).toMatchObject({
+        status: "waiting",
+        canceledRequestIds: ["bridge:sleep:1"],
+        pendingRequests: [
+          {
+            id: "bridge:agentSpawn:1",
+            method: "agentSpawn",
+            args: [
+              "Queued research",
+              { label: "original", ...(structured ? { schema: { type: "object" } } : {}) },
+            ],
+          },
+        ],
+      });
+      for (let round = 0; result.status === "waiting" && round < 2; round++) {
+        const settledRequests = result.pendingRequests.map((request) => ({
+          id: request.id,
+          ok: true as const,
+          value:
+            request.method === "agentSpawn"
+              ? { runId: "collector" }
+              : {
+                  runId: "collector",
+                  status: "done",
+                  result: "text",
+                  ...(structured ? { structured: { answer: 42 } } : {}),
+                },
+        }));
+        result = await testing.runCodeModeWorker(
+          { kind: "resume", snapshot: result.snapshot, config, settledRequests },
+          10_000,
+        );
+      }
+      expect(result.status).toBe("completed");
+      if (result.status !== "completed") {
+        throw new Error("collector must complete");
+      }
+      expect(JSON.parse(result.value.json)).toEqual(structured ? { answer: 42 } : "text");
+    },
+  );
 });

@@ -321,7 +321,7 @@ describe("Code Mode swarm guest", () => {
       return { runId: "collector-1", status: "done", result: "collected" };
     });
     const harness = createSwarmHarness();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const executing = harness.tools[0]!.execute("parked-collector", {
       code: `await agents.run("Research"); return missingAfterCollector();`,
     });
