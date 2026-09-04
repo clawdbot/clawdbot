@@ -117,6 +117,7 @@ import {
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import { resolveApiKeyForProviderCore } from "../model-auth-provider.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
@@ -210,6 +211,7 @@ const defaultPrepareDeps = {
   claudeCliSessionTranscriptHasOrphanedToolUse,
   getCliLiveSessionGeneration,
   resolveApiKeyForProfile,
+  resolveApiKeyForProviderCore,
   loadManifestModelCatalog,
 };
 const prepareDeps = { ...defaultPrepareDeps };
@@ -564,6 +566,7 @@ export async function prepareCliRunContext(
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
+  const backendAuthProvider = backendResolved.modelProvider?.trim() || params.provider;
   const canEnforceExactToolAvailability =
     backendResolved.nativeToolMode === "selectable" &&
     ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
@@ -723,6 +726,21 @@ export async function prepareCliRunContext(
     if (effectiveAuthProfileId) {
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
+  }
+  if (!authCredential && backendAuthPolicy?.providerConfigApiKey) {
+    const resolvedAuth = await prepareDeps.resolveApiKeyForProviderCore({
+      provider: backendAuthProvider,
+      cfg: params.config,
+      agentDir,
+      allowAuthProfileFallback: false,
+    });
+    params.assertCurrent?.();
+    authCredential = {
+      type: "api_key",
+      provider: backendAuthProvider,
+      key: resolvedAuth.apiKey,
+    };
+    resolvedProfileAuth = resolvedAuth;
   }
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude

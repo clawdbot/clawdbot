@@ -115,6 +115,30 @@ function attachLiveSession(context: CliBackendExecuteContext) {
 }
 
 describe("Claude subprocess diagnostics through the real Agent SDK", () => {
+  it("materializes an auth-token secret only in the final Claude child environment", async () => {
+    const credential = "opaque-zai-auth-token-fixture";
+    const context = await contextForChild(`
+      if (process.env.ANTHROPIC_AUTH_TOKEN !== ${JSON.stringify("opaque-zai-auth-token-fixture")}) {
+        process.exit(2);
+      }
+      ${PROTOCOL_CHILD}
+    `);
+    const buffers: Buffer[] = [];
+    const events = await collect(context, {
+      fd: 3,
+      envName: "ANTHROPIC_AUTH_TOKEN",
+      createData: () => {
+        const bytes = Buffer.from(credential);
+        buffers.push(bytes);
+        return bytes;
+      },
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: "result", result: "ok" }));
+    expect(context.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+    expect(buffers).toHaveLength(1);
+    expect(buffers[0]?.every((byte) => byte === 0)).toBe(true);
+  });
+
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
     const context = await contextForChild(`

@@ -10,7 +10,11 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export type ClaudeAgentSdkSecretInput = { fd: 3; createData: () => Buffer };
+export type ClaudeAgentSdkSecretInput = {
+  fd: 3;
+  createData: () => Buffer;
+  envName?: "ANTHROPIC_AUTH_TOKEN";
+};
 
 const STDERR_CAPTURE_CHARS = 8_192;
 const STDERR_PREVIEW_CHARS = 2_000;
@@ -19,14 +23,20 @@ const STDERR_DRAIN_GRACE_MS = 200;
 function spawnClaudeAgentSdkProcess(
   options: SpawnOptions,
   secretInput: ClaudeAgentSdkSecretInput | undefined,
+  credential: Buffer | undefined,
   observeStderr: (child: ChildProcessWithoutNullStreams) => void,
 ): SpawnedProcess {
   const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
-  using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
+  const descriptorInput = secretInput?.envName ? undefined : secretInput;
+  using secretDelivery = prepareSecretInputStdio(stdio, descriptorInput);
+  const env =
+    secretInput?.envName && credential
+      ? { ...options.env, [secretInput.envName]: credential.toString("utf8") }
+      : options.env;
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
     detached: process.platform !== "win32",
-    env: options.env,
+    env,
     signal: options.signal,
     stdio,
     windowsHide: true,
@@ -112,7 +122,7 @@ export function createClaudeAgentSdkProcessOwner(
     spawn: (options: SpawnOptions) => {
       assertCurrent();
       environment = options.env;
-      return spawnClaudeAgentSdkProcess(options, secretInput, observeStderr);
+      return spawnClaudeAgentSdkProcess(options, secretInput, credential, observeStderr);
     },
     async withDiagnostics(error: unknown): Promise<unknown> {
       const context = currentContext();

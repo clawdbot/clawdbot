@@ -30,10 +30,11 @@ type ClaudeCliAuthCredential =
 
 type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
-  secretInput: {
+  secretInput?: {
     fd: 3;
     fingerprint: string;
     createData: () => Buffer;
+    envName?: "ANTHROPIC_AUTH_TOKEN";
   };
 };
 
@@ -114,6 +115,38 @@ function createClaudeCliAuthInput(params: {
   };
 }
 
+function createClaudeCliAuthTokenInput(value: string): ClaudeCliPreparedExecution | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Z.AI's documented Claude Code contract is specifically ANTHROPIC_AUTH_TOKEN.
+  // Claude's private OAuth descriptor selects Anthropic OAuth semantics instead
+  // and Z.AI rejects that request even when the underlying token is valid.
+  const source = Buffer.from(trimmed, "utf8");
+  let disposed = false;
+  return {
+    clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+    secretInput: {
+      fd: 3,
+      envName: "ANTHROPIC_AUTH_TOKEN",
+      fingerprint: createHmac("sha256", CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY)
+        .update(source)
+        .digest("hex"),
+      createData: () => {
+        if (disposed) {
+          throw new Error("Claude CLI auth input is no longer available.");
+        }
+        return Buffer.from(source);
+      },
+    },
+    cleanup: async () => {
+      disposed = true;
+      source.fill(0);
+    },
+  };
+}
+
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
   options: { apiKeyAsAuthToken?: boolean } = {},
@@ -148,12 +181,11 @@ function resolveClaudeCliAuthInput(
     });
   }
   if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    if (options.apiKeyAsAuthToken) {
+      return createClaudeCliAuthTokenInput(credential.key);
+    }
     return createClaudeCliAuthInput({
-      // Z.AI documents its Anthropic-compatible endpoint with
-      // ANTHROPIC_AUTH_TOKEN (Bearer authentication), not x-api-key.
-      envName: options.apiKeyAsAuthToken
-        ? "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"
-        : "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
       value: credential.key,
     });
   }

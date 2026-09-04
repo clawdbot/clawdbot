@@ -11,13 +11,12 @@ import {
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  buildZaiClaudeAgentSdkBackend,
-  ZAI_ANTHROPIC_BASE_URL,
-  ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
-} from "./cli-backend.js";
+import { buildZaiClaudeAgentSdkBackend } from "./cli-backend.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const ZAI_CLAUDE_AGENT_SDK_BACKEND_ID = "zai-claude-agent-sdk";
+const ZAI_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
 
 function createGlm47Template() {
   return {
@@ -59,6 +58,10 @@ function expectModelFields(
 }
 
 describe("zai provider plugin", () => {
+  it("declares lazy activation ownership for its Agent SDK backend", () => {
+    expect(manifest.activation.onAgentHarnesses).toEqual([ZAI_CLAUDE_AGENT_SDK_BACKEND_ID]);
+  });
+
   it("registers an explicit Agent SDK backend without changing native Claude routing", () => {
     const captured = capturePluginRegistration({ register: plugin.register });
     expect(captured.cliBackends.map((entry) => entry.id)).toContain(
@@ -77,10 +80,10 @@ describe("zai provider plugin", () => {
       subscriptionAuthDispatch: false,
       config: {
         command: "claude",
+        liveSession: "claude-stdio",
         clearEnv: expect.arrayContaining(["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]),
       },
     });
-
     const prepared = backend.prepareExecution?.({
       provider: "zai",
       modelId: "glm-4.7",
@@ -90,12 +93,22 @@ describe("zai provider plugin", () => {
     } as never);
     expect(prepared).toBeDefined();
     return Promise.resolve(prepared).then((execution) => {
+      // The credential descriptor is provider-private and intentionally absent
+      // from the public prepared-execution contract.
+      const privateExecution = execution as
+        | (NonNullable<typeof execution> & {
+            secretInput?: { createData: () => Buffer };
+          })
+        | undefined;
       expect(execution).toMatchObject({
         env: {
           ANTHROPIC_BASE_URL: ZAI_ANTHROPIC_BASE_URL,
-          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+        },
+        secretInput: {
+          envName: "ANTHROPIC_AUTH_TOKEN",
         },
       });
+      expect(privateExecution?.secretInput?.createData().toString("utf8")).toBe("zai-test-key");
       expect(execution?.execute).toBeTypeOf("function");
       return execution?.cleanup?.();
     });
