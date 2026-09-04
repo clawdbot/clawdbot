@@ -4,7 +4,7 @@ import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { MemoryIndexManager } from "./manager.js";
+import { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -153,6 +153,37 @@ describe("memory manager shared agent connection", () => {
     expect(() => shared.db.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
       "not authorized",
     );
+  });
+
+  it("shares retained manager handles and trims released handles on the next open", async () => {
+    const cfg = createConfig();
+    const agents = Array.from({ length: 65 }, (_, index) => ({
+      id: `retained-${index}`,
+      workspace: fixture.paths.workspace,
+    }));
+    cfg.agents!.list = agents;
+    const handles = new Set<DatabaseSync>();
+    const countOpenHandles = () => [...handles].filter((db) => db.isOpen).length;
+    for (const { id: agentId } of agents) {
+      handles.add(sqliteRuntime.openOpenClawAgentDatabase({ agentId }).db);
+      const manager = await MemoryIndexManager.get({ cfg, agentId });
+      if (!manager) {
+        throw new Error("manager missing");
+      }
+      fixture.trackManager(manager);
+      handles.add(managerDatabase(manager));
+    }
+    const retained = countOpenHandles();
+
+    await closeAllMemoryIndexManagers();
+    const afterRelease = countOpenHandles();
+    handles.add(sqliteRuntime.openOpenClawAgentDatabase({ agentId: "after-release" }).db);
+
+    expect({ retained, afterRelease, afterOpen: countOpenHandles() }).toEqual({
+      retained: agents.length,
+      afterRelease: agents.length,
+      afterOpen: 64,
+    });
   });
 
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {

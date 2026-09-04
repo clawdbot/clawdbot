@@ -116,8 +116,8 @@ export class IncognitoAgentDatabasePathCollisionError extends Error {
     this.path = pathname;
   }
 }
-// Each WAL database consumes roughly three file descriptors, so the fixed cap
-// satisfies the bounded-cache policy within a predictable FD budget, without config.
+// Target 64 cached handles (roughly three WAL FDs each). Live borrowers,
+// transactions and incognito sessions keep their handles until owner release.
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
