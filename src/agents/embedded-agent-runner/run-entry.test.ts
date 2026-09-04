@@ -3,49 +3,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
+import type { runWithModelFallback } from "../model-fallback-runner.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-type FallbackRunnerParams = {
-  provider: string;
-  model: string;
-  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-  prepareCandidateChain?: (
-    candidates: ReadonlyArray<{
-      provider: string;
-      model: string;
-      routeOrigin: "requested" | "configured-fallback";
-      routeResolution: "raw";
-    }>,
-  ) => Promise<void> | void;
-  prepareAgentHarnessRuntime?: (params: {
-    provider: string;
-    model: string;
-    agentHarnessRuntimeOverride?: string;
-  }) => Promise<void> | void;
-  classifyResult?: (params: {
-    result: EmbeddedAgentRunResult;
-    provider: string;
-    model: string;
-    attempt: number;
-    total: number;
-  }) => unknown;
-  canFallbackAfterError?: (params: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => boolean | Promise<boolean>;
-  mergeExhaustedResult?: (params: {
-    latestResult: EmbeddedAgentRunResult;
-    preferredResult: EmbeddedAgentRunResult;
-  }) => EmbeddedAgentRunResult;
-  run: (
-    provider: string,
-    model: string,
-    options: ModelFallbackRunOptions,
-  ) => Promise<EmbeddedAgentRunResult>;
-};
+type FallbackRunnerParams = Parameters<typeof runWithModelFallback<EmbeddedAgentRunResult>>[0];
 
 function initialAttemptOptions(params: FallbackRunnerParams): ModelFallbackRunOptions {
   return {
@@ -598,49 +559,76 @@ describe("runEmbeddedAgentEntry", () => {
     expect(state.finalizedAttempts).toEqual([]);
   });
 
-  it("accepts an empty result after a committed side effect and finalizes it once", async () => {
-    const hasCommittedSideEffect = vi.fn(() => true);
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      expect(
-        params.classifyResult?.({
+  it.each(["committed side effect", "continuity failure"])(
+    "settles an empty result after %s without reusing a replaced result's classification",
+    async (settlement) => {
+      const committed = settlement === "committed side effect";
+      const hasCommittedSideEffect = vi.fn(() => committed);
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+        const result = await params.run(
+          params.provider,
+          params.model,
+          initialAttemptOptions(params),
+        );
+        const classification = await params.classifyResult?.({
           result,
           provider: params.provider,
           model: params.model,
           attempt: 1,
-          total: 1,
-        }),
-      ).toBeUndefined();
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
-    await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-side-effect", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
-      behavior: { kind: "command-rpc", hasCommittedSideEffect },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model, options) => {
-        recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        const result = makeResult({ provider, model, classification: "empty" });
-        expect(options.classifyResult(result)).toBeUndefined();
-        return result;
-      },
-    });
-
-    expect(state.finalizedAttempts).toEqual(["candidate"]);
-    expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
-  });
+          total: 2,
+        });
+        expect(classification).toBe(committed ? undefined : null);
+        return {
+          outcome: "completed",
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        };
+      });
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+      const run = await runEmbeddedAgentEntry({
+        selection: { cfg: {}, provider: "provider", model: "model" },
+        identity: { runId: "settle-result", agentId: "main", sessionId: "session-1" },
+        harness: {
+          workspaceDir: "/tmp/workspace",
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+        },
+        behavior: { kind: "command-rpc", hasCommittedSideEffect },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
+          const candidate = makeResult({ provider, model, classification: "empty" });
+          expect(options.classifyResult(candidate)).toEqual(
+            committed ? undefined : expect.objectContaining({ code: "empty_result" }),
+          );
+          return committed
+            ? candidate
+            : {
+                ...candidate,
+                payloads: [{ text: "continuity failed", isError: true }],
+                meta: {
+                  ...candidate.meta,
+                  replayInvalid: true,
+                  error: {
+                    kind: "incomplete_turn",
+                    message: "continuity failed",
+                    fallbackSafe: false,
+                  },
+                },
+              };
+        },
+      });
+      expect(run.terminal.outcome.status).toBe(committed ? "ok" : "error");
+      expect(run.result.meta.executionTrace?.winnerProvider).toBe(
+        committed ? "provider" : undefined,
+      );
+      expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
+      expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
+      expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not finalize any candidate when fallback is exhausted", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
@@ -686,30 +674,40 @@ describe("runEmbeddedAgentEntry", () => {
   it.each([
     {
       label: "yielded",
+      status: "ok",
       meta: { yielded: true, livenessState: "paused" as const, stopReason: "end_turn" },
     },
-    { label: "aborted", meta: { aborted: true, stopReason: "error" } },
-    { label: "timed out", meta: { timeoutPhase: "provider" as const, stopReason: "timeout" } },
+    { label: "aborted", status: "error", meta: { aborted: true, stopReason: "error" } },
+    {
+      label: "timed out",
+      status: "timeout",
+      meta: { timeoutPhase: "provider" as const, stopReason: "timeout" },
+    },
     {
       label: "errored",
+      status: "error",
       meta: {
         error: { kind: "retry_limit" as const, message: "provider failed" },
         stopReason: "error",
       },
     },
-  ])("does not finalize a $label candidate", async ({ meta }) => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
+    { label: "blocked", status: "error", meta: { livenessState: "blocked" as const } },
+  ])("does not finalize a $label candidate", async ({ meta, status }) => {
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed" as const,
+      result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    const innerFailure = {
+      provider: "inner-provider",
+      model: "inner-model",
+      result: "same_model_transient" as const,
+      reason: "rate_limit",
+    };
     const { runEmbeddedAgentEntry } = await import("./run-entry.js");
-    await runEmbeddedAgentEntry({
+    const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
       harness: {
@@ -721,10 +719,31 @@ describe("runEmbeddedAgentEntry", () => {
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
         recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        return makeResult({ provider, model, meta });
+        return makeResult({
+          provider,
+          model,
+          meta: {
+            ...meta,
+            executionTrace: {
+              winnerProvider: provider,
+              winnerModel: model,
+              attempts: [innerFailure, { provider, model, result: "success" }],
+              runner: "embedded",
+            },
+          },
+        });
       },
     });
 
+    expect(result.terminal.outcome.status).toBe(status);
+    expect(result.result.meta.executionTrace).toMatchObject({
+      winnerProvider: status === "ok" ? "provider" : undefined,
+      winnerModel: status === "ok" ? "model" : undefined,
+      attempts: [
+        innerFailure,
+        ...(status === "ok" ? [{ provider: "provider", model: "model", result: "success" }] : []),
+      ],
+    });
     expect(state.finalizedAttempts).toEqual([]);
     expect(state.discardedAttempts).toEqual(["candidate"]);
   });
@@ -733,7 +752,7 @@ describe("runEmbeddedAgentEntry", () => {
     const classificationError = new Error("classification failed");
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      params.classifyResult?.({
+      await params.classifyResult?.({
         result,
         provider: params.provider,
         model: params.model,

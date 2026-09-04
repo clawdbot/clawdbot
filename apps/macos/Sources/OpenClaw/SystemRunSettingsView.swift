@@ -52,7 +52,7 @@ struct SystemRunSettingsView: View {
                 self.loadingPanel
             }
         }
-        .task { await self.model.refresh() }
+        .task { await self.model.run() }
         .onChange(of: self.tab) { _, _ in
             Task { await self.model.refreshSkillBins() }
         }
@@ -503,6 +503,7 @@ final class ExecApprovalsSettingsModel {
         @MainActor (String) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     @ObservationIgnored private let resolveDefaultsAsync:
         @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
+    @ObservationIgnored private let skillBinsCache: SkillBinsCache
     @ObservationIgnored private let readRetryDelay: Duration
     @ObservationIgnored private let automaticReadRetryAttempts: Int
     @ObservationIgnored private var readRetryTask: Task<Void, Never>?
@@ -515,9 +516,13 @@ final class ExecApprovalsSettingsModel {
     var askFallback: ExecSecurity = .deny
     var autoAllowSkills = false
     var entries: [ExecAllowlistEntry] = []
-    var skillBins: [String] = []
+    private var skillSnapshot: SkillBinsCache.Snapshot?
     var policyLoadState: ExecApprovalsPolicyLoadState = .loading
     var mutationErrorMessage: String?
+
+    var skillBins: [String] {
+        self.skillSnapshot?.bins.sorted() ?? []
+    }
 
     var obsoleteGeneratedApprovalCount: Int {
         self.entries.count { entry in
@@ -538,7 +543,9 @@ final class ExecApprovalsSettingsModel {
     }
 
     var agentPickerIds: [String] {
-        [Self.defaultsScopeId] + self.agentIds
+        var ids = [Self.defaultsScopeId] + self.agentIds
+        if !ids.contains(self.selectedAgentId) { ids.append(self.selectedAgentId) }
+        return ids
     }
 
     var isDefaultsScope: Bool {
@@ -558,9 +565,11 @@ final class ExecApprovalsSettingsModel {
         > = {
             await ExecApprovalsStore.resolveDefaultsAsyncResult()
         },
+        skillBinsCache: SkillBinsCache = .shared,
         readRetryDelay: Duration = .milliseconds(250),
         automaticReadRetryAttempts: Int = 5)
     {
+        self.skillBinsCache = skillBinsCache
         self.resolveApprovalsAsync = resolveApprovalsAsync
         self.resolveDefaultsAsync = resolveDefaultsAsync
         self.readRetryDelay = readRetryDelay
@@ -574,14 +583,29 @@ final class ExecApprovalsSettingsModel {
         return id
     }
 
-    func refresh() async {
+    func run() async {
+        // Cached panes stay mounted across Gateway changes; subscribe before the initial reads.
+        let pushes = await self.skillBinsCache.gateway.subscribe()
         await self.refreshAgents()
+        if !self.isDefaultsScope, !self.agentIds.contains(self.selectedAgentId) {
+            self.selectedAgentId = self.defaultAgentId
+        }
         await self.loadSettings(for: self.selectedAgentId)
         await self.refreshSkillBins()
+
+        var source: GatewayConnection.ServerLease?
+        for await delivery in pushes {
+            if Task.isCancelled { return }
+            guard delivery.push != nil, delivery.isCurrent, source != delivery.serverLease else { continue }
+            source = delivery.serverLease
+            // Gateway catalogs follow the source; local policy and drafts keep their selected scope.
+            await self.refreshAgents()
+            await self.refreshSkillBins()
+        }
     }
 
     func refreshAgents() async {
-        let document = await ConfigStore.load()
+        let document = await ConfigStore.load(gateway: self.skillBinsCache.gateway)
         guard document.isCurrent else { return }
         let root = document.root
         let agents = root["agents"] as? [String: Any]
@@ -609,12 +633,6 @@ final class ExecApprovalsSettingsModel {
         }
         self.agentIds = ids
         self.defaultAgentId = defaultId ?? "main"
-        if self.selectedAgentId == Self.defaultsScopeId {
-            return
-        }
-        if !self.agentIds.contains(self.selectedAgentId) {
-            self.selectedAgentId = self.defaultAgentId
-        }
     }
 
     func selectAgent(_ id: String) {
@@ -887,11 +905,12 @@ final class ExecApprovalsSettingsModel {
 
     func refreshSkillBins(force: Bool = false) async {
         guard self.autoAllowSkills else {
-            self.skillBins = []
+            self.skillSnapshot = nil
             return
         }
-        let bins = await SkillBinsCache.shared.currentBins(force: force)
-        self.skillBins = bins.sorted()
+        if let snapshot = await self.skillBinsCache.current(force: force), snapshot.isCurrent {
+            self.skillSnapshot = snapshot
+        }
     }
 
     @discardableResult

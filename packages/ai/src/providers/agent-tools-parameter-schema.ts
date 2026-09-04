@@ -777,7 +777,7 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
       changed ||= next.some((entry, index) => entry !== value[index]);
       continue;
     }
-    normalized[key] = value;
+    setOwnSchemaProperty(normalized, key, value);
   }
 
   if (nullable) {
@@ -897,10 +897,9 @@ function normalizeToolParameterSchemaUncached(
   // field that is not re-declared in any branch would be dropped from
   // `properties` while staying `required`, producing an unsatisfiable schema
   // when `additionalProperties` is false (#128743).
-  const rootProperties = isSchemaRecord(schemaRecord.properties)
+  const mergedProperties: Record<string, unknown> = isSchemaRecord(schemaRecord.properties)
     ? { ...schemaRecord.properties }
     : {};
-  const mergedProperties: Record<string, unknown> = rootProperties;
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;
 
@@ -914,11 +913,8 @@ function normalizeToolParameterSchemaUncached(
     }
     objectVariants += 1;
     for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
-      if (!(key in mergedProperties)) {
-        mergedProperties[key] = value;
-        continue;
-      }
-      mergedProperties[key] = mergePropertySchemas(mergedProperties[key], value);
+      const existing = Object.hasOwn(mergedProperties, key) ? mergedProperties[key] : undefined;
+      setOwnSchemaProperty(mergedProperties, key, mergePropertySchemas(existing, value));
     }
     const required = Array.isArray((entry as { required?: unknown }).required)
       ? (entry as { required: unknown[] }).required

@@ -121,23 +121,22 @@ type PreparedMemoryIndexEntry = {
 function resolveChunkRecallMetadata(params: {
   curatedRoot: boolean;
   projectScopeEligible: boolean;
-  content?: string;
+  sourceLines: string[];
   chunk: MemoryChunk;
 }): Pick<IndexedMemoryChunk, "importance" | "triggers" | "projectKey"> {
-  if ((!params.curatedRoot && !params.projectScopeEligible) || params.content === undefined) {
+  if (!params.curatedRoot && !params.projectScopeEligible) {
     return { importance: null, triggers: null, projectKey: null };
   }
 
   const phrases = new Set<string>();
   let importance: number | null = null;
-  const lines = params.content.replace(/\r\n/gu, "\n").split("\n");
   const annotationStartLine = params.chunk.entryStartLine ?? params.chunk.startLine;
   const annotationEndLine = params.chunk.entryEndLine ?? params.chunk.endLine;
-  const annotationLines = lines.slice(annotationStartLine - 1, annotationEndLine);
+  const annotationLines = params.sourceLines.slice(annotationStartLine - 1, annotationEndLine);
   const projectAnnotations = params.projectScopeEligible
     ? extractProjectKeysFromCuratedEntry(annotationLines.join("\n"))
     : { annotated: false, valid: true, keys: [] };
-  for (const line of annotationLines) {
+  for (const line of params.curatedRoot ? annotationLines : []) {
     const annotationSuffix = line.match(
       /(?:\s*<!--\s*(?:trigger|importance|project)\s*:[\s\S]*?-->\s*)+$/iu,
     )?.[0];
@@ -150,9 +149,6 @@ function resolveChunkRecallMetadata(params: {
       const kind = match[1]?.toLowerCase();
       const value = match[2]?.trim() ?? "";
       if (kind === "trigger") {
-        if (!params.curatedRoot) {
-          continue;
-        }
         for (const phrase of value.split(/[,;]/u).map((entry) => entry.trim())) {
           if (phrase) {
             phrases.add(phrase);
@@ -160,13 +156,7 @@ function resolveChunkRecallMetadata(params: {
         }
         continue;
       }
-      if (kind === "project") {
-        continue;
-      }
-      if (!params.curatedRoot) {
-        continue;
-      }
-      if (/^\d+$/u.test(value)) {
+      if (kind === "importance" && /^\d+$/u.test(value)) {
         const parsed = Number.parseInt(value, 10);
         if (parsed >= 1 && parsed <= 10) {
           importance = Math.max(importance ?? parsed, parsed);
@@ -1121,6 +1111,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
       const indexingContent =
         options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+      // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
+      const sourceLines =
+        options.source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
       const chunkOptions = { ...this.settings.chunking, perEntry };
       const baseChunks = filterNonEmptyMemoryChunks(
         options.source === "sessions"
@@ -1158,7 +1151,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             curatedRoot: pathClassification.curatedRoot,
             projectScopeEligible:
               options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-            content,
+            sourceLines,
             chunk,
           }),
         ),
