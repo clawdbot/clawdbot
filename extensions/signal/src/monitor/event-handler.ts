@@ -44,10 +44,11 @@ import {
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-  resolveChannelGroups,
-  resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import {
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
@@ -189,12 +190,6 @@ async function finalizeSignalStatusReaction(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
-  const groupsConfigPath = resolveChannelGroupsConfigPath({
-    cfg: deps.cfg,
-    channel: "signal",
-    accountId: deps.accountId,
-    groups: resolveChannelGroups(deps.cfg, "signal", deps.accountId),
-  });
   const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
@@ -1019,6 +1014,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
     const hasControlCommandInMessage = isControlCommandMessage(messageText, deps.cfg);
+    const shouldComputeCommandAuthorization = shouldComputeCommandAuthorized(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
@@ -1032,7 +1028,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         isGroup,
         cfg: deps.cfg,
-        hasControlCommand: hasControlCommandInMessage,
+        hasControlCommand: isGroup ? hasControlCommandInMessage : shouldComputeCommandAuthorization,
         contextBinding,
       });
     const accessDecision = await resolveChannelIngress();
@@ -1185,12 +1181,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
-        log: deps.runtime.log,
+        log: logVerbose,
         channel: "signal",
         reason: "no mention",
-        target: groupId,
-        onceKey: JSON.stringify([deps.accountId, groupId]),
-        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+        target: senderDisplay,
       });
       const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
         (attachment) => {
@@ -1231,6 +1225,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (
         (signalGroupPolicy.groupConfig?.ingest ?? signalGroupPolicy.defaultConfig?.ingest) === true
       ) {
+        const canonicalGroupTarget =
+          normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;
         fireAndForgetHook(
           triggerInternalHook(
             createInternalHookEvent(
@@ -1239,12 +1235,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               route.sessionKey,
               toInternalMessageReceivedContext({
                 from: `group:${groupId}`,
-                to: signalTo,
+                to: canonicalGroupTarget,
                 content: pendingBodyText,
                 timestamp: envelope.timestamp ?? undefined,
                 channelId: "signal",
                 accountId: deps.accountId,
-                conversationId: signalTo,
+                conversationId: canonicalGroupTarget,
                 messageId:
                   typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
                 senderId: senderDisplay,
@@ -1252,9 +1248,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                 provider: "signal",
                 surface: "signal",
                 originatingChannel: "signal",
-                originatingTo: signalTo,
+                originatingTo: canonicalGroupTarget,
                 isGroup: true,
-                groupId: signalTo,
+                groupId: canonicalGroupTarget,
               }),
             ),
           ),

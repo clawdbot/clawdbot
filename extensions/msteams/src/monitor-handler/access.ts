@@ -258,10 +258,16 @@ export async function admitMSTeamsMessage(params: {
   });
   const isControlCommand =
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
+  const shouldComputeAuth =
+    allowTextCommands &&
+    core.channel.commands.shouldComputeCommandAuthorized(params.text, params.cfg);
+  const convType = normalizeOptionalLowercaseString(params.activity.conversation?.conversationType);
+  const messageIsDirectMessage =
+    convType === "personal" || (!convType && !params.activity.conversation?.isGroup);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
     activity: params.activity,
-    hasControlCommand: isControlCommand,
+    hasControlCommand: messageIsDirectMessage ? shouldComputeAuth : isControlCommand,
   });
   const {
     dmPolicy,

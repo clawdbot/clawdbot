@@ -200,41 +200,11 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
   });
 
-  it("logs identity-derived mention drops once per account and group while preserving history", async () => {
-    const log = vi.fn();
-    const groupHistories = new Map();
-    const createHandler = (accountId: string) =>
-      createSignalEventHandler(
-        createBaseSignalEventHandlerDeps({
-          accountId,
-          runtime: { log, error: vi.fn(), exit: vi.fn() },
-          groupHistories,
-          cfg: { agents: { list: [{ id: "main", identity: { name: "Claw" } }] } },
-        }),
-      );
-    const event = (groupId: string) =>
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "What up",
-          groupInfo: { groupId },
-        },
-      });
-    const handler = createHandler("mention-primary");
+  it("drops group messages without mention when requireMention is configured", async () => {
+    const handler = createMentionHandler({ requireMention: true });
 
-    await handler(event("mention-g1"));
-    await handler(event("mention-g1"));
-    await handler(event("mention-g2"));
-    await createHandler("mention-secondary")(event("mention-g1"));
-
+    await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeUndefined();
-    expect(groupHistories.get("mention-g1")).toHaveLength(3);
-    expect(log).toHaveBeenCalledTimes(3);
-    expect(log.mock.calls[0]?.[0]).toContain("mention-g1");
-    expect(log.mock.calls[1]?.[0]).toContain("mention-g2");
-    expect(log.mock.calls[0]?.[0]).toContain("requireMention");
-    expect(log.mock.calls[0]?.[0]).toContain("false");
-    expect(log.mock.calls.flat().join(" ")).not.toContain("What up");
-    expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
   });
 
   it("allows group messages with mention when requireMention is configured", async () => {
@@ -249,6 +219,13 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(getCapturedCtx().WasMentioned).toBe(false);
+  });
+
+  it("does not drop group text with inline command tokens when requireMention is off", async () => {
+    const handler = createMentionHandler({ requireMention: false });
+
+    await handler(makeGroupEvent({ message: "hello /status" }));
+    expect(getCapturedCtx().Body).toContain("hello /status");
   });
 
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
