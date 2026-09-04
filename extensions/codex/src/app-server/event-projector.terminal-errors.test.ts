@@ -74,82 +74,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it("normalizes biological-policy app-server errors into provider_refusal without promptError", async () => {
-    const projector = await createProjector();
-    const message =
-      "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.";
-
-    await projector.handleNotification(
-      forCurrentTurn("error", {
-        error: {
-          message,
-          codexErrorInfo: "other",
-          additionalDetails: null,
-        },
-        willRetry: false,
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(readAttemptTerminal(result)).toMatchObject({
-      promptError: null,
-      promptErrorSource: null,
-    });
-    expect(result.agentHarnessResultClassification).toBeUndefined();
-    expect(result.lastAssistant).toMatchObject({
-      stopReason: "error",
-      errorMessage: message,
-      diagnostics: [
-        expect.objectContaining({
-          type: "provider_refusal",
-          details: expect.objectContaining({
-            provider: "openai",
-            category: "biological_risk",
-          }),
-        }),
-      ],
-    });
-    expect(result.currentAttemptAssistant).toEqual(result.lastAssistant);
-  });
-
-  it("normalizes biological-policy failed turns into provider_refusal without promptError", async () => {
-    const projector = await createProjector();
-    const message = "This content was flagged for possible biological risk.";
-
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message,
-            codexErrorInfo: "other",
-            additionalDetails: null,
-          },
-          items: [],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(readAttemptTerminal(result)).toMatchObject({
-      promptError: null,
-      promptErrorSource: null,
-    });
-    expect(result.lastAssistant).toMatchObject({
-      stopReason: "error",
-      errorMessage: message,
-      diagnostics: [
-        expect.objectContaining({
-          type: "provider_refusal",
-          details: expect.objectContaining({ category: "biological_risk" }),
-        }),
-      ],
-    });
-  });
-
   it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
     const projector = await createProjector();
 
@@ -310,6 +234,60 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(result.lastAssistant).toBeUndefined();
   });
+
+  it.each([
+    {
+      label: "biological-risk",
+      message: "This content was flagged for possible biological risk. Try rephrasing it.",
+      codexErrorInfo: "other",
+      category: "bio",
+    },
+    {
+      label: "typed cyber",
+      message: "This request was blocked by the provider's cyber policy.",
+      codexErrorInfo: "cyberPolicy",
+      category: "cyber",
+    },
+  ])(
+    "keeps $label refusals terminal when error is followed by failed turn completion",
+    async ({ message, codexErrorInfo, category }) => {
+      const projector = await createProjector();
+      const error = { message, codexErrorInfo };
+
+      await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: { id: TURN_ID, status: "failed", items: [], error },
+        }),
+      );
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      const terminalAssistant = result.currentAttemptAssistant;
+
+      expect(readAttemptTerminal(result)).toMatchObject({
+        promptError: null,
+        promptErrorSource: null,
+      });
+      expect(terminalAssistant).toMatchObject({
+        stopReason: "error",
+        errorMessage: message,
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            details: { provider: "openai", category },
+          },
+        ],
+      });
+      expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(
+        result.messagesSnapshot.filter(
+          (candidate) =>
+            candidate.role === "assistant" &&
+            candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },

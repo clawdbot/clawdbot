@@ -5122,6 +5122,47 @@ describe("runCodexAppServerAttempt", () => {
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactPrompt);
   });
+  it("preserves a structured provider refusal through attempt finalization", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    const error = {
+      message: "This content was flagged for possible biological risk. Try rephrasing it.",
+      codexErrorInfo: "other",
+    };
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        error,
+        willRetry: false,
+      },
+    });
+    await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error }));
+
+    const result = await run;
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.currentAttemptAssistant).toMatchObject({
+      stopReason: "error",
+      errorMessage: error.message,
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          details: { provider: "openai", category: "bio" },
+        },
+      ],
+    });
+    expect(
+      result.messagesSnapshot.filter(
+        (message) =>
+          message.role === "assistant" &&
+          message.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+      ),
+    ).toHaveLength(1);
+  });
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
     const { sessionFile, workspaceDir } = createRunPaths();

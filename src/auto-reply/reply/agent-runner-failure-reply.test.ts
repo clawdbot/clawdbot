@@ -152,29 +152,6 @@ describe("buildExternalRunFailureReply", () => {
     expect(reply.isGenericRunnerFailure).toBe(false);
   });
 
-  it("surfaces Codex biological-risk blocks with session-preserving copy", () => {
-    const message =
-      "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.";
-    const reply = buildExternalRunFailureReply(
-      {
-        message,
-        error: new FailoverError(message, {
-          reason: "format",
-          provider: "openai",
-          model: "gpt-5.6-luna",
-        }),
-      },
-      { includeDetails: false },
-    );
-
-    expect(reply.text).toBe(
-      "⚠️ The model provider blocked this turn due to its biological-risk policy. Your current session and conversation context remain intact — rephrase your request, or select another approved model.",
-    );
-    expect(reply.text).not.toMatch(/\/new\b/);
-    expect(reply.text).not.toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-    expect(reply.isGenericRunnerFailure).toBe(false);
-  });
-
   it("keeps classified HTTP status facts when verbose detail is off", () => {
     const message =
       "⚠️ openai/gpt-5.6-luna request failed (provider overloaded, HTTP 503). " +

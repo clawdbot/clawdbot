@@ -18,7 +18,6 @@ import {
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
-import { classifyProviderRequestFacets } from "../failover/request-error-facets.js";
 import type { FailoverReason } from "../failover/signal.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
@@ -32,7 +31,6 @@ import {
   PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
-  resolveProviderRequestFacetUserMessage,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
@@ -105,11 +103,6 @@ export function formatAssistantErrorText(
   }
   const providerRefusalText = formatProviderRefusalText(msg);
   if (providerRefusalText) {
-    // Prefer curated biological-risk copy when the structured refusal carries that policy text.
-    const requestFacet = classifyProviderRequestFacets({ message: raw });
-    if (requestFacet === "biological-risk") {
-      return resolveProviderRequestFacetUserMessage(requestFacet);
-    }
     return providerRefusalText;
   }
   const formatCopy = renderFormatErrorCopy(raw);

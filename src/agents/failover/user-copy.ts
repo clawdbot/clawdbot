@@ -372,8 +372,6 @@ export function renderHeartbeatRunFailureCopy(reason?: string): string {
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
-const PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE =
-  "⚠️ The model provider blocked this turn due to its biological-risk policy. Your current session and conversation context remain intact — rephrase your request, or select another approved model.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
@@ -383,17 +381,11 @@ const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
   "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
 
 const PROVIDER_REQUEST_COPY = {
-  "biological-risk": PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE,
   "quota-429": PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
   "conversation-state": PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   "provider-internal": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   "provider-internal-503": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
 } satisfies Record<ProviderRequestFacet, string>;
-
-/** Shared user copy for provider-request facets, including structured refusal display. */
-export function resolveProviderRequestFacetUserMessage(facet: ProviderRequestFacet): string {
-  return PROVIDER_REQUEST_COPY[facet];
-}
 
 function renderProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
@@ -413,7 +405,6 @@ function renderProviderRequestFailureCopy(params: {
 
 type ProviderRequestErrorCode =
   | "provider_authentication_error"
-  | "provider_biological_risk_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
   | "provider_model_unavailable"
@@ -440,9 +431,7 @@ export function resolveProviderRequestFailureCopy(params: {
           ? "provider_rate_limit_or_quota_error"
           : params.facet === "conversation-state"
             ? "provider_conversation_state_error"
-            : params.facet === "biological-risk"
-              ? "provider_biological_risk_error"
-              : "provider_internal_error";
+            : "provider_internal_error";
   return {
     code,
     userMessage,

@@ -7,7 +7,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptFailureSource, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
@@ -28,6 +28,7 @@ import {
   type CodexAppServerToolTelemetry,
 } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
+import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
@@ -53,7 +54,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
-import { resolveCodexPromptError } from "./usage-limit-error.js";
 
 export class CodexAppServerEventProjector {
   readonly transcriptCheckpoint: CodexTranscriptCheckpoint;
@@ -73,8 +73,7 @@ export class CodexAppServerEventProjector {
   private projectionClosed = false;
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
-  private promptError: unknown;
-  private promptErrorSource: AttemptFailureSource | null = null;
+  private readonly terminalFailure = new CodexTerminalFailureProjection();
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
@@ -334,16 +333,17 @@ export class CodexAppServerEventProjector {
           break;
         }
         const codexErrorInfo = isJsonObject(params.error) ? params.error.codexErrorInfo : undefined;
+        const message = readCodexErrorNotificationMessage(params);
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
-        this.promptError =
-          resolveCodexPromptError({
-            message: readCodexErrorNotificationMessage(params),
-            codexErrorInfo,
-            rateLimits: this.options.readRecentRateLimits?.(),
-          }) ?? "codex app-server error";
-        this.promptErrorSource = compactionFailure ? "compaction" : "prompt";
+        this.terminalFailure.record({
+          message,
+          codexErrorInfo,
+          rateLimits: this.options.readRecentRateLimits?.(),
+          fallbackMessage: "codex app-server error",
+          promptErrorSource: compactionFailure ? "compaction" : "prompt",
+        });
         break;
       }
       case "thread/compacted":
@@ -374,12 +374,13 @@ export class CodexAppServerEventProjector {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedTurn: this.completedTurn,
-      promptError: this.promptError,
-      promptErrorSource: this.promptErrorSource,
+      promptError: this.terminalFailure.promptError,
+      promptErrorSource: this.terminalFailure.promptErrorSource,
+      providerRefusal: this.terminalFailure.providerRefusal,
       synthesizedMissingToolResultError: this.synthesizedMissingToolResultError,
       recordSynthesizedMissingToolResultError: (error) => {
         this.synthesizedMissingToolResultError = error;
-        this.promptErrorSource = this.promptErrorSource ?? "prompt";
+        this.terminalFailure.promptErrorSource ??= "prompt";
       },
       aborted: this.aborted,
       tokenUsage: this.tokenUsage,
@@ -433,8 +434,8 @@ export class CodexAppServerEventProjector {
 
   markTimedOut(): void {
     this.aborted = true;
-    this.promptError = "codex app-server attempt timed out";
-    this.promptErrorSource = "prompt";
+    this.terminalFailure.promptError = "codex app-server attempt timed out";
+    this.terminalFailure.promptErrorSource = "prompt";
   }
 
   markAborted(): void {
@@ -601,7 +602,7 @@ export class CodexAppServerEventProjector {
     this.completedTurn = turn;
     const compactionFailure =
       turn.status === "failed" &&
-      (this.promptErrorSource === "compaction" ||
+      (this.terminalFailure.promptErrorSource === "compaction" ||
         (turn.error?.codexErrorInfo === "other" && this.isCompacting()));
     this.settledTurnFailureFinalizationAllowed =
       turn.status === "failed" &&
@@ -610,13 +611,14 @@ export class CodexAppServerEventProjector {
       this.responseCompletions.clear();
     }
     if (turn.status === "failed") {
-      this.promptError =
-        resolveCodexPromptError({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.options.readRecentRateLimits?.(),
-        }) ?? "codex app-server turn failed";
-      this.promptErrorSource = compactionFailure ? "compaction" : "prompt";
+      const codexErrorInfo = turn.error?.codexErrorInfo as JsonValue | null | undefined;
+      this.terminalFailure.record({
+        message: turn.error?.message,
+        codexErrorInfo,
+        rateLimits: this.options.readRecentRateLimits?.(),
+        fallbackMessage: "codex app-server turn failed",
+        promptErrorSource: compactionFailure ? "compaction" : "prompt",
+      });
     }
     if (compactionFailure) {
       // Codex omits item/completed on failure, so the terminal turn must close
