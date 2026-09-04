@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+import { resolveChangedTestTargetPlan } from "../../scripts/test-projects.test-support.mts";
 
 type WorkflowStep = {
   name: string;
@@ -10,6 +11,16 @@ type WorkflowStep = {
   uses?: string;
   with?: Record<string, string>;
 };
+
+it.each([".github/workflows/ci.yml", "extensions/browser/src/browser/chrome-mcp-options.ts"])(
+  "selects the prewarm contract when %s changes",
+  (changedPath) => {
+    expect(resolveChangedTestTargetPlan([changedPath])).toMatchObject({
+      mode: "targets",
+      targets: expect.arrayContaining(["test/scripts/ci-chrome-mcp-prewarm.test.ts"]),
+    });
+  },
+);
 
 it("prewarms the runtime's pinned Chrome MCP package before offline browser E2E", () => {
   // The private runtime constants are the independent contract, not another test pin.
@@ -26,6 +37,7 @@ it("prewarms the runtime's pinned Chrome MCP package before offline browser E2E"
   const restore = steps.findIndex((step) => step.name === "Restore Chrome MCP npm cache");
   const warm = steps.findIndex((step) => step.name === "Pre-warm Chrome MCP");
   const save = steps.findIndex((step) => step.name === "Save Chrome MCP npm cache");
+  const offline = steps.findIndex((step) => step.name === "Configure offline Chrome MCP");
   const test = steps.findIndex(
     (step) => step.name === "Test browser extension bootstrap end-to-end",
   );
@@ -33,7 +45,8 @@ it("prewarms the runtime's pinned Chrome MCP package before offline browser E2E"
   expect(restore).toBeGreaterThan(-1);
   expect(warm).toBeGreaterThan(restore);
   expect(save).toBeGreaterThan(warm);
-  expect(test).toBeGreaterThan(save);
+  expect(offline).toBeGreaterThan(save);
+  expect(test).toBeGreaterThan(offline);
   expect(steps[restore]).toMatchObject({
     id: "chrome-mcp-cache",
     if: "matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'",
@@ -52,13 +65,8 @@ it("prewarms the runtime's pinned Chrome MCP package before offline browser E2E"
     uses: expect.stringMatching(/^actions\/cache\/save@/),
     with: steps[restore]!.with,
   });
-  expect(steps[test]).toMatchObject({
+  expect(steps[offline]).toMatchObject({
     if: "matrix.task == 'browser-extension'",
-    run: expect.stringContaining(
-      'npm config set cache="$HOME/.npm" offline=true --location=project\n',
-    ),
+    run: 'npm config set cache="$HOME/.npm" offline=true --location=project',
   });
-  expect(steps[test]!.run).toMatch(
-    /npm config set cache="\$HOME\/\.npm" offline=true --location=project\n\s*pnpm test:e2e:browser-extension/,
-  );
 });

@@ -708,6 +708,13 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   [
+    "extensions/browser/src/browser/chrome-mcp-options.ts",
+    [
+      "extensions/browser/src/browser/chrome-mcp.test.ts",
+      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
+    ],
+  ],
+  [
     "scripts/prepare-apple-mermaid.mjs",
     [
       "test/scripts/build-and-run-mac.test.ts",

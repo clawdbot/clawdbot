@@ -2549,6 +2549,12 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with: *chrome_mcp_npm_cache
 
+      - name: Configure offline Chrome MCP
+        if: matrix.task == 'browser-extension'
+        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
+        # HOME. Project config keeps the warmed cache reachable without the registry.
+        run: npm config set cache="$HOME/.npm" offline=true --location=project
+
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
@@ -2572,11 +2578,7 @@ jobs:
 
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
-        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
-        # HOME. Project config keeps the warmed cache reachable without the registry.
-        run: |
-          npm config set cache="$HOME/.npm" offline=true --location=project
-          pnpm test:e2e:browser-extension
+        run: pnpm test:e2e:browser-extension
 
   checks-ui-e2e-real-gateway:
     permissions:
