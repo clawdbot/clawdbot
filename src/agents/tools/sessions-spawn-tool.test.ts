@@ -1139,6 +1139,46 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("clamps inherited thinking against a profile-qualified child's canonical model", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "ultra",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna@openai:work" },
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-profile-thinking", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        model: "openai/gpt-5.6-luna@openai:work",
+        thinkingLevel: "ultra",
+      }),
+    );
+  });
+
   it("surfaces unsupported configured thinking instead of silently creating a visible child", async () => {
     const registerRun = vi.fn();
     const callGateway = vi.fn(async (_method: string, request: Record<string, unknown>) => {

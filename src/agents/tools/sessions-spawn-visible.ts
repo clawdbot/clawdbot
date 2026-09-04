@@ -20,6 +20,7 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentSpawnModelSelection,
@@ -257,7 +258,7 @@ export async function maybeSpawnVisibleSession(params: {
     thinkingPlan.thinkingOverride === undefined
       ? thinkingPlan.initialSessionPatch.thinkingLevel
       : undefined;
-  const selectedModel = splitModelRef(resolvedModel);
+  const selectedModel = splitModelRef(splitTrailingAuthProfile(resolvedModel).model);
   const selectedDefaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
   const resolvedThinkingLevel = inheritedThinkingLevel
     ? resolveCandidateThinkingLevel({
