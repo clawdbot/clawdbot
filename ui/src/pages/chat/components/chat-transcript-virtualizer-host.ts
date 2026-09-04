@@ -246,17 +246,28 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           }
           if (widthChanged || heightChanged) {
             this.callbacks.onViewportResize?.();
+            this.host.requestUpdate();
           }
         }),
       observeElementOffset: (instance, callback) => {
         const element = this.scrollElement;
+        const publishOffset = (offset: number, scrolling: boolean) => {
+          const changed = offset !== instance.scrollOffset;
+          callback(offset, scrolling);
+          // Range notifications are memoized: the viewport midpoint can cross
+          // a rail landmark without changing the visible rows. Lit coalesces
+          // this request with the virtualizer's own update when both fire.
+          if (changed) {
+            this.host.requestUpdate();
+          }
+        };
         const syncOffset = () => {
           if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
           }
           const offset = element.scrollTop;
           if (offset !== instance.scrollOffset) {
-            callback(offset, instance.isScrolling);
+            publishOffset(offset, instance.isScrolling);
           }
         };
         this.syncNativeOffset = syncOffset;
@@ -282,7 +293,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (element !== this.scrollElement) {
             return;
           }
-          callback(offset, scrolling);
+          publishOffset(offset, scrolling);
           // Idle can arrive between smooth retargets. Completion needs the
           // restore path's 1px precision, not the 8px UI-follow boundary.
           // The input listeners above own reader takeover.
@@ -525,7 +536,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     // The reader has reached the final section even though the normal midpoint
     // viewport anchor still points into the preceding row.
     if (maxOffset !== null && Math.abs(maxOffset - scrollElement.scrollTop) <= 1) {
-      for (const messageId of [...messageIds].reverse()) {
+      for (const messageId of messageIds.toReversed()) {
         if (this.messageRowKeysById.has(messageId)) {
           return messageId;
         }

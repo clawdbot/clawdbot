@@ -5,6 +5,7 @@ import { directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -30,13 +31,13 @@ class ChatPositionRailDirective extends AsyncDirective {
   private interaction = initialInteraction();
   private requestUpdate: (() => void) | undefined;
 
-  protected disconnected() {
+  protected override disconnected() {
     this.interaction.hoveredId = null;
     this.interaction.focusedId = null;
     this.interaction.dismissed = false;
   }
 
-  protected reconnected() {
+  protected override reconnected() {
     this.requestUpdate?.();
   }
 
@@ -93,7 +94,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     // Resolve previews only for the bounded set of visible landmarks.
     const markers = indexes.map((candidateIndex, index) => {
       const candidate = candidates[candidateIndex]!;
-      const role = (candidate.message as { role?: unknown }).role;
+      const role = normalizeMessage(candidate.message).role;
       return {
         id: candidate.id,
         label: t(
@@ -132,7 +133,10 @@ class ChatPositionRailDirective extends AsyncDirective {
       event.preventDefault();
       event.stopPropagation();
       // Focus existing buttons synchronously: currentTarget expires after dispatch.
-      (event.currentTarget as HTMLElement)
+      if (!(event.currentTarget instanceof HTMLButtonElement)) {
+        return;
+      }
+      event.currentTarget
         .closest(".chat-position-rail")
         ?.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker")
         .item(nextIndex)
@@ -160,7 +164,7 @@ class ChatPositionRailDirective extends AsyncDirective {
                   type="button"
                   data-position-marker-id=${marker.id}
                   tabindex=${marker.id === rovingMarker.id ? "0" : "-1"}
-                  aria-label=${t("chat.thread.positionMarker", { position: index + 1, count, label: marker.label })}
+                  aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
                   aria-description=${`${marker.preview}. ${t("chat.thread.positionMarkerHint")}`}
                   aria-current=${marker.id === activeMarker.id ? "true" : "false"}
                   @pointerenter=${() => {
