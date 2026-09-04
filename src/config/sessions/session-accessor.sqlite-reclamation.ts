@@ -40,6 +40,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
+import { authorizeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -55,6 +56,8 @@ type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
   path: string;
 };
 
+type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
+
 type SessionReclamationPlanBase = {
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
@@ -62,7 +65,7 @@ type SessionReclamationPlanBase = {
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
-      deleteParams: DeleteSessionEntryLifecycleParams;
+      deleteParams: ReclamationDeleteParams;
       kind: "entry";
       preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
     })
@@ -76,7 +79,7 @@ export type SqliteSessionReclamationPlan =
       sessionId: string;
     })
   | (SessionReclamationPlanBase & {
-      deleteParams: DeleteSessionEntryLifecycleParams;
+      deleteParams: ReclamationDeleteParams;
       kind: "historical-generation";
       preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
       protectedSessionIds: string[];
@@ -106,6 +109,7 @@ export type SqliteSessionReclamationResult =
     };
 
 export type SqliteSessionReclamationWorkerData = {
+  commitGate?: SharedArrayBuffer;
   operation: "reclaim";
   plan: SqliteSessionReclamationPlan;
   type: "sqlite-transcript-archive-v2";
@@ -222,7 +226,6 @@ export function reclaimSqliteSessionInTransaction(
   if (plan.kind === "entry") {
     const value = runSqliteSessionDeletionTransaction<DeleteSessionEntryLifecycleResult>(
       (transactionDb) => {
-        plan.deleteParams.commitGuard?.();
         callbacks.beforeMutation?.();
         const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
         const entry = snapshot[0]?.entry;
@@ -314,7 +317,6 @@ export function reclaimSqliteSessionInTransaction(
   }
 
   const value = runOpenClawAgentWriteTransaction((transactionDb) => {
-    plan.deleteParams.commitGuard?.();
     callbacks.beforeMutation?.();
     const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
     if (
@@ -391,15 +393,12 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 }
 
 export async function runSqliteSessionReclamation(params: {
-  beforeInProcessMutation?: () => void;
+  assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
-  // Caller authority is a live closure: retain its synchronous commit on this thread.
-  // Unguarded background reclamation can still move expensive deletion to a Worker.
   if (
-    ("deleteParams" in params.plan && params.plan.deleteParams.commitGuard) ||
     params.forceInProcess ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
       agentId: params.plan.databaseOptions.agentId,
@@ -407,15 +406,33 @@ export async function runSqliteSessionReclamation(params: {
     })
   ) {
     return reclaimSqliteSessionInTransaction(params.plan, {
-      beforeMutation: params.beforeInProcessMutation,
+      beforeMutation: params.assertCommitAllowed,
       onCommit: params.onInProcessCommit,
     });
   }
+  const assertCommitAllowed = params.assertCommitAllowed;
+  const commitGate = assertCommitAllowed
+    ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
+    : undefined;
+  const recoveredCommitErrors: unknown[] = [];
   const [workerResult] =
     await runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
       expectedMessageType: "reclaimed",
+      onCommitRequest:
+        commitGate && assertCommitAllowed
+          ? () => {
+              recoveredCommitErrors.push(
+                ...authorizeSqliteReclamationCommit(
+                  commitGate,
+                  params.plan.databaseOptions.path,
+                  assertCommitAllowed,
+                ),
+              );
+            }
+          : undefined,
       transferList: prepareReclamationWorkerTransferList(params.plan),
       workerData: {
+        commitGate,
         operation: "reclaim",
         plan: params.plan,
         type: "sqlite-transcript-archive-v2",
@@ -423,6 +440,12 @@ export async function runSqliteSessionReclamation(params: {
     });
   if (!workerResult) {
     throw new Error("SQLite session reclamation Worker returned no result");
+  }
+  if (recoveredCommitErrors.length > 0) {
+    reclamationLog.warn("SQLite session reclamation recovered commit settlement errors", {
+      errors: recoveredCommitErrors.map(String),
+      path: params.plan.databaseOptions.path,
+    });
   }
   if (workerResult.cleanupIncomplete) {
     reclamationLog.error("SQLite session reclamation committed but Worker cleanup is incomplete", {
@@ -439,6 +462,14 @@ export async function runSqliteSessionReclamation(params: {
   return workerResult.result;
 }
 
+// The live assertion belongs to runSqliteSessionReclamation, never its cloneable plan.
+function prepareReclamationDeleteParams({
+  commitGuard: _commitGuard,
+  ...params
+}: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
+  return params;
+}
+
 export function createSessionEntryReclamationPlan(params: {
   databaseOptions: OpenClawAgentDatabaseOptions;
   deleteParams: DeleteSessionEntryLifecycleParams;
@@ -447,7 +478,7 @@ export function createSessionEntryReclamationPlan(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "entry" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
-    deleteParams: { ...params.deleteParams },
+    deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "entry",
     materializedPlans: params.materializedPlans,
     preparedTargetSnapshot: params.preparedTargetSnapshot,
@@ -492,7 +523,7 @@ export function createHistoricalGenerationReclamationPlan(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "historical-generation" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
-    deleteParams: { ...params.deleteParams },
+    deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "historical-generation",
     materializedPlans: params.materializedPlans,
     preparedTargetSnapshot: params.preparedTargetSnapshot,
