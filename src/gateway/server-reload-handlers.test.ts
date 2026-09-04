@@ -5111,7 +5111,11 @@ describe("gateway Gmail hot reload handlers", () => {
         .mockImplementationOnce(() => {
           throw new Error("runtime publication refused");
         });
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const recoveryRequested = createDeferred();
+      const requestRecoveryRestart = vi.fn(() => {
+        recoveryRequested.resolve();
+        return { status: "emitted" as const };
+      });
       const reloader = startManagedGatewayConfigReloader({
         initialConfig,
         readSnapshot: async () => createValidConfigSnapshot(disabledConfig, "terminal-disable"),
@@ -5187,7 +5191,9 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(policy.isEnabled()).toBe(false);
         expect(stopAndDrain).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
         if (cronCleanupFails) {
-          await waitForFast(() => expect(requestRecoveryRestart).toHaveBeenCalledOnce());
+          // Drive the idle poll without tying fake-clock progress to real polling ticks.
+          await vi.advanceTimersByTimeAsync(500);
+          await recoveryRequested.promise;
         }
         expect(requestRecoveryRestart).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
       } finally {
