@@ -326,6 +326,12 @@ Rejected support-file paths: absolute paths, hidden path segments, path
 traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
 and paths outside the standard support folders.
 
+Directory drafts must be completely readable and fit within eight path
+components, including the filename. Evaluator bundles require a completely
+readable target skill tree within sixteen path components. Unreadable directories or
+deeper content produce an error; they are not silently omitted from the proposal
+or evaluation. Fix the reported directory or reduce its nesting, then retry.
+
 ## Agent tool
 
 For personal library operations, `skill_workshop` exposes
