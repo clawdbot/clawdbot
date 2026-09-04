@@ -351,6 +351,7 @@ describe("chrome MCP page parsing", () => {
       "--autoConnect",
       "--no-usage-statistics",
       "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
       ...mcpArgs,
     ]);
   });
