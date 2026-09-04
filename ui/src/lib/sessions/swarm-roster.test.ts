@@ -39,6 +39,41 @@ afterEach(() => {
 });
 
 describe("isSwarmEnabledInConfig", () => {
+  it.each([
+    { label: "unloaded config", config: undefined },
+    { label: "omitted tools", config: {} },
+    { label: "omitted swarm", config: { tools: {} } },
+    { label: "empty swarm", config: { tools: { swarm: {} } } },
+    { label: "limits-only swarm", config: { tools: { swarm: { maxConcurrent: 3 } } } },
+    {
+      label: "limits-only agent swarm",
+      config: { agents: { entries: { worker: { tools: { swarm: { maxConcurrent: 3 } } } } } },
+    },
+  ])("defaults to enabled with $label", ({ config }) => {
+    expect(isSwarmEnabledInConfig(config, "worker")).toBe(true);
+  });
+
+  it.each([
+    { globalSwarm: false, agentSwarm: {}, expected: false },
+    { globalSwarm: { enabled: false }, agentSwarm: { maxConcurrent: 3 }, expected: false },
+    { globalSwarm: true, agentSwarm: { enabled: false }, expected: false },
+    { globalSwarm: { enabled: true }, agentSwarm: false, expected: false },
+    { globalSwarm: false, agentSwarm: { enabled: true }, expected: true },
+    { globalSwarm: { enabled: false }, agentSwarm: true, expected: true },
+    { globalSwarm: undefined, agentSwarm: false, expected: false },
+    { globalSwarm: undefined, agentSwarm: { enabled: false }, expected: false },
+  ])("resolves global $globalSwarm and agent $agentSwarm as $expected", (testCase) => {
+    expect(
+      isSwarmEnabledInConfig(
+        {
+          tools: { swarm: testCase.globalSwarm },
+          agents: { entries: { WORKER: { tools: { swarm: testCase.agentSwarm } } } },
+        },
+        "worker",
+      ),
+    ).toBe(testCase.expected);
+  });
+
   it("accepts both the boolean and object configuration forms", () => {
     expect(isSwarmEnabledInConfig({ tools: { swarm: true } })).toBe(true);
     expect(isSwarmEnabledInConfig({ tools: { swarm: { enabled: true } } })).toBe(true);

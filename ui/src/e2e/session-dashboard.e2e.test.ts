@@ -11,6 +11,11 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  dockChatSidePanel,
+  focusChatSidePanel,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 
@@ -312,7 +317,7 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
-    await page.locator(".side-panel").waitFor();
+    await page.locator('[data-panel-slot="dashboard"]').waitFor();
     await page.locator(".board-session-surface").waitFor();
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -321,7 +326,7 @@ suite.define(() => {
       });
     }
 
-    await page.locator(".side-panel__dock-bottom").click();
+    await dockChatSidePanel(page, "bottom");
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
     if (recordProof) {
@@ -400,10 +405,10 @@ suite.define(() => {
       proofDir: recordProof ? path.join(suite.artifactDir, "workboard-pin") : undefined,
     });
 
-    const expand = page.getByRole("button", { name: "Expand side panel" });
-    await expand.click();
+    await restoreChatAsMain(page);
+    await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-    await page.getByRole("button", { name: "Collapse", exact: true }).click();
+    await page.getByRole("button", { name: "Restore split", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
@@ -416,7 +421,8 @@ suite.define(() => {
         path: path.join(suite.artifactDir, "workboard-pin", "05-collapsed-bottom.png"),
       });
     }
-    await page.locator(".side-panel__minimize").click();
+    await restoreChatAsMain(page);
+    await page.locator('[data-region-header="side"] .side-panel__minimize').click();
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -674,7 +680,7 @@ suite.define(() => {
         Reflect.set(globalThis, "workboardPluginElementIdentity", element);
       });
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      await page.locator(".side-panel__minimize").click();
+      await page.locator('[data-region-header="side"] .side-panel__minimize').click();
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expect
         .poll(() =>

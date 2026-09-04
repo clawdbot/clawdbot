@@ -70,6 +70,58 @@ suite.define(() => {
     },
   );
 
+  it("shows the active fallback model while retaining the selected preference", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
+      const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
+      const gateway = await installMockGateway(page, {
+        agentModel: "codex/gpt-5.5",
+        models: [selectedModel, activeModel],
+        methodResponses: {
+          "sessions.list": {
+            count: 1,
+            defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                model: selectedModel.id,
+                modelProvider: selectedModel.provider,
+                activeModel: activeModel.id,
+                activeModelProvider: activeModel.provider,
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            path: "",
+            ts: Date.now(),
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__input");
+      const trigger = composer.locator('[data-chat-model-select="true"]');
+
+      await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+      await trigger.click();
+      await expect
+        .poll(() =>
+          composer
+            .locator('[data-chat-model-option="codex/gpt-5.5"]')
+            .getAttribute("aria-selected"),
+        )
+        .toBe("true");
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${suite.artifactDir}/active-fallback-model.png`,
+        });
+      }
+    });
+  });
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

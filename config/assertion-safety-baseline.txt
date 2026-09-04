@@ -1491,7 +1491,7 @@ packages/ai/src/transports/openai-completions-replay.ts	9
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
-packages/ai/src/transports/openai-responses-client.ts	13
+packages/ai/src/transports/openai-responses-client.ts	12
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
@@ -1560,7 +1560,7 @@ packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/post-json.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
-packages/memory-host-sdk/src/host/session-files.ts	15
+packages/memory-host-sdk/src/host/session-files.ts	9
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/session-transcript-corpus.ts	1
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
@@ -2015,7 +2015,7 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
-src/agents/tools/agent-step.ts	6
+src/agents/tools/agent-step.ts	2
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3
 src/agents/tools/ask-user-tool.ts	8
@@ -2903,7 +2903,7 @@ src/gateway/server-methods/skills.ts	8
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/talk-shared.ts	6
-src/gateway/server-methods/talk.ts	7
+src/gateway/server-methods/talk.ts	5
 src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
 src/gateway/server-methods/terminal.ts	6
@@ -3545,7 +3545,7 @@ src/projects/project-registry.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
-src/proxy-capture/store.sqlite.ts	27
+src/proxy-capture/store.sqlite.ts	25
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1
 src/runtime.ts	4
@@ -3626,7 +3626,7 @@ src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/config.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/source.ts	1
-src/skills/loading/workspace-skill-loader.ts	2
+src/skills/loading/workspace-skill-loader.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2

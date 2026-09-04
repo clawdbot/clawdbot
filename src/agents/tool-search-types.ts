@@ -163,6 +163,7 @@ export type ToolSearchCatalogCompactionParams = {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  toolExecutionAllow?: readonly string[];
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;

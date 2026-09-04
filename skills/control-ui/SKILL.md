@@ -1,6 +1,7 @@
 ---
 name: control-ui
 description: "Operate and troubleshoot the OpenClaw Control UI: navigate connected clients, organize sessions, build session dashboards, and handle direct or Tailscale-hosted Gateways."
+user-invocable: true
 ---
 
 # Control UI

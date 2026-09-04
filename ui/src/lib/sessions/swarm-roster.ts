@@ -27,7 +27,7 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
     : null;
   const agent = authoredAgentId ? asNullableRecord(entries?.[authoredAgentId]) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
-  return agentEnabled ?? globalEnabled ?? false;
+  return agentEnabled ?? globalEnabled ?? true;
 }
 
 function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {

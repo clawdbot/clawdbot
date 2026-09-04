@@ -371,6 +371,58 @@ describe("gateway session utils", () => {
     expect(row.modelOverrideSource).toBe(expected);
   });
 
+  test("projects the active fallback model separately from the selected model", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: "fallback-session",
+        updatedAt: 1,
+        providerOverride: "codex",
+        modelOverride: "gpt-5.5",
+        modelProvider: "ollama",
+        model: "qwen3.5:9b",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.5",
+          activeModel: "ollama/qwen3.5:9b",
+        },
+      },
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "codex",
+      model: "gpt-5.5",
+      activeModelProvider: "ollama",
+      activeModel: "qwen3.5:9b",
+    });
+  });
+
+  test("does not project a stale fallback notice after the runtime returns to the selection", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "codex/gpt-5.5" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: "recovered-session",
+        updatedAt: 1,
+        modelProvider: "codex",
+        model: "gpt-5.5",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.5",
+          activeModel: "ollama/qwen3.5:9b",
+        },
+      },
+    });
+
+    expect(row.activeModelProvider).toBeUndefined();
+    expect(row.activeModel).toBeUndefined();
+  });
+
   test.each([
     { name: "never read", entry: {}, expected: false },
     {

@@ -5,8 +5,9 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import { CODE_MODE_NODES_TOOL_ID } from "./code-mode-bridge.js";
+import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogBinding,
@@ -36,7 +37,6 @@ import {
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
@@ -144,7 +144,7 @@ function createCodeModeExecDescription(
   // A known run catalog with neither MCP nor swarm has no virtual API files.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
-  const swarmEnabled = resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled;
+  const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
   const apiGuidance =
     !catalogKnown || hasMcp || swarmEnabled
       ? " Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`."
@@ -296,10 +296,13 @@ export function applyCodeModeCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  toolExecutionAllow?: ToolSearchToolContext["toolExecutionAllow"];
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
 }) {
-  const tools = params.tools.filter(
+  const tools = finalizeAgentToolAvailability(params.tools, {
+    toolExecutionAllow: params.toolExecutionAllow,
+  }).filter(
     (tool) =>
       isCodeModeControlTool(tool) ||
       (tool.name !== TOOL_SEARCH_CODE_MODE_TOOL_NAME &&
