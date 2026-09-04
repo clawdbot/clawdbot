@@ -1,11 +1,16 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
-import type { ChatGoalDraftMode, DurableComposerDraftAttachment } from "./chat-types.ts";
+import type {
+  ChatGoalDraftMode,
+  DurableComposerDraftAttachment,
+  HumanMention,
+} from "./chat-types.ts";
 import {
   openControlUiDatabase,
   requestResult,
   transactionComplete,
 } from "./control-ui-database.runtime.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
+import { readHumanMentions } from "./human-mentions.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
 const STORE_NAME = "composerDrafts";
@@ -24,6 +29,7 @@ export type DurableComposerDraftScope = {
 type DurableComposerDraft = {
   revision: number;
   text: string;
+  mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   attachments: DurableComposerDraftAttachment[];
 };
@@ -111,6 +117,7 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
   ) {
     return null;
   }
+  record.mentions = readHumanMentions(record.text, record.mentions);
   // SAFETY: the complete stored shape and every attachment payload were validated above.
   return record as StoredDurableComposerDraft;
 }
@@ -125,6 +132,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     ...record,
     revision,
     text: "",
+    mentions: undefined,
     goalMode: undefined,
     attachments: [],
     updatedAt: now,
@@ -406,6 +414,7 @@ export async function readDurableComposerDraft(
         revision: record.revision,
         writeId: record.writeId,
         text: record.text,
+        ...(record.mentions?.length ? { mentions: record.mentions } : {}),
         ...(record.goalMode ? { goalMode: record.goalMode } : {}),
         attachments: record.attachments,
       },
@@ -431,7 +440,7 @@ export async function writeDurableComposerDraft(
   if (payloadBytes > MAX_DURABLE_DRAFT_ATTACHMENT_BYTES) {
     const fallbackResult = await writeDurableComposerDraft(
       scope,
-      { revision: draft.revision, text: draft.text, goalMode: draft.goalMode, attachments: [] },
+      { ...draft, attachments: [] },
       options,
     );
     return fallbackResult.status === "persisted"
@@ -472,6 +481,9 @@ export async function writeDurableComposerDraft(
       scopeKey: scope.scopeKey,
       revision: draft.revision,
       text: draft.text,
+      ...(draft.mentions?.length
+        ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
       attachments: draft.attachments,
       updatedAt: now,

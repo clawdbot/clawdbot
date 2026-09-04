@@ -728,26 +728,14 @@ export class FeishuStreamingSession {
     return result;
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
-    try {
-      return (await this.closeWithResult(finalText, options)).visibleReplySent;
-    } catch (error: unknown) {
-      if (error instanceof FeishuStreamingFinalizationError) {
-        return error.result.visibleReplySent;
-      }
-      throw error;
-    }
-  }
-
-  async discard(): Promise<void> {
+  async discard(): Promise<FeishuStreamingCloseResult> {
     if (!this.state || this.closed) {
-      return;
+      return { visibleReplySent: false };
     }
     const { cardId, messageId } = this.state;
     if (!messageId) {
       // Accepted cards without a message receipt can still be cleared by card id.
-      await this.close("");
-      return;
+      return this.closeWithResult("");
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -763,10 +751,12 @@ export class FeishuStreamingSession {
       this.state = null;
       this.pendingText = null;
       this.log?.(`Discarded streaming card: cardId=${cardId}`);
+      return { visibleReplySent: false };
     } catch (error) {
       this.log?.(`Discard failed: ${String(error)}`);
       this.closed = false;
-      await this.close("");
+      // A rejected clear leaves accepted text visible; preserve its receipt and failure.
+      return this.closeWithResult("");
     }
   }
 

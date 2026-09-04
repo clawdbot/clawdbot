@@ -429,7 +429,9 @@ async function noteSessionSqliteMigrationHealth(params: {
     );
   }
   if (report.totals.issues > 0) {
-    lines.push(`- Found ${report.totals.issues} session SQLite issue(s).`);
+    lines.push(
+      `- Found ${report.totals.issues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
+    );
   }
   if (!params.shouldRepair) {
     lines.push(

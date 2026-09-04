@@ -8,7 +8,13 @@ import type { SlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 export function createSlackNativeProgressTransport(params: {
   setup: Pick<
     SlackDispatchSetup,
-    "ctx" | "message" | "replyPlan" | "slackClient" | "slackIdentity" | "slackStreamFallbackTeamId"
+    | "ctx"
+    | "message"
+    | "replyPlan"
+    | "slackClient"
+    | "slackClientOptions"
+    | "slackIdentity"
+    | "slackStreamFallbackTeamId"
   >;
   delivery: SlackStreamingDeliveryRuntime;
 }) {
@@ -55,6 +61,7 @@ export function createSlackNativeProgressTransport(params: {
     const startPromise = (async () => {
       const session = await startSlackStream({
         client: slackClient,
+        clientOptions: params.setup.slackClientOptions,
         channel: message.channel,
         threadTs: streamThreadTs,
         ...(update.text ? { text: update.text } : {}),

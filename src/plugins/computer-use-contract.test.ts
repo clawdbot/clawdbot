@@ -212,6 +212,18 @@ describe("Computer Use wire contract", () => {
     }
   });
 
+  it("accepts canonical input success and rejects obsolete cursor fields", () => {
+    expect(parseComputerActResult({ ok: true })).toEqual({ ok: true });
+    const openDetails = { coordinateSpace: { unit: "provider-defined" }, vendorValue: 42 };
+    expect(parseComputerActResult({ ok: true, details: openDetails })).toEqual({
+      ok: true,
+      details: openDetails,
+    });
+    expect(() => parseComputerActResult({ ok: true, cursorX: 12, cursorY: 34 })).toThrow(
+      "COMPUTER_CONTRACT_MISMATCH",
+    );
+  });
+
   it("caps semantic observations and provider detail records", () => {
     const element = {
       elementRef: "element-1",

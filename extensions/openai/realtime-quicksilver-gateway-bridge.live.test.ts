@@ -3,13 +3,13 @@ import {
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-provider-shared.js";
 import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-peer.runtime.js";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
 import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
@@ -163,7 +163,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       let lateAudioBytes = 0;
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
-        model: "gpt-live-1-boulder-alpha",
+        model: "gpt-live-1-codex",
         voice: "spruce",
         instructions: "Listen to the user. Do not speak or delegate.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },

@@ -1,15 +1,40 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
-export function resolveGitHubPublicationFailure(error: unknown): {
-  code: Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
-  nextAction: string;
-} {
+type PublicationFailure = Pick<
+  Extract<SessionGitHubPublicationResult, { status: "failed" }>,
+  "code" | "nextAction"
+>;
+
+/** An owner observed a definitive outcome; an unavailable probe is not this failure. */
+export class GitHubPublicationKnownFailure extends Error {
+  constructor(
+    message: string,
+    readonly failure: PublicationFailure,
+  ) {
+    super(message);
+  }
+}
+
+export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKnownFailure {
+  constructor(message: string) {
+    super(message, {
+      code: "workspace_changed",
+      nextAction:
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+    });
+  }
+}
+
+export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
+  if (error instanceof GitHubPublicationKnownFailure) {
+    return error.failure;
+  }
   const message = error instanceof Error ? error.message : "";
   if (message.includes("identity")) {
     return {
       code: message.includes("changed") ? "identity_changed" : "identity_unavailable",
       nextAction:
-        "Reconnect the GitHub identity in Agents → Tools, then request publication again.",
+        "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.",
     };
   }
   if (message.includes("session") || message.includes("worktree owner")) {
@@ -29,7 +54,7 @@ export function resolveGitHubPublicationFailure(error: unknown): {
     return {
       code: "workspace_changed",
       nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
     };
   }
   if (message.includes("not a git")) {
@@ -38,20 +63,11 @@ export function resolveGitHubPublicationFailure(error: unknown): {
   if (message.includes("GitHub remote")) {
     return { code: "not_github", nextAction: "Use a GitHub repository remote to publish." };
   }
-  if (message.includes("no changes")) {
-    return { code: "no_changes", nextAction: "Make or restore a repository change, then retry." };
-  }
   if (message.includes("push")) {
     return {
       code: "push_rejected",
       nextAction:
         "Check repository write access and branch drift, then retry without force-pushing.",
-    };
-  }
-  if (message.includes("pull request was closed")) {
-    return {
-      code: "github_rejected",
-      nextAction: "Reopen the closed pull request or retry to create a new publication request.",
     };
   }
   if (message.includes("pull request") || message.includes("GitHub")) {

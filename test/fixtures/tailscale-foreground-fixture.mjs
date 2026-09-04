@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 const args = process.argv.slice(2);
+if (JSON.stringify(args) === JSON.stringify(["serve", "status", "--json"])) {
+  process.stdout.write("{}");
+  process.exit(0);
+}
 const serveArgs = ["serve", "--yes", "--bg=false", "18789"];
 const stalledFunnelArgs = ["funnel", "--yes", "--bg=false", "18790"];
 if (

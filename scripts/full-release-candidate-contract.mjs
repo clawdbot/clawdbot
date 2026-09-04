@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { canonicalAsciiJson } from "./lib/canonical-json.mjs";
+import { canonicalAsciiJson, compareAscii } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   normalizeUpgradeSurvivorBaselineSpec,
@@ -10,7 +10,7 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
 const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
 const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
 const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v2-";
@@ -28,8 +28,6 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const WORKFLOW_PATH_PATTERN = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/u;
 const RELEASE_PROFILES = new Set(["minimum", "beta", "stable", "full"]);
 const SHARED_IMAGE_POLICIES = new Set(["existing-only", "no-push-artifact"]);
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
-
 function fail(message) {
   throw new Error(message);
 }
@@ -151,6 +149,7 @@ export function buildFullReleaseCandidateRequest(input) {
     upgradeSurvivorScenarios: effectiveScenarios.toSorted(compareAscii),
     allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
     allowUnreleasedChangelog: input.allowUnreleasedChangelog,
+    packagePublished: input.packagePublished,
     sharedImagePolicy: input.sharedImagePolicy,
     contractVersions: {
       package: 1,
@@ -167,6 +166,7 @@ export function validateFullReleaseCandidateRequest(value) {
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
+      "packagePublished",
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -245,6 +245,10 @@ export function validateFullReleaseCandidateRequest(value) {
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
+    packagePublished: boolean(
+      value.packagePublished,
+      "full release candidate request packagePublished",
+    ),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(

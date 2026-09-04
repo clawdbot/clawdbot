@@ -17,12 +17,10 @@ type FsBridgeHoisted = {
 
 let actualOpenRootFile: OpenRootFileFn | undefined;
 
-const hoisted = vi.hoisted(
-  (): FsBridgeHoisted => ({
-    execDockerRaw: vi.fn(),
-    openRootFile: vi.fn(),
-  }),
-);
+const hoisted = vi.hoisted((): FsBridgeHoisted => ({
+  execDockerRaw: vi.fn(),
+  openRootFile: vi.fn(),
+}));
 
 vi.mock("./docker.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },

@@ -249,7 +249,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
-    sidecar.stop();
+    await sidecar.stop();
     expect(titleBatchSpy).toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     titleBatchSpy.mockClear();
@@ -281,7 +281,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
     expect(afterListEntries[0]?.entry).toBe(cachedEntries[0]?.entry);
   } finally {
-    sidecar?.stop();
+    await sidecar?.stop();
     vi.useRealTimers();
     titleBatchSpy.mockRestore();
     titlePageSpy.mockRestore();
@@ -328,7 +328,7 @@ test("startup skips a large session prewarm while request-time listing remains a
 
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
-    sidecar.stop();
+    await sidecar.stop();
     expect(info).toHaveBeenCalledWith(
       "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
     );
@@ -338,7 +338,7 @@ test("startup skips a large session prewarm while request-time listing remains a
     const result = await directSessionReq("sessions.list", LIST_PARAMS);
     expect(result.ok).toBe(true);
   } finally {
-    sidecar?.stop();
+    await sidecar?.stop();
     vi.useRealTimers();
     listSpy.mockRestore();
   }

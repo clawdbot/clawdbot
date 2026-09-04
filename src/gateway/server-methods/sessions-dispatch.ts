@@ -16,12 +16,16 @@ import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from 
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
 import {
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
 } from "../worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import {
+  isForceAbandonedWorkerPlacement,
+  type WorkerSessionPlacementRecord,
+} from "../worker-environments/placement-record.js";
 import {
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementSessionRuntime,
@@ -167,11 +171,7 @@ async function validateDispatchExecutionMode(params: {
     return false;
   }
   const environmentService = params.context.workerEnvironmentService;
-  if (
-    (params.executionMode === "worker-turn" && !environmentService?.supportsExecutionMode) ||
-    environmentService?.supportsExecutionMode?.(params.target.profileId, params.executionMode) ===
-      true
-  ) {
+  if (environmentService?.supportsExecutionMode(params.target.profileId, params.executionMode)) {
     return true;
   }
   respondInvalidWorkerSession(
@@ -358,9 +358,21 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         placement: existingPlacement,
       })
     ) {
+      let providerId: string | undefined;
+      try {
+        const identity = readWorkerPlacementIdentity(
+          existingPlacement,
+          context.workerEnvironmentService,
+        );
+        providerId = identity?.providerId;
+      } catch {
+        // Missing inventory proof must retain the refusal even when its label is unknown.
+      }
       respondInvalidWorkerSession(
         respond,
-        "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
+        providerId === DEVICE_WORKER_PROVIDER_ID
+          ? "device worker placement must be abandoned before redispatch; use Continue on Gateway"
+          : "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
       );
       return;
     }
@@ -532,7 +544,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
-    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "draining") {
+    const retryAbandonment =
+      "abandonSource" in params && isForceAbandonedWorkerPlacement(existingPlacement);
+    if (
+      existingPlacement?.state !== "active" &&
+      existingPlacement?.state !== "draining" &&
+      !retryAbandonment
+    ) {
       respondInvalidWorkerSession(
         respond,
         `session cannot move from placement ${existingPlacement?.state ?? "local"}`,

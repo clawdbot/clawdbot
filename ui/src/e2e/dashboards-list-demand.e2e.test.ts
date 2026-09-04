@@ -17,8 +17,8 @@ const suite = createControlUiE2eSuite({
 
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
-  boardFace: "dashboard",
   configuredAgentsOnly: true,
+  hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
@@ -46,8 +46,8 @@ function isDashboardRequest(request: { params?: unknown }): boolean {
   return (
     typeof request.params === "object" &&
     request.params !== null &&
-    "boardFace" in request.params &&
-    request.params.boardFace === "dashboard"
+    "hasBoard" in request.params &&
+    request.params.hasBoard === true
   );
 }
 
@@ -71,7 +71,7 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               {
-                match: { boardFace: "dashboard" },
+                match: { hasBoard: true },
                 response: sessionsResult(key, "Deploy monitor", 1),
               },
             ],
@@ -82,7 +82,7 @@ suite.define(() => {
       const dashboards = page.locator("openclaw-dashboards-page");
       await dashboards.getByText("Deploy monitor", { exact: true }).waitFor();
       const before = (await gateway.getRequests("sessions.list")).filter(isDashboardRequest);
-      await gateway.deferNext("sessions.list", { boardFace: "dashboard" });
+      await gateway.deferNext("sessions.list", { hasBoard: true });
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
         key,
@@ -122,7 +122,7 @@ suite.define(() => {
         return (
           appContext?.sessions.listSnapshot({
             limit: rosterLimit,
-            boardFace: "dashboard",
+            hasBoard: true,
             archivedFilter: "all",
             agentId: appContext.agentSelection.state.scopeId ?? undefined,
           }).error === "Dashboard refresh unavailable"
@@ -140,7 +140,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.list", {
         cases: [
           {
-            match: { boardFace: "dashboard" },
+            match: { hasBoard: true },
             response: sessionsResult(key, "Updated deploy monitor", 2),
           },
         ],
@@ -166,7 +166,7 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               {
-                match: { boardFace: "dashboard" },
+                match: { hasBoard: true },
                 response: {
                   __mockError: { code: "UNAVAILABLE", message: "Dashboard list unavailable" },
                 },
@@ -185,7 +185,7 @@ suite.define(() => {
       expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
       const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
       await gateway.setMethodResponse("sessions.list", {
-        cases: [{ match: { boardFace: "dashboard" }, response: emptyResult }],
+        cases: [{ match: { hasBoard: true }, response: emptyResult }],
       });
       await dashboards.getByRole("button", { name: "Retry", exact: true }).click();
       await dashboards.locator("[data-dashboards-empty]").waitFor();
@@ -214,7 +214,7 @@ suite.define(() => {
             "sessions.list": {
               cases: [
                 {
-                  match: { archived: "all", boardFace: "dashboard" },
+                  match: { archived: "all", hasBoard: true },
                   response: sessionsResult(`agent:main:dashboard-${index}`, dashboardLabel, index),
                 },
               ],
@@ -302,7 +302,7 @@ suite.define(() => {
           await gateway.setMethodResponse("sessions.list", {
             cases: [
               {
-                match: { archived: "all", boardFace: "dashboard" },
+                match: { archived: "all", hasBoard: true },
                 response: sessionsResult(
                   `agent:main:updated-dashboard-${index + 1}`,
                   updatedDashboardLabel,

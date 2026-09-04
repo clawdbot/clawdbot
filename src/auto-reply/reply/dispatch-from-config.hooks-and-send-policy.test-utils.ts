@@ -59,6 +59,30 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("skips claiming hooks when admitted session settings are restrictive", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "unsafe" });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "embedded reply" }));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "embedded reply" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
   it("silently short-circuits when hook returns handled without text", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
@@ -1735,6 +1759,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         archivedBy: { type: "human", id: "profile-operator" },
+        archiveReason: "manual",
       };
       if (blocked || suppliedOwner) {
         placementContextMocks.getMany.mockReturnValue(
@@ -1795,6 +1820,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           type: "human",
           id: "profile-operator",
         });
+        expect(sessionStoreMocks.currentEntry?.archiveReason).toBe("manual");
         expect(replyResolver).not.toHaveBeenCalled();
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         return;
@@ -1805,6 +1831,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
       expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archiveReason).toBeUndefined();
       if (suppliedOwner) {
         expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
         expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();

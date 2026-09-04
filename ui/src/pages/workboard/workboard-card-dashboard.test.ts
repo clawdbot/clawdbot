@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -22,8 +23,11 @@ function createClient(
     : [],
 ) {
   const removeListener = vi.fn();
-  const request = vi.fn(async (_method: string, params?: { sessionKey?: string }) => ({
-    sessionKey: params?.sessionKey ?? "agent:main:unknown",
+  const request = vi.fn(async (_method: string, params?: BoardGetParams) => ({
+    sessionKey:
+      params?.sessionKey === "global"
+        ? `agent:${params.agentId}:global`
+        : (params?.sessionKey ?? "agent:main:unknown"),
     revision: 1,
     tabs,
     widgets,
@@ -39,12 +43,12 @@ function createClient(
 }
 
 async function mountDashboard(
-  sessionKey: string,
+  session: BoardGetParams,
   client: GatewayBrowserClient,
   capabilities: { canMutate?: boolean; canGrant?: boolean } = {},
 ): Promise<DashboardElement> {
   const element = document.createElement("openclaw-workboard-card-dashboard");
-  element.sessionKey = sessionKey;
+  element.session = session;
   element.client = client;
   element.connected = true;
   element.canMutate = capabilities.canMutate ?? false;
@@ -96,7 +100,7 @@ describe("Workboard card dashboard", () => {
       request,
       addEventListener: vi.fn(() => () => {}),
     } as unknown as GatewayBrowserClient;
-    const element = await mountDashboard(sessionKey, client);
+    const element = await mountDashboard({ sessionKey }, client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expect(
@@ -128,10 +132,14 @@ describe("Workboard card dashboard", () => {
         revision: 1,
       },
     ]);
-    const element = await mountDashboard("agent:main:workboard-live-scopes", client, {
-      canMutate: true,
-      canGrant: true,
-    });
+    const element = await mountDashboard(
+      { sessionKey: "agent:main:workboard-live-scopes" },
+      client,
+      {
+        canMutate: true,
+        canGrant: true,
+      },
+    );
 
     await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
     const board = element.querySelector("openclaw-board-view")!;
@@ -167,30 +175,35 @@ describe("Workboard card dashboard", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each(["chat-first", "dashboard-first"] as const)(
-    "shares gateway state without leaking dashboard capabilities in %s order",
-    async (order) => {
-      const sessionKey = `agent:main:workboard-shared-${order}`;
+  it.each(
+    (["chat-first", "dashboard-first"] as const).flatMap((order) => [
+      { order, session: { sessionKey: `agent:main:workboard-shared-${order}` } },
+      { order, session: { sessionKey: "global", agentId: "work" } },
+    ]),
+  )(
+    "shares $session.sessionKey gateway state without leaking dashboard capabilities in $order order",
+    async ({ order, session }) => {
       const { client, request, removeListener } = createClient();
       let chat: BoardProviderLease | undefined;
       let dashboard: DashboardElement | undefined;
 
       try {
         if (order === "chat-first") {
-          chat = acquireBoardProviderForSession(sessionKey, client, true, true, true, true, true);
-          dashboard = await mountDashboard(sessionKey, client, {
+          chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
+          dashboard = await mountDashboard(session, client, {
             canMutate: true,
             canGrant: false,
           });
         } else {
-          dashboard = await mountDashboard(sessionKey, client, {
+          dashboard = await mountDashboard(session, client, {
             canMutate: true,
             canGrant: false,
           });
-          chat = acquireBoardProviderForSession(sessionKey, client, true, true, true, true, true);
+          chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
         }
 
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+        expect(request).toHaveBeenCalledWith("board.get", session);
         const dashboardProvider = Reflect.get(dashboard, "provider") as BoardProvider;
 
         expect(chat.provider).not.toBe(dashboardProvider);
@@ -244,7 +257,7 @@ describe("Workboard card dashboard", () => {
         revision: 1,
       },
     ]);
-    const element = await mountDashboard("agent:main:workboard-non-empty", client);
+    const element = await mountDashboard({ sessionKey: "agent:main:workboard-non-empty" }, client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
     await vi.waitFor(() =>
@@ -271,7 +284,7 @@ describe("Workboard card dashboard", () => {
         viewTicketTtlMs: 1_200_000,
       },
     ]);
-    const element = await mountDashboard("agent:main:workboard-collapse", client);
+    const element = await mountDashboard({ sessionKey: "agent:main:workboard-collapse" }, client);
     await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
     const board = element.querySelector("openclaw-board-view")!;
     expect(board.active).toBe(true);
@@ -289,7 +302,7 @@ describe("Workboard card dashboard", () => {
 
   it("keeps an empty dashboard compact until the operator expands its hint", async () => {
     const { client, request } = createClient();
-    const element = await mountDashboard("agent:main:workboard-empty", client);
+    const element = await mountDashboard({ sessionKey: "agent:main:workboard-empty" }, client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
     await vi.waitFor(() => expect(element.textContent).toContain("No dashboard yet"));
@@ -321,7 +334,7 @@ describe("Workboard card dashboard", () => {
       revision: 1,
     }));
     const { client } = createClient(widgets, tabs);
-    const element = await mountDashboard("agent:main:workboard-tabs", client);
+    const element = await mountDashboard({ sessionKey: "agent:main:workboard-tabs" }, client);
     await vi.waitFor(() => expect(element.querySelector("wa-tab-group")).not.toBeNull());
 
     element
@@ -338,14 +351,23 @@ describe("Workboard card dashboard", () => {
     expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("active")).toBeNull();
   });
 
-  it("releases its shared provider lease when removed", async () => {
+  it("releases its provider through detached updates and reacquires only after reconnect", async () => {
     const { client, request, removeListener } = createClient();
-    const element = await mountDashboard("agent:main:workboard-disposal", client);
+    const element = await mountDashboard({ sessionKey: "agent:main:workboard-disposal" }, client);
     await vi.waitFor(() => expect(request).toHaveBeenCalled());
 
     element.remove();
-    await Promise.resolve();
+    await element.updateComplete;
 
     expect(removeListener).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+
+    document.body.append(element);
+    await element.updateComplete;
+    expect(request).toHaveBeenCalledTimes(2);
+    element.remove();
+    await element.updateComplete;
+    expect(removeListener).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,6 +1,7 @@
 /** Persistent SQLite-backed ACP event ledger for session rehydration. */
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -23,10 +24,7 @@ export { createInMemoryAcpEventLedger } from "./event-ledger.memory.js";
 export type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.types.js";
 
 function normalizeSqliteInteger(value: number | bigint | null): number {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : 0;
+  return value === null ? 0 : sqliteNumber(value);
 }
 
 type AcpReplaySessionRow = {

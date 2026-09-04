@@ -10,6 +10,22 @@ import { truncateCloseReason } from "../close-reason.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 
 describe("formatGatewayAuthFailureMessage", () => {
+  it.each(["bootstrap_token_invalid", undefined])(
+    "warns that a rejected setup code may already be used for reason %s",
+    (reason) => {
+      const message = formatGatewayAuthFailureMessage({
+        authMode: "token",
+        authProvided: "bootstrap-token",
+        reason,
+      });
+
+      expect(message).toBe(
+        "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review `openclaw devices list`)",
+      );
+      expect(truncateCloseReason(message)).toBe(message);
+    },
+  );
+
   it("keeps device-token scope mismatches distinct from token mismatches", () => {
     expect(
       formatGatewayAuthFailureMessage({

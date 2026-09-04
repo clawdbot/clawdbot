@@ -1214,10 +1214,11 @@ describe("openai transport stream", () => {
 
     expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
       headers: { Accept: "text/event-stream" },
+      maxRetries: 0,
     });
     expect(
       testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
-    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    ).toEqual({ headers: { Accept: "text/event-stream" }, maxRetries: 0 });
     expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),

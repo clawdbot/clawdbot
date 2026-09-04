@@ -1,5 +1,6 @@
 // Migrate Hermes tests cover config plugin behavior.
 import path from "node:path";
+import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolvePreferredOpenClawTmpDir,
@@ -136,13 +137,10 @@ describe("Hermes migration config mapping", () => {
       },
     });
 
-    const skillEntries = itemById(plan.items, "config:skill-entries");
-    expect(skillEntries?.details?.value).toEqual({
-      "ship-it": {
-        config: {
-          mode: "fast",
-        },
-      },
+    const skillEntry = itemById(plan.items, "config:skill-entry:ship-it");
+    expect(skillEntry?.details).toEqual({
+      path: ["skills", "entries", "ship-it"],
+      value: { config: { mode: "fast" } },
     });
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",
@@ -174,6 +172,7 @@ describe("Hermes migration config mapping", () => {
         "",
       ].join("\n"),
     );
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
 
     const provider = buildHermesMigrationProvider();
     const result = await provider.apply(
@@ -197,6 +196,18 @@ describe("Hermes migration config mapping", () => {
     );
     expect(config.mcp?.servers?.time?.command).toBe("npx");
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
+    expect(config.plugins?.slots?.memory).toBe("memory-core");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeFile(configPath, JSON.stringify(config));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      isolateEnv: true,
+      pluginValidation: "core-only",
+    });
+    expect(snapshot.issues).toEqual([]);
+    expect(snapshot.valid).toBe(true);
   });
 
   it("drops prototype-bearing provider, MCP, and skill keys during apply", async () => {
@@ -397,14 +408,14 @@ describe("Hermes migration config mapping", () => {
     expect(itemById(plan.items, "config:mcp-server:utilities_only")?.details?.value).toEqual({
       utilities_only: {
         command: "utilities-only",
-        toolFilter: { exclude: ["resources_list", "resources_read"] },
+        toolFilter: { include: ["prompts_list", "prompts_get"] },
       },
     });
     expect(itemById(plan.items, "config:mcp-server:no_tools")?.details?.value).toEqual({
       no_tools: {
         command: "no-tools",
         toolFilter: {
-          exclude: ["resources_list", "resources_read", "prompts_list", "prompts_get"],
+          exclude: ["*"],
         },
       },
     });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -7,6 +8,7 @@ const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
   it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
+    const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
     const onComplete = vi.fn();
     const onEnqueued = vi.fn(() => true);
     const parent = createMockFollowupRun({
@@ -18,6 +20,7 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
         onDeferred: onEnqueued,
       },
       admissionSessionId: "sess-rotated",
+      replyOperationRunStates: receipts,
     });
 
     const recovery = resolveStrandedReplyRecovery({
@@ -37,6 +40,8 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     const retry = recovery.run;
 
     expect(retry.turnAdoptionLifecycle).toBeUndefined();
+    expect(retry.replyOperationRunStates).toBeUndefined();
+    expect(parent.replyOperationRunStates).toBe(receipts);
     expect(retry.strandedReplyRetry).toBe(true);
     expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
     // Session routing stays; only the client-turn lifecycle identity is detached.

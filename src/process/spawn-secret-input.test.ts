@@ -58,6 +58,26 @@ describe("Windows secret input delivery", () => {
     expect(stream.listenerCount("error")).toBe(0);
   });
 
+  it("rejects a blocked write when abortSignal fires", async () => {
+    const stream = new ControlledSecretStream();
+    const abort = new AbortController();
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      using prepared = prepareSecretInputStdio([], {
+        fd: 3,
+        createData: () => Buffer.from("selected-secret"),
+      });
+      const write = prepared!.deliverTo(childWithSecretStream(stream), {
+        abortSignal: abort.signal,
+      });
+      abort.abort();
+      await expect(write).rejects.toThrow("secret delivery aborted");
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  });
+
   it("rejects delivery errors before consuming their later stream event", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);

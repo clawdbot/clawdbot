@@ -2,8 +2,7 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS } from "./check-ids.js";
 import { SUPPORTED_AUTH_PROFILE_METADATA } from "./policy-constants.js";
-import { isChannelDenyRule } from "./policy-runtime.js";
-import { unsupportedPolicyKey } from "./shape-helpers.js";
+import { isChannelDenyRule, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
 export function authProfileMetadataRequirementFindings(

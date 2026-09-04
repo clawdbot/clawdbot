@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -50,13 +49,7 @@ type ScenarioOutcome =
   | { kind: "error"; error: Error & { attempts?: unknown[] } };
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
-  computeBackoffMock: vi.fn(
-    (
-      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      _attempt: number,
-    ) => 0,
-  ),
+const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
@@ -66,10 +59,6 @@ vi.mock("./models-config.js", async () => {
 });
 
 type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-type TestRunEmbeddedAgent = (
-  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
-) => ReturnType<ProductionRunEmbeddedAgent>;
-let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
@@ -84,7 +73,7 @@ beforeAll(async () => {
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
   installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+    computeBackoff: () => 0,
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/model.js", () => ({
@@ -94,7 +83,6 @@ beforeAll(async () => {
 
   runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
-  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
@@ -103,7 +91,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
-  computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
 
@@ -147,9 +134,11 @@ async function withScenarioWorkspace<T>(
     fs.mkdir(agentDir, { recursive: true }),
     fs.mkdir(workspaceDir, { recursive: true }),
   ]);
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
   try {
     return await run({ agentDir, workspaceDir });
   } finally {
+    random.mockRestore();
     const { waitForSessionTranscriptIndexReconcile } =
       await import("../config/sessions/session-transcript-reconcile.js");
     const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
@@ -276,6 +265,13 @@ async function runScenario(params: {
     sessionKey: `agent:test:${params.runId}`,
     storePath: path.join(params.agentDir, "openclaw-agent.sqlite"),
   };
+  // Every fallback candidate belongs to the same outer admitted run.
+  const preparedRunAdmission = createModelRoutingTestAdmission({
+    cfg: params.config,
+    runId: params.runId,
+    agentId: sessionTarget.agentId,
+    boundary: "provider-fault-sequence",
+  });
   try {
     // The synthetic attempt skips transcript creation; seed the real row so the
     // runner claims its writer normally before entering compaction recovery.
@@ -299,7 +295,9 @@ async function runScenario(params: {
           preferredResult,
         }),
       run: async (provider, model, options) =>
-        await runEmbeddedAgent({
+        await runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission,
+          agentId: sessionTarget.agentId,
           sessionId: sessionTarget.sessionId,
           sessionKey: sessionTarget.sessionKey,
           sessionTarget,
@@ -329,6 +327,8 @@ async function runScenario(params: {
       throw error;
     }
     return { kind: "error", error };
+  } finally {
+    preparedRunAdmission.close();
   }
 }
 
@@ -337,6 +337,7 @@ async function readUsageStats(agentDir: string) {
 }
 
 function expectResult(outcome: ScenarioOutcome): Extract<ScenarioOutcome, { kind: "result" }> {
+  expect(outcome.kind).toBe("result");
   if (outcome.kind !== "result") {
     throw outcome.error;
   }
@@ -480,7 +481,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual(
         faults.map(() => ({ provider: "openai", model: "mock-1", profileId: "openai:p1" })),
       );
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([10_000, 20_000]);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
       expect(outcome.provider).toBe("openai");
       expect(outcome.model).toBe("mock-1");
       expect(outcome.attempts).toEqual([]);
@@ -491,7 +492,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
-  it("walks 429 -> 401 -> 500 -> 200 across profile rotation and model fallback", async () => {
+  it("walks 429 -> 401 -> persistent 500 -> 200 across profile rotation and model fallback", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 2, groq: true });
       const observations: AttemptObservation[] = [];
@@ -499,7 +500,8 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         [
           { status: 429, window: "long" },
           { status: 401 },
-          { status: 500 },
+          // Exhaust the default three transient retries before advancing the model.
+          ...Array.from({ length: 4 }, () => ({ status: 500 as const })),
           { status: 200, text: "fallback chain ok" },
         ],
         observations,
@@ -519,10 +521,10 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual([
         ["openai", "mock-1", "openai:p1"],
         ["openai", "mock-1", "openai:p2"],
-        ["groq", "mock-2", "groq:p1"],
+        ...Array.from({ length: 4 }, () => ["groq", "mock-2", "groq:p1"]),
         ["groq", "mock-3", "groq:p1"],
       ]);
-      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
       expect(outcome.provider).toBe("groq");
       expect(outcome.model).toBe("mock-3");
       expect(outcome.attempts).toMatchObject([
@@ -640,7 +642,12 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       writeProfiles(agentDir, { openai: 2, groq: true });
       const observations: AttemptObservation[] = [];
       installFaultScript(
-        [{ status: 429, window: "long" }, { status: 401 }, { status: 500 }, { status: 402 }],
+        [
+          { status: 429, window: "long" },
+          { status: 401 },
+          ...Array.from({ length: 4 }, () => ({ status: 500 as const })),
+          { status: 402 },
+        ],
         observations,
       );
 
@@ -658,10 +665,11 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual([
         ["openai", "mock-1", "openai:p1"],
         ["openai", "mock-1", "openai:p2"],
-        ["groq", "mock-2", "groq:p1"],
+        ...Array.from({ length: 4 }, () => ["groq", "mock-2", "groq:p1"]),
         ["groq", "mock-3", "groq:p1"],
       ]);
       // FIXED(refactor-02): the shared concrete reason propagates through exhaustion prose and attempts.
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
       expect(error.message).toMatch(/^All models failed \(3\): /);
       expect(error.message).toMatch(
         /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(server_error\) \| groq\/mock-3: .* \(billing\)/,

@@ -119,8 +119,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   sendUserMessage(text: string, options?: OpenAIRealtimeUserMessageOptions): void {
     if (
       options?.toolChoice &&
-      (this.responseActive ||
-        this.responseCreateInFlight ||
+      (this.interruptingPlayback ||
+        this.responseActive ||
+        this.responseCreateState !== "idle" ||
         this.responseCancelInFlight ||
         this.pendingToolCallIds.size > 0)
     ) {
@@ -670,12 +671,12 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   }
 
   protected sendEvent(event: unknown, detail?: string): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const ws = this.ws;
+    if (ws?.readyState === WebSocket.OPEN) {
       const type =
         event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
           ? (event as { type: string }).type
           : "unknown";
-      this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.connectionUrl,
@@ -688,7 +689,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           capability: "realtime-voice",
         },
       });
-      this.ws.send(payload);
+      ws.send(payload);
+      // Observers report a sent frame, so nested control cannot overtake it.
+      this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
     }
   }
 

@@ -1131,7 +1131,10 @@ commands run against the active Gateway. Each CLI command has a two-minute
 execution limit. Stop closes admission immediately and settles all owned process
 groups; leader exit does not bypass shutdown or the bounded wait for inherited
 stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
-commands do not replace the active Gateway's identity.
+commands do not replace the active Gateway's identity. CLI failures, including
+timeouts, cancellations, and stream faults, retain bounded, redacted stderr and
+stdout captured through shutdown. Packaged plugin setup errors distinguish
+`update repair --help` from `update repair`.
 
 Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
@@ -1259,6 +1262,11 @@ The baseline list should stay broad enough to cover:
 - `aimock` starts an AIMock-backed provider server for experimental
   protocol, fixture, record/replay, and chaos coverage. It is additive and
   does not replace the `mock-openai` scenario dispatcher.
+
+For an IPv6 loopback server, run `pnpm openclaw qa mock-openai --host ::1`.
+The printed URL includes brackets, such as `http://[::1]:<port>`; use that URL
+when configuring a client. QA Lab also brackets IPv6 hosts in its listen and
+advertised URLs. Pass the bare address to `--host`.
 
 Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
 Each provider owns its defaults, local server startup, gateway model config,

@@ -219,12 +219,6 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
-      label: "Swarm",
-      sourceConfig: { tools: { swarm: { enabled: false } } },
-      expectedPatch: { tools: { swarm: { enabled: true } } },
-      note: "labs: update swarm",
-    },
-    {
       // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
       // mode to "code", so a bare `enabled: true` would select the surface with
       // the weakest recall rather than the one this row advertises.
@@ -335,7 +329,7 @@ describe("LabsPage", () => {
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
-    expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
+    expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Enabled");
     inherited.provider.remove();
 
     const overridden = await mountPage({
@@ -345,7 +339,7 @@ describe("LabsPage", () => {
       },
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
-    expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
+    expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Enabled");
   });
 
   it.each([{ model: "ollama/qwen3:8b" }, { model: { primary: "ollama/qwen3:8b", fallbacks: [] } }])(
@@ -413,6 +407,89 @@ describe("LabsPage", () => {
         wizard: { localModelLeanAutoModel: null },
       },
       note: "labs: update localModelLean",
+    });
+  });
+});
+
+describe("LabsPage swarm enablement", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it.each([
+    { label: "unset", config: {}, expected: true, overridden: false },
+    { label: "empty object", config: { tools: { swarm: {} } }, expected: true, overridden: false },
+    {
+      label: "limits-only object",
+      config: { tools: { swarm: { maxConcurrent: 3 } } },
+      expected: true,
+      overridden: false,
+    },
+    { label: "boolean true", config: { tools: { swarm: true } }, expected: true, overridden: true },
+    {
+      label: "explicit enabled",
+      config: { tools: { swarm: { enabled: true } } },
+      expected: true,
+      overridden: true,
+    },
+    {
+      label: "boolean false",
+      config: { tools: { swarm: false } },
+      expected: false,
+      overridden: true,
+    },
+    {
+      label: "explicit disabled with limits",
+      config: { tools: { swarm: { enabled: false, maxConcurrent: 3 } } },
+      expected: false,
+      overridden: true,
+    },
+  ])(
+    "reads $label as $expected with an enabled default",
+    async ({ config, expected, overridden }) => {
+      const { page } = await mountPage(config);
+
+      expect(labToggle(page, "Swarm").checked).toBe(expected);
+      expect(labRow(page, "Swarm").textContent).toContain(
+        overridden ? "Default: Enabled" : "Using default: Enabled",
+      );
+    },
+  );
+
+  it("writes an explicit opt-out when disabling the default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Swarm");
+    expect(toggle.checked).toBe(true);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { swarm: { enabled: false } } },
+      note: "labs: update swarm",
+    });
+  });
+
+  it.each([
+    {
+      label: "object gate without removing limits",
+      swarm: { enabled: false, maxConcurrent: 3 },
+      reset: { enabled: null },
+    },
+    { label: "boolean shorthand", swarm: false, reset: null },
+  ])("restores the enabled default by resetting the $label", async ({ swarm, reset }) => {
+    const { page, runtimeConfig } = await mountPage({ tools: { swarm } });
+    const toggle = labToggle(page, "Swarm");
+    expect(toggle.checked).toBe(false);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { swarm: reset } },
+      note: "labs: update swarm",
     });
   });
 });

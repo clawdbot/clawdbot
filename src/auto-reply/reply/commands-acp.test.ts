@@ -1162,7 +1162,10 @@ describe("/acp command", () => {
 
     const result = await handleAcpCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
   });
 
   it("keeps read-only /acp actions available to authorized non-owners", async () => {
@@ -1697,6 +1700,7 @@ describe("/acp command", () => {
     );
     expect(hoisted.cancelMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       reason: "manual-cancel",
       sessionKey: defaultAcpSessionKey,
     });
@@ -1960,6 +1964,7 @@ describe("/acp command", () => {
 
     expect(hoisted.closeMock).toHaveBeenCalledWith({
       cfg: baseCfg,
+      agentId: "codex",
       sessionKey: defaultAcpSessionKey,
       reason: "manual-close",
       allowBackendUnavailable: true,
@@ -2052,8 +2057,8 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain(currentSessionKey);
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
       cfg: baseCfg,
-      sessionKey: currentSessionKey,
       agentId: "codex",
+      sessionKey: currentSessionKey,
     });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });
@@ -2076,9 +2081,11 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain(boundSessionKey);
     expect(result?.reply?.text).not.toContain("agent:main:raw-requester");
-    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: baseCfg, sessionKey: boundSessionKey }),
-    );
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      agentId: "codex",
+      sessionKey: boundSessionKey,
+    });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });
 
@@ -2096,8 +2103,8 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("(none)");
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
       cfg: baseCfg,
-      sessionKey: "agent:main:raw-requester",
       agentId: "main",
+      sessionKey: "agent:main:raw-requester",
     });
     expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
   });

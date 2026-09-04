@@ -238,6 +238,21 @@ export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
   return `${scope.sessionKey}\u0000agent:${agentScope}`;
 }
 
+/** Logical client ownership plus this key fences a retained delivery's display. */
+export function chatOutboxDeliveryKey(
+  host: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+  runId = "",
+): string {
+  return (
+    JSON.stringify([
+      host.settings?.gatewayUrl,
+      host.client?.recoveryScope,
+      storedChatOutboxScopeKey(scope),
+    ]) + runId
+  );
+}
+
 function holdComposerRecovery(
   store: StoredComposerState,
   id: string,

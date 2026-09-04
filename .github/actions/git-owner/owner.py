@@ -1,3 +1,6 @@
+import base64
+import builtins
+import json
 import os
 import re
 import runpy
@@ -7,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import TracebackType
 
 linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
 fetch_timeout_seconds = 120 if linux else 90
@@ -14,6 +18,7 @@ cleanup_seconds = 10
 cancelled = 0
 closed = False
 git = shutil.which("git")
+checkout_environment = {}
 
 
 def cancel(signum, _frame):
@@ -199,6 +204,23 @@ def git_lock_files(directory):
     return locks
 
 
+def git_auth_environment(remote, token):
+    # Git's promisor fetch inherits this process-only config from checkout.
+    # Reject redirects: http.<url> matching does not re-scope redirected requests.
+    count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+    if count < 0:
+        raise ValueError("Invalid Git environment configuration count")
+    header = f"http.{remote}.extraheader"
+    authorization = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    settings = [(header, ""), (header, f"AUTHORIZATION: basic {authorization}"),
+                (f"http.{remote}.followRedirects", "false")]
+    environment = {"GIT_CONFIG_COUNT": str(count + len(settings)), "GIT_TERMINAL_PROMPT": "0"}
+    for index, (key, value) in enumerate(settings, count):
+        environment[f"GIT_CONFIG_KEY_{index}"] = key
+        environment[f"GIT_CONFIG_VALUE_{index}"] = value
+    return environment
+
+
 def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
             reclaim_locks=False):
     global closed
@@ -216,8 +238,10 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
     timed_out = False
     deadline = time.monotonic() + timeout if timeout is not None else None
     try:
+        environment = ({**os.environ, **checkout_environment, **(env or {})}
+                       if checkout_environment or env is not None else None)
         options = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": stderr,
-                   "env": {**os.environ, **env} if env is not None else None}
+                   "env": environment}
         if os.name == "nt":
             job = create_job(None, None)
             limits = ExtendedLimits()
@@ -339,8 +363,53 @@ def checkout_selected_ref():
     run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
+def checkout_harness(sha):
+    action = ".github/actions/setup-node-env/action.yml"
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
+        raise GitFailure(1)
+    harness = os.path.join(workspace, ".ci-harness")
+    os.makedirs(harness, exist_ok=True)
+    if sha == os.environ["WORKFLOW_SHA"]:
+        # Export the workflow revision from the freshly populated index, replacing
+        # retained harness files without updating the index or trusting later edits.
+        pathspecs = [".github/actions"]
+        if kind in ("platform", "linux-node"):
+            pathspecs += evidence_scripts
+        elif kind == "preflight":
+            pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
+        run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
+    else:
+        run_git(harness, "init", harness)
+        run_git(harness, "remote", "add", "origin", remote)
+        sparse_paths = ["/.github/actions/"]
+        if kind in ("platform", "linux-node"):
+            sparse_paths += [f"/{path}" for path in evidence_scripts]
+        # Rooted non-cone patterns keep the kind-owned workflow files exact.
+        # Sparse first, then blob-less avoids downloading a second repository snapshot.
+        run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
+        fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+              max_attempts=1, blobless=True)
+        # Checkout now materializes the sparse blobs over the network, so it carries the
+        # fetch deadline instead of running unbounded like a local checkout.
+        run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
+                timeout=fetch_timeout_seconds)
+    if not os.path.isfile(os.path.join(harness, action)):
+        raise GitFailure(1)
+    check_cancelled()
+
+
 def checkout():
     check_cancelled()
+    prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
+    if prerequisites is None:
+        prerequisites = []
+    if not isinstance(prerequisites, list) or any(
+        not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
+        for commit in prerequisites
+    ):
+        raise ValueError("Invalid immutable test prerequisite commits")
     if reset:
         os.makedirs(workspace, exist_ok=True)
         # Every earlier Git group has been drained before deleting its workspace.
@@ -353,6 +422,8 @@ def checkout():
     run_git(workspace, "remote", "add", "origin", remote)
     if kind in ("preflight", "manual"):
         checkout_selected_ref()
+        if kind == "preflight" and resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+            checkout_harness(os.environ["WORKFLOW_SHA"])
         return
     target = "refs/remotes/origin/ci-target" if kind in ("linux-node", "android") else "refs/remotes/origin/checkout"
     sha = "refs/heads/main" if kind == "clawhub" else os.environ["CHECKOUT_SHA"]
@@ -360,6 +431,9 @@ def checkout():
     base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
     if base:
         refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
+    # Fetch full reader objects with the authenticated checkout, before its
+    # credential scope ends and test workers create historical worktrees.
+    refs.extend(prerequisites)
     fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
           retry_codes=(124, 137) if kind == "skills" else ())
     run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
@@ -370,27 +444,7 @@ def checkout():
         return
     if kind in ("clawhub", "skills"):
         return
-    action = ".github/actions/setup-node-env/action.yml"
-    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
-        raise GitFailure(1)
-    harness = os.path.join(workspace, ".ci-harness")
-    os.makedirs(harness, exist_ok=True)
-    run_git(harness, "init", harness)
-    run_git(harness, "remote", "add", "origin", remote)
-    # The harness only supplies .github/actions, so narrow the fetch before it runs:
-    # sparse first, then blob-less. A full snapshot here downloads a second copy of
-    # the repository that the checkout below immediately discards, and every extra
-    # byte is amplified by the shared runner egress.
-    run_git(harness, "sparse-checkout", "set", ".github/actions")
-    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
-          max_attempts=1, blobless=True)
-    # Checkout now materializes the sparse blobs over the network, so it carries the
-    # fetch deadline instead of running unbounded like a local checkout.
-    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
-            timeout=fetch_timeout_seconds)
-    if not os.path.isfile(os.path.join(harness, action)):
-        raise GitFailure(1)
-    check_cancelled()
+    checkout_harness(sha)
 
 
 def main():
@@ -422,39 +476,99 @@ def main():
         raise SystemExit(0)
     workspace = os.environ["GITHUB_WORKSPACE"]
     remote = f"https://github.com/{os.environ['CHECKOUT_REPO']}.git"
+    # The workflow's token is repository-bound; never lend it to a sibling checkout.
+    token = os.environ.pop("CHECKOUT_TOKEN", "")
+    if token and os.environ["CHECKOUT_REPO"] == os.environ.get("GITHUB_REPOSITORY"):
+        checkout_environment.update(git_auth_environment(remote, token))
+    del token
     if kind == "clawhub":
         workspace = os.path.join(workspace, "clawhub-source")
     reset = kind in ("linux-node", "android", "clawhub")
     label = "ClawHub checkout" if kind == "clawhub" else "checkout"
     started_at = time.monotonic()
-    for attempt in range(1, 6 if reset else 2):
-        try:
-            checkout()
-            if reset:
-                print(f"{label} attempt {attempt}/5 succeeded", flush=True)
-            if kind == "clawhub":
-                print(f"{label} completed in {int(time.monotonic() - started_at)}s", flush=True)
-            raise SystemExit(0)
-        except (FetchTimeout, GitFailure) as error:
-            # Only command failures are retryable. Ownership/inspection errors
-            # escape to the fail-closed boundary below, never workspace deletion.
-            check_cancelled()
-            if not reset:
-                raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-            print(f"{label} attempt {attempt}/5 failed", flush=True)
-            backoff(attempt * 5)
-    print(f"{label} failed after 5 attempts", file=sys.stderr)
-    raise SystemExit(1)
+    try:
+        for attempt in range(1, 6 if reset else 2):
+            try:
+                checkout()
+                if reset:
+                    print(f"{label} attempt {attempt}/5 succeeded", flush=True)
+                if kind == "clawhub":
+                    print(f"{label} completed in {int(time.monotonic() - started_at)}s", flush=True)
+                raise SystemExit(0)
+            except (FetchTimeout, GitFailure) as error:
+                # Only command failures are retryable. Ownership/inspection errors
+                # escape to the fail-closed boundary below, never workspace deletion.
+                check_cancelled()
+                if not reset:
+                    raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
+                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                backoff(attempt * 5)
+        print(f"{label} failed after 5 attempts", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        checkout_environment.clear()
+
+
+def terminal_diagnostic(error, owner_code):
+    # Code identity, not a filename supplied by policy, proves source provenance.
+    codes = {id(owner_code): owner_code}
+    pending = [owner_code]
+    while pending:
+        for value in pending.pop().co_consts:
+            if type(value) is type(owner_code):
+                codes[id(value)] = value
+                pending.append(value)
+    names = {value: value.__name__ for value in vars(builtins).values()
+             if isinstance(value, type) and issubclass(value, BaseException)}
+    names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+    records, seen, via = [], set(), "terminal"
+    while error is not None and id(error) not in seen and len(records) < 4:
+        seen.add(id(error))
+        record = {"type": names.get(type(error), "unknown"), "via": via}
+        for field in ("errno", "winerror"):
+            value = getattr(error, field, None)
+            if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                record[field] = value
+        frames, trace = [], error.__traceback__
+        # Bound traversal as well as output; malformed metadata cannot stall exit.
+        for _ in range(256):
+            if trace is None:
+                break
+            if type(trace) is not TracebackType:
+                raise TypeError
+            frame, code = trace.tb_frame, trace.tb_frame.f_code
+            if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                frames = frames[-6:]
+            trace = trace.tb_next
+        record["owner_frames"] = frames
+        if trace is not None:
+            record["traceback_truncated"] = 1
+        records.append(record)
+        cause = error.__cause__
+        error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+    return records
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         main()
-    except FetchTimeout:
-        raise SystemExit(124)
-    except GitFailure as error:
-        raise SystemExit(error.code)
+    except (FetchTimeout, GitFailure) as error:
+        exit_code = 124 if isinstance(error, FetchTimeout) else error.code
     except Exception as error:
-        # Do not print command arguments or environment: Git may carry credentials.
-        print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
-        raise SystemExit(125)
+        name, diagnostic = "unknown", "unavailable"
+        try:
+            records = terminal_diagnostic(error, sys._getframe().f_code)
+            diagnostic = json.dumps(records, separators=(",", ":"))
+            name = records[0]["type"]
+        except BaseException:
+            pass  # Diagnostics must never replace the authoritative terminal exit.
+        try:
+            print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+            print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+        except BaseException:
+            pass
+        exit_code = 125
+    # Exit outside the handler: Python 3.9 can loop while chaining cyclic contexts.
+    raise SystemExit(exit_code)

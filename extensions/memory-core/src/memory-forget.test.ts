@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -28,8 +27,6 @@ import {
   closeMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
-import * as memoryDatabase from "./memory/manager-db.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
@@ -38,7 +35,6 @@ describe("memory forget", () => {
   let stateDir: string;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
-  let vectorDatabase: DatabaseSync | undefined;
 
   beforeEach(async () => {
     stateDir = tempDirs.make("openclaw-memory-forget-");
@@ -47,10 +43,6 @@ describe("memory forget", () => {
 
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(() => {
-      if (vectorDatabase) {
-        closeMemoryDatabase(vectorDatabase);
-        vectorDatabase = undefined;
-      }
       closeMemoryForgetFixture();
       cleanup();
     }),
@@ -146,6 +138,73 @@ describe("memory forget", () => {
     expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
       { sessionId: "archived", reason: "forgotten" },
     ]);
+  });
+
+  it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
+    await seedMemoryForgetSession("archived");
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          entryKey: "archived-entry",
+          agentId: "main",
+          sessionId: "archived",
+          sessionKey: "agent:main:archived",
+          originClass: "owner",
+          observedAt: 1_000,
+        },
+      ],
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const originalContent =
+      "# Long-Term Memory\n" +
+      "Curated operator fact that must survive.\n" +
+      "<!-- openclaw-memory-promotion:archived-entry -->\n" +
+      "- Archived secret.\n";
+    await fs.writeFile(memoryPath, originalContent);
+    await deleteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:archived",
+      expectedSessionId: "archived",
+      archiveTranscript: true,
+    });
+
+    // Exercise both the old direct write and the replacement temp write so this
+    // regression fails against the original boundary for the observed data loss.
+    const writeFile = fs.writeFile.bind(fs);
+    const directWriteFault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (args[0] === memoryPath) {
+        await writeFile(memoryPath, "Curated ope");
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await writeFile(...args);
+    });
+    const open = fs.open.bind(fs);
+    const tempPrefix = `${memoryPath}.forget.`;
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(tempPrefix)) {
+        const handle = await open(...args);
+        await handle.writeFile("Curated ope");
+        await handle.close();
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await open(...args);
+    });
+    try {
+      await expect(
+        forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] }),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      fault.mockRestore();
+      directWriteFault.mockRestore();
+    }
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(originalContent);
+
+    // A retry with the fault cleared still completes the purge.
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["archived"] });
+    expect(report.entryKeys).toEqual(["archived-entry"]);
+    expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Archived secret");
   });
 
   it.each([
@@ -481,8 +540,7 @@ describe("memory forget", () => {
       });
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-      const db = openMemoryDatabaseAtPath(agentDatabase.path, true, "main");
-      vectorDatabase = db;
+      const db = agentDatabase.db;
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       db.exec(`
@@ -631,14 +689,16 @@ describe("memory forget", () => {
       if (failure !== "none") {
         const failureMessage = `synthetic ${failure} storage failure`;
         if (failure === "memory" || failure === "corpus") {
-          const writeFile = fs.writeFile.bind(fs);
+          const open = fs.open.bind(fs);
           const failedPath =
             failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
-          const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-            await writeFile(...args);
-            if (args[0] === failedPath) {
+          const failedTempPrefix = `${failedPath}.forget.`;
+          const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const target = args[0];
+            if (typeof target === "string" && target.startsWith(failedTempPrefix)) {
               throw new Error(failureMessage);
             }
+            return await open(...args);
           });
           try {
             await expect(
@@ -654,27 +714,12 @@ describe("memory forget", () => {
               : failure === "index"
                 ? "BEFORE DELETE ON memory_index_chunks WHEN OLD.id = 'chunk-0'"
                 : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
-          const injectFailure = (connection: DatabaseSync) =>
-            connection.exec(
-              `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
-            );
           // Attach the fault to the actual purge connection after schema validation,
           // so an unexpected persistent trigger cannot fail database admission first.
           const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
-          const openDatabase = openMemoryDatabaseAtPath;
-          const fault =
-            failure === "index"
-              ? vi
-                  .spyOn(memoryDatabase, "openMemoryDatabaseAtPath")
-                  .mockImplementation((...args) => {
-                    const connection = openDatabase(...args);
-                    injectFailure(connection);
-                    return connection;
-                  })
-              : undefined;
-          if (!fault) {
-            injectFailure(faultDb);
-          }
+          faultDb.exec(
+            `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+          );
           try {
             await expect(
               forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
@@ -684,11 +729,7 @@ describe("memory forget", () => {
                 : { message: failureMessage },
             );
           } finally {
-            if (fault) {
-              fault.mockRestore();
-            } else {
-              faultDb.exec("DROP TRIGGER abort_forget");
-            }
+            faultDb.exec("DROP TRIGGER abort_forget");
           }
         }
         expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([

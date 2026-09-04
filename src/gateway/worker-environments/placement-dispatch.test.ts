@@ -99,6 +99,7 @@ describe("worker placement dispatch", () => {
       "beast",
       REQUEST.executionMode,
       path.join(root, "workspace"),
+      undefined,
     );
   });
 

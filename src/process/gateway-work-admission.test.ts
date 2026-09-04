@@ -6,12 +6,14 @@ import {
   captureGatewayRootWorkAdmissionContinuationScope,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
+  onGatewaySuspendAdmissionChange,
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
@@ -26,6 +28,48 @@ import { runWithGatewayRootWorkAdmissionForTest } from "./gateway-work-admission
 
 beforeEach(resetGatewayWorkAdmission);
 afterEach(resetGatewayWorkAdmission);
+
+it("publishes only committed suspension transitions and isolates broken observers", () => {
+  const phases: string[] = [];
+  const unsubscribeBroken = onGatewaySuspendAdmissionChange(() => {
+    throw new Error("observer failed");
+  });
+  const unsubscribe = onGatewaySuspendAdmissionChange((phase) => phases.push(phase));
+  try {
+    const rolledBack = tryBeginGatewaySuspendAdmission(() => {});
+    expect(rolledBack?.rollback()).toBe(true);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.drain()).toBe(true);
+    expect(suspension?.commit()).toBe(true);
+    expect(suspension?.release()).toBe(true);
+    expect(suspension?.release()).toBe(false);
+    expect(phases).toEqual([
+      "preparing",
+      "accepting",
+      "preparing",
+      "draining",
+      "prepared",
+      "accepting",
+    ]);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+
+    tryBeginGatewaySuspendAdmission(() => {})?.commit();
+    markGatewayRestartDraining();
+    expect(phases.at(-1)).toBe("accepting");
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+    resetGatewayWorkAdmission();
+    tryBeginGatewaySuspendAdmission(() => {})?.drain();
+    resetGatewayWorkAdmission();
+    expect(phases.at(-1)).toBe("accepting");
+    unsubscribe();
+    const published = phases.length;
+    tryBeginGatewaySuspendAdmission(() => {})?.rollback();
+    expect(phases).toHaveLength(published);
+  } finally {
+    unsubscribe();
+    unsubscribeBroken();
+  }
+});
 
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
@@ -220,7 +264,7 @@ it("lets an admitted root cross only the reversible suspension fence", async () 
 });
 
 it("synchronously reserves a tracked continuation across a closed suspension fence", async () => {
-  const root = tryBeginGatewayRootWorkAdmission();
+  const root = tryBeginGatewayRootWorkAdmission("ws:agent");
   expect(root).not.toBeNull();
   let releaseContinuation = () => {};
   let continuation: Promise<void> | undefined;
@@ -232,16 +276,35 @@ it("synchronously reserves a tracked continuation across a closed suspension fen
         await new Promise<void>((resolve) => {
           releaseContinuation = resolve;
         }),
+      "runtime:detached",
     );
     expect(getActiveGatewayRootWorkCount()).toBe(2);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached", "ws:agent"]);
     expect(suspension?.rollback()).toBe(true);
   });
 
   root?.release();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
+  expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
   releaseContinuation();
   await continuation;
   expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("uses the supplied origin when a continuation has no live parent", async () => {
+  let releaseContinuation = () => {};
+  const continuation = runWithGatewayIndependentRootWorkContinuation(
+    async () =>
+      await new Promise<void>((resolve) => {
+        releaseContinuation = resolve;
+      }),
+    "runtime:detached",
+  );
+
+  expect(getActiveGatewayRootWorkHolders()).toEqual(["runtime:detached"]);
+  releaseContinuation();
+  await continuation;
+  expect(getActiveGatewayRootWorkHolders()).toEqual([]);
 });
 
 it("retains an admitted request root across its handler return", async () => {

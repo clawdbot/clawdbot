@@ -8,10 +8,10 @@ import {
 } from "../../sessions/transcript-display-position.js";
 import {
   getActiveTranscriptKysely,
+  readTranscriptProjectionGeneration,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-active-projection.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptProjectionGeneration } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
 export function readTranscriptDisplaySource(

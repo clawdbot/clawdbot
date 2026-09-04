@@ -401,7 +401,7 @@ struct GeneralSettings: View {
                self.localGatewayFailure == nil,
                let ping = ControlChannel.shared.lastPingMs
             {
-                Text("\(Int(ping)) ms")
+                Text(String(format: String(localized: "%lld ms"), Int(ping)))
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -524,7 +524,8 @@ struct GeneralSettings: View {
 
             TailscaleIntegrationSection(
                 connectionMode: self.state.connectionMode,
-                isPaused: self.state.isPaused)
+                isPaused: self.state.isPaused,
+                isActive: self.isActive)
         }
     }
 
@@ -807,17 +808,18 @@ struct GeneralSettings: View {
                let required = self.gatewayStatus.requiredGateway,
                gatewayVersion != required
             {
-                Text("Installed: \(gatewayVersion) · Required: \(required)")
+                Text(String(
+                    format: String(localized: "Installed: %@ · Required: %@"), gatewayVersion, required))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
-                Text("Gateway \(gatewayVersion) detected")
+                Text(String(format: String(localized: "Gateway %@ detected"), gatewayVersion))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let node = self.gatewayStatus.nodeVersion {
-                Text("Node \(node)")
+                Text(verbatim: "Node \(node)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -829,7 +831,7 @@ struct GeneralSettings: View {
             }
 
             if let failure = self.gatewayManager.lastFailureReason {
-                Text("Last failure: \(failure)")
+                Text(String(format: String(localized: "Last failure: %@"), failure))
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -837,7 +839,9 @@ struct GeneralSettings: View {
             Button("Recheck") { self.refreshGatewayStatus() }
                 .buttonStyle(.bordered)
 
-            Text("Gateway auto-starts in local mode via launchd (\(gatewayLaunchdLabel)).")
+            Text(String(
+                format: String(localized: "Gateway auto-starts in local mode via launchd (%@)."),
+                gatewayLaunchdLabel))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)

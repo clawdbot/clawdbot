@@ -21,6 +21,7 @@ import {
   emitAcpLifecycleError as emitAcpLifecycleErrorBase,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent as emitAcpRuntimeEventBase,
+  resolveAcpLifecycleEndFields,
 } from "./attempt-execution.js";
 
 let captured: AgentEventPayload[] = [];
@@ -36,9 +37,21 @@ function emitAcpRuntimeEvent(
 }
 
 function emitAcpLifecycleEnd(
-  params: Omit<Parameters<typeof emitAcpLifecycleEndBase>[0], "toolTracker">,
+  params: Omit<Parameters<typeof emitAcpLifecycleEndBase>[0], "toolTracker" | "endFields"> & {
+    abortSignal?: AbortSignal;
+    stopReason?: string;
+    resultStatus?: "completed" | "cancelled";
+  },
 ) {
-  return emitAcpLifecycleEndBase({ ...params, toolTracker });
+  return emitAcpLifecycleEndBase({
+    ...params,
+    toolTracker,
+    endFields: resolveAcpLifecycleEndFields(
+      params.abortSignal,
+      params.stopReason,
+      params.resultStatus,
+    ),
+  });
 }
 
 function emitAcpLifecycleError(
@@ -350,7 +363,7 @@ describe("ACP diagnostic events", () => {
     emitAcpLifecycleEndBase({
       runId: "run-tool-unrelated",
       toolTracker: unrelatedTracker,
-      resultStatus: "completed",
+      endFields: resolveAcpLifecycleEndFields(undefined, undefined, "completed"),
     });
 
     emitAcpLifecycleEnd({ ...params, resultStatus: "completed" });
@@ -520,6 +533,7 @@ describe("ACP diagnostic events", () => {
 
     expect(captured.at(-1)?.data).toMatchObject({
       phase: "end",
+      executionSettled: true,
       aborted: true,
       stopReason: "stop",
       status: "cancelled",
@@ -654,6 +668,7 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
     const data = captured[0]?.data as Record<string, unknown> | undefined;
     expect(data?.phase).toBe("error");
     expect(data?.error).toBe("Error: something went wrong");
+    expect(data?.executionSettled).toBe(true);
   });
 
   it("formats non-Error values without crashing", () => {

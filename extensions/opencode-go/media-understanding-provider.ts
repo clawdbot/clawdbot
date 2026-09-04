@@ -1,9 +1,5 @@
 // Opencode Go provider module implements model/runtime integration.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 
 export const opencodeGoMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "opencode-go",
@@ -11,6 +7,6 @@ export const opencodeGoMediaUnderstandingProvider: MediaUnderstandingProvider = 
   defaultModels: {
     image: "kimi-k2.6",
   },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
 };
