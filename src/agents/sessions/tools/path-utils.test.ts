@@ -88,6 +88,9 @@ describe("normalizeWindowsPosixDrivePath", () => {
     ["/c/Users/Test/file.txt", "C:\\Users\\Test\\file.txt"],
     ["/cygdrive/d/work/file.txt", "D:\\work\\file.txt"],
     ["/mnt/e/work/file.txt", "E:\\work\\file.txt"],
+    ["@/c/Users/Test/file.txt", "C:\\Users\\Test\\file.txt"],
+    ["@/cygdrive/d/work/file.txt", "D:\\work\\file.txt"],
+    ["@/mnt/e/work/file.txt", "E:\\work\\file.txt"],
     ["/f", "F:\\"],
   ])("maps %s to %s on native Windows", (input, expected) => {
     expect(normalizeWindowsPosixDrivePath(input, "win32")).toBe(expected);
@@ -106,16 +109,23 @@ describe("normalizeWindowsPosixDrivePath", () => {
 });
 
 describe.runIf(process.platform === "win32")("local Windows POSIX drive paths", () => {
-  it.each(["", "cygdrive/", "mnt/"] as const)(
-    "reads an existing file through the %s form",
-    async (prefix) => {
+  it.each([
+    ["", ""],
+    ["", "@"],
+    ["cygdrive/", ""],
+    ["cygdrive/", "@"],
+    ["mnt/", ""],
+    ["mnt/", "@"],
+  ] as const)(
+    "reads an existing file through the %s form with %s shorthand",
+    async (prefix, at) => {
       const dir = tempDirs.make("openclaw-msys-read-");
       const nativePath = path.join(dir, "fixture.txt");
       await fs.writeFile(nativePath, "fixture", "utf8");
       const tool = createReadTool(dir);
 
       const result = await tool.execute("read-posix-drive", {
-        path: toWindowsPosixDrivePath(nativePath, prefix),
+        path: `${at}${toWindowsPosixDrivePath(nativePath, prefix)}`,
       });
 
       expect(result.content).toEqual([{ type: "text", text: "fixture" }]);

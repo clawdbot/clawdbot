@@ -10,7 +10,7 @@ import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
-const WINDOWS_POSIX_DRIVE_PATH_RE = /^\/(?:cygdrive\/|mnt\/)?([a-z])(?:\/(.*))?$/i;
+const WINDOWS_POSIX_DRIVE_PATH_RE = /^@?\/(?:cygdrive\/|mnt\/)?([a-z])(?:\/(.*))?$/i;
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
 }
