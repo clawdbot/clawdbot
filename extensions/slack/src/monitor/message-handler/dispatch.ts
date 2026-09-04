@@ -171,6 +171,30 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
       progress.progressDraft.markFinalReplyStarted();
+      if (!progress.useDraftProgressCard) {
+        // Compact progress is temporary. Stop its edits before posting a new
+        // final reply, and keep it visible until Slack confirms that send.
+        await draftStream?.discardPending();
+        const supplement = getReplyPayloadTtsSupplement(payload);
+        await delivery.deliverNormally({
+          payload:
+            supplement && !supplement.visibleTextAlreadyDelivered && !payload.text?.trim()
+              ? { ...payload, text: supplement.spokenText }
+              : payload,
+          kind: info.kind,
+          forcedThreadTs: delivery.usedReplyThreadTs,
+        });
+        if (delivery.observedFinalReplyDelivery) {
+          progress.progressDraft.markFinalReplyDelivered();
+          try {
+            // clear also deletes this run's previews displaced by human replies.
+            await draftStream?.clear();
+          } catch (err) {
+            logVerbose(`slack: progress preview cleanup failed (${formatSlackError(err)})`);
+          }
+        }
+        return;
+      }
       if (progress.useDraftProgressCard) {
         await delivery.deliverNormally({
           payload,
