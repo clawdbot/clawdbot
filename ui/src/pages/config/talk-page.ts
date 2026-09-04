@@ -51,6 +51,7 @@ function toProviderOption(
     aliases: provider.aliases ?? [],
     models: provider.models ?? [],
     voices: provider.voices ?? [],
+    voicesByModel: provider.voicesByModel,
     transports: provider.transports ?? [],
     defaultModel: provider.defaultModel ?? null,
   };

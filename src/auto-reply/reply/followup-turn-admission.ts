@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -41,6 +42,7 @@ import {
 import type { TypingController } from "./typing.js";
 
 export type FollowupRunnerParams = {
+  resolveGatewayContext?: GatewayContextResolver;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
@@ -141,6 +143,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
@@ -152,9 +155,11 @@ export async function admitFollowupTurn(params: {
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
   });
   if (admission.status === "skipped") {
-    return admission.reason === "active-run"
-      ? { kind: "deferred", reason: "active-run" }
-      : { kind: "skipped", reason: admission.reason };
+    if (admission.reason !== "active-run") {
+      return { kind: "skipped", reason: admission.reason };
+    }
+    params.queued.turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+    return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();

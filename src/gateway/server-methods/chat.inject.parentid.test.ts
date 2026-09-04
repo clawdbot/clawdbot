@@ -83,6 +83,53 @@ async function readLastTranscriptRecord(
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
+  it.each(["stop", "aborted"] as const)(
+    "retains %s on both display and model content",
+    async (stopReason) => {
+      const fixture = await createSqliteTranscriptFixture({
+        prefix: "openclaw-chat-inject-display-content-",
+        sessionId: "sess-display-content",
+      });
+      const modelContent = [
+        { type: "thinking", thinking: "reasoning" },
+        { type: "text", text: "Slides ready" },
+        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+      ];
+      const attachment = {
+        type: "attachment",
+        attachment: { kind: "document", label: "slides.pptx" },
+      };
+
+      try {
+        const appended = await appendInjectedAssistantMessageToTranscript({
+          agentId: fixture.agentId,
+          sessionId: fixture.sessionId,
+          sessionKey: fixture.sessionKey,
+          storePath: fixture.storePath,
+          message: "Slides ready",
+          content: [...modelContent, attachment],
+          stopReason,
+        });
+        const last = (await readLastTranscriptRecord(fixture)) as {
+          message?: Record<string, unknown>;
+        };
+
+        expect(appended.message).toMatchObject({
+          role: "assistant",
+          content: [...modelContent, attachment],
+          stopReason,
+        });
+        expect(last.message).toMatchObject({
+          content: modelContent,
+          openclawDisplayContent: [...modelContent, attachment],
+          stopReason,
+        });
+      } finally {
+        await cleanupFixture(fixture);
+      }
+    },
+  );
+
   it("appends a agent session entry that includes parentId", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-",
@@ -129,11 +176,11 @@ describe("gateway chat.inject transcript writes", () => {
       const messageId = await appendHelloAndRequireId(fixture);
       const last = await readLastTranscriptRecord(fixture);
 
-      expect(existing).toBeDefined();
+      expect(existing).toMatchObject({ ok: true });
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
-      expect(last).toHaveProperty("parentId", existing?.messageId);
+      expect(last).toHaveProperty("parentId", existing.ok ? existing.value?.messageId : undefined);
     } finally {
       await cleanupFixture(fixture);
     }

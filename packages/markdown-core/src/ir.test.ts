@@ -11,6 +11,25 @@ function expectWellFormedUtf16(text: string): void {
   expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
 }
 
+describe("Markdown parser calls", () => {
+  it("keeps document references and changed options local to each parse", () => {
+    const options = { linkify: false };
+    expect(
+      markdownToIR("[ref]: https://example.org/doc\n\n[ref]", options).links.map(
+        (link) => link.href,
+      ),
+    ).toEqual(["https://example.org/doc"]);
+    expect(markdownToIR("[ref] example.org", options).links).toEqual([]);
+
+    options.linkify = true;
+    expect(markdownToIR("[ref] example.org", options).links.map((link) => link.href)).toEqual([
+      "http://example.org",
+    ]);
+    options.linkify = false;
+    expect(markdownToIR("[ref] example.org", options).links).toEqual([]);
+  });
+});
+
 describe("sliceMarkdownIR surrogate pair boundaries", () => {
   it("expands start boundary backward when it lands on a low surrogate", () => {
     // "a😀b" — UTF-16: [a] [\uD83D] [\uDE00] [b], indices 0-3
@@ -197,5 +216,71 @@ describe("sliceMarkdownIR surrogate pair boundaries", () => {
     const ir = markdownToIR(`a${EMOJI}b`);
     const sliced = sliceMarkdownIR(ir, -1, 0);
     expect(sliced.text).toBe("");
+  });
+});
+
+describe("Markdown final code content", () => {
+  it.each([
+    {
+      name: "terminal inline code",
+      markdown: "Copy `name `",
+      expected: {
+        text: "Copy name ",
+        styles: [{ start: 5, end: 10, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "terminal inline code in a link label",
+      markdown: "[`name `](https://example.com)",
+      expected: {
+        text: "name ",
+        styles: [{ start: 0, end: 5, style: "code" }],
+        links: [{ start: 0, end: 5, href: "https://example.com" }],
+      },
+    },
+    {
+      name: "standalone one-space inline code",
+      markdown: "` `",
+      expected: {
+        text: " ",
+        styles: [{ start: 0, end: 1, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "standalone three-space inline code",
+      markdown: "`   `",
+      expected: {
+        text: "   ",
+        styles: [{ start: 0, end: 3, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "inline code followed by prose",
+      markdown: "Copy `name ` next",
+      expected: {
+        text: "Copy name  next",
+        styles: [{ start: 5, end: 10, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "ordinary trailing prose whitespace",
+      markdown: "Copy name   ",
+      expected: { text: "Copy name", styles: [], links: [] },
+    },
+    {
+      name: "fenced code trailing whitespace",
+      markdown: "```\nname \n```",
+      expected: {
+        text: "name \n",
+        styles: [{ start: 0, end: 6, style: "code_block" }],
+        links: [],
+      },
+    },
+  ])("preserves final code payload: $name", ({ markdown, expected }) => {
+    expect(markdownToIR(markdown)).toEqual(expected);
   });
 });

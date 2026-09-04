@@ -1,9 +1,9 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
-const SIDEBAR_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
@@ -14,10 +14,6 @@ type StartupTrace = {
 type GatewayHandlerPrewarmItem = {
   name: string;
   load: () => Promise<unknown>;
-};
-
-type GatewayHandlerPrewarmHandle = {
-  stop: () => void;
 };
 
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
@@ -41,7 +37,7 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
       includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
-      limit: SIDEBAR_SESSION_LIST_LIMIT,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     },
   });
 }
@@ -99,7 +95,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
-}): GatewayHandlerPrewarmHandle {
+}): GatewayIdleTaskHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
   // Keep bounded session reads first and process-stable plugin data second.
   // Provider catalogs stay request-driven because their adapters may do unbounded external work.
@@ -135,8 +131,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
               ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
               : load());
           } finally {
-            idleTask = undefined;
-            scheduleNext();
+            // Keep the outgoing join published until its lease and warning handler settle.
+            void Promise.resolve(idleTask?.stop()).then(scheduleNext, scheduleNext);
           }
         },
         log: params.log,
@@ -157,8 +153,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      idleTask?.stop();
-      idleTask = undefined;
+      return idleTask?.stop();
     },
   };
 }

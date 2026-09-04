@@ -336,7 +336,8 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
     ...(models?.models ?? []).map((model) => ({
-      id: `model-${model.provider}-${model.id}`,
+      // Both IDs can contain separators; selection needs a lossless pair.
+      id: `model-${JSON.stringify([model.provider, model.id])}`,
       label: model.name || model.id,
       icon: "brain" as const,
       category: "models" as const,

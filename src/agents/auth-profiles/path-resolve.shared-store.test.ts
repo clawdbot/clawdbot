@@ -72,6 +72,22 @@ describe("shared auth store path resolution", () => {
     });
   });
 
+  it("reloads ownership after an explicit out-of-process auth mutation", async () => {
+    const env = makeStateEnv();
+    const {
+      reloadSharedAuthStoreOwnership,
+      resolveSharedAuthStoreOwnership,
+      resolveSharedAuthStorePath,
+    } = await import("./path-resolve.js");
+
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
+
+    expect(reloadSharedAuthStoreOwnership(env)).toEqual({ location: "state-db" });
+    expect(resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
+  });
+
   it("resolves the relocated store to the canonical shared state database", async () => {
     const env = makeStateEnv();
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });

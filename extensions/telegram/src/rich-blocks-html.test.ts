@@ -33,6 +33,21 @@ describe("block HTML islands", () => {
     expect(block.blocks).toEqual([{ type: "paragraph", text: "hidden body" }]);
   });
 
+  it("keeps Markdown lists inside <details> islands", () => {
+    const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toBe("List");
+    expect(block.blocks).toHaveLength(1);
+    expect(block.blocks[0]?.type).toBe("paragraph");
+    const serialized = JSON.stringify(block);
+    expect(serialized).toContain("• item A");
+    expect(serialized).toContain("• item B");
+    expect(serialized).not.toContain("<details>");
+  });
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
@@ -153,8 +168,8 @@ describe("block HTML islands", () => {
     if (block.type !== "table") {
       return;
     }
-    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
-    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span", align: "left", valign: "middle" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
   it.each([
@@ -190,19 +205,33 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain('"superscript"');
   });
 
-  it("keeps unsupported matched tags literal", () => {
-    const blocks = blocksFor("a <custom>tag</custom> here");
+  it.each(["custom", "constructor"])("keeps unsupported matched <%s> tags literal", (tag) => {
+    const markdown = `a <${tag}>tag</${tag}> here`;
+    const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+    expect(plainText).toBe(markdown);
     const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<custom>");
-    expect(serialized).toContain("</custom>");
+    expect(serialized).toContain(`<${tag}>`);
+    expect(serialized).toContain(`</${tag}>`);
   });
 
-  it("keeps the entire subtree of unsupported wrappers literal", () => {
-    const blocks = blocksFor("a <custom><sup>x</sup></custom> here");
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<sup>x</sup>");
-    expect(serialized).not.toContain('"superscript"');
+  it("still maps own inline style tags", () => {
+    expect(single("<b>secret</b>")).toEqual({
+      type: "paragraph",
+      text: { type: "bold", text: "secret" },
+    });
   });
+
+  it.each(["custom", "constructor"])(
+    "keeps the entire subtree of unsupported <%s> wrappers literal",
+    (tag) => {
+      const markdown = `a <${tag}><sup>x</sup></${tag}> here`;
+      const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+      expect(plainText).toBe(markdown);
+      const serialized = JSON.stringify(blocks);
+      expect(serialized).toContain("<sup>x</sup>");
+      expect(serialized).not.toContain('"superscript"');
+    },
+  );
 
   it("counts rowspan carryover toward the table column limit", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");

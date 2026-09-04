@@ -2,7 +2,8 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   identityAvatarClass,
   renderIdentityAvatarImage,
@@ -48,7 +49,7 @@ describe("shared identity avatar view", () => {
   });
 
   it("keeps hostile avatar origins out of the shared authenticated renderer", () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer avatar-token");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
 
     const view = resolveIdentityAvatarView({
@@ -64,7 +65,7 @@ describe("shared identity avatar view", () => {
   });
 
   it("shares authenticated loading and reconciles image fallback events", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer avatar-token");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array([1, 2, 3]), {
         headers: { "content-type": "image/png" },
@@ -110,7 +111,7 @@ describe("shared identity avatar view", () => {
   });
 
   it("retains its existing image while a newer avatar revision loads", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer avatar-token");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([1, 2, 3]), {

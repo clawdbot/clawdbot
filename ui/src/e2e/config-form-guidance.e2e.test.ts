@@ -1,7 +1,7 @@
 // Control UI tests cover form support for transform-backed config fields.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-guidance",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("config-form-guidance");
+  }
+});
 
 function notificationStatusConfigMocks() {
   const config = { ui: { prefs: { theme: "claw" } } };
@@ -122,7 +122,6 @@ suite.define(() => {
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -198,18 +197,19 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("radio", { name: "UI", exact: true }).click();
+        await page.getByRole("tab", { name: "UI", exact: true }).click();
 
-        const disclosure = page.locator(".config-advanced-ghost");
+        const disclosure = page.locator("details.config-advanced-disclosure");
         await expect.poll(() => disclosure.count()).toBe(1);
-        await expect.poll(() => disclosure.textContent()).toContain("2 advanced settings hidden");
-        await expect.poll(() => page.locator(".config-show-advanced").count()).toBe(1);
+        await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => disclosure.locator(":scope > summary").textContent())
+          .toContain("Advanced settings");
         await expect
           .poll(() => page.getByText("Show Advanced Settings", { exact: true }).count())
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -217,11 +217,8 @@ suite.define(() => {
           });
         }
 
-        await disclosure.click();
-        const hideAdvanced = page.locator(".config-advanced-divider__toggle");
-        await expect.poll(() => hideAdvanced.count()).toBe(1);
-        await expect.poll(() => hideAdvanced.textContent()).toContain("Hide Advanced");
-        await expect.poll(() => disclosure.count()).toBe(0);
+        await disclosure.locator(":scope > summary").click();
+        await expect.poll(() => disclosure.getAttribute("open")).not.toBeNull();
 
         if (captureUiProofEnabled) {
           await page.screenshot({
@@ -231,8 +228,8 @@ suite.define(() => {
           });
         }
 
-        await hideAdvanced.click();
-        await expect.poll(() => disclosure.count()).toBe(1);
+        await disclosure.locator(":scope > summary").click();
+        await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
         await page.waitForTimeout(750);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
@@ -263,7 +260,7 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("radio", { name: "UI", exact: true }).click();
+        await page.getByRole("tab", { name: "UI", exact: true }).click();
 
         const themeInput = page
           .locator(".settings-row")
@@ -289,7 +286,6 @@ suite.define(() => {
           .toContain("Ready");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

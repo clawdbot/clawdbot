@@ -2,11 +2,12 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -73,10 +74,10 @@ export function createOpenAIRealtimeMockState() {
 
   return {
     FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
+    execFileSyncMock: vi.fn() as Mock,
+    fetchWithSsrFGuardMock: vi.fn() as Mock,
+    isProviderAuthProfileConfiguredMock: vi.fn() as Mock,
+    resolveProviderAuthProfileApiKeyMock: vi.fn() as Mock,
   };
 }
 
@@ -108,6 +109,7 @@ type InternalRealtimeVoiceProviderApi = {
     providerConfig: Record<string, unknown>;
     agentId?: string;
     model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   }) => {
     handlesAgentConsult?: boolean;
     supportsToolCalls?: boolean;

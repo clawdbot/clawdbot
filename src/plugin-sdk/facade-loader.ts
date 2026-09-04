@@ -1,19 +1,24 @@
 // Facade loader helpers resolve plugin public API modules from source, dist, or installed roots.
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import {
-  clearPluginModuleLoaderLifecycleCache,
+  getPluginCacheRoot,
+  getPluginCacheSource,
+  resetPluginCache,
+} from "../plugins/plugin-cache.js";
+import {
   getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
+  loadPluginPublicSurfaceModule,
+  loadPluginPublicSurfaceModuleSync,
   type PluginModuleLoaderFactory,
 } from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.js";
+import {
+  createFacadeResolutionKey,
+  resolveBundledFacadeModuleLocation,
+} from "./facade-resolution-shared.js";
 
 /** Error thrown when a bundled plugin public surface artifact cannot be resolved. */
 export class MissingPublicSurfaceError extends Error {
@@ -25,29 +30,15 @@ export class MissingPublicSurfaceError extends Error {
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
-const moduleLoaders: PluginModuleLoaderCache = new Map();
-const loadedFacadeModules = new Map<string, unknown>();
-const loadedFacadeModuleRoots = new Map<string, string>();
 const loadedFacadePluginIds = new Set<string>();
 let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
-let cachedOpenClawPackageRoot: string | undefined;
-
-// Facade exports and native loader closures must retire with their plugin; imported ids are history.
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  loadedFacadeModules.clear();
-  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: loadedFacadeModuleRoots });
-});
-
 function getOpenClawPackageRoot() {
-  if (cachedOpenClawPackageRoot) {
-    return cachedOpenClawPackageRoot;
-  }
-  cachedOpenClawPackageRoot =
+  return (
     resolveLoaderPackageRoot({
       modulePath: fileURLToPath(import.meta.url),
       moduleUrl: import.meta.url,
-    }) ?? fileURLToPath(new URL("../..", import.meta.url));
-  return cachedOpenClawPackageRoot;
+    }) ?? fileURLToPath(new URL("../..", import.meta.url))
+  );
 }
 
 function resolveFacadeModuleLocation(params: {
@@ -56,17 +47,24 @@ function resolveFacadeModuleLocation(params: {
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  return resolveBundledFacadeModuleLocation({
+  const key = `facade:${createFacadeResolutionKey({ ...params, bundledPluginsDir })}`;
+  const artifacts = getPluginCacheRoot(getOpenClawPackageRoot()).artifacts;
+  const cached = artifacts.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const location = resolveBundledFacadeModuleLocation({
     ...params,
     currentModulePath: CURRENT_MODULE_PATH,
     packageRoot: getOpenClawPackageRoot(),
     bundledPluginsDir,
   });
+  artifacts.set(key, location);
+  return location;
 }
 
 function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
@@ -77,68 +75,92 @@ function getModuleLoader(modulePath: string) {
   });
 }
 
-function createLazyFacadeValueLoader<T>(load: () => T): () => T {
-  let loaded = false;
-  let value: T;
-  return () => {
-    if (!loaded) {
-      value = load();
-      loaded = true;
+/** Create an object proxy that loads the underlying facade only on first use. */
+export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
+  let resolvedValue: T | undefined;
+  const resolve = () => (resolvedValue ??= load());
+  const target = {};
+  // Proxy invariants inspect the target, even though the loaded object owns all values.
+  // Mirror descriptors and integrity at reflection boundaries, never on ordinary reads.
+  const syncProperty = (property: PropertyKey) => {
+    const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), property);
+    if (descriptor) {
+      Object.defineProperty(target, property, descriptor);
+    } else {
+      Reflect.deleteProperty(target, property);
     }
-    return value;
+    return descriptor;
   };
-}
-
-function createLazyFacadeProxyValue<T extends object>(params: {
-  load: () => T;
-  target: object;
-}): T {
-  const resolve = createLazyFacadeValueLoader(params.load);
-  return new Proxy(params.target, {
+  const syncTarget = () => {
+    const original = resolve();
+    const descriptors = Object.getOwnPropertyDescriptors(original);
+    for (const property of Reflect.ownKeys(target)) {
+      if (!Object.hasOwn(descriptors, property)) {
+        Reflect.deleteProperty(target, property);
+      }
+    }
+    Object.defineProperties(target, descriptors);
+    Reflect.setPrototypeOf(target, Reflect.getPrototypeOf(original));
+    if (!Reflect.isExtensible(original)) {
+      Reflect.preventExtensions(target);
+    }
+  };
+  return new Proxy(target, {
     defineProperty(_target, property, descriptor) {
-      return Reflect.defineProperty(resolve(), property, descriptor);
+      const defined = Reflect.defineProperty(resolve(), property, descriptor);
+      if (defined) {
+        syncProperty(property);
+      }
+      return defined;
     },
     deleteProperty(_target, property) {
-      return Reflect.deleteProperty(resolve(), property);
+      return (
+        Reflect.deleteProperty(resolve(), property) && Reflect.deleteProperty(target, property)
+      );
     },
     get(_target, property, receiver) {
       return Reflect.get(resolve(), property, receiver);
     },
     getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(resolve(), property);
+      return syncProperty(property);
     },
     getPrototypeOf() {
       return Reflect.getPrototypeOf(resolve());
     },
     has(_target, property) {
-      return Reflect.has(resolve(), property);
+      const present = Reflect.has(resolve(), property);
+      if (!present) {
+        Reflect.deleteProperty(target, property);
+      }
+      return present;
     },
     isExtensible() {
-      return Reflect.isExtensible(resolve());
+      const extensible = Reflect.isExtensible(resolve());
+      if (!extensible) {
+        syncTarget();
+      }
+      return extensible;
     },
     ownKeys() {
+      syncTarget();
       return Reflect.ownKeys(resolve());
     },
     preventExtensions() {
-      return Reflect.preventExtensions(resolve());
+      if (!Reflect.preventExtensions(resolve())) {
+        return false;
+      }
+      syncTarget();
+      return true;
     },
     set(_target, property, value, receiver) {
       return Reflect.set(resolve(), property, value, receiver);
     },
     setPrototypeOf(_target, prototype) {
-      return Reflect.setPrototypeOf(resolve(), prototype);
+      return (
+        Reflect.setPrototypeOf(resolve(), prototype) && Reflect.setPrototypeOf(target, prototype)
+      );
     },
   }) as T;
-}
-
-/** Create an object proxy that loads the underlying facade only on first property access. */
-export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: {} });
-}
-
-/** Create an array proxy that loads the underlying facade only on first array access. */
-export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: [] });
 }
 
 /** Resolved public-surface module path plus the filesystem root it must stay within. */
@@ -146,6 +168,20 @@ export type FacadeModuleLocation = {
   modulePath: string;
   boundaryRoot: string;
 };
+
+function trackFacadeModule(modulePath: string, pluginId: string | (() => string)): void {
+  const source = getPluginCacheSource(modulePath);
+  if (source.facadeTracked) {
+    return;
+  }
+  source.facadeTracked = true;
+  try {
+    loadedFacadePluginIds.add(typeof pluginId === "function" ? pluginId() : pluginId);
+  } catch (error) {
+    delete source.facadeTracked;
+    throw error;
+  }
+}
 
 function isPathAtOrInside(target: string, root: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -160,6 +196,10 @@ function resolveFacadeBoundaryOpenParams(boundaryRoot: string): {
   boundaryLabel: string;
   rejectHardlinks: boolean;
 } {
+  const checked = getPluginCacheRoot(boundaryRoot).publicSurfaceBoundary;
+  if (checked) {
+    return checked;
+  }
   if (isPathAtOrInside(boundaryRoot, getOpenClawPackageRoot())) {
     return { boundaryLabel: "OpenClaw package root", rejectHardlinks: false };
   }
@@ -180,44 +220,14 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   loadModule?: (modulePath: string) => T;
 }): T {
   const location = params.location;
-  const cached = loadedFacadeModules.get(location.modulePath);
-  if (cached) {
-    return cached as T;
-  }
-
-  const opened = openRootFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
+  const loaded = loadPluginPublicSurfaceModuleSync({
+    ...location,
     ...resolveFacadeBoundaryOpenParams(location.boundaryRoot),
+    surfaceLabel: `bundled plugin public surface ${location.modulePath}`,
+    loadModule: params.loadModule ?? ((modulePath) => getModuleLoader(modulePath)(modulePath)),
   });
-  if (!opened.ok) {
-    throw new Error(`Unable to open bundled plugin public surface ${location.modulePath}`, {
-      cause: opened.error,
-    });
-  }
-  fs.closeSync(opened.fd);
-
-  const sentinel = {} as T;
-  loadedFacadeModules.set(location.modulePath, sentinel);
-
-  let loaded: T;
-  try {
-    loaded =
-      params.loadModule?.(location.modulePath) ??
-      (getModuleLoader(location.modulePath)(location.modulePath) as T);
-    loadedFacadeModuleRoots.set(location.modulePath, location.boundaryRoot);
-    Object.assign(sentinel, loaded);
-    loadedFacadePluginIds.add(
-      typeof params.trackedPluginId === "function"
-        ? params.trackedPluginId()
-        : params.trackedPluginId,
-    );
-  } catch (err) {
-    loadedFacadeModules.delete(location.modulePath);
-    throw err;
-  }
-
-  return sentinel;
+  trackFacadeModule(location.modulePath, params.trackedPluginId);
+  return loaded as T;
 }
 
 /** Resolve and synchronously load a bundled plugin public surface by plugin dir and artifact name. */
@@ -252,40 +262,24 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = location;
-  const cached = loadedFacadeModules.get(preparedLocation.modulePath);
-  if (cached) {
-    return cached as T;
-  }
-
-  const opened = openRootFileSync({
-    absolutePath: preparedLocation.modulePath,
-    rootPath: preparedLocation.boundaryRoot,
-    ...resolveFacadeBoundaryOpenParams(preparedLocation.boundaryRoot),
+  const loaded = await loadPluginPublicSurfaceModule({
+    ...location,
+    ...resolveFacadeBoundaryOpenParams(location.boundaryRoot),
+    surfaceLabel: `bundled plugin public surface ${location.modulePath}`,
+    loadModule: async (modulePath) => {
+      try {
+        // Native ESM imports cannot be evicted; bundled core-dist artifacts change only on restart.
+        return (await import(pathToFileURL(modulePath).href)) as T;
+      } catch {
+        return loadFacadeModuleAtLocationSync<T>({
+          location,
+          trackedPluginId: params.trackedPluginId ?? params.dirName,
+        });
+      }
+    },
   });
-  if (!opened.ok) {
-    throw new Error(`Unable to open bundled plugin public surface ${preparedLocation.modulePath}`, {
-      cause: opened.error,
-    });
-  }
-  fs.closeSync(opened.fd);
-
-  try {
-    // Native ESM imports cannot be evicted; bundled core-dist artifacts change only on restart.
-    const loaded = (await import(pathToFileURL(preparedLocation.modulePath).href)) as T;
-    loadedFacadeModules.set(preparedLocation.modulePath, loaded);
-    loadedFacadePluginIds.add(
-      typeof params.trackedPluginId === "function"
-        ? params.trackedPluginId()
-        : (params.trackedPluginId ?? params.dirName),
-    );
-    return loaded;
-  } catch {
-    return loadFacadeModuleAtLocationSync({
-      location: preparedLocation,
-      trackedPluginId: params.trackedPluginId ?? params.dirName,
-    });
-  }
+  trackFacadeModule(location.modulePath, params.trackedPluginId ?? params.dirName);
+  return loaded as T;
 }
 
 /** List plugin ids whose public facades have been loaded in this process. */
@@ -295,11 +289,9 @@ export function listImportedBundledPluginFacadeIds(): string[] {
 
 /** Reset facade module caches and test loader overrides. */
 export function resetFacadeLoaderStateForTest(): void {
-  loadedFacadeModules.clear();
+  resetPluginCache();
   loadedFacadePluginIds.clear();
-  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: loadedFacadeModuleRoots });
   facadeLoaderSourceTransformFactory = undefined;
-  cachedOpenClawPackageRoot = undefined;
 }
 
 /** Override source transform loader creation for facade-loader tests. */

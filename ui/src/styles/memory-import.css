@@ -222,9 +222,10 @@
 .memory-import__skeleton {
   height: 96px;
   border-radius: var(--radius-md);
-  background: linear-gradient(90deg, var(--bg-muted), var(--bg-elevated), var(--bg-muted));
-  background-size: 200% 100%;
-  animation: memory-import-pulse 1.4s ease infinite;
+}
+
+.memory-import__skeleton::after {
+  animation-duration: 1.4s;
 }
 
 .memory-import__confirm .callout {
@@ -288,11 +289,5 @@
   .memory-import__backfill-dates,
   .memory-import__backfill-actions {
     justify-content: flex-start;
-  }
-}
-
-@keyframes memory-import-pulse {
-  to {
-    background-position: -200% 0;
   }
 }

@@ -32,7 +32,8 @@ const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
 const isInternalMessageChannelMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: vi.fn(() => "agent:main"),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveAgentDir: vi.fn(() => "/tmp/agent"),
 }));
 
 vi.mock("../../agents/bash-process-registry.js", () => ({
@@ -229,6 +230,7 @@ function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsPa
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
@@ -344,14 +346,20 @@ describe("command gating", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
     const configResult = await handleConfigCommand(configParams, true);
-    expect(configResult).toEqual({ shouldContinue: false });
+    expect(configResult).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
 
     const debugParams = buildParams("/debug show", {
       commands: { debug: true, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
     const debugResult = await handleDebugCommand(debugParams, true);
-    expect(debugResult).toEqual({ shouldContinue: false });
+    expect(debugResult).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
   });
 
   it("keeps /config show and /debug show available for owners", async () => {
@@ -602,7 +610,7 @@ describe("command gating", () => {
     const configResult = await handleConfigCommand(configParams, true);
     expect(configResult).toEqual({
       shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
 
     const debugParams = buildParams("/debug show", {
@@ -616,7 +624,7 @@ describe("command gating", () => {
     const debugResult = await handleDebugCommand(debugParams, true);
     expect(debugResult).toEqual({
       shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
   });
 

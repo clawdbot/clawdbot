@@ -1,4 +1,3 @@
-// Normalizes group-policy config for channel and runtime decisions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -8,6 +7,7 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import { resolveMergedAccountConfig } from "./channel-account-config.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   parseToolsBySenderTypedKey,
@@ -347,23 +347,45 @@ export function resolveChannelGroups(
   if (!channelConfig) {
     return undefined;
   }
-  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  // In a single-account setup, treat an explicit empty account groups map
-  // (`accounts.<id>.groups: {}`) the same as undefined for fallback: the empty
-  // literal is almost always a config-migration artifact, not an intentional
-  // "block all groups" declaration — the explicit way to block is
-  // `groupPolicy: "disabled"` (or omitting the group from a populated
-  // allowlist). Without this, an empty `{}` paired with the default
-  // `groupPolicy: "allowlist"` silently denies every group update even though
-  // root `channels.<channel>.groups` is populated. Multi-account contexts keep
-  // the existing semantics so per-account explicit-empty groups still scope
-  // disable a single account without affecting siblings.
-  const isMultiAccount = Object.keys(channelConfig.accounts ?? {}).length > 1;
-  if (!isMultiAccount) {
-    const hasAccountGroups = accountGroups && Object.keys(accountGroups).length > 0;
-    return hasAccountGroups ? accountGroups : channelConfig.groups;
+  // Single-account empty maps inherit; in multi-account setups they opt out.
+  return resolveMergedAccountConfig({
+    channelConfig,
+    accounts: channelConfig.accounts,
+    accountId: normalizedAccountId,
+    inheritEmptyKeys:
+      Object.keys(channelConfig.accounts ?? {}).length > 1 ? {} : { groups: "object" },
+  }).groups;
+}
+
+/** Locate the authored map selected by the channel owner without changing its inheritance rules. */
+export function resolveChannelGroupsConfigPath(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  accountId?: string | null;
+  groups: Readonly<Record<string, unknown>> | undefined;
+}): string {
+  const rootPath = `channels.${params.channel}.groups`;
+  // SAFETY: Validated channel groups retain the original map reference selected by the caller.
+  const channelConfig = params.cfg.channels?.[params.channel] as
+    | { accounts?: Record<string, { groups?: Readonly<Record<string, unknown>> }> }
+    | undefined;
+  const accounts = channelConfig?.accounts;
+  if (!accounts) {
+    return rootPath;
   }
-  return accountGroups ?? channelConfig.groups;
+  const accountId = normalizeAccountId(params.accountId);
+  const account = resolveAccountEntry(accounts, accountId);
+  // Account merging preserves map references. Use the owner's selected map so
+  // empty-map inheritance and shallow replacement both retain their exact scope.
+  if (!account || (params.groups !== undefined && params.groups !== account.groups)) {
+    return rootPath;
+  }
+  const accountKey = Object.hasOwn(accounts, accountId)
+    ? accountId
+    : Object.keys(accounts).find((key) => accounts[key] === account);
+  return accountKey
+    ? `channels.${params.channel}.accounts[${JSON.stringify(accountKey)}].groups`
+    : rootPath;
 }
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";

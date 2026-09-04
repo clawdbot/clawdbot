@@ -73,6 +73,7 @@ vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
     buffer,
+    sourceDimensions: null,
     contentType: "image/png",
   })),
 }));

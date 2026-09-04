@@ -13,7 +13,7 @@ import {
   createInternalHookEvent,
   triggerInternalHook,
 } from "./internal-hooks.js";
-import { loadInternalHooks } from "./loader.js";
+import { prepareInternalHooks } from "./loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,17 +27,13 @@ afterEach(() => {
 
 async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", "hooks", ...args],
-      {
-        cwd: process.cwd(),
-        env,
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024,
-        timeout: 90_000,
-      },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", "hooks", ...args], {
+      cwd: process.cwd(),
+      env,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: 90_000,
+    });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
     const failed = error as Error & { stdout?: string; stderr?: string };
@@ -180,12 +176,12 @@ describe("internal hook lifecycle", () => {
     expect(disabledConfig.hooks?.internal?.entries?.[hookName]?.enabled).toBe(false);
 
     clearInternalHooks();
-    expect(
-      await loadInternalHooks(disabledConfig, fixture.workspaceDir, {
-        bundledHooksDir: fixture.bundledHooksDir,
-        managedHooksDir: fixture.managedHooksDir,
-      }),
-    ).toBe(0);
+    const disabledHooks = await prepareInternalHooks(disabledConfig, fixture.workspaceDir, {
+      bundledHooksDir: fixture.bundledHooksDir,
+      managedHooksDir: fixture.managedHooksDir,
+    });
+    expect(disabledHooks.loadedCount).toBe(0);
+    disabledHooks.commit();
     const disabledEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
       cfg: disabledConfig,
       workspaceDir: fixture.workspaceDir,
@@ -199,12 +195,12 @@ describe("internal hook lifecycle", () => {
     expect(enabledConfig.hooks?.internal?.entries?.[hookName]?.enabled).toBe(true);
 
     clearInternalHooks();
-    expect(
-      await loadInternalHooks(enabledConfig, fixture.workspaceDir, {
-        bundledHooksDir: fixture.bundledHooksDir,
-        managedHooksDir: fixture.managedHooksDir,
-      }),
-    ).toBe(1);
+    const enabledHooks = await prepareInternalHooks(enabledConfig, fixture.workspaceDir, {
+      bundledHooksDir: fixture.bundledHooksDir,
+      managedHooksDir: fixture.managedHooksDir,
+    });
+    expect(enabledHooks.loadedCount).toBe(1);
+    enabledHooks.commit();
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
       cfg: enabledConfig,
       workspaceDir: fixture.workspaceDir,

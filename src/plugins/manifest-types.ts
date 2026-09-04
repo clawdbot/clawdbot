@@ -1,3 +1,4 @@
+import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
@@ -73,22 +74,8 @@ export type PluginManifestModelSupport = {
 
 export type PluginManifestModelCatalog = ModelCatalog;
 
-export type PluginManifestModelPricingModelIdTransform = "version-dots";
-
-export type PluginManifestModelPricingSource = {
-  provider?: string;
-  passthroughProviderModel?: boolean;
-  modelIdTransforms?: PluginManifestModelPricingModelIdTransform[];
-};
-
-export type PluginManifestModelPricingProvider = {
-  external?: boolean;
-  openRouter?: PluginManifestModelPricingSource | false;
-  liteLLM?: PluginManifestModelPricingSource | false;
-};
-
 export type PluginManifestModelPricing = {
-  providers?: Record<string, PluginManifestModelPricingProvider>;
+  providers?: Record<string, ModelPricingProvider>;
 };
 
 export type PluginManifestModelIdPrefixRule = {
@@ -299,7 +286,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {
@@ -418,6 +405,8 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Doctor contract surfaces available without loading the plugin artifact. */
   doctorContract?: PluginManifestDoctorContract;
+  /** Whether the plugin public API registers structured health checks. */
+  doctorHealthChecks?: boolean;
   /** Static ownership metadata for doctor session-route state repairs. */
   sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
@@ -431,8 +420,6 @@ export type PluginManifest = {
   description?: string;
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
-  /** Optional HTTPS URL for marketplace/catalog card artwork. */
-  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -590,6 +577,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Interactive method stages one inline credential without host login imports or persistence. */
+  personalAccount?: boolean;
   /** Short provider-owned command label for starting app-guided setup. */
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */

@@ -139,14 +139,14 @@ function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePat
 }
 
 export async function loadSystemAgentOverview(
-  opts: { env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
 ): Promise<SystemAgentOverview> {
   const env = opts.env ?? process.env;
   const deps = opts.deps ?? {};
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveAmbientOwnerAgentId(cfg);
+  const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);

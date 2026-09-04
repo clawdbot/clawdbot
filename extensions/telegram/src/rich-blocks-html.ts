@@ -155,7 +155,7 @@ export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
       }
       continue;
     }
-    const style = INLINE_STYLE_TAGS[node.name];
+    const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
     if (style) {
       parts.push({ type: style, text: htmlNodesToRichText(node.children) });
       continue;

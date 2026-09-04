@@ -15,7 +15,10 @@ import {
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
-import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
+import type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderConfig,
+} from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
@@ -55,6 +58,7 @@ export function resolveRealtimeVoiceProviderCapabilities(params: {
   agentId?: string;
   /** Effective per-session model after request overrides. */
   model?: string;
+  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   surface?: "browser-session" | "gateway-relay" | "bridge";
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   if (params.surface === "browser-session") {
@@ -100,7 +104,6 @@ export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
   const cfgForResolve = params.cfgForResolve ?? params.cfg ?? ({} as OpenClawConfig);
-  const providers = params.providers ?? listRealtimeVoiceProviders(params.cfg);
   const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.configuredProviderId,
     providerConfigs: params.providerConfigs,
@@ -109,7 +112,9 @@ export function resolveConfiguredRealtimeVoiceProvider(
     getConfiguredProvider: (providerId) =>
       params.providers?.find((entry) => entry.id === providerId) ??
       getRealtimeVoiceProvider(providerId, params.cfg),
-    listProviders: () => providers,
+    listProviders: () =>
+      params.providers ??
+      listRealtimeVoiceProviders(params.cfg, Object.keys(params.providerConfigs ?? {})),
     isProviderAvailable: params.isProviderAvailable
       ? ({ provider }) => params.isProviderAvailable?.(provider) === true
       : undefined,

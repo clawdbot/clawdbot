@@ -4,7 +4,6 @@ import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accou
 import * as verificationActions from "./matrix/actions/verification.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
-import { getMatrixRuntime } from "./runtime.js";
 
 type MatrixCliVerificationBootstrap = Awaited<
   ReturnType<typeof verificationActions.bootstrapMatrixVerification>
@@ -57,8 +56,8 @@ async function setupMatrixEncryption(params: {
   recoveryKey?: string;
   forceResetCrossSigning?: boolean;
 }): Promise<MatrixCliEncryptionSetupResult> {
-  const runtime = getMatrixRuntime();
   const { accountId, cfg } = cli.resolveMatrixCliAccountContext(params.account);
+  const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
   const account = resolveMatrixAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(
@@ -74,13 +73,6 @@ async function setupMatrixEncryption(params: {
   const updated = encryptionChanged
     ? updateMatrixAccountConfig(cfg, accountId, { encryption: true })
     : cfg;
-  if (encryptionChanged) {
-    await runtime.config.replaceConfigFile({
-      nextConfig: updated as never,
-      afterWrite: { mode: "auto" },
-    });
-  }
-
   const canUseExistingBootstrap =
     !encryptionChanged && !params.recoveryKey && params.forceResetCrossSigning !== true;
   const existingStatus = canUseExistingBootstrap
@@ -100,24 +92,34 @@ async function setupMatrixEncryption(params: {
     };
   }
 
-  const bootstrap = await verificationActions.bootstrapMatrixVerification({
-    accountId,
-    cfg: updated,
-    recoveryKey: params.recoveryKey,
-    forceResetCrossSigning: params.forceResetCrossSigning === true,
-  });
-  const status = await verificationActions.getMatrixVerificationStatus({
-    accountId,
-    cfg: updated,
-  });
+  try {
+    const bootstrap = await verificationActions.bootstrapMatrixVerification({
+      accountId,
+      cfg: updated,
+      recoveryKey: params.recoveryKey,
+      forceResetCrossSigning: params.forceResetCrossSigning === true,
+    });
+    const status = await verificationActions.getMatrixVerificationStatus({
+      accountId,
+      cfg: updated,
+    });
 
-  return {
-    accountId,
-    configPath: resolveMatrixConfigPath(updated, accountId),
-    encryptionChanged,
-    bootstrap,
-    status,
-  };
+    return {
+      accountId,
+      configPath: resolveMatrixConfigPath(updated, accountId),
+      encryptionChanged,
+      bootstrap,
+      status,
+    };
+  } finally {
+    // Publishing enables Gateway crypto startup; release every CLI client first.
+    // Keep the configured encryption choice even when bootstrap or status fails.
+    if (encryptionChanged) {
+      await publishConfig((current) =>
+        updateMatrixAccountConfig(current, accountId, { encryption: true }),
+      );
+    }
+  }
 }
 
 function printMatrixEncryptionSetupResult(

@@ -1,10 +1,14 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
+const tempDirs = createTempDirTracker();
+let sessionStorePath: string;
 
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
@@ -44,11 +48,13 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
+    // Store paths reach real SQLite target resolution, which inspects the agent
+    // database beside them; a shared /tmp path would read machine-wide state.
     vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => sessionStorePath,
     }));
     vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      listSessionEntriesReadOnly: () => [],
+      readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -63,7 +69,15 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
   });
 
   beforeEach(() => {
+    sessionStorePath = path.join(
+      tempDirs.make("openclaw-health-legacy-sessions-"),
+      "sessions.json",
+    );
     healthPluginsForTest = [createHealthPlugin()];
+  });
+
+  afterEach(() => {
+    tempDirs.cleanup();
   });
 
   it("projects the retained owner without inventing an explicit fleet default", async () => {
@@ -86,6 +100,9 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     const migrated = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
     expect(migrated.defaultAgentId).toBe("ops");
+    expect(migrated.agents.map(({ sessions }) => path.dirname(sessions.path))).toEqual(
+      migrated.agents.map(() => path.dirname(sessionStorePath)),
+    );
     const migratedOwner = migrated.agents.find((agent) => agent.isDefault);
     expect(migratedOwner?.agentId).toBe("ops");
     expect(migratedOwner?.heartbeat.enabled).toBe(true);

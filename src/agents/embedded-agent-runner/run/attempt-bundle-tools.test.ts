@@ -3,7 +3,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -155,7 +155,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each(["disableTools", "raw", "restart", "reconciliation", "model"])(
+  it.each(["disableTools", "raw", "restart", "model"])(
     "does not discover matching MCP when tools are disabled by %s",
     async (mode) => {
       const input = createInput([], []);
@@ -164,7 +164,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disableTools";
       input.isRawModelRun = mode === "raw";
       input.attempt.forceRestartSafeTools = mode === "restart";
-      input.attempt.forceCodeModeReconciliationTools = mode === "reconciliation";
       input.preparedToolBase.toolsEnabled = mode !== "model";
 
       await prepareEmbeddedAttemptBundleTools(input);

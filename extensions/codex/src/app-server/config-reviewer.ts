@@ -1,13 +1,17 @@
 import { readFileSync } from "node:fs";
-import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { parse as parseToml } from "smol-toml";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerUserHomeDir,
+} from "./auth-start-options.js";
 import type {
   CodexAppServerHomeScope,
   CodexModelBackedReviewerContext,
   ProviderAuthAliasConfig,
 } from "./config-contracts.js";
+import { readCodexEffectiveConfig, type CodexConfigReadClient } from "./config-layer-policy.js";
 import {
   firstTomlTableOffset,
   parseInlineOpenAIModelProviderBaseUrl,
@@ -16,39 +20,26 @@ import {
   stripTomlLineComments,
 } from "./config-requirements.js";
 import { readNonEmptyString, readRecord } from "./config-utils.js";
-import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-control-plane.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
-  client: {
-    request: (
-      method: "config/read",
-      params: CodexConfigReadParams,
-      options: { signal?: AbortSignal },
-    ) => Promise<CodexConfigReadResponse>;
-  };
+  client: CodexConfigReadClient;
   approvalsReviewer: string;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<CodexConfigReadResponse | undefined> {
   if (
     params.approvalsReviewer !== "auto_review" &&
     params.approvalsReviewer !== "guardian_subagent"
   ) {
-    return;
+    return undefined;
   }
-  const response = await params.client.request(
-    "config/read",
-    { cwd: path.resolve(params.cwd), includeLayers: false },
-    { signal: params.signal },
-  );
-  const effectiveConfig = readRecord(readRecord(response)?.config);
-  if (!effectiveConfig) {
-    throw new Error("Codex config/read returned an invalid model-backed reviewer config");
-  }
+  const response = await readCodexEffectiveConfig(params.client, params.cwd, params.signal);
+  const effectiveConfig = response.config;
   const modelProvider = effectiveConfig.model_provider;
   const providers = effectiveConfig.model_providers;
   const providerRecords = providers == null ? undefined : readRecord(providers);
@@ -66,6 +57,7 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
       "Codex model-backed approval reviewer requires the running server to use a trusted OpenAI endpoint",
     );
   }
+  return response;
 }
 
 function isTrustedOptionalReviewerEndpoint(
@@ -80,17 +72,13 @@ export function canUseCodexModelBackedApprovalsReviewerForModel(
 ): boolean {
   const explicitProvider = params.modelProvider?.trim().toLowerCase();
   const inferredProvider = inferProviderFromModelRef(params.model);
-  if (explicitProvider && explicitProvider !== "codex") {
-    return (
-      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
-      (inferredProvider === undefined ||
-        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
-    );
+  if (explicitProvider && explicitProvider !== "codex" && explicitProvider !== "openai") {
+    return false;
   }
-  if (inferredProvider !== undefined) {
-    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
-  }
-  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+  return (
+    (inferredProvider ?? explicitProvider) === "openai" &&
+    isTrustedCodexModelBackedOpenAIProvider(params)
+  );
 }
 
 function isTrustedCodexModelBackedOpenAIProvider(params: {
@@ -164,29 +152,6 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   };
 }
 
-function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "openai";
-}
-
-function isTrustedCodexModelBackedApprovalsReviewerProvider(
-  provider: string | undefined,
-  params: CodexModelBackedReviewerContext,
-): boolean {
-  return (
-    isCodexModelBackedApprovalsReviewerProvider(provider) &&
-    isTrustedCodexModelBackedOpenAIProvider({
-      config: params.config,
-      env: params.env,
-      model: params.model,
-      agentDir: params.agentDir,
-      codexConfigToml: params.codexConfigToml,
-      homeScope: params.homeScope,
-      codexArgs: params.codexArgs,
-    })
-  );
-}
-
 function readCodexBaseUrlOverridesForModelBackedReview(
   params: Pick<
     CodexModelBackedReviewerContext,
@@ -234,26 +199,19 @@ function readCodexBaseUrlOverridesForModelBackedReview(
 function readNativeCodexReviewerConfigOverrides(
   params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexArgs" | "env" | "homeScope">,
 ): string[] | false {
+  if (params.codexArgs?.some((arg) => !arg)) {
+    return false;
+  }
   const overrides: string[] = [];
   let profile: string | undefined;
-  const args = params.codexArgs ?? [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg) {
+  for (const { name, value } of readCodexAppServerConfigOptions(params.codexArgs ?? [])) {
+    if (!value) {
       return false;
     }
-    if (arg === "--profile" || arg === "-p") {
-      profile = args[++index];
-    } else if (arg.startsWith("--profile=")) {
-      profile = arg.slice("--profile=".length);
-    } else if (arg === "-c" || arg === "--config") {
-      const override = args[++index];
-      if (!override) {
-        return false;
-      }
-      overrides.push(`${override}\n`);
-    } else if (arg.startsWith("--config=")) {
-      overrides.push(`${arg.slice("--config=".length)}\n`);
+    if (name === "--profile" || name === "-p") {
+      profile = value;
+    } else {
+      overrides.push(`${value}\n`);
     }
   }
   if (profile) {
@@ -351,19 +309,9 @@ function resolveCodexAppServerConfigPath(
     return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
   }
   const agentDir = readNonEmptyString(params.agentDir);
-  const codexHome = agentDir
-    ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
+  return agentDir
+    ? path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_CONFIG_TOML_FILENAME)
     : undefined;
-  return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
-}
-
-/** Resolves the native user Codex home used by Desktop and the CLI. */
-export function resolveCodexAppServerUserHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = readHomeDir,
-): string {
-  const configured = readNonEmptyString(env.CODEX_HOME);
-  return path.resolve(configured ?? path.join(homedir(), ".codex"));
 }
 
 function readErrorCode(error: unknown): string | undefined {

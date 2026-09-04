@@ -1,7 +1,9 @@
 // Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
+import { createPendingResponse } from "./response-snippet.test-harness.js";
 
 vi.mock("./remote-http.js", () => ({
   withRemoteHttpResponse: vi.fn(),
@@ -33,23 +35,6 @@ function streamingTextResponse(params: {
     },
   });
   return new Response(stream, { status: params.status, headers: params.headers });
-}
-
-function stallingSuccessResponse(onCancel: () => void): Response {
-  const reader = {
-    read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
-    cancel: async () => {
-      onCancel();
-    },
-    releaseLock: () => undefined,
-  } as ReadableStreamDefaultReader<Uint8Array>;
-
-  return {
-    body: { getReader: () => reader },
-    headers: new Headers(),
-    ok: true,
-    status: 200,
-  } as Response;
 }
 
 describe("postJson", () => {
@@ -91,14 +76,11 @@ describe("postJson", () => {
   });
 
   it("applies abort signals while reading successful response bodies", async () => {
-    let canceled = false;
+    const fixture = createPendingResponse();
     const controller = new AbortController();
+    const expected = new Error("body aborted");
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        stallingSuccessResponse(() => {
-          canceled = true;
-        }),
-      );
+      return await params.onResponse(fixture.response);
     });
 
     const read = postJson({
@@ -109,14 +91,25 @@ describe("postJson", () => {
       errorPrefix: "post failed",
       parse: () => ({}),
     });
+    const settled = read.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await withTestTimeout(fixture.readStarted, 1_000, "POST JSON read did not start");
+      expect(fixture.response.body?.locked).toBe(true);
+      controller.abort(expected);
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    controller.abort(new Error("body aborted"));
-
-    await expect(read).rejects.toThrow("body aborted");
-    expect(canceled).toBe(true);
+      await expect(withTestTimeout(settled, 1_000, "POST JSON abort did not settle")).resolves.toBe(
+        expected,
+      );
+      expect(fixture.cancel).toHaveBeenCalledOnce();
+      expect(fixture.response.body?.locked).toBe(false);
+    } finally {
+      controller.abort(expected);
+      fixture.dispose();
+      await withTestTimeout(settled, 1_000, "POST JSON cleanup did not settle");
+    }
   });
 
   it("attaches status to thrown error when requested", async () => {

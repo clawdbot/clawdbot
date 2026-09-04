@@ -4,23 +4,43 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
-import type { ChannelKind } from "./config-reload-plan.js";
-import type { GatewayReloadPlan } from "./config-reload.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { StartChannelOptions } from "./server-channel-runtime.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-export function startGatewayChannelFromActiveRegistry(
+async function startGatewayChannelFromActiveRegistry(
   params: Pick<GatewayReloadHandlerParams, "startChannel">,
   channel: ChannelKind,
   accountId?: string,
+  options: Pick<StartChannelOptions, "skipUnavailableAccounts"> = {},
 ): Promise<void> {
-  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+  await withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+    // Reload and rollback replace snapshots, not the operator's stopped intent.
     runOutsideGatewayRootWorkAdmission(() =>
-      accountId === undefined
-        ? params.startChannel(channel)
-        : params.startChannel(channel, accountId),
+      params.startChannel(channel, accountId, { preserveManualStop: true, ...options }),
     ),
   );
+}
+
+export async function rollbackStoppedGatewayChannels(
+  params: Pick<GatewayReloadHandlerParams, "startChannel" | "logChannels">,
+  channels: Set<ChannelKind>,
+  reason: string,
+): Promise<string[]> {
+  return await collectChannelOperationFailures({
+    channels: [...channels],
+    run: async (channel) => {
+      params.logChannels.info(`restarting ${channel} channel after ${reason}`);
+      await startGatewayChannelFromActiveRegistry(params, channel);
+      channels.delete(channel);
+    },
+    onFailure: (channel, err) => {
+      params.logChannels.error(
+        `failed to restart ${channel} channel after ${reason}: ${formatErrorMessage(err)}`,
+      );
+    },
+  });
 }
 
 export async function restartGatewayChannels(options: {
@@ -31,10 +51,8 @@ export async function restartGatewayChannels(options: {
   restartChannelAccounts: ReadonlyMap<ChannelKind, Set<string>>;
   activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null;
   channelsStoppedBeforePluginReload: Set<ChannelKind>;
-  accountsStoppedBeforePluginReload: ReadonlyMap<ChannelKind, ReadonlySet<string>>;
   shouldSkipChannelRestart: boolean;
   skipChannelRestartLogMessage: string;
-  pluginReloadAborted: boolean;
   isLifecycleReloadAborted: () => boolean;
   getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
@@ -49,18 +67,14 @@ export async function restartGatewayChannels(options: {
     restartChannelAccounts,
     activePluginChannelsAfterReload,
     channelsStoppedBeforePluginReload,
-    accountsStoppedBeforePluginReload,
     shouldSkipChannelRestart,
     skipChannelRestartLogMessage,
-    pluginReloadAborted,
     isLifecycleReloadAborted,
     getChannelAutostartSuppression,
     channelReloadTargets,
     logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
-  const wasStoppedBeforePluginReload = (channel: ChannelKind, accountId: string) =>
-    accountsStoppedBeforePluginReload.get(channel)?.has(accountId) === true;
   // Suppressed and normal reloads share fallback selection so stale account
   // ids always reach the wholesale path that evicts their old runtime.
   const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
@@ -102,108 +116,69 @@ export async function restartGatewayChannels(options: {
     return targets;
   };
 
-  if (channelsToRestart.size > 0 || restartChannelAccounts.size > 0) {
-    if (shouldSkipChannelRestart) {
-      params.logChannels.info(skipChannelRestartLogMessage);
-    } else if (getChannelAutostartSuppression()) {
-      const cancelledByRestart = pluginReloadAborted;
-      if (cancelledByRestart) {
-        params.logChannels.info("channel restart cancelled by in-process restart");
-      } else {
-        const accountStops = collectChannelAccountTargets();
-        const accountStopFailures: string[] = [];
-        for (const [channel, accountId] of accountStops) {
-          try {
-            params.logChannels.info(
-              `stopping ${channel} account ${accountId} before suppressed hot reload`,
-            );
-            if (!wasStoppedBeforePluginReload(channel, accountId)) {
-              await params.stopChannel(channel, accountId, { manual: false });
-            }
-          } catch (err) {
-            accountStopFailures.push(`${channel}[${accountId}]`);
-            params.logChannels.error(
-              `failed to stop ${channel} account ${accountId} during suppressed hot reload: ${formatErrorMessage(err)}`,
-            );
-          }
-        }
-        const stopFailures = await collectChannelOperationFailures({
-          channels: channelsToRestart,
-          run: async (channel) => {
-            if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(channel) === false) {
-              return;
-            }
-            if (channelsStoppedBeforePluginReload.has(channel)) {
-              return;
-            }
-            params.logChannels.info(`stopping ${channel} channel before suppressed hot reload`);
-            await params.stopChannel(channel, undefined, { manual: false });
-          },
-          onFailure: (channel, err) => {
-            params.logChannels.error(
-              `failed to stop ${channel} channel during suppressed hot reload: ${formatErrorMessage(
-                err,
-              )}`,
-            );
-          },
+  if (channelsToRestart.size === 0 && restartChannelAccounts.size === 0) {
+    return;
+  }
+  if (shouldSkipChannelRestart) {
+    params.logChannels.info(skipChannelRestartLogMessage);
+    return;
+  }
+  const suppressed = Boolean(getChannelAutostartSuppression());
+  const operation = suppressed ? "stop" : "restart";
+  const phase = suppressed ? "suppressed hot reload" : "hot reload";
+  const accountTargets = collectChannelAccountTargets();
+  const accountFailures: string[] = [];
+  for (const [channel, accountId] of accountTargets) {
+    try {
+      params.logChannels.info(
+        suppressed
+          ? `stopping ${channel} account ${accountId} before suppressed hot reload`
+          : `restarting ${channel} account ${accountId}`,
+      );
+      await params.stopChannel(channel, accountId, { manual: false });
+      if (!suppressed && !isLifecycleReloadAborted()) {
+        await startGatewayChannelFromActiveRegistry(params, channel, accountId, {
+          skipUnavailableAccounts: true,
         });
-        const allStopFailures = [...accountStopFailures, ...stopFailures];
-        if (allStopFailures.length > 0) {
-          scheduleRecoveryRestart(`channel stop (${allStopFailures.join(", ")})`);
-        }
-        logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
       }
-    } else {
-      const cancelledByRestart = pluginReloadAborted;
-      if (cancelledByRestart) {
-        params.logChannels.info("channel restart cancelled by in-process restart");
-      } else {
-        const accountRestarts = collectChannelAccountTargets();
-        const accountRestartFailures: string[] = [];
-        for (const [channel, accountId] of accountRestarts) {
-          try {
-            params.logChannels.info(`restarting ${channel} account ${accountId}`);
-            if (!wasStoppedBeforePluginReload(channel, accountId)) {
-              await params.stopChannel(channel, accountId, { manual: false });
-            }
-            if (isLifecycleReloadAborted()) {
-              continue;
-            }
-            await startGatewayChannelFromActiveRegistry(params, channel, accountId);
-          } catch (err) {
-            accountRestartFailures.push(`${channel}[${accountId}]`);
-            params.logChannels.error(
-              `failed to restart ${channel} account ${accountId} during hot reload: ${formatErrorMessage(err)}`,
-            );
-          }
-        }
-        const restartChannel = async (name: ChannelKind) => {
-          if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
-            return;
-          }
-          params.logChannels.info(`restarting ${name} channel`);
-          if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name, undefined, { manual: false });
-          }
-          if (isLifecycleReloadAborted()) {
-            return;
-          }
-          await startGatewayChannelFromActiveRegistry(params, name);
-        };
-        const restartFailures = await collectChannelOperationFailures({
-          channels: channelsToRestart,
-          run: restartChannel,
-          onFailure: (channel, err) => {
-            params.logChannels.error(
-              `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
-            );
-          },
-        });
-        const allRestartFailures = [...accountRestartFailures, ...restartFailures];
-        if (allRestartFailures.length > 0) {
-          scheduleRecoveryRestart(`channel restart (${allRestartFailures.join(", ")})`);
-        }
-      }
+    } catch (err) {
+      accountFailures.push(`${channel}[${accountId}]`);
+      params.logChannels.error(
+        `failed to ${operation} ${channel} account ${accountId} during ${phase}: ${formatErrorMessage(err)}`,
+      );
     }
+  }
+  const channelFailures = await collectChannelOperationFailures({
+    channels: channelsToRestart,
+    run: async (channel) => {
+      if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(channel) === false) {
+        return;
+      }
+      params.logChannels.info(
+        suppressed
+          ? `stopping ${channel} channel before suppressed hot reload`
+          : `restarting ${channel} channel`,
+      );
+      if (!channelsStoppedBeforePluginReload.has(channel)) {
+        await params.stopChannel(channel, undefined, { manual: false });
+      }
+      if (!suppressed && !isLifecycleReloadAborted()) {
+        await startGatewayChannelFromActiveRegistry(params, channel, undefined, {
+          skipUnavailableAccounts: true,
+        });
+      }
+    },
+    onFailure: (channel, err) => {
+      params.logChannels.error(
+        `failed to ${operation} ${channel} channel during ${phase}: ${formatErrorMessage(err)}`,
+      );
+    },
+  });
+  const failures = [...accountFailures, ...channelFailures];
+  if (failures.length > 0) {
+    scheduleRecoveryRestart(`channel ${operation} (${failures.join(", ")})`);
+  }
+  if (suppressed) {
+    logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
   }
 }

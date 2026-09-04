@@ -21,6 +21,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
   ChannelPollResult,
+  ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -609,12 +610,12 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
 
 type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
   ChannelPlugin<TResolvedAccount, Probe, Audit>,
-  "security" | "pairing" | "threading" | "outbound"
+  "capabilities" | "security" | "pairing" | "threading" | "outbound"
 > &
   Partial<
     Pick<
       ChannelPlugin<TResolvedAccount, Probe, Audit>,
-      "security" | "pairing" | "threading" | "outbound"
+      "capabilities" | "security" | "pairing" | "threading" | "outbound"
     >
   >;
 
@@ -630,6 +631,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     approveChannelId?: string;
     approveHint?: string;
     normalizeEntry?: (raw: string) => string;
+    classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
   dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
@@ -740,6 +742,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         approveChannelId: security.dm.approveChannelId,
         approveHint: security.dm.approveHint,
         normalizeEntry: security.dm.normalizeEntry,
+        classifyEntryAuthentication: security.dm.classifyEntryAuthentication,
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
@@ -822,6 +825,7 @@ export function createChatChannelPlugin<
 }): ChannelPlugin<TResolvedAccount, Probe, Audit> {
   return {
     ...params.base,
+    capabilities: params.base.capabilities ?? { chatTypes: ["direct"] },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       ...params.base.conversationBindings,

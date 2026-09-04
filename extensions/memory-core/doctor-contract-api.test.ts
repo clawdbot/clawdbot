@@ -1049,6 +1049,60 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${eventPath}.migrated.2`)).resolves.toBeUndefined();
   });
 
+  it("resumes a partially committed host event import before archiving the source", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const events = Array.from({ length: 1_002 }, (_, index) => ({
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: `resume-${index}`,
+      resultCount: 0,
+      results: [],
+    }));
+    const raw = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    await fs.writeFile(eventPath, raw);
+    await context()
+      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
+      .clear();
+    const db = new DatabaseSync(path.join(rootDir, "state", "state", "openclaw.sqlite"));
+    try {
+      db.exec(`CREATE TRIGGER fail_host_import BEFORE INSERT ON plugin_state_entries
+        WHEN NEW.namespace = 'memory-host.events' AND json_extract(NEW.value_json, '$.event.query') = 'resume-750'
+        BEGIN SELECT RAISE(ABORT, 'injected host import failure'); END`);
+      await expect(hostEventsMigration().migrateLegacyState(migrationParams())).rejects.toThrow(
+        "Failed to register plugin state entry",
+      );
+      const partial = await readMemoryHostEventRecords({ workspaceDir, env });
+      expect(partial).toHaveLength(750);
+      expect(partial).toMatchObject(events.slice(0, 750));
+      await expect(fs.readFile(eventPath, "utf8")).resolves.toBe(raw);
+      await expect(fs.access(`${eventPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        context()
+          .openPluginStateKeyedStore({
+            namespace: "memory-host.event-migration-checkpoints",
+            maxEntries: 10_000,
+            overflowPolicy: "reject-new",
+          })
+          .entries(),
+      ).resolves.toEqual([]);
+    } finally {
+      db.exec("DROP TRIGGER IF EXISTS fail_host_import");
+      db.close();
+    }
+    resetPluginStateStoreForTests();
+    const result = await hostEventsMigration().migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    const recovered = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(recovered).toHaveLength(events.length);
+    expect(recovered).toMatchObject(events);
+    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await expect(hostEventsMigration().migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(await readMemoryHostEventRecords({ workspaceDir, env })).toEqual(recovered);
+  });
+
   it("leaves legacy host events in place when plugin-wide SQLite capacity is exhausted", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     await fs.writeFile(
@@ -1464,6 +1518,79 @@ describe("memory-core doctor dreaming migration", () => {
       `Removed empty Memory Core legacy memory index sidecar placeholder: ${legacyPath}`,
     ]);
     await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("ignores a legacy sidecar symlink to the populated canonical agent database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), agentPath), legacyPath);
+
+    const migration = legacyMemoryIndexMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(agentPath));
+    expect(readMemoryRows(agentPath).chunks).toEqual([
+      { id: "canonical-chunk", text: "canonical memory remains authoritative" },
+    ]);
+  });
+
+  it("keeps the warning for a legacy sidecar symlink to a different data-bearing database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const unrelatedPath = path.join(rootDir, "unrelated.sqlite");
+    const db = new DatabaseSync(unrelatedPath);
+    try {
+      db.exec("CREATE TABLE unrelated (value TEXT)");
+      db.prepare("INSERT INTO unrelated (value) VALUES (?)").run("preserve me");
+    } finally {
+      db.close();
+    }
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), unrelatedPath), legacyPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
+    ]);
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(unrelatedPath));
+    const preserved = new DatabaseSync(unrelatedPath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT value FROM unrelated").get()).toEqual({
+        value: "preserve me",
+      });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("keeps a corrupt legacy sidecar with an import warning", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const corruptBytes = Buffer.from("not a sqlite database");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, corruptBytes);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported:",
+      ),
+    ]);
+    await expect(fs.readFile(legacyPath)).resolves.toEqual(corruptBytes);
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves the main sidecar when a companion stat fails with ELOOP", async () => {

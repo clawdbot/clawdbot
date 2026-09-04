@@ -29,6 +29,14 @@ describe("Discord secret target registry", () => {
       "channels.discord.voice.tts.providers.openai.apiKey",
     ],
     [
+      "channels.discord.voice.tts.personas.*.providers.*.apiKey",
+      "channels.discord.voice.tts.personas.narrator.providers.openai.apiKey",
+    ],
+    [
+      "channels.discord.accounts.*.voice.tts.personas.*.providers.*.apiKey",
+      "channels.discord.accounts.work.voice.tts.personas.narrator.providers.openai.apiKey",
+    ],
+    [
       "channels.discord.accounts.*.voice.realtime.providers.*.apiKey",
       "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
     ],

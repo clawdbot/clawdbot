@@ -1,30 +1,16 @@
-// Minimax tests cover minimax web search provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { minimaxWebSearchTesting } from "../test-api.js";
 import { createMiniMaxWebSearchProvider } from "./minimax-web-search-provider.js";
 
-const {
-  MINIMAX_SEARCH_ENDPOINT_GLOBAL,
-  MINIMAX_SEARCH_ENDPOINT_CN,
-  resolveMiniMaxApiKey,
-  resolveMiniMaxEndpoint,
-  resolveMiniMaxRegion,
-} = minimaxWebSearchTesting;
-
-function restoreEnvValue(key: string, value: string | undefined) {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
-}
-
 describe("minimax web search provider", () => {
-  const originalApiHost = process.env.MINIMAX_API_HOST;
-  const originalCodePlanKey = process.env.MINIMAX_CODE_PLAN_KEY;
-  const originalCodingApiKey = process.env.MINIMAX_CODING_API_KEY;
-  const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
-  const originalApiKey = process.env.MINIMAX_API_KEY;
+  const envSnapshot = captureEnv([
+    "MINIMAX_API_HOST",
+    "MINIMAX_CODE_PLAN_KEY",
+    "MINIMAX_CODING_API_KEY",
+    "MINIMAX_OAUTH_TOKEN",
+    "MINIMAX_API_KEY",
+  ]);
 
   beforeEach(() => {
     delete process.env.MINIMAX_API_HOST;
@@ -35,12 +21,68 @@ describe("minimax web search provider", () => {
   });
 
   afterEach(() => {
-    restoreEnvValue("MINIMAX_API_HOST", originalApiHost);
-    restoreEnvValue("MINIMAX_CODE_PLAN_KEY", originalCodePlanKey);
-    restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
-    restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
-    restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
+    envSnapshot.restore();
   });
+
+  it.each([0, 1])(
+    "applies the current cache TTL of %i minutes to existing results",
+    async (ttl) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      for (const result of ["initial", "fresh", "uncached"]) {
+        fetchMock.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              organic: [{ title: result, link: `https://example.test/${result}` }],
+              base_resp: { status_code: 0 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      const createTool = (cacheTtlMinutes: number) => {
+        const tool = createMiniMaxWebSearchProvider().createTool({
+          config: {
+            plugins: {
+              entries: { minimax: { config: { webSearch: { apiKey: "minimax-test-key" } } } },
+            },
+          },
+          searchConfig: { cacheTtlMinutes },
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+        return tool;
+      };
+
+      try {
+        const args = { query: `minimax current cache TTL ${ttl}` };
+        const originalTool = createTool(15);
+        const initial = await originalTool.execute(args);
+        expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        expect(fetchMock).toHaveBeenCalledOnce();
+
+        now.mockReturnValue(1_700_000_060_000);
+        const currentTool = createTool(ttl);
+        const fresh = await currentTool.execute(args);
+        expect(fresh.cached).toBeUndefined();
+        expect(fresh.results).toEqual([
+          expect.objectContaining({ url: "https://example.test/fresh" }),
+        ]);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
+        const repeated = await currentTool.execute(args);
+        expect(repeated.cached).toBe(ttl === 0 ? undefined : true);
+        expect(fetchMock).toHaveBeenCalledTimes(ttl === 0 ? 3 : 2);
+        if (ttl === 0) {
+          expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+        }
+      } finally {
+        fetchMock.mockRestore();
+        now.mockRestore();
+      }
+    },
+  );
 
   it("does not send an already canceled MiniMax search", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -113,131 +155,92 @@ describe("minimax web search provider", () => {
     }
   });
 
-  describe("resolveMiniMaxRegion", () => {
-    it("returns global by default", () => {
-      expect(resolveMiniMaxRegion()).toBe("global");
-      expect(resolveMiniMaxRegion({})).toBe("global");
-    });
-
-    it("returns cn when explicit region is cn", () => {
-      expect(resolveMiniMaxRegion({ minimax: { region: "cn" } })).toBe("cn");
-    });
-
-    it("returns global when explicit region is not cn", () => {
-      expect(resolveMiniMaxRegion({ minimax: { region: "global" } })).toBe("global");
-      expect(resolveMiniMaxRegion({ minimax: { region: "us" } })).toBe("global");
-    });
-
-    it("infers cn from MINIMAX_API_HOST", () => {
-      process.env.MINIMAX_API_HOST = "https://api.minimaxi.com/anthropic";
-      expect(resolveMiniMaxRegion()).toBe("cn");
-    });
-
-    it("infers cn from model provider base URL", () => {
-      const cnConfig = {
-        models: {
-          providers: {
-            minimax: { baseUrl: "https://api.minimaxi.com/anthropic" },
+  const globalEndpoint = "https://api.minimax.io/v1/coding_plan/search";
+  const cnEndpoint = "https://api.minimaxi.com/v1/coding_plan/search";
+  const codePlanEnv = { MINIMAX_CODE_PLAN_KEY: "cn-key" };
+  const cnProvider = {
+    models: { providers: { minimax: { baseUrl: "https://api.minimaxi.com/v1", models: [] } } },
+  } satisfies OpenClawConfig;
+  const cnPortal = {
+    models: {
+      providers: { "minimax-portal": { baseUrl: "https://api.minimaxi.com/v1", models: [] } },
+    },
+  } satisfies OpenClawConfig;
+  const cases = [
+    {
+      name: "configured global over CN provider",
+      endpoint: globalEndpoint,
+      key: "configured-key",
+      config: cnProvider,
+      region: "global",
+      env: { MINIMAX_CODE_PLAN_KEY: "ignored-env-key" },
+    },
+    { name: "explicit CN", endpoint: cnEndpoint, key: "cn-key", region: "cn", env: codePlanEnv },
+    { name: "CN model provider", endpoint: cnEndpoint, key: "model-key", config: cnProvider },
+    { name: "CN portal provider", endpoint: cnEndpoint, key: "portal-key", config: cnPortal },
+    {
+      name: "shared CN host with coding key",
+      endpoint: cnEndpoint,
+      key: "coding-key",
+      env: {
+        MINIMAX_API_HOST: "https://api.minimaxi.com/anthropic",
+        MINIMAX_CODING_API_KEY: "coding-key",
+      },
+    },
+    {
+      name: "OAuth before legacy key",
+      endpoint: globalEndpoint,
+      key: "oauth-key",
+      env: { MINIMAX_OAUTH_TOKEN: "oauth-key", MINIMAX_API_KEY: "ignored-legacy-key" },
+    },
+    {
+      name: "legacy API key",
+      endpoint: globalEndpoint,
+      key: "legacy-key",
+      env: { MINIMAX_API_KEY: "legacy-key" },
+    },
+  ];
+  it.each(cases)("routes $name searches through the public tool boundary", async (entry) => {
+    const env = "env" in entry ? (entry.env ?? {}) : {};
+    const config = "config" in entry ? entry.config : {};
+    const region = "region" in entry ? entry.region : undefined;
+    Object.assign(process.env, env);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ organic: [], base_resp: { status_code: 0 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const tool = createMiniMaxWebSearchProvider().createTool({
+      config: {
+        ...config,
+        plugins: {
+          entries: {
+            minimax: {
+              config: {
+                webSearch: {
+                  apiKey: Object.values(env).includes(entry.key) ? undefined : entry.key,
+                  ...(region ? { region } : {}),
+                },
+              },
+            },
           },
         },
-      };
-      expect(resolveMiniMaxRegion({}, cnConfig)).toBe("cn");
+      },
+      searchConfig: {},
     });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
 
-    it("infers cn from minimax-portal base URL (OAuth CN path)", () => {
-      const cnPortalConfig = {
-        models: {
-          providers: {
-            "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic" },
-          },
-        },
-      };
-      expect(resolveMiniMaxRegion({}, cnPortalConfig)).toBe("cn");
-    });
-
-    it("returns global when model provider base URL is global", () => {
-      const globalConfig = {
-        models: {
-          providers: {
-            minimax: { baseUrl: "https://api.minimax.io/anthropic" },
-          },
-        },
-      };
-      expect(resolveMiniMaxRegion({}, globalConfig)).toBe("global");
-    });
-
-    it("explicit search config region takes priority over base URL", () => {
-      const cnConfig = {
-        models: {
-          providers: {
-            minimax: { baseUrl: "https://api.minimaxi.com/anthropic" },
-          },
-        },
-      };
-      // Explicit global region overrides CN base URL
-      expect(resolveMiniMaxRegion({ minimax: { region: "global" } }, cnConfig)).toBe("global");
-    });
-
-    it("handles non-object minimax search config gracefully", () => {
-      expect(resolveMiniMaxRegion({ minimax: "invalid" })).toBe("global");
-      expect(resolveMiniMaxRegion({ minimax: null })).toBe("global");
-      expect(resolveMiniMaxRegion({ minimax: [1, 2] })).toBe("global");
-    });
-  });
-
-  describe("resolveMiniMaxEndpoint", () => {
-    it("returns global endpoint by default", () => {
-      expect(resolveMiniMaxEndpoint()).toBe(MINIMAX_SEARCH_ENDPOINT_GLOBAL);
-    });
-
-    it("returns CN endpoint when region is cn", () => {
-      expect(resolveMiniMaxEndpoint({ minimax: { region: "cn" } })).toBe(
-        MINIMAX_SEARCH_ENDPOINT_CN,
-      );
-    });
-
-    it("returns CN endpoint when inferred from model provider base URL", () => {
-      const cnConfig = {
-        models: {
-          providers: {
-            minimax: { baseUrl: "https://api.minimaxi.com/anthropic" },
-          },
-        },
-      };
-      expect(resolveMiniMaxEndpoint({}, cnConfig)).toBe(MINIMAX_SEARCH_ENDPOINT_CN);
-    });
-  });
-
-  describe("resolveMiniMaxApiKey", () => {
-    it("prefers configured apiKey over env vars", () => {
-      process.env.MINIMAX_CODE_PLAN_KEY = "env-key";
-      expect(resolveMiniMaxApiKey({ apiKey: "configured-key" })).toBe("configured-key");
-    });
-
-    it("accepts MINIMAX_CODING_API_KEY as a token-plan alias", () => {
-      process.env.MINIMAX_CODING_API_KEY = "coding-key";
-      expect(resolveMiniMaxApiKey()).toBe("coding-key");
-    });
-
-    it("falls back to MINIMAX_API_KEY last", () => {
-      process.env.MINIMAX_API_KEY = "plain-key";
-      expect(resolveMiniMaxApiKey()).toBe("plain-key");
-    });
-
-    it("accepts MINIMAX_OAUTH_TOKEN before the legacy API-key fallback", () => {
-      process.env.MINIMAX_OAUTH_TOKEN = "oauth-token";
-      process.env.MINIMAX_API_KEY = "plain-key";
-      expect(resolveMiniMaxApiKey()).toBe("oauth-token");
-    });
-  });
-
-  describe("endpoint constants", () => {
-    it("uses correct global endpoint", () => {
-      expect(MINIMAX_SEARCH_ENDPOINT_GLOBAL).toBe("https://api.minimax.io/v1/coding_plan/search");
-    });
-
-    it("uses correct CN endpoint", () => {
-      expect(MINIMAX_SEARCH_ENDPOINT_CN).toBe("https://api.minimaxi.com/v1/coding_plan/search");
-    });
+    try {
+      await tool.execute({ query: `MiniMax ${entry.key}` });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(entry.endpoint);
+      expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        Authorization: `Bearer ${entry.key}`,
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

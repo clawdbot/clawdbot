@@ -24,7 +24,8 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
-  hasProjectedAgentRunForSession,
+  getAgentRunContextOwnership,
+  resolveProjectedAgentRunProgressState,
   releaseAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
@@ -194,6 +195,13 @@ describe("worker live events", () => {
 
   it("persists cloud-worker progress for sessions tail", async () => {
     const credential = ["trajectory", "credential", "secret"].join("-");
+    unsubscribe?.();
+    unsubscribe = onAgentRuntimeEvent((event) => {
+      events.push(event);
+      if (event.stream === "tool" && event.data.phase === "result") {
+        event.data.result = { status: "live-consumer-mutated" };
+      }
+    });
     ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
     ack(
       live(
@@ -235,7 +243,14 @@ describe("worker live events", () => {
       "model.completed",
       "session.ended",
     ]);
-    expect(rows[2]?.event.data).toMatchObject({ name: "write", success: true });
+    expect(events.find((event) => event.data.phase === "result")?.data.result).toEqual({
+      status: "live-consumer-mutated",
+    });
+    expect(rows[2]?.event.data).toMatchObject({
+      name: "write",
+      success: true,
+      result: { status: "written" },
+    });
     expect(rows[4]?.event.data).toMatchObject({ status: "success" });
     expect(JSON.stringify(rows)).not.toContain(credential);
   });
@@ -708,7 +723,9 @@ describe("worker live events", () => {
       }
 
       expect(getAgentRunContext(RUN)).toBeUndefined();
-      expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+      expect(
+        resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+      ).toBeUndefined();
     },
   );
 
@@ -734,7 +751,9 @@ describe("worker live events", () => {
       lifecycleGeneration,
       projectSessionActive: true,
     });
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(true);
+    expect(resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID })).toBe(
+      "running",
+    );
     expect(events.map((event) => [event.stream, event.data.phase ?? event.data.delta])).toEqual([
       ["lifecycle", "start"],
       ["assistant", "worker"],
@@ -752,7 +771,9 @@ describe("worker live events", () => {
     expect(end?.data.phase).toBe("end");
     clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+    expect(
+      resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+    ).toBeUndefined();
   });
 
   it("shares a compatible non-exclusive Gateway run owner", () => {
@@ -783,6 +804,82 @@ describe("worker live events", () => {
     rx.clear();
     expect(getAgentRunContext(RUN)).toBeDefined();
     releaseAgentRunContext(RUN, gatewayClaim);
+  });
+
+  const farmIdentity = (n: number): Identity => ({
+    ...ID,
+    environmentId: `environment-farm-${n}`,
+    sessionId: `session-farm-${n}`,
+    runId: `run-farm-${n}`,
+    turnClaim: {
+      sessionId: `session-farm-${n}`,
+      claimId: `claim-farm-${n}`,
+      runId: `run-farm-${n}`,
+      placementGeneration: 4,
+      owner: { kind: "worker", environmentId: `environment-farm-${n}`, ownerEpoch: EPOCH },
+    },
+  });
+  const farmSession = (n: number, updatedAt = 20) =>
+    sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: `agent:main:farm-${n}`, storePath: store },
+      { sessionId: `session-farm-${n}`, updatedAt },
+    );
+  const farmStart = (count: number, maxSessions: number) => {
+    start({
+      maxSessions,
+      startupBindings: Array.from({ length: count }, (_, i) => binding(farmIdentity(i + 1))),
+      startupOwners: new Map(
+        Array.from({ length: count }, (_, i) => [`environment-farm-${i + 1}`, EPOCH]),
+      ),
+    });
+  };
+  const farmEvent = (n: number, seq: number, event: Params["event"]): Params => ({
+    runEpoch: EPOCH,
+    lastAckedSeq: seq - 1,
+    seq,
+    runId: `run-farm-${n}`,
+    event,
+  });
+
+  it("evicts the oldest quiescent window instead of rejecting new sessions at the cap", async () => {
+    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
+    farmStart(3, 2);
+    for (const n of [1, 2]) {
+      ack(
+        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
+        1,
+        farmIdentity(n),
+      );
+      // Turn completion releases the run context gateway-side; the window's
+      // stale activeRuns entry lingers until the next event revalidates it.
+      for (const claimId of getAgentRunContextOwnership(`run-farm-${n}`)?.claimIds ?? []) {
+        releaseAgentRunContext(`run-farm-${n}`, claimId);
+      }
+    }
+    // Both existing windows are quiescent per the run-context registry; the
+    // third session evicts the oldest instead of failing with capacity-exceeded.
+    ack(
+      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
+      1,
+      farmIdentity(3),
+    );
+  });
+
+  it("rejects a new session only when every window has an active run", async () => {
+    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
+    farmStart(3, 2);
+    for (const n of [1, 2]) {
+      ack(
+        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
+        1,
+        farmIdentity(n),
+      );
+    }
+    fail(
+      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
+      "capacity-exceeded",
+      farmIdentity(3),
+    );
   });
 
   it("rejects a compatible context held by an exclusive Gateway owner", () => {

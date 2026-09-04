@@ -50,6 +50,17 @@ describe("resolveSnapshotPlan", () => {
     expect(plan.wantsRoleSnapshot).toBe(true);
   });
 
+  it("does not treat refs=role alone as a role snapshot feature", () => {
+    const plan = resolveSnapshotPlan({
+      profile: profile("openclaw"),
+      query: { refs: "role" },
+      hasPlaywright: true,
+    });
+
+    expect(plan.refsMode).toBe("role");
+    expect(plan.wantsRoleSnapshot).toBe(false);
+  });
+
   it("parses timeoutMs from the snapshot query string", () => {
     const plan = resolveSnapshotPlan({
       profile: profile("openclaw"),

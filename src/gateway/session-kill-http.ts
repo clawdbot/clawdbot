@@ -117,6 +117,14 @@ export async function handleSessionKillHttpRequest(
     agentId: requestedAgent.agentId,
   });
 
+  if (result.found && result.error) {
+    sendJson(res, 503, {
+      ok: false,
+      error: { type: "unavailable", message: result.error },
+    });
+    return true;
+  }
+
   sendJson(res, 200, {
     ok: true,
     killed: result.killed,

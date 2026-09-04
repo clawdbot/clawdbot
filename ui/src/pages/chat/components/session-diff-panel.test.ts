@@ -72,7 +72,8 @@ function fileResult(patch: string): SessionsDiffResult {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   document.body.replaceChildren();
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
@@ -80,6 +81,28 @@ afterEach(() => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("renders a skeleton only while a real diff request is pending", async () => {
+    setNativeGatewayTestState(null);
+    const pending = deferred<SessionsDiffResult>();
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    document.body.append(panel);
+
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
+
+    panel.loader = vi.fn(() => pending.promise);
+    await vi.waitFor(() => {
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe("review");
+      expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("true");
+    });
+
+    pending.resolve(result("feature/pending"));
+    await vi.waitFor(() => expect(panel.textContent).toContain("feature/pending"));
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
+  });
+
   it.each([false, true])(
     "highlights source in split=%s without changing its text",
     async (split) => {
@@ -102,6 +125,8 @@ describe("SessionDiffPanel", () => {
       data.files[0]!.path = "example.ts";
       panel.loader = async () => data;
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
       );
@@ -141,6 +166,8 @@ describe("SessionDiffPanel", () => {
     };
     panel.loader = async () => data;
     document.body.append(panel);
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
 
     const oldSide = split ? ".session-diff-split__side--left" : ".chat-diff__row--del";
     const newSide = split ? ".session-diff-split__side--right" : ".chat-diff__row--add";

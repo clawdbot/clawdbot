@@ -720,6 +720,69 @@ describe("createCopilotAgentHarness", () => {
     expect(session.disconnect).toHaveBeenCalledOnce();
   });
 
+  it.each(["client acquisition", "session creation"] as const)(
+    "releases resources without further SDK dispatch when the owner is revoked during %s",
+    async (stage) => {
+      const controller = new AbortController();
+      const retired = new Error("isolated completion owner retired");
+      let current = true;
+      const session = {
+        abort: vi.fn().mockResolvedValue(undefined),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        sendAndWait: vi.fn().mockResolvedValue({
+          type: "assistant.message",
+          data: { content: "Must not be returned", messageId: "revoked-owner" },
+        }),
+      };
+      const sessionReady = createDeferred<typeof session>();
+      const createSession = vi
+        .fn()
+        .mockReturnValue(
+          stage === "session creation" ? sessionReady.promise : Promise.resolve(session),
+        );
+      const handle = { client: createMockCopilotClient({ createSession }), key: TEST_POOL_KEY };
+      const handleReady = createDeferred<typeof handle>();
+      const pool = makePoolMock();
+      pool.acquire.mockReturnValue(
+        stage === "client acquisition" ? handleReady.promise : Promise.resolve(handle),
+      );
+      pool.release.mockResolvedValue(undefined);
+      const harness = createCopilotAgentHarness({ pool });
+      const pending = harness.runIsolatedCompletionV2?.({
+        ...ISOLATED_COMPLETION_PARAMS,
+        abortSignal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(
+            stage === "client acquisition" ? pool.acquire : createSession,
+          ).toHaveBeenCalledOnce(),
+        );
+        current = false;
+      } finally {
+        handleReady.resolve(handle);
+        sessionReady.resolve(session);
+      }
+
+      await expect(pending).rejects.toBe(retired);
+      await flushAsyncWork();
+      expect(controller.signal.aborted).toBe(false);
+      expect(session.sendAndWait).not.toHaveBeenCalled();
+      expect(pool.release).toHaveBeenCalledExactlyOnceWith(handle);
+      if (stage === "client acquisition") {
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        expect(session.abort).toHaveBeenCalledOnce();
+        expect(session.disconnect).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("does not start a request when cancellation wins the send boundary", async () => {
     const controller = new AbortController();
     let boundaryRegistrations = 0;

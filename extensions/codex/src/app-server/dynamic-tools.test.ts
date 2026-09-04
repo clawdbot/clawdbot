@@ -5,7 +5,6 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
@@ -22,6 +21,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -52,7 +52,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
-import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -699,6 +698,7 @@ describe("createCodexDynamicToolBridge", () => {
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
         createTool({ name: "agents_list" }),
+        createTool({ name: "agents_wait" }),
         createTool({ name: "sessions_spawn" }),
         createTool({ name: "sessions_yield" }),
       ],
@@ -710,6 +710,7 @@ describe("createCodexDynamicToolBridge", () => {
     const message = specs.find((tool) => tool.name === "message");
     const heartbeat = specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
     const agentsList = specs.find((tool) => tool.name === "agents_list");
+    const agentsWait = specs.find((tool) => tool.name === "agents_wait");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -729,6 +730,7 @@ describe("createCodexDynamicToolBridge", () => {
       deferLoading: true,
     });
     expectNoNamespace(agentsList);
+    expectNoNamespace(agentsWait);
     expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
     expect(bridge.resultContentSourceForTool("web_search")).toBe("network");
@@ -764,7 +766,6 @@ describe("createCodexDynamicToolBridge", () => {
       tools: [createTool({ name: "progress_card" }), createTool({ name: "web_search" })],
       signal: new AbortController().signal,
       loading: "searchable",
-      directToolNames: resolveCodexDynamicToolDirectNames({} as EmbeddedRunAttemptParams),
     });
 
     const specs = flattenSpecsWithNamespace(bridge.specs);
@@ -1242,6 +1243,28 @@ describe("createCodexDynamicToolBridge", () => {
       callId: "call-repaired-schema",
       args: { action: "inspect" },
     });
+  });
+
+  it("publishes and executes a repaired schema with a literal prototype property", async () => {
+    const args = { ["__proto__"]: "synthetic value" };
+    const schema = {
+      type: "object",
+      properties: { ["__proto__"]: { type: "string", description: null } },
+      required: ["__proto__"],
+      additionalProperties: false,
+    };
+    const { bridge, execute, response } = await runSchemaToolCall({
+      arguments: args,
+      callId: "call-literal-schema-property",
+      parameters: schema,
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toStrictEqual({
+      ...schema,
+      properties: { ["__proto__"]: { type: "string" } },
+    });
+    expect(response).toEqual(expectInputText("done"));
+    expectExecuteCall(execute, { callId: "call-literal-schema-property", args });
   });
 
   it("enforces the strict empty-object schema published to Codex", async () => {
@@ -1917,13 +1940,119 @@ describe("createCodexDynamicToolBridge", () => {
     },
   );
 
-  it("preserves audio-as-voice metadata from tts results", async () => {
+  it.each([
+    { tool: "tts", timedOut: false },
+    { tool: "tts", timedOut: true },
+    { tool: "message", timedOut: false },
+    { tool: "message", timedOut: true },
+    { tool: "sessions_spawn", timedOut: false },
+    { tool: "sessions_spawn", timedOut: true },
+    { tool: "cron", timedOut: false },
+    { tool: "cron", timedOut: true },
+  ])(
+    "accepts artifacts separately from committed $tool effects (timeout: $timedOut)",
+    async ({ tool, timedOut }) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const registry = createEmptyPluginRegistry();
+      const middleware = async (event: { result: AgentToolResult<unknown> }) => {
+        entered.resolve();
+        await release.promise;
+        return { result: event.result };
+      };
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "held-result",
+        pluginName: "Held result",
+        rawHandler: middleware,
+        handler: middleware,
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const result =
+        tool === "tts"
+          ? mediaResult("/tmp/reply.opus", true)
+          : tool === "message"
+            ? textToolResult("Sent.", {
+                ok: true,
+                result: { messageId: "message-1", channelId: "C123" },
+              })
+            : tool === "cron"
+              ? textToolResult("Added.", { ok: true })
+              : textToolResult("Accepted.", {
+                  status: "accepted",
+                  runId: "child-run",
+                  childSessionKey: "child-session",
+                });
+      const outer = new AbortController();
+      const bridge = createCodexDynamicToolBridge({
+        tools: [createTool({ name: tool, execute: vi.fn(async () => result) })],
+        signal: outer.signal,
+      });
+      const handle = vi.spyOn(bridge, "handleToolCall");
+      const onAgentToolResult = vi.fn();
+      vi.useFakeTimers();
+      try {
+        const response = handleDynamicToolCallWithTimeout({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "held-result",
+            namespace: null,
+            tool,
+            arguments:
+              tool === "message"
+                ? { action: "send", target: "C123", text: "hello" }
+                : tool === "cron"
+                  ? { action: "add" }
+                  : { text: "hello" },
+          },
+          toolBridge: bridge,
+          signal: outer.signal,
+          timeoutMs: 1,
+          onAgentToolResult,
+        });
+        await entered.promise;
+        if (timedOut) {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await response).toMatchObject({ success: false });
+          expect(outer.signal.aborted).toBe(false);
+        }
+        release.resolve();
+        // Drain the actual bridge continuation, not just the watchdog winner.
+        await handle.mock.results[0]?.value;
+        expect(await response).toMatchObject({ success: !timedOut });
+        expect(onAgentToolResult).toHaveBeenCalledOnce();
+        if (tool === "tts") {
+          expect(bridge.telemetry.toolMediaUrls).toEqual(timedOut ? [] : ["/tmp/reply.opus"]);
+          expect(bridge.telemetry.toolAudioAsVoice).toBe(!timedOut);
+        } else if (tool === "message") {
+          expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+          expect(bridge.telemetry.messagingToolSentTexts).toEqual(["hello"]);
+        } else if (tool === "cron") {
+          expect(bridge.telemetry.successfulCronAdds).toBe(1);
+        } else {
+          expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
+            { runId: "child-run", childSessionKey: "child-session" },
+          ]);
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(handle.mock.results.map((entry) => entry.value));
+        handle.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves audio-as-voice metadata from unowned tts results", async () => {
     const toolResult = {
       content: [{ type: "text", text: "(spoken) hello" }],
       details: {
         media: {
           mediaUrl: "/tmp/reply.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         },
       },
     } satisfies AgentToolResult<unknown>;
@@ -1949,7 +2078,41 @@ describe("createCodexDynamicToolBridge", () => {
       contentItems: [{ type: "inputText", text: "(spoken) hello" }],
     });
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
+  });
+
+  it("does not grant auto-delivery to a plugin tool named tts", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "tts-collision",
+      name: "tts",
+      result: {
+        content: [{ type: "text", text: "plugin audio" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/plugin.opus",
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+          },
+        },
+      },
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/plugin.opus"]);
+    expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
   });
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
@@ -2329,6 +2492,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.sourceReplyDelivered).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "visible reply",
@@ -2415,49 +2579,54 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when middleware redacts receipt details", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "receipt-redactor",
-      pluginName: "Receipt redactor",
-      rawHandler: () => undefined,
-      handler: (event: { result: AgentToolResult<unknown> }) => ({
-        result: {
-          content: event.result.content,
-          details: { redacted: true },
-        },
-      }),
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", {
-        messageDelivery: {
-          status: "settled",
-          primaryPlatformMessageId: "imessage-6264",
-          partialDelivery: false,
-          createdThreadIds: [],
-        },
-        receipt: {
-          primaryPlatformMessageId: "imessage-6264",
-          platformMessageIds: ["imessage-6264"],
-        },
-      }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves implicit source delivery when middleware redacts details in %s mode",
+    async (sourceReplyDeliveryMode) => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "receipt-redactor",
+        pluginName: "Receipt redactor",
+        rawHandler: () => undefined,
+        handler: (event: { result: AgentToolResult<unknown> }) => ({
+          result: {
+            content: event.result.content,
+            details: { redacted: true },
+          },
+        }),
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const bridge = createBridgeWithToolResult(
+        "message",
+        textToolResult("Sent.", {
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "imessage-6264",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+          receipt: {
+            primaryPlatformMessageId: "imessage-6264",
+            platformMessageIds: ["imessage-6264"],
+          },
+        }),
+        { sourceReplyDeliveryMode },
+      );
 
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-      final: true,
-    });
+      const result = await handleMessageToolCall(bridge, {
+        action: "send",
+        message: "visible reply",
+        final: true,
+      });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
+      expect(result).toEqual(expectInputText("Sent."));
+      expect(result.terminate).toBe(sourceReplyDeliveryMode ? true : undefined);
+      expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+      expect(Object.keys(result)).not.toContain("terminate");
+    },
+  );
 
   it("does not treat target telemetry alone as delivered message-tool-only source reply evidence", async () => {
     const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {

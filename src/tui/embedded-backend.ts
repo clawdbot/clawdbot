@@ -21,10 +21,9 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
-} from "../agents/embedded-agent-runner/runs.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
+import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -128,6 +127,7 @@ type LocalRunState = {
   agentId: string;
   controller: AbortController;
   buffer: string;
+  managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
   isBtw: boolean;
   question?: string;
@@ -409,7 +409,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.preparedModelRuntime.publish(event.runtimeConfig);
     });
     this.preparedModelRuntime.publish(config);
-    // Local mode never runs gateway startup; canonicalize orphaned keys once here.
+    // Local mode shares the Gateway's session-store readiness checks.
     this.ready = (async () => {
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
@@ -511,7 +511,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
               isInboundUserMessage: true,
             },
-          ).catch(() => undefined);
+          ).catch((error: unknown) => {
+            if (error instanceof QuestionAnswerUnconfirmedError) {
+              throw error;
+            }
+            return undefined;
+          });
           if (outcome?.queued) {
             return { runId: queuedAfter.runId };
           }
@@ -540,6 +545,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId,
       controller,
       buffer: "",
+      managedMediaUrls: new Set(),
       isBtw: Boolean(question),
       question,
       finishing: false,
@@ -682,7 +688,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ? {
           runId: newestInFlightRun[0],
           text: projectLiveAssistantBufferedText(
-            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer).trim(),
+            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer, {
+              managedMediaUrls: [...newestInFlightRun[1].managedMediaUrls],
+            }).trim(),
             { suppressLeadFragments: true },
           ).text.trim(),
         }
@@ -833,7 +841,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       operatorRoleActor: { kind: "system" },
       ...opts,
-      creation: { via: "operator", actor: { type: "human" } },
+      creation: { via: "operator", actor: { type: "human", source: "unknown" } },
       armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
@@ -877,6 +885,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
+      agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
       provider: resolvedModel.provider,
       model: resolvedModel.model,
@@ -1151,7 +1160,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
+    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer, {
+      managedMediaUrls: [...run.managedMediaUrls],
+    }).trim();
     const projected = projectLiveAssistantBufferedText(normalizedText, {
       suppressLeadFragments: true,
     });
@@ -1195,7 +1206,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.registered = true;
     run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(
-      normalizeLiveAssistantBufferedText(run.buffer).trim(),
+      normalizeLiveAssistantBufferedText(run.buffer, {
+        final: true,
+        managedMediaUrls: [...run.managedMediaUrls],
+      }).trim(),
       { suppressLeadFragments: false },
     );
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
@@ -1318,6 +1332,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       !run.isBtw &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
+      for (const url of assistantLiveChatInput.managedMediaUrls ?? []) {
+        run.managedMediaUrls.add(url);
+      }
       run.buffer = resolveMergedAssistantText({
         previousText: run.buffer,
         nextText: assistantLiveChatInput.text,

@@ -1,4 +1,3 @@
-// Verifies backup archives, including payload paths and hardlink/symbolic-link targets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +48,11 @@ type BackupVerifyResult = {
   symlinkCount: number;
 };
 
+type PreparedBackupArchive = {
+  result: BackupVerifyResult;
+  hardlinkTargets: ReadonlyMap<string, string>;
+};
+
 type ArchiveEntry = {
   path: string;
   linkpath?: string;
@@ -78,8 +82,9 @@ async function listArchiveEntries(archivePath: string) {
     gzip: true,
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     onwarn: (code, message) => {
-      if (code === "TAR_BAD_ARCHIVE" && invalidReason === undefined) {
-        invalidReason = formatErrorMessage(message);
+      // tar skips invalid headers; a readable remainder is not a complete backup.
+      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
+        invalidReason ??= formatErrorMessage(message);
       }
     },
     onReadEntry: (entry) => {
@@ -123,32 +128,6 @@ async function extractManifest(params: {
   return content.toString("utf8");
 }
 
-function verifyHardlinkTargetsAgainstArchiveRoot(
-  hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
-  archiveRoot: string,
-  entries: Set<string>,
-): void {
-  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
-  for (const target of hardlinkTargets) {
-    // Older backup archives may store hardlink linkpath values relative to the
-    // archive root instead of including the root segment. Accept that form only
-    // when it resolves to a real entry inside this archive.
-    const normalizedTarget = isArchivePathWithin(target.normalized, normalizedRoot)
-      ? target.normalized
-      : path.posix.join(normalizedRoot, target.normalized);
-    if (!isArchivePathWithin(normalizedTarget, normalizedRoot)) {
-      throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${normalizedTarget}`,
-      );
-    }
-    if (!entries.has(normalizedTarget)) {
-      throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${normalizedTarget}`,
-      );
-    }
-  }
-}
-
 function formatResult(result: BackupVerifyResult): string {
   return [
     `Backup archive OK: ${result.archivePath}`,
@@ -159,19 +138,6 @@ function formatResult(result: BackupVerifyResult): string {
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
   ].join("\n");
-}
-
-function findDuplicateNormalizedEntryPath(
-  entries: Array<{ normalized: string }>,
-): string | undefined {
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (seen.has(entry.normalized)) {
-      return entry.normalized;
-    }
-    seen.add(entry.normalized);
-  }
-  return undefined;
 }
 
 function resolvePortableArchivePathKey(value: string): string {
@@ -573,7 +539,7 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupVerifyResult> {
+async function verifyResolvedBackupArchive(archivePath: string): Promise<PreparedBackupArchive> {
   let archiveStat;
   try {
     archiveStat = await fs.stat(archivePath);
@@ -613,25 +579,24 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
     ...(entry.size !== undefined ? { size: entry.size } : {}),
     ...(entry.type ? { type: entry.type } : {}),
   }));
-  const hardlinkTargets = rawEntries
-    .filter((entry) => entry.type === "Link" && entry.linkpath)
-    .map((entry) => ({
-      entryPath: entry.path,
-      normalized: normalizeArchivePath(
-        entry.linkpath ?? "",
-        `Archive hardlink target for ${entry.path}`,
-      ),
-    }));
   const symbolicLinks = rawEntries
     .filter((entry) => entry.type === "SymbolicLink")
     .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
-  const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
+  const rawEntryPaths = new Map<string, string>();
+  let duplicateEntryPath: string | undefined;
+  // Keep the first duplicate for validation below; manifest-count errors still win.
+  for (const entry of entries) {
+    if (rawEntryPaths.has(entry.normalized)) {
+      duplicateEntryPath ??= entry.normalized;
+    }
+    rawEntryPaths.set(entry.normalized, entry.raw);
+  }
+  const normalizedEntrySet = new Set(rawEntryPaths.keys());
 
   const manifestMatches = entries.filter((entry) => isRootBackupManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }
-  const duplicateEntryPath = findDuplicateNormalizedEntryPath(entries);
   if (duplicateEntryPath) {
     throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
   }
@@ -649,16 +614,33 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseBackupManifest(manifestRaw);
   verifyBackupManifestEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveRoot(
-    hardlinkTargets,
-    manifest.archiveRoot,
-    normalizedEntrySet,
-  );
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const hardlinkTargets = new Map<string, string>();
+  for (const entry of rawEntries) {
+    if (entry.type === "Link") {
+      const target = normalizeArchivePath(
+        entry.linkpath ?? "",
+        `Archive hardlink target for ${entry.path}`,
+      );
+      // Older backups omit the archive root. Resolve once, retaining the actual
+      // entry spelling: normalization is a lookup key, not a filename rewrite.
+      const resolved = isArchivePathWithin(target, archiveRoot)
+        ? target
+        : path.posix.join(archiveRoot, target);
+      const rawTarget = rawEntryPaths.get(resolved);
+      if (!rawTarget) {
+        throw new Error(
+          `Archive hardlink target is missing from archive entries: ${entry.path} -> ${resolved}`,
+        );
+      }
+      hardlinkTargets.set(entry.path, rawTarget);
+    }
+  }
   for (const link of symbolicLinks) {
     assertArchiveSymbolicLinkTarget({
       ...link,
       archiveRoot: manifest.archiveRoot,
-      assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+      assets: manifest.assets,
     });
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
@@ -674,16 +656,21 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
     symlinkCount: symbolicLinks.length,
   };
 
-  return result;
+  return { result, hardlinkTargets };
 }
 
-/** Verify a backup archive and return its normalized, integrity-checked inventory. */
-export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+/** Verify an archive and prepare the exact hardlink targets needed by extraction. */
+export async function prepareBackupArchive(archive: string): Promise<PreparedBackupArchive> {
   const archivePath = resolveUserPath(archive);
   return await verifyResolvedBackupArchive(archivePath).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);
     throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
   });
+}
+
+/** Verify a backup archive without exposing extraction metadata in CLI output. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  return (await prepareBackupArchive(archive)).result;
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */

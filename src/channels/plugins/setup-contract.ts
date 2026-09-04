@@ -116,6 +116,7 @@ type ChannelOwnedSetupAdapterShape<Input extends { name?: string }> = ChannelSet
 
 export type ChannelOwnedSetupContract = {
   kind: "channel-owned";
+  configPromotion?: ChannelSetupAdapter["configPromotion"];
   metadata: ChannelSetupMetadata;
   parseInput: (input: unknown) => ChannelSetupParseResult;
   resolveAccountId?: (params: {
@@ -337,6 +338,7 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
           },
         }
       : {}),
+    configPromotion: adapter.configPromotion,
     singleAccountKeysToMove: adapter.singleAccountKeysToMove,
     namedAccountPromotionKeys: adapter.namedAccountPromotionKeys,
     resolveSingleAccountPromotionTarget: adapter.resolveSingleAccountPromotionTarget,

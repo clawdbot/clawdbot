@@ -65,7 +65,6 @@ const channelActivityMocks = vi.hoisted(() => ({
 const pluginRuntimeMocks = vi.hoisted(() => {
   type StoreEntry = { key: string; value: unknown; createdAt: number };
   const stores = new Map<string, Map<string, StoreEntry>>();
-  let nextRegisterIfAbsentError: Error | undefined;
   let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
 
   const openKeyedStore = vi.fn((options: { namespace: string }) => {
@@ -79,11 +78,6 @@ const pluginRuntimeMocks = vi.hoisted(() => {
         store.set(key, { key, value, createdAt: Date.now() });
       },
       registerIfAbsent: async (key: string, value: unknown) => {
-        if (nextRegisterIfAbsentError) {
-          const error = nextRegisterIfAbsentError;
-          nextRegisterIfAbsentError = undefined;
-          throw error;
-        }
         if (store.has(key)) {
           return false;
         }
@@ -107,12 +101,8 @@ const pluginRuntimeMocks = vi.hoisted(() => {
   return {
     openKeyedStore,
     stateDir: () => stateDir,
-    failNextRegisterIfAbsent: (error: Error) => {
-      nextRegisterIfAbsentError = error;
-    },
     reset: () => {
       stores.clear();
-      nextRegisterIfAbsentError = undefined;
       openKeyedStore.mockClear();
       stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
     },
@@ -257,25 +247,6 @@ export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 let resetWebInboundDedupe: ResetWebInboundDedupe;
 
-function expectInboxPairingReplyText(
-  text: string,
-  params: {
-    channel: string;
-    idLine: string;
-    code?: string;
-  },
-): string {
-  const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
-  expect(code).toBeDefined();
-  const resolvedCode = params.code ?? code ?? "";
-  expect(text).toContain("OpenClaw: access not configured.");
-  expect(text).toContain(params.idLine);
-  expect(text).toContain("Pairing code:");
-  expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
-  expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
-  return resolvedCode;
-}
-
 // Yields two macrotask ticks so already-scheduled inbound continuations run.
 // This deliberately does NOT wait for pending inbound work to finish — tests
 // observing intermediate states (held handlers, parked debounce batches) rely
@@ -291,23 +262,7 @@ export async function settleInboundWork() {
 
 type InboundWorkTracker = { pending: number };
 const inboundWorkTrackers = new Set<InboundWorkTracker>();
-let inboundDrainWaiters: Array<() => void> = [];
-
-function releaseInboundDrainWaitersIfIdle() {
-  if (inboundDrainWaiters.length === 0) {
-    return;
-  }
-  for (const tracker of inboundWorkTrackers) {
-    if (tracker.pending > 0) {
-      return;
-    }
-  }
-  const waiters = inboundDrainWaiters;
-  inboundDrainWaiters = [];
-  for (const release of waiters) {
-    release();
-  }
-}
+let inboundIdle: { promise: Promise<void>; release: () => void } | undefined;
 
 function hasPendingInboundWork(): boolean {
   for (const tracker of inboundWorkTrackers) {
@@ -316,6 +271,14 @@ function hasPendingInboundWork(): boolean {
     }
   }
   return false;
+}
+
+function publishInboundPendingWork(tracker: InboundWorkTracker, pending: number) {
+  tracker.pending = pending;
+  if (inboundIdle && !hasPendingInboundWork()) {
+    inboundIdle.release();
+    inboundIdle = undefined;
+  }
 }
 
 // Event-driven drain: resolves when every harness-started listener reports zero
@@ -329,9 +292,14 @@ export async function waitForInboundWorkDrained() {
     throw new Error("waitForInboundWorkDrained requires a listener started via startInboxMonitor");
   }
   if (hasPendingInboundWork()) {
-    await new Promise<void>((resolve) => {
-      inboundDrainWaiters.push(resolve);
-    });
+    if (!inboundIdle) {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      inboundIdle = { promise, release };
+    }
+    await inboundIdle.promise;
   }
   // One extra tick lets drained-callback continuations (delivery bookkeeping) run.
   await new Promise((resolve) => {
@@ -377,8 +345,7 @@ export async function startInboxMonitor(
   const listener = await monitorWebInbox({
     ...merged,
     onPendingWorkChanged: (pendingWorkCount: number, at?: number) => {
-      tracker.pending = pendingWorkCount;
-      releaseInboundDrainWaitersIfIdle();
+      publishInboundPendingWork(tracker, pendingWorkCount);
       callerOnPendingWorkChanged?.(pendingWorkCount, at);
     },
   });
@@ -411,23 +378,21 @@ export function buildNotifyMessageUpsert(params: {
   };
 }
 
-function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
-  expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  const sendCall = sock.sendMessage.mock.calls.at(0);
-  expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
-    channel: "whatsapp",
-    idLine: `Your WhatsApp phone number: ${senderE164}`,
-    code: "PAIRCODE",
-  });
-}
-
 // The pairing reply is sent before the inbound handler completes, so a full
 // drain guarantees the prompt is observable — and makes the callers' negative
 // assertions (onMessage/readMessages never called) non-vacuous.
 export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   await waitForInboundWorkDrained();
-  expectPairingPromptSent(sock, jid, senderE164);
+  expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+  const sendCall = sock.sendMessage.mock.calls.at(0);
+  expect(sendCall?.[0]).toBe(jid);
+  // The mocked pairing upsert always issues PAIRCODE.
+  const text = (sendCall?.[1] as { text?: string } | undefined)?.text ?? "";
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(`Your WhatsApp phone number: ${senderE164}`);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain("\n```\nPAIRCODE\n```\n");
+  expect(text).toContain("pairing approve whatsapp PAIRCODE");
 }
 
 let authDir: string | undefined;
@@ -439,14 +404,12 @@ export function getAuthDir(): string {
   return authDir;
 }
 
-export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }) {
-  const createAuthDir = opts?.authDir ?? true;
-
+export function installWebMonitorInboxUnitTestHooks() {
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     inboundWorkTrackers.clear();
-    inboundDrainWaiters = [];
+    inboundIdle = undefined;
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
     setWhatsAppRuntime({
@@ -467,11 +430,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       resetWebInboundDedupe = inboundModule.resetWebInboundDedupe;
     }
     resetWebInboundDedupe();
-    if (createAuthDir) {
-      authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    } else {
-      authDir = undefined;
-    }
+    authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
   afterEach(() => {

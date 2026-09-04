@@ -58,6 +58,10 @@ Playback conversion is lazy:
    route falls back to the original bytes. The client can then show its
    unplayable-media fallback and keep the download action available.
 
+The Control UI checks rendition readiness with `HEAD` before loading the inline
+player. It shows **Preparing playback** while conversion is pending and keeps
+the download action available when playback is unavailable.
+
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
 or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
@@ -90,8 +94,9 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Probing is best-effort: a missing or failed probe leaves fields absent
-instead of rejecting the attachment.
+probe. Video dimensions account for quarter-turn display rotation; image
+dimensions account for EXIF orientation. Probing is best-effort: a missing or
+failed probe leaves fields absent instead of rejecting the attachment.
 
 Gateway-managed assistant attachments use these per-file caps:
 

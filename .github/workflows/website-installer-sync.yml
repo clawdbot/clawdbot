@@ -84,6 +84,31 @@ jobs:
             node:24-bookworm-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
+  debian-installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh on Debian without Node
+        run: |
+          timeout --kill-after=30s 20m docker run --rm -i \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            debian:bookworm-slim \
+            bash -s <<'CONTAINER'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq ca-certificates curl
+          bash /tmp/install.sh --install-method npm --no-onboard --no-prompt --version latest
+          node --version | grep -E '^v24\.[0-9]+\.[0-9]+$'
+          node -e '
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(":memory:");
+            console.log(`SQLite ${db.prepare("SELECT sqlite_version() AS version").get().version}`);
+            db.close();
+          '
+          openclaw --version
+          CONTAINER
+
   linux-build-tools-failure:
     runs-on: ubuntu-24.04
     steps:
@@ -321,6 +346,7 @@ jobs:
     needs:
       - static
       - linux-docker
+      - debian-installer
       - linux-build-tools-failure
       - linux-non-root
       - fedora-installer

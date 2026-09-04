@@ -1,11 +1,10 @@
 /**
  * Update-hunk application for the apply_patch parser.
  * Locates expected old lines with tolerant matching, applies chunks in order,
- * and returns normalized file contents with a trailing newline.
+ * and retains source bytes that the patch does not change.
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
-import { hasOnlyCrlfLineEndings, normalizeToLF, restoreLineEndings } from "./line-endings.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
@@ -19,6 +18,22 @@ type UpdateFileChunk = {
   contextOldIndexes: Array<number | undefined>;
   isEndOfFile: boolean;
 };
+
+type LineEnding = "\r\n" | "\r" | "\n" | "";
+
+type SourceLine = {
+  text: string;
+  ending: LineEnding;
+};
+
+type SourceFile = {
+  bom: string;
+  lines: SourceLine[];
+  preferredEnding: Exclude<LineEnding, "">;
+  missingFinalEnding: boolean;
+};
+
+type Replacement = [number, number, SourceLine[]];
 
 async function defaultReadFile(filePath: string): Promise<string> {
   return fs.readFile(filePath, "utf8");
@@ -35,30 +50,20 @@ export async function applyUpdateHunk(
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
 
-  // Normalizing mixed endings would rewrite untouched lines across the file.
-  // Keep the existing localized behavior unless every terminator is CRLF.
-  const preserveCrlf = hasOnlyCrlfLineEndings(originalContents);
-  const matchingContents = preserveCrlf ? normalizeToLF(originalContents) : originalContents;
-  const originalLines = matchingContents.split("\n");
-  if (originalLines.length > 0 && originalLines[originalLines.length - 1] === "") {
-    originalLines.pop();
-  }
-
-  const replacements = computeReplacements(originalLines, filePath, chunks);
-  let newLines = applyReplacements(originalLines, replacements);
-  if (newLines.length === 0 || newLines[newLines.length - 1] !== "") {
-    newLines = [...newLines, ""];
-  }
-  const updatedContents = newLines.join("\n");
-  return preserveCrlf ? restoreLineEndings(updatedContents, "\r\n") : updatedContents;
+  const source = parseSourceFile(originalContents);
+  const replacements = computeReplacements(source, filePath, chunks);
+  const newLines = applyReplacements(source.lines, replacements);
+  ensureInteriorEndings(newLines, source.preferredEnding);
+  return source.bom + newLines.map((line) => line.text + line.ending).join("");
 }
 
 function computeReplacements(
-  originalLines: string[],
+  source: SourceFile,
   filePath: string,
   chunks: UpdateFileChunk[],
-): Array<[number, number, string[]]> {
-  const replacements: Array<[number, number, string[]]> = [];
+): Replacement[] {
+  const originalLines = source.lines.map((line) => line.text);
+  const replacements: Replacement[] = [];
   let lineIndex = 0;
 
   for (const chunk of chunks) {
@@ -77,12 +82,23 @@ function computeReplacements(
 
     if (chunk.oldLines.length === 0) {
       const insertionIndex =
-        chunk.changeContext && !chunk.isEndOfFile
-          ? lineIndex
-          : originalLines.length > 0 && originalLines[originalLines.length - 1] === ""
-            ? originalLines.length - 1
-            : originalLines.length;
-      replacements.push([insertionIndex, 0, chunk.newLines]);
+        chunk.changeContext && !chunk.isEndOfFile ? lineIndex : source.lines.length;
+      const insertedLines = buildChangedLines({
+        sourceLines: source.lines,
+        startIndex: insertionIndex,
+        oldCount: 0,
+        newLines: chunk.newLines,
+        preferredEnding: source.preferredEnding,
+      });
+      const finalInsertedLine = insertedLines.at(-1);
+      if (
+        source.missingFinalEnding &&
+        insertionIndex === source.lines.length &&
+        finalInsertedLine
+      ) {
+        finalInsertedLine.ending = "";
+      }
+      replacements.push([insertionIndex, 0, insertedLines]);
       lineIndex = insertionIndex;
       continue;
     }
@@ -116,10 +132,10 @@ function computeReplacements(
     replacements.push([
       found,
       pattern.length,
-      keepContextBytes({
-        originalLines,
+      buildChunkLines({
+        source,
         matchIndex: found,
-        patternLength: pattern.length,
+        pattern,
         newSlice,
         contextOldIndexes: chunk.contextOldIndexes,
       }),
@@ -131,41 +147,123 @@ function computeReplacements(
   return replacements;
 }
 
-function keepContextBytes(params: {
-  originalLines: string[];
+function buildChunkLines(params: {
+  source: SourceFile;
   matchIndex: number;
-  patternLength: number;
+  pattern: string[];
   newSlice: string[];
   contextOldIndexes: Array<number | undefined>;
-}): string[] {
-  const { originalLines, matchIndex, patternLength, newSlice, contextOldIndexes } = params;
-  return newSlice.map((line, index) => {
-    const oldIndex = contextOldIndexes.at(index);
-    if (oldIndex === undefined || oldIndex >= patternLength) {
-      return line;
+}): SourceLine[] {
+  const { source, matchIndex, pattern, newSlice, contextOldIndexes } = params;
+  const lines: SourceLine[] = [];
+  let oldStart = 0;
+  let newStart = 0;
+
+  // Tolerant matching may ignore whitespace or punctuation. Reuse matched
+  // context records so bytes outside each explicit change stay untouched.
+  for (const [newContext, oldContext] of contextOldIndexes.entries()) {
+    if (oldContext === undefined || oldContext >= pattern.length || newContext >= newSlice.length) {
+      continue;
     }
-    return originalLines.at(matchIndex + oldIndex) ?? line;
+    lines.push(
+      ...buildChangedLines({
+        sourceLines: source.lines,
+        startIndex: matchIndex + oldStart,
+        oldCount: oldContext - oldStart,
+        newLines: newSlice.slice(newStart, newContext),
+        preferredEnding: source.preferredEnding,
+      }),
+      source.lines[matchIndex + oldContext]!,
+    );
+    oldStart = oldContext + 1;
+    newStart = newContext + 1;
+  }
+
+  lines.push(
+    ...buildChangedLines({
+      sourceLines: source.lines,
+      startIndex: matchIndex + oldStart,
+      oldCount: pattern.length - oldStart,
+      newLines: newSlice.slice(newStart),
+      preferredEnding: source.preferredEnding,
+    }),
+  );
+  return lines;
+}
+
+function buildChangedLines(params: {
+  sourceLines: SourceLine[];
+  startIndex: number;
+  oldCount: number;
+  newLines: string[];
+  preferredEnding: Exclude<LineEnding, "">;
+}): SourceLine[] {
+  const { sourceLines, startIndex, oldCount, newLines, preferredEnding } = params;
+  const replacedLines = sourceLines.slice(startIndex, startIndex + oldCount);
+  const nearbyEnding =
+    replacedLines.find((line) => line.ending)?.ending ||
+    sourceLines.at(startIndex)?.ending ||
+    sourceLines.at(startIndex - 1)?.ending ||
+    preferredEnding;
+  return newLines.map((text, index) => {
+    let ending: LineEnding = nearbyEnding;
+    if (replacedLines.length === newLines.length) {
+      ending = replacedLines.at(index)?.ending ?? nearbyEnding;
+    } else if (index === newLines.length - 1 && replacedLines.length > 0) {
+      ending = replacedLines.at(-1)?.ending ?? nearbyEnding;
+    } else if (index < replacedLines.length - 1) {
+      ending = replacedLines.at(index)?.ending ?? nearbyEnding;
+    }
+    return { text, ending };
   });
 }
 
-function applyReplacements(
-  lines: string[],
-  replacements: Array<[number, number, string[]]>,
-): string[] {
+function applyReplacements(lines: SourceLine[], replacements: Replacement[]): SourceLine[] {
   const result = [...lines];
   // Apply from the end of the file backward so earlier replacement indexes stay
   // stable while later replacements mutate the array.
   for (const [startIndex, oldLen, newLines] of [...replacements].toReversed()) {
-    for (let i = 0; i < oldLen; i += 1) {
-      if (startIndex < result.length) {
-        result.splice(startIndex, 1);
-      }
-    }
-    for (const [i, line] of newLines.entries()) {
-      result.splice(startIndex + i, 0, line);
-    }
+    result.splice(startIndex, oldLen, ...newLines);
   }
   return result;
+}
+
+function parseSourceFile(contents: string): SourceFile {
+  const bom = contents.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const text = bom ? contents.slice(1) : contents;
+  const rawLines = text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+  const lines = rawLines.map(splitLineEnding);
+  const preferredEnding = lines.find((line) => line.ending)?.ending || "\n";
+  return {
+    bom,
+    lines,
+    preferredEnding,
+    missingFinalEnding: lines.length > 0 && lines.at(-1)?.ending === "",
+  };
+}
+
+function splitLineEnding(line: string): SourceLine {
+  if (line.endsWith("\r\n")) {
+    return { text: line.slice(0, -2), ending: "\r\n" };
+  }
+  if (line.endsWith("\r")) {
+    return { text: line.slice(0, -1), ending: "\r" };
+  }
+  if (line.endsWith("\n")) {
+    return { text: line.slice(0, -1), ending: "\n" };
+  }
+  return { text: line, ending: "" };
+}
+
+function ensureInteriorEndings(
+  lines: SourceLine[],
+  preferredEnding: Exclude<LineEnding, "">,
+): void {
+  // An insertion can move an unterminated line inward. Only that interior
+  // boundary needs a terminator; the final record already owns EOF state.
+  for (const line of lines.slice(0, -1)) {
+    line.ending ||= preferredEnding;
+  }
 }
 
 type SequenceSearch =

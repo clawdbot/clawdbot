@@ -272,20 +272,20 @@ describe("OpenAI embedding batch output", () => {
         }
       },
     });
-    const rejection = result.catch((error: unknown) => error);
+    const rejection = expect(result).rejects.toMatchObject({
+      message: "openai batch batch-0 timed out after 1000ms",
+      ...(scenario.retryFirstStatus ? { cause: { status: 503 } } : {}),
+    });
 
     for (const [index, waitMs] of scenario.expectedWaits.entries()) {
       for (let attempt = 0; attempt < 100 && pollTimeoutCalls().length < index + 1; attempt++) {
-        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
       }
       expect(pollTimeoutCalls()).toHaveLength(index + 1);
       expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
       await vi.advanceTimersByTimeAsync(waitMs);
     }
-    await expect(rejection).resolves.toMatchObject({
-      message: "openai batch batch-0 timed out after 1000ms",
-      ...(scenario.retryFirstStatus ? { cause: { status: 503 } } : {}),
-    });
+    await rejection;
     expect(statusCalls).toBe(scenario.retryFirstStatus ? 1 : 0);
   });
 

@@ -161,7 +161,18 @@ describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],
-      hotPrefixes: ["browser.profiles"],
+      hotPrefixes: [
+        "browser.profiles",
+        "browser.defaultProfile",
+        "browser.headless",
+        "browser.executablePath",
+        "browser.attachOnly",
+        "browser.cdpUrl",
+        "browser.noSandbox",
+        "browser.extraArgs",
+        "browser.snapshotDefaults",
+        "browser.tabCleanup",
+      ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
       "browser.proxy",
@@ -341,6 +352,10 @@ describe("browser plugin", () => {
       "act",
       "close",
       "console",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
       "dialog",
       "download",
       "focus",
@@ -399,7 +414,17 @@ describe("browser plugin", () => {
     const actions = (properties.action as { enum?: string[] }).enum;
     const actKinds = (properties.kind as { enum?: string[] }).enum;
 
-    expect(actions).not.toEqual(expect.arrayContaining(["pdf", "download", "waitfordownload"]));
+    for (const action of [
+      "pdf",
+      "download",
+      "waitfordownload",
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+    ]) {
+      expect(actions).not.toContain(action);
+    }
     expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot"]));
     expect(actKinds).not.toContain("batch");
     expect((properties.actions as { description?: string }).description).toBeUndefined();

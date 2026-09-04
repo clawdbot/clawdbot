@@ -60,8 +60,6 @@ type UpdateMetadataMemoryWikiMutation = {
 
 type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
-type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
-
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
@@ -91,21 +89,36 @@ function normalizeMutationConfidence(
   });
 }
 
-function normalizeMemoryWikiMutationOp(
-  op: MemoryWikiMutationInputOp,
-): ApplyMemoryWikiMutation["op"] {
-  if (op === "synthesis") {
+// Reads stay tolerant of legacy or hand-written frontmatter. Mutations reject
+// new invalid confidence before source sync or a vault write can persist it.
+function normalizeMutationClaims(claims: unknown[]): WikiClaim[] {
+  const normalizedClaims = normalizeWikiClaims(claims);
+  for (const [index, claim] of normalizedClaims.entries()) {
+    const confidence = claim.confidence;
+    if (confidence !== undefined && (confidence < 0 || confidence > 1)) {
+      throw new Error(
+        `claims[${index}].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+    }
+  }
+  return normalizedClaims;
+}
+
+function normalizeMemoryWikiMutationOp(op: unknown): ApplyMemoryWikiMutation["op"] {
+  if (op === "synthesis" || op === "create_synthesis") {
     return "create_synthesis";
   }
-  if (op === "metadata") {
+  if (op === "metadata" || op === "update_metadata") {
     return "update_metadata";
   }
-  return op;
+  throw new Error(
+    'wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata").',
+  );
 }
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = asNonArrayRecord(rawParams) as {
-    op: MemoryWikiMutationInputOp;
+    op: unknown;
     title?: string;
     body?: string;
     lookup?: string;
@@ -135,7 +148,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       title: params.title,
       body: params.body,
       sourceIds: params.sourceIds,
-      ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
+      ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
       ...(typeof confidence === "number" ? { confidence } : {}),
@@ -152,7 +165,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     op: "update_metadata",
     lookup: params.lookup,
     ...(params.sourceIds ? { sourceIds: params.sourceIds } : {}),
-    ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
+    ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
@@ -365,8 +378,13 @@ async function applyUpdateMetadataMutation(params: {
 async function applyMemoryWikiMutationUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
+  signal?: AbortSignal;
 }): Promise<ApplyMemoryWikiMutationResult> {
-  await initializeMemoryWikiVault(params.config);
+  await initializeMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
+  params.signal?.throwIfAborted();
   const result =
     params.mutation.op === "create_synthesis"
       ? await applyCreateSynthesisMutation({
@@ -377,7 +395,11 @@ async function applyMemoryWikiMutationUnlocked(params: {
           config: params.config,
           mutation: params.mutation,
         });
-  const compile = await compileMemoryWikiVault(params.config);
+  params.signal?.throwIfAborted();
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
   return {
     changed: result.changed,
     operation: params.mutation.op,
@@ -390,6 +412,7 @@ async function applyMemoryWikiMutationUnlocked(params: {
 export async function applyMemoryWikiMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
+  signal?: AbortSignal;
 }): Promise<ApplyMemoryWikiMutationResult> {
   return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
     applyMemoryWikiMutationUnlocked(params),

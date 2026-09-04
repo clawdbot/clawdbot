@@ -125,6 +125,26 @@ describe("SQLite trajectory runtime store", () => {
     expect(rows.map((row) => row.seq)).toEqual([1, 2]);
   });
 
+  it("reads a missing trajectory store without creating an agent database", () => {
+    const missingStorePath = path.join(tempDir, "agents", "missing", "sessions", "sessions.json");
+    const missingDatabasePath = path.join(
+      tempDir,
+      "agents",
+      "missing",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: "missing",
+        sessionId: "missing-session",
+        storePath: missingStorePath,
+      }),
+    ).toEqual([]);
+    expect(fs.existsSync(missingDatabasePath)).toBe(false);
+  });
+
   it("applies maxEvents to a trailing window", () => {
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
       createTrajectoryEvent({ type: "event-1" }),

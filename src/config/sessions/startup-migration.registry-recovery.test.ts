@@ -3,12 +3,14 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -18,6 +20,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import {
+  isCanonicalSqliteSessionMainKeyCurrent,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
@@ -27,6 +33,32 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each(["cold", "preexisting"] as const)(
+  "preserves the %s database lifetime for maintenance without a runtime handoff",
+  async (lifetime) => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handle-lifetime-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const options = { agentId: "main", env };
+    const initial = openOpenClawAgentDatabase(options);
+    setCanonicalSqliteSessionMainKey(initial, "previous");
+    if (lifetime === "cold") {
+      closeOpenClawAgentDatabasesForTest();
+    }
+
+    await runSessionStartupMigration({
+      cfg: { agents: { entries: { main: {} } } },
+      env,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
+    expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
+    if (lifetime === "preexisting") {
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
+    }
+  },
+);
 
 it("does not create a missing configured agent database during startup maintenance", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-missing-agent-db-"));
@@ -42,7 +74,6 @@ it("does not create a missing configured agent database during startup maintenan
     env,
   }).path;
   const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
-  const sweepOrphanSessionStoreTemps = vi.fn(async () => 0);
 
   await runSessionStartupMigration({
     cfg,
@@ -60,16 +91,12 @@ it("does not create a missing configured agent database during startup maintenan
         warnings: [],
       })),
       migrateManagedWorktreeCanonicalWorkspaces,
-      migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-      prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
       resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
-      sweepOrphanSessionStoreTemps,
     },
   });
 
   expect(fs.existsSync(sqlitePath)).toBe(false);
   expect(migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
-  expect(sweepOrphanSessionStoreTemps).toHaveBeenCalledWith({ storePath });
 });
 
 it("re-registers durable lineage children before configured-only runtime reads", async () => {
@@ -135,9 +162,6 @@ it("re-registers durable lineage children before configured-only runtime reads",
           outcomes: [{ kind: "not-armed" as const }],
           warnings: [],
         })),
-        migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-        prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
-        sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
       },
     });
     expect(migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalled();

@@ -11,7 +11,7 @@ import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "./capability-provider-runtime.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import * as installRecords from "./installed-plugin-index-record-reader.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -75,6 +75,11 @@ export default { id: "${id}", register(api) {
   const builtDir = path.join(root, "dist", "extensions", id);
   mkdirSafe(builtDir);
   fs.writeFileSync(path.join(builtDir, "index.js"), body("built"));
+  // Artifact selection follows the entry format declared by emitted package metadata.
+  fs.writeFileSync(
+    path.join(builtDir, "package.json"),
+    JSON.stringify({ openclaw: { extensions: ["./index.js"] } }),
+  );
   const seed = writePlugin({
     id: "fixture-seed",
     dir: path.join(root, "extensions", "fixture-seed"),

@@ -2,8 +2,9 @@
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createSlackOutboundPayloadHarness as createHarness, slackOutbound } from "../test-api.js";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -857,6 +858,7 @@ describe("slackOutbound sendPayload", () => {
     const controlsSent = sentSlackMessage(sendMock, 1);
     expect(controlsSent.to).toBe(to);
     expect(controlsSent.text).toBe("Approval required\n\nAllow");
+    expect(controlsSent.options).not.toHaveProperty("mediaUrl");
     expect(controlsSent.options.blocks?.map((block) => block.type)).toEqual(["section", "actions"]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");

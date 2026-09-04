@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -81,11 +82,13 @@ export function buildSilentFallbackFailurePayload(params: {
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  hasExplicitSilentReply?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
+    params.hasExplicitSilentReply === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
@@ -192,7 +195,12 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
 export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
+  runtimeModelSelection?: ModelRef;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
+  // Runtime-owned selection is not a fallback from the caller's nominal model.
+  if (params.runtimeModelSelection) {
+    return { ...params.runtimeModelSelection, persistedAutoFallback: false };
+  }
   const entry = params.fallbackStateEntry;
   const isAutoFallbackOverride =
     entry?.modelOverrideSource === "auto" ||
@@ -286,8 +294,7 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
-    blockReplyPipeline: BlockReplyPipeline | null;
-    didDeliverVisiblePartialReply: () => boolean;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -298,8 +305,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
-    blockReplyPipeline,
-    didDeliverVisiblePartialReply,
+    resolveVisibleReplyDelivery,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -356,19 +362,8 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
-  if (blockReplyPipeline) {
-    try {
-      await blockReplyPipeline.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-  }
-  const didDeliverVisibleReply =
-    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
-    didDeliverVisiblePartialReply();
-  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+  const visibleReplyDelivered = await resolveVisibleReplyDelivery();
+  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({

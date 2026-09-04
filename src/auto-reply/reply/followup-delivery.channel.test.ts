@@ -10,7 +10,7 @@ import {
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
-import { deliverFollowupDecision } from "./followup-delivery.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const channelState = vi.hoisted(() => ({
@@ -35,6 +35,23 @@ function createChannelPlugin(id: ChannelPlugin["id"]): ChannelPlugin {
     label: String(id),
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
   });
+}
+
+function registerCurrentReplyThreading() {
+  const slack = createChannelPlugin("slack");
+  slack.threading = {
+    resolveReplyTransport: (params: {
+      threadId?: string | number | null;
+      replyToId?: string | null;
+      replyToCurrent?: boolean;
+    }) => ({
+      threadId: null,
+      replyToId: params.replyToCurrent ? String(params.threadId) : params.replyToId,
+    }),
+  };
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "slack", plugin: slack, source: "test" }]),
+  );
 }
 
 function createTurn(params: {
@@ -139,6 +156,94 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each([true, false])(
+    "carries current-reply intent (%s) through queued status delivery",
+    async (replyToCurrent) => {
+      registerCurrentReplyThreading();
+      const turn = createTurn({ messageProvider: "discord", originatingChannel: "slack" });
+      turn.queued.originatingThreadId = "111.000";
+      channelState.outcomes = ["delivered"];
+      await deliverFollowupDecision({
+        decision: {
+          kind: "deliver",
+          payloads: [
+            {
+              text: "Compacting context",
+              replyToId: "222.000",
+              replyToCurrent,
+              isCompactionNotice: true,
+            },
+          ],
+        },
+        turn,
+        defaults: createDefaults(vi.fn(async () => {})),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+        kind: "block",
+      });
+
+      expect(channelState.deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToId: replyToCurrent ? "111.000" : "222.000" }),
+      );
+    },
+  );
+
+  it("dedupes a current-reply status against its actual thread root", () => {
+    registerCurrentReplyThreading();
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: {},
+        payloads: [
+          {
+            text: "Compacting context",
+            replyToId: "222.000",
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          },
+        ],
+        messageProvider: "slack",
+        originatingChannel: "slack",
+        originatingReplyToMode: "all",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["Compacting context"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "Compacting context",
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("renders post-compaction model failures after queued payload selection", () => {
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { text: "⚠️ Provider billing failed.", isError: true },
+          postCompactionModelFailure: true,
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed.",
+          isError: true,
+        },
+      ],
+    });
+  });
+
   it.each([
     { mode: "first", duplicate: "media" },
     { mode: "batched", duplicate: "media" },

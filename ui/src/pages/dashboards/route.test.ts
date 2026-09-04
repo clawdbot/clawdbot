@@ -2,6 +2,7 @@
 
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
 
@@ -55,14 +56,14 @@ describe("dashboards route", () => {
     await loadDashboards(context, loaderOptions);
 
     expect(refreshList).toHaveBeenCalledWith({
-      limit: 50,
-      boardFace: "dashboard",
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      hasBoard: true,
       archivedFilter: "all",
       force: true,
     });
     expect(listSnapshot).toHaveBeenLastCalledWith({
-      limit: 50,
-      boardFace: "dashboard",
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      hasBoard: true,
       archivedFilter: "all",
     });
     expect(list).not.toHaveBeenCalled();

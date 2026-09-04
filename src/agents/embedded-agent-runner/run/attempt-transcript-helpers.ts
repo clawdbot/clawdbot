@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
-  findTranscriptEvent,
+  hasSessionTranscriptMessage,
   loadSessionEntry,
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
@@ -153,23 +153,23 @@ type ExistingAttemptTranscriptState = {
   hasBootstrapTranscriptState: boolean;
 };
 
-function isTranscriptMessageEvent(event: unknown): boolean {
-  return (
-    typeof event === "object" &&
-    event !== null &&
-    "type" in event &&
-    (event as { type?: unknown }).type === "message"
-  );
-}
-
 export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
   sessionFile: string;
+  sessionManager?: EmbeddedRunAttemptParams["sessionManager"];
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<ExistingAttemptTranscriptState> {
+  // The supplied manager owns this transcript; a borrowed durable identity is not its history.
+  if (params.sessionManager) {
+    return {
+      hasBootstrapTranscriptState: params.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "message"),
+    };
+  }
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
@@ -181,12 +181,12 @@ export async function resolveExistingAttemptTranscriptState(params: {
   let hasBootstrapTranscriptState = false;
   if (storePath && sessionKey) {
     try {
-      hasBootstrapTranscriptState = Boolean(
-        await findTranscriptEvent(
-          { agentId, sessionId, sessionKey, storePath },
-          isTranscriptMessageEvent,
-        ),
-      );
+      hasBootstrapTranscriptState = await hasSessionTranscriptMessage({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+      });
     } catch {
       hasBootstrapTranscriptState = false;
     }

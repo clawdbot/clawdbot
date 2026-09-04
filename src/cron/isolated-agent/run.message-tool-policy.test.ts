@@ -1,6 +1,8 @@
 // Message tool policy tests cover message tool availability during cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
@@ -408,6 +410,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
           cronSession: makeCronSession() as unknown as MutableCronSession,
           commandBody,
           persistSessionEntry: async () => undefined,
+          lifecycle: createAgentLifecycleTerminalBackstop({
+            runId: "test-session-id",
+            sessionKey: "cron:message-tool-policy:run:test-session-id",
+            getLifecycleGeneration: getAgentEventLifecycleGeneration,
+            resolveTerminationFields: () => ({}),
+          }),
           abortReason: () => "aborted",
           isAborted: () => false,
           ...overrides,
@@ -1172,7 +1180,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolveCronSessionMock.mockImplementation(() => makeCronSession());
     const { claimAgentRunContext, getAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
-    const { getAgentEventLifecycleGeneration } = await import("../../infra/agent-events.js");
     let invocationCount = 0;
     let releaseFirst = () => {};
     let releaseSecond = () => {};
@@ -1235,8 +1242,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
     const { claimAgentRunContext, getAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
-    const { getAgentEventLifecycleGeneration, rotateAgentEventLifecycleGeneration } =
-      await import("../../infra/agent-events.js");
+    const { rotateAgentEventLifecycleGeneration } = await import("../../infra/agent-events.js");
     claimAgentRunContext("test-session-id", {
       sessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
@@ -1278,7 +1284,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
     expectDispatchFields({
       deliveryRequested: true,
-      skipHeartbeatDelivery: true,
+      skipDelivery: "heartbeat",
     });
   });
 
@@ -1981,31 +1987,21 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       hasFatalStructuredErrorPayload: false,
       embeddedRunError: undefined,
     });
-    dispatchCronDeliveryMock.mockImplementationOnce(
-      (params: {
-        withRunSession: (result: {
-          status: "error";
-          summary: string;
-          outputText: string;
-          error: string;
-          deliveryAttempted: true;
-        }) => unknown;
-      }) => ({
-        result: params.withRunSession({
-          status: "error",
-          summary: "Final cron report",
-          outputText: "Final cron report",
-          error: "Message failed",
-          deliveryAttempted: true,
-        }),
+    dispatchCronDeliveryMock.mockResolvedValueOnce({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "Message failed",
+      deliveryState: {
+        status: "not-delivered",
         delivered: false,
-        deliveryAttempted: true,
-        summary: "Final cron report",
-        outputText: "Final cron report",
-        synthesizedText: "Final cron report",
-        deliveryPayloads: [{ text: "Final cron report" }],
-      }),
-    );
+        error: "Message failed",
+        failureNotification: { status: "not-requested" },
+      },
+      summary: "Final cron report",
+      outputText: "Final cron report",
+      synthesizedText: "Final cron report",
+      deliveryPayloads: [{ text: "Final cron report" }],
+    });
 
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -2025,6 +2021,12 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
     // logs (#95419) without mislabeling the successful run as a failure.
     expect(result.deliveryError).toBe("Message failed");
+    expect(result.deliveryState).toEqual({
+      status: "not-delivered",
+      delivered: false,
+      error: "Message failed",
+      failureNotification: { status: "not-requested" },
+    });
     // Delivery failure metadata is preserved and decoupled from status.
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(true);

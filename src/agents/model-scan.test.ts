@@ -242,7 +242,7 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response too large/,
+      /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
     // The reader stopped early instead of draining an unbounded stream, and
@@ -262,9 +262,21 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response is malformed JSON/,
+      /OpenRouter \/models: malformed JSON response/,
     );
   });
+
+  it.each([{}, { data: {} }, { data: null }])(
+    "rejects a malformed catalog envelope",
+    async (payload) => {
+      await expect(
+        scanOpenRouterModels({
+          fetchImpl: createFetchFixture(payload),
+          probe: false,
+        }),
+      ).rejects.toThrow(/OpenRouter \/models.*malformed JSON response/);
+    },
+  );
 
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
@@ -363,10 +375,7 @@ describe("scanOpenRouterModels", () => {
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
     // Timer APIs cannot safely schedule above the platform max; cap before
     // creating the catalog abort timeout.
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fetchImpl = createFetchFixture({ data: [] });
 
     await scanOpenRouterModels({

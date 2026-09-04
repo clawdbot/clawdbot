@@ -3,9 +3,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelKind } from "./config-reload-plan.js";
-import type { GatewayReloadPlan } from "./config-reload.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
@@ -16,26 +14,6 @@ import type {
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
-
-let currentReloadGeneration = 0;
-let abortGeneration: number | undefined;
-
-export function nextGatewayReloadGeneration(): number {
-  return ++currentReloadGeneration;
-}
-
-export function isCurrentGatewayReloadGeneration(generation: number): boolean {
-  return generation === currentReloadGeneration;
-}
-
-export function isGatewayReloadGenerationAborted(generation: number): boolean {
-  return abortGeneration !== undefined && generation <= abortGeneration;
-}
-
-/** Signal any in-progress deferred channel reload to abort immediately. */
-export function abortPendingChannelReloads(): void {
-  abortGeneration = currentReloadGeneration;
-}
 
 export type RuntimeSecretsPreflightParams = Omit<
   Parameters<ActivateRuntimeSecrets>[1],
@@ -52,7 +30,6 @@ type GatewayHotReloadState = {
   hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
-  channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
 type GatewayReloadLog = {
@@ -97,7 +74,7 @@ export type AcceptedRestartTargetOwnership = {
   reject: () => void;
 };
 
-export class GatewayHotReloadCancelledError extends Error {
+class GatewayHotReloadCancelledError extends Error {
   constructor() {
     super("config hot reload cancelled by config supersession or in-process restart");
     this.name = "GatewayHotReloadCancelledError";
@@ -132,20 +109,22 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function createReloadCancellationError(superseded: boolean) {
+  return superseded
+    ? new GatewayConfigReloadSupersededError()
+    : new GatewayHotReloadCancelledError();
+}
+
 export function assertReloadPublicationCurrent(
   publicationCurrent: boolean,
   restartStopped: boolean,
 ): void {
-  if (!publicationCurrent) {
-    throw new GatewayConfigReloadSupersededError();
-  }
-  if (restartStopped) {
-    throw new GatewayHotReloadCancelledError();
+  if (!publicationCurrent || restartStopped) {
+    throw createReloadCancellationError(!publicationCurrent);
   }
 }
 
 export type GatewayPluginReloadResult = {
-  restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
   /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
   cancelled?: boolean;
@@ -169,11 +148,7 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    changedPaths: readonly string[];
-    beforeReplace: (
-      channels: ReadonlySet<ChannelKind>,
-      accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
-    ) => Promise<void>;
+    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
     commitRuntime: (onCommit?: () => void) => Promise<void>;
     onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;
@@ -188,7 +163,6 @@ export type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
   createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
@@ -200,7 +174,7 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "createHealthMonitor" | "logReload" | "pruneInactiveChannelAccountState"
+  "assertRestartReady" | "logReload" | "pruneInactiveChannelAccountState"
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
@@ -237,8 +211,12 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
   prepareTerminalConfig: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
-  reconcileTerminalSessions: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
-  commitTerminalConfig: (nextConfig: OpenClawConfig) => void;
+  reconcileRuntimePolicy: (
+    nextConfig: OpenClawConfig,
+    phase: "committed" | "restart",
+  ) => Promise<void> | void;
+  assertRuntimeSecurityConfig?: (config: OpenClawConfig, env?: NodeJS.ProcessEnv) => void;
+  commitRuntimePolicy: (nextConfig: OpenClawConfig) => void;
   acceptTerminalConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 

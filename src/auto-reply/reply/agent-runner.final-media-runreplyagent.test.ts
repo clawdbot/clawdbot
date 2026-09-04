@@ -67,6 +67,7 @@ vi.mock("../../media/outbound-attachment.js", () => ({
 vi.mock("./agent-runner-failure-reply.js", () => ({
   buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
+  markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
@@ -101,9 +102,12 @@ vi.mock("./queue.js", async () => {
   };
 });
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: async () => undefined,
-  persistRunSessionUsage: async () => undefined,
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: async () => undefined,
+}));
+
+vi.mock("./session-usage.js", () => ({
+  persistSessionUsageUpdate: async () => undefined,
 }));
 
 const { runReplyAgent } = await import("./agent-runner.js");

@@ -1,7 +1,10 @@
+import { once } from "node:events";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   createChildEnv,
@@ -9,11 +12,82 @@ import {
   processIsAlive,
   startHttpFixture,
   stopChild,
+  waitForMcpFixtureGate,
 } from "./gateway-node-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("gateway node MCP fixture ownership", () => {
+  it.each(["existing", "published"] as const)(
+    "joins its watcher when the gate is %s",
+    async (mode) => {
+      const root = tempDirs.make("mcp-gate-publication-");
+      const gate = path.join(root, "gate");
+      if (mode === "existing") {
+        await fs.writeFile(gate, "ready");
+      }
+      const watching = createDeferred<nodeFs.FSWatcher>();
+      const watch = nodeFs.watch;
+      const observeWatch = vi.fn((...args: Parameters<typeof watch>) => {
+        const watcher = watch(...args);
+        watching.resolve(watcher);
+        return watcher;
+      });
+      vi.resetModules();
+      vi.doMock("node:fs", () => ({ ...nodeFs, watch: observeWatch }));
+      const { waitForMcpFixtureGate: waitForGate } =
+        await import("./gateway-node-mcp.test-support.js");
+      let watcher: nodeFs.FSWatcher | undefined;
+      const waiting = waitForGate(gate);
+      try {
+        if (mode === "published") {
+          watcher = await watching.promise;
+          const closed = once(watcher, "close");
+          await fs.writeFile(gate, "ready");
+          await waiting;
+          await closed;
+        } else {
+          await waiting;
+          expect(observeWatch).not.toHaveBeenCalled();
+        }
+        expect(await fs.readFile(gate, "utf8")).toBe("ready");
+      } finally {
+        watcher?.close();
+        await waiting;
+        vi.doUnmock("node:fs");
+        vi.resetModules();
+      }
+    },
+  );
+
+  it("releases its deadline when the real gate watcher cannot be constructed", async () => {
+    const root = tempDirs.make("mcp-gate-watch-failure-");
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      await expect(waitForMcpFixtureGate(path.join(root, "missing", "gate"))).rejects.toMatchObject(
+        {
+          code: "ENOENT",
+          syscall: "watch",
+        },
+      );
+      const allocated = timers.mock.results.flatMap((result, index) =>
+        result.type === "return" && timers.mock.calls[index]?.[1] === 30_000 ? [result.value] : [],
+      );
+      expect(
+        allocated.filter((timer) => !cleared.mock.calls.some(([value]) => value === timer)).length,
+      ).toBe(0);
+    } finally {
+      for (const result of timers.mock.results) {
+        if (result.type === "return") {
+          clearTimeout(result.value);
+        }
+      }
+      timers.mockRestore();
+      cleared.mockRestore();
+    }
+  });
+
   it.each([
     ["direct", (payload: object) => payload],
     ["node.invoke", (payload: object) => ({ ok: true, payload })],

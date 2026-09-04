@@ -26,10 +26,6 @@ const manifestModels = buildManifestModelProviderConfig({
   providerId: "github-copilot",
   catalog: manifestCatalog,
 }).models;
-for (const model of manifestModels) {
-  model.api = resolveCopilotTransportApi(model.id);
-  model.compat = { ...resolveCopilotModelCompat(model.id), ...model.compat };
-}
 
 const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
   ...manifestModels.map((model) => [model.id, model] as const),

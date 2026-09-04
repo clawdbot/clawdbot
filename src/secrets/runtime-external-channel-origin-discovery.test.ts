@@ -1,24 +1,24 @@
 /** Tests external channel origin discovery for secrets runtime loading. */
 import { describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const { loadPluginMetadataSnapshotMock, loadChannelSecretContractApiMock } = vi.hoisted(() => ({
   loadPluginMetadataSnapshotMock: vi.fn(),
   loadChannelSecretContractApiMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
   resolvePluginMetadataSnapshot: (params: unknown) => {
     const snapshot = loadPluginMetadataSnapshotMock(params) as {
-      plugins: Array<{ id: string; origin: string }>;
+      plugins: Array<{ id: string; origin: "global" }>;
     };
-    return {
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    };
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
   },
   listPluginOriginsFromMetadataSnapshot: (snapshot: {
-    plugins: Array<{ id: string; origin: string }>;
+    plugins: Array<{ id: string; origin: "global" }>;
   }) => new Map(snapshot.plugins.map((record) => [record.id, record.origin])),
 }));
 

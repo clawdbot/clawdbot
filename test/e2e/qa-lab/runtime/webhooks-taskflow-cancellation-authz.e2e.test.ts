@@ -18,7 +18,6 @@ import {
 import { createTestAdmittedRunContext } from "../../../../src/agents/admitted-run-context.test-support.js";
 import { cancelBackgroundExecSession } from "../../../../src/agents/bash-process-control.js";
 import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
-import { testing as subagentControlTesting } from "../../../../src/agents/subagents/registry/subagent-control.test-support.js";
 import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -73,13 +72,6 @@ type WebhookResponse = {
 };
 
 beforeEach(() => {
-  // Keep the real registry and kill lifecycle while injecting the process facts
-  // that this isolated Gateway has no embedded model run or persisted session for.
-  subagentControlTesting.setDepsForTest({
-    abortEmbeddedAgentRun: () => false,
-    isEmbeddedAgentRunActive: () => false,
-    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-  });
   subagentRegistryTesting.setDepsForTest({
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
@@ -96,7 +88,6 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
-  subagentControlTesting.setDepsForTest();
   subagentRegistryTesting.setDepsForTest();
 });
 
@@ -271,12 +262,6 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               stateDir: acpxStateDir,
               permissionMode: "deny-all",
               timeoutSeconds: 15,
-              agents: {
-                codex: {
-                  command: process.execPath,
-                  args: [path.resolve("node_modules/@agentclientprotocol/codex-acp/dist/index.js")],
-                },
-              },
             },
             runtime: acpxRuntime,
             registerService: (service) => {
@@ -533,8 +518,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             throw new Error("failed to create persisted ACP projection");
           }
 
-          const elicitationEntered = createDeferred<void>();
-          const releaseElicitation = createDeferred<void>();
+          const elicitationEntered = createDeferred();
+          const releaseElicitation = createDeferred();
           const replacementAcpTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(reusedAcpRunId),
             cfg: config,
@@ -595,8 +580,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "persistent",
             backendId: "acpx",
           });
-          const queuedTargetEntered = createDeferred<void>();
-          const releaseQueuedTarget = createDeferred<void>();
+          const queuedTargetEntered = createDeferred();
+          const releaseQueuedTarget = createDeferred();
           const queuedTargetTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,
@@ -623,8 +608,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           const interruptsBeforeQueuedCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
             (method) => method === "turn/interrupt",
           ).length;
-          const queuedSuccessorEntered = createDeferred<void>();
-          const releaseQueuedSuccessor = createDeferred<void>();
+          const queuedSuccessorEntered = createDeferred();
+          const releaseQueuedSuccessor = createDeferred();
           const queuedSuccessorTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,

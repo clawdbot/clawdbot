@@ -1,7 +1,12 @@
 // Formats subagent status rows for the status command response.
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  hasSubagentRunEnded,
+  isLiveUnendedSubagentRun,
+} from "../../agents/subagents/registry/subagent-run-liveness.js";
+import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
-import { formatRunLabel, sortSubagentRuns } from "./subagents-utils.js";
+import { formatRunLabel } from "./subagents-utils.js";
 
 function formatActiveSubagentDetail(params: {
   entry: SubagentRunRecord;
@@ -35,28 +40,24 @@ export function buildSubagentsStatusLine(params: {
   if (runs.length === 0) {
     return undefined;
   }
-  const activeWithDescendants = runs
-    .map((entry) => ({ entry, pendingDescendants: pendingDescendantsForRun(entry) }))
-    .filter(({ entry, pendingDescendants }) => !entry.execution.endedAt || pendingDescendants > 0);
-  const active = activeWithDescendants.map(({ entry }) => entry);
-  const done = runs.length - active.length;
+  const now = params.now ?? Date.now();
+  const details = sortSubagentRuns(runs).map((entry) => ({
+    entry,
+    pendingDescendants: pendingDescendantsForRun(entry),
+    now,
+  }));
+  const active = details.filter(
+    ({ entry, pendingDescendants }) =>
+      isLiveUnendedSubagentRun(entry, now) || pendingDescendants > 0,
+  );
+  const done = details.filter(
+    ({ entry, pendingDescendants }) => hasSubagentRunEnded(entry) && pendingDescendants === 0,
+  ).length;
   if (active.length === 0) {
     return verboseEnabled && done > 0 ? `🤖 Subagents: 0 active · ${done} done` : undefined;
   }
 
   const summary = `🤖 Subagents: ${active.length} active${done > 0 ? ` · ${done} done` : ""}`;
-  const now = params.now ?? Date.now();
-  const detailLookup = new Map(
-    activeWithDescendants.map(({ entry, pendingDescendants }) => [entry.runId, pendingDescendants]),
-  );
-  const detailLines = sortSubagentRuns(active)
-    .slice(0, 3)
-    .map((entry) =>
-      formatActiveSubagentDetail({
-        entry,
-        now,
-        pendingDescendants: detailLookup.get(entry.runId) ?? 0,
-      }),
-    );
+  const detailLines = active.slice(0, 3).map(formatActiveSubagentDetail);
   return [summary, ...detailLines].join("\n");
 }

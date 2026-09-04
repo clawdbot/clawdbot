@@ -81,46 +81,42 @@ export function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
+function clipSpans<T extends { start: number; end: number }>(
+  spans: T[],
+  start: number,
+  end: number,
+  copySpan: (span: T) => T,
+): T[] {
+  const clipped: T[] = [];
+  for (const span of spans) {
+    const sliceStart = Math.max(span.start, start);
+    const sliceEnd = Math.min(span.end, end);
+    if (sliceEnd > sliceStart) {
+      const copy = copySpan(span);
+      copy.start = sliceStart - start;
+      copy.end = sliceEnd - start;
+      clipped.push(copy);
+    }
+  }
+  return clipped;
+}
+
 export function clampStyleSpans(
   spans: MarkdownStyleSpan[],
   maxLength: number,
 ): MarkdownStyleSpan[] {
-  const clamped: MarkdownStyleSpan[] = [];
-  for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push(createStyleSpan({ start, end, style: span.style, language: span.language }));
-    }
-  }
-  return clamped;
+  return clipSpans(spans, 0, maxLength, createStyleSpan);
 }
 
 export function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownLinkSpan[] {
-  const clamped: MarkdownLinkSpan[] = [];
-  for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push(copyMarkdownLinkSpan(span, { start, end }));
-    }
-  }
-  return clamped;
+  return clipSpans(spans, 0, maxLength, copyMarkdownLinkSpan);
 }
 
 export function clampAnnotationSpans(
   spans: MarkdownAnnotationSpan[],
   maxLength: number,
 ): MarkdownAnnotationSpan[] {
-  const clamped: MarkdownAnnotationSpan[] = [];
-  for (const span of spans) {
-    const start = Math.max(0, Math.min(span.start, maxLength));
-    const end = Math.max(start, Math.min(span.end, maxLength));
-    if (end > start) {
-      clamped.push({ ...span, start, end });
-    }
-  }
-  return clamped;
+  return clipSpans(spans, 0, maxLength, (span) => ({ ...span }));
 }
 
 export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
@@ -172,36 +168,12 @@ export function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[]
   return merged;
 }
 
-function resolveSliceBounds(
-  span: { start: number; end: number },
-  start: number,
-  end: number,
-): { start: number; end: number } | null {
-  const sliceStart = Math.max(span.start, start);
-  const sliceEnd = Math.min(span.end, end);
-  return sliceEnd > sliceStart ? { start: sliceStart, end: sliceEnd } : null;
-}
-
 export function sliceStyleSpans(
   spans: MarkdownStyleSpan[],
   start: number,
   end: number,
 ): MarkdownStyleSpan[] {
-  const sliced: MarkdownStyleSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push(
-        createStyleSpan({
-          start: bounds.start - start,
-          end: bounds.end - start,
-          style: span.style,
-          language: span.language,
-        }),
-      );
-    }
-  }
-  return mergeStyleSpans(sliced);
+  return mergeStyleSpans(clipSpans(spans, start, end, createStyleSpan));
 }
 
 export function sliceLinkSpans(
@@ -209,19 +181,7 @@ export function sliceLinkSpans(
   start: number,
   end: number,
 ): MarkdownLinkSpan[] {
-  const sliced: MarkdownLinkSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push(
-        copyMarkdownLinkSpan(span, {
-          start: bounds.start - start,
-          end: bounds.end - start,
-        }),
-      );
-    }
-  }
-  return sliced;
+  return clipSpans(spans, start, end, copyMarkdownLinkSpan);
 }
 
 export function sliceAnnotationSpans(
@@ -229,16 +189,5 @@ export function sliceAnnotationSpans(
   start: number,
   end: number,
 ): MarkdownAnnotationSpan[] {
-  const sliced: MarkdownAnnotationSpan[] = [];
-  for (const span of spans) {
-    const bounds = resolveSliceBounds(span, start, end);
-    if (bounds) {
-      sliced.push({
-        ...span,
-        start: bounds.start - start,
-        end: bounds.end - start,
-      });
-    }
-  }
-  return mergeAnnotationSpans(sliced);
+  return mergeAnnotationSpans(clipSpans(spans, start, end, (span) => ({ ...span })));
 }

@@ -5,6 +5,7 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
+  isQwen38ModelId,
   isQwenCodingPlanBaseUrl,
   isQwenStandardOnlyModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
@@ -112,6 +113,10 @@ function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
 }
 
 function resolveQwenTokenPlanThinkingProfile(modelId: string) {
+  const qwenProfile = resolveQwenThinkingProfile(modelId);
+  if (qwenProfile) {
+    return qwenProfile;
+  }
   // Uncataloged exact refs remain selectable, so family predicates preserve their request controls.
   if (isQwenTokenPlanThinkingOnlyModelId(modelId)) {
     return {
@@ -138,6 +143,15 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
   return undefined;
 }
 
+function resolveQwenThinkingProfile(modelId: string) {
+  return isQwen38ModelId(modelId)
+    ? {
+        levels: (["off", "low", "medium", "xhigh"] as const).map((id) => ({ id })),
+        defaultLevel: "xhigh" as const,
+      }
+    : undefined;
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Qwen Provider",
@@ -161,7 +175,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: dashscope.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, etc.",
+          "Models: qwen3.8-max, qwen3.8-flash, qwen3.7-plus, and other discovered models.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Standard (China)",
         wizard: {
@@ -184,7 +198,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, etc.",
+          "Models: qwen3.8-max, qwen3.8-flash, qwen3.7-plus, and other discovered models.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Standard (Global/Intl)",
         wizard: {
@@ -259,6 +273,7 @@ export default defineSingleProviderPluginEntry({
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
+    resolveThinkingProfile: ({ modelId }) => resolveQwenThinkingProfile(modelId),
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
         return undefined;

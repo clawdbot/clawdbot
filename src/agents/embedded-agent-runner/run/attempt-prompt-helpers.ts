@@ -111,6 +111,7 @@ export async function resolvePromptBuildHookResult(params: {
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
+        agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
@@ -395,8 +396,12 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
 
 /**
  * Merges a trailing user message that was queued in transcript history but not
- * present in the active prompt. The leaf is removed whether merged or already
- * present so the transcript cannot submit the same user turn twice.
+ * present in the active prompt.
+ *
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`).
+ * Session repair preserves them only for producer-tagged main-session restart
+ * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
+ * internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
@@ -407,9 +412,6 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
-  }
   if (
     shouldDropStaleInternalOrphanedUserPrompt({
       prompt: params.prompt,
@@ -418,11 +420,15 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
+  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    // Text is already in the active prompt; keep the leaf for later turns.
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
+  }
 
   return {
     prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
-    removeLeaf: true,
+    removeLeaf: false,
   };
 }
 
@@ -468,6 +474,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "messageChannel"
   | "messageProvider"
   | "agentAccountId"
@@ -540,6 +547,8 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
+      sandboxSessionKey: params.attempt.sandboxSessionKey,
+      sandboxAgentId: params.attempt.sandboxAgentId,
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,
       agentAccountId: params.attempt.agentAccountId,

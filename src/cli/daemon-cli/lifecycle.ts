@@ -3,10 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { createConfigIO } from "../../config/io.js";
+import { readBestEffortConfig } from "../../config/config.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
-import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -50,6 +48,7 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
+import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -64,14 +63,15 @@ import { createDaemonActionContext, createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
-  type GatewayRestartSnapshot,
+  formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import { renderGatewayServiceStartHints } from "./shared.js";
+import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -83,54 +83,6 @@ function postRestartHealthAttempts(): number {
   return process.platform === "win32"
     ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
     : POST_RESTART_HEALTH_ATTEMPTS;
-}
-
-function formatRestartFailure(params: {
-  health: GatewayRestartSnapshot;
-  port: number;
-  defaultTimeoutSeconds: number;
-}): { statusLine: string; failMessage: string } {
-  if (params.health.waitOutcome === "stopped-free") {
-    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
-    return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
-    };
-  }
-
-  const elapsed = params.health.elapsedMs;
-  const timeoutSeconds = Math.max(
-    1,
-    Math.round(elapsed === undefined ? params.defaultTimeoutSeconds : elapsed / 1000),
-  );
-  return {
-    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
-  };
-}
-
-async function resolveGatewayLifecycleContext(service = resolveGatewayService()) {
-  const command = await service.readCommand(process.env).catch(() => null);
-  const env = mergeGatewayServiceEnv(process.env, command);
-  const config = await createConfigIO({
-    env,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch(() => undefined);
-  const port = parsePortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, command };
-}
-
-async function resolveGatewayPortFallback(): Promise<number> {
-  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
-  return resolveGatewayPort(config, process.env);
-}
-
-async function resolveExplicitGatewayConfigPort(): Promise<number | undefined> {
-  return (await readBestEffortConfig({ observe: false }).catch(() => undefined))?.gateway?.port;
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
@@ -480,7 +432,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceMutationAllowed("start the gateway");
   const service = resolveGatewayService();
-  const expectedPort = await resolveExplicitGatewayConfigPort();
+  const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
@@ -507,6 +459,14 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         warn,
         state,
         issues,
+      }),
+    postStartCheck: ({ fail, warnings }) =>
+      verifyGatewayStartReadiness({
+        service,
+        expectedPort,
+        resolveContext: () => resolveGatewayLifecycleContext(service),
+        fail,
+        warnings,
       }),
     expectedPort,
     opts,
@@ -546,7 +506,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // override makes the running gateway look like it is already stopped.
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
       const ctx = lock ? null : await resolveGatewayLifecycleContext(service).catch(() => null);
-      const port = lock?.port ?? ctx?.port ?? (await resolveGatewayPortFallback());
+      const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },
   });
@@ -554,6 +514,13 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 
 /** Restart the Gateway service or a verified unmanaged listener, then prove health. */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  const preserveDefinition = Boolean(opts.preserveDefinition);
+  if (preserveDefinition) {
+    assertGatewayServiceMutationAllowed("restart the gateway");
+    if (opts.safe) {
+      throw new Error("--preserve-definition requires a native restart without --safe");
+    }
+  }
   if (opts.skipDeferral && !opts.safe) {
     throw new Error("--skip-deferral requires --safe");
   }
@@ -568,12 +535,19 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   let unmanagedPreviousLockIdentity: GatewayLockIdentity | undefined;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const configuredPort = await resolveExplicitGatewayConfigPort();
-  let managedRestartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
-    port: await resolveGatewayPortFallback(),
-    env: process.env,
-  }));
-  let managedRestartPort = configuredPort ?? managedRestartContext.port;
+  const { explicit: configuredPort, fallback: fallbackPort } = await resolveGatewayConfigPorts();
+  let managedRestartContext = await resolveGatewayLifecycleContext(
+    service,
+    preserveDefinition,
+  ).catch(async (error: unknown) => {
+    if (preserveDefinition) {
+      throw error;
+    }
+    return { port: fallbackPort, env: process.env };
+  });
+  let managedRestartPort = preserveDefinition
+    ? managedRestartContext.port
+    : (configuredPort ?? managedRestartContext.port);
   // An unmanaged run loop keeps its lock port across in-process restarts, even
   // when config changes underneath it. Use that port for both the signal and
   // health proof or a valid CLI/env override looks like a failed restart.
@@ -597,23 +571,28 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     checkTokenDrift: true,
     expectedPort: configuredPort,
     beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
-      const result = await repairLoadedGatewayServiceForStart({
-        action: "restart",
-        service,
-        json,
-        stdout,
-        warn,
-        state,
-        issues,
-      });
-      // Repair rewrites the service definition, so the old command environment
-      // no longer identifies where the restarted gateway publishes readiness.
-      managedRestartContext = await resolveGatewayLifecycleContext(service);
-      managedRestartPort = configuredPort ?? managedRestartContext.port;
-      return result;
-    },
+    repairLoadedService: preserveDefinition
+      ? undefined
+      : async ({ json, stdout, warn, state, issues }) => {
+          const result = await repairLoadedGatewayServiceForStart({
+            action: "restart",
+            service,
+            json,
+            stdout,
+            warn,
+            state,
+            issues,
+          });
+          // Repair rewrites the service definition, so the old command environment
+          // no longer identifies where the restarted gateway publishes readiness.
+          managedRestartContext = await resolveGatewayLifecycleContext(service);
+          managedRestartPort = configuredPort ?? managedRestartContext.port;
+          return result;
+        },
     onNotLoaded: async () => {
+      if (preserveDefinition) {
+        return null;
+      }
       const mutationError = resolveGatewayServiceMutationError("restart the gateway");
       if (process.platform === "darwin" && !mutationError) {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
@@ -681,15 +660,17 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         throw new Error("unreachable after gateway restart health failure");
       }
 
-      let health = await waitForGatewayHealthyRestart({
-        service,
-        port: managedRestartPort,
-        attempts: restartHealthAttempts,
-        delayMs: POST_RESTART_HEALTH_DELAY_MS,
-        env: managedRestartContext.env,
-        includeUnknownListenersAsStale: process.platform === "win32",
-        supervisorKeepsAlive: process.platform === "darwin",
-      });
+      const waitForHealthy = async () =>
+        await waitForGatewayHealthyRestart({
+          service,
+          port: managedRestartPort,
+          attempts: restartHealthAttempts,
+          delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          env: managedRestartContext.env,
+          includeUnknownListenersAsStale: process.platform === "win32",
+          supervisorKeepsAlive: process.platform === "darwin",
+        });
+      let health = await waitForHealthy();
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {
         // On Windows service restarts can leave stale listeners behind; kill verified stale
@@ -703,6 +684,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
         const retryRestart = await service.restart({
+          preserveDefinition,
           env: process.env,
           stdout,
           warn,
@@ -711,15 +693,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }
-        health = await waitForGatewayHealthyRestart({
-          service,
-          port: managedRestartPort,
-          attempts: restartHealthAttempts,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
-          env: managedRestartContext.env,
-          includeUnknownListenersAsStale: process.platform === "win32",
-          supervisorKeepsAlive: process.platform === "darwin",
-        });
+        health = await waitForHealthy();
       }
 
       if (health.healthy) {
@@ -727,7 +701,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       const diagnostics = renderRestartDiagnostics(health);
-      const failure = formatRestartFailure({
+      const failure = formatGatewayRestartFailure({
         health,
         port: managedRestartPort,
         defaultTimeoutSeconds: restartWaitSeconds,

@@ -2,6 +2,8 @@
  * Test: before_compaction & after_compaction hook wiring
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -19,6 +21,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: hookMocks.emitAgentEvent,
+  emitAgentEventIfCurrent: vi.fn(() => true),
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
@@ -47,11 +50,13 @@ describe("compaction hook wiring", () => {
     sessionKey?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
+    isTerminalAborted?: () => boolean;
   }) {
     return {
       params: {
         runId: params.runId,
         sessionKey: params.sessionKey,
+        isTerminalAborted: params.isTerminalAborted,
         session: {
           messages: params.messages ?? [],
           sessionFile: params.sessionFile,
@@ -170,45 +175,51 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("calls runAfterCompaction when willRetry is false", () => {
-    hookMocks.runner.hasHooks.mockReturnValue(true);
+  it.each([false, true])(
+    "retains completed compaction facts with terminalAborted=%s",
+    (terminalAborted) => {
+      hookMocks.runner.hasHooks.mockReturnValue(true);
 
-    const ctx = createCompactionEndCtx({
-      runId: "r2",
-      messages: [1, 2],
-      sessionFile: "/tmp/session.jsonl",
-      sessionKey: "agent:main:web-xyz",
-      compactionCount: 1,
-    });
-
-    runCompactionEnd(ctx, {
-      outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
-    });
-
-    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
-    expectCompactionEvent({
-      call: getAfterCompactionCall(),
-      expectedEvent: {
-        messageCount: 2,
-        compactedCount: 1,
+      const ctx = createCompactionEndCtx({
+        runId: "r2",
+        messages: [1, 2],
         sessionFile: "/tmp/session.jsonl",
-      },
-      expectedSessionKey: "agent:main:web-xyz",
-    });
-    expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
-    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
-    expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
-      runId: "r2",
-      stream: "compaction",
-      data: {
-        phase: "end",
-        outcome: "completed",
-        willRetry: false,
-        completed: true,
-      },
-    });
-  });
+        sessionKey: "agent:main:web-xyz",
+        compactionCount: 1,
+        isTerminalAborted: () => terminalAborted,
+      });
+
+      runCompactionEnd(ctx, {
+        outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
+      });
+
+      expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
+      expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(50);
+      expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
+      expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
+        runId: "r2",
+        stream: "compaction",
+        data: {
+          phase: "end",
+          outcome: "completed",
+          willRetry: false,
+          completed: true,
+        },
+      });
+      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(terminalAborted ? 0 : 1);
+      if (!terminalAborted) {
+        expectCompactionEvent({
+          call: getAfterCompactionCall(),
+          expectedEvent: {
+            messageCount: 2,
+            compactedCount: 1,
+            sessionFile: "/tmp/session.jsonl",
+          },
+          expectedSessionKey: "agent:main:web-xyz",
+        });
+      }
+    },
+  );
 
   it("does not call runAfterCompaction when willRetry is true but still increments counter", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
@@ -242,17 +253,81 @@ describe("compaction hook wiring", () => {
   });
 
   it.each([
-    ["does not increment counter when compaction was aborted", { outcome: { status: "aborted" } }],
-    [
-      "does not increment counter when compaction was skipped",
-      {
-        outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
-      },
-    ],
-  ] as const)("%s", (_name, event) => {
+    { status: "aborted" },
+    { status: "skipped", reason: "Nothing to compact (session too small)" },
+    { status: "failed", reason: "Summary generation failed" },
+  ] as const)("keeps $status compaction observable without success hooks", (outcome) => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
     const ctx = createCompactionEndCtx({ runId: "r3c" });
-    runCompactionEnd(ctx, event);
+
+    runCompactionEnd(ctx, { outcome });
+
     expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
+    expect(ctx.noteCompactionTokensAfter).not.toHaveBeenCalled();
+    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledOnce();
+    expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
+      runId: "r3c",
+      stream: "compaction",
+      data: expect.objectContaining({
+        phase: "end",
+        outcome: outcome.status,
+        completed: false,
+        willRetry: false,
+      }),
+    });
+    expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("retains queued compaction facts without starting hooks after unsubscribe", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const flushStarted = createDeferred();
+    const flush = createDeferred();
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-hook-after-unsubscribe",
+      sessionExtras: { messages: [] },
+      blockReplyBreak: "message_end",
+      onBlockReplyFlush: () => {
+        flushStarted.resolve();
+        return flush.promise;
+      },
+      onAgentEvent,
+    });
+    try {
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Previous reply" }],
+          stopReason: "stop",
+        },
+      });
+      await flushStarted.promise;
+      emit({
+        type: "compaction_end",
+        reason: "threshold",
+        outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
+      });
+      expect(subscription.getCompactionCount()).toBe(0);
+      expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+
+      // The end event is already queued behind delivery when teardown closes the subscription.
+      subscription.unsubscribe();
+      flush.resolve();
+      await subscription.waitForPendingEvents();
+
+      expect(subscription.getCompactionCount()).toBe(1);
+      expect(subscription.getLastCompactionTokensAfter()).toBe(50);
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "compaction",
+        data: { phase: "end", outcome: "completed", completed: true, willRetry: false },
+      });
+      expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+    } finally {
+      flush.resolve();
+      subscription.unsubscribe();
+      await subscription.waitForPendingEvents();
+    }
   });
 
   it("resets stale assistant usage after final compaction", () => {

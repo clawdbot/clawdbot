@@ -27,6 +27,7 @@ function createStubProcessAdapter(pid = 1234): StubProcessAdapter {
   const killMock = vi.fn();
   return {
     pid,
+    supportsRawOutput: false,
     onStdout: () => undefined,
     onStderr: () => undefined,
     wait: async () => completion.promise,
@@ -43,20 +44,15 @@ function createSpawnInput(params: {
   mode?: "child" | "pty";
   replaceExistingScope?: boolean;
 }): SpawnInput {
-  const common = {
+  return {
     runId: params.runId,
     sessionId: "queued-cancellation",
     backendId: "test",
     scopeKey: params.scopeKey,
     replaceExistingScope: params.replaceExistingScope,
+    mode: params.mode ?? "child",
+    argv: [process.execPath, "-e", "process.stdout.write('should-not-run')"],
   };
-  return params.mode === "pty"
-    ? { ...common, mode: "pty", ptyCommand: "printf should-not-run" }
-    : {
-        ...common,
-        mode: "child",
-        argv: [process.execPath, "-e", "process.stdout.write('should-not-run')"],
-      };
 }
 
 describe("process supervisor queued cancellation", () => {
@@ -178,5 +174,47 @@ describe("process supervisor queued cancellation", () => {
       expect.objectContaining({ reason: "exit" }),
       expect.objectContaining({ reason: "exit" }),
     ]);
+  });
+
+  it("rejects retired request authority behind a scope fence without cancelling its survivor", async () => {
+    const first = createStubProcessAdapter();
+    const replacement = createStubProcessAdapter(1235);
+    const firstStartup = createDeferred<StubProcessAdapter>();
+    createChildAdapterMock
+      .mockReturnValueOnce(firstStartup.promise)
+      .mockResolvedValueOnce(replacement);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:retired-request";
+    const retired = new Error("request authority retired behind scope fence");
+    let current = true;
+    const firstRunPromise = supervisor.spawn(createSpawnInput({ runId: "survivor", scopeKey }));
+    const replacementPromise = supervisor.spawn({
+      ...createSpawnInput({ runId: "retired-request", scopeKey, replaceExistingScope: true }),
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    const replacementOutcome = Promise.allSettled([replacementPromise]);
+
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    current = false;
+    firstStartup.resolve(first);
+    const firstRun = await firstRunPromise;
+    const [outcome] = await replacementOutcome;
+    try {
+      expect(outcome).toEqual({ status: "rejected", reason: retired });
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+      expect(first.killMock).not.toHaveBeenCalled();
+    } finally {
+      first.settle(0);
+      replacement.settle(0);
+      await firstRun.wait();
+      if (outcome?.status === "fulfilled") {
+        await outcome.value.wait();
+      }
+      await supervisor.shutdown();
+    }
   });
 });

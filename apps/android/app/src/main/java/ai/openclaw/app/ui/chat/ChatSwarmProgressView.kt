@@ -149,9 +149,16 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
         drawCircle(color = color, style = Stroke(width = 1.dp.toPx()))
       }
     }
-    ChatSwarmDotStatus.Running -> StatusDot(ClawTheme.colors.primary, description)
-    ChatSwarmDotStatus.Done -> StatusDot(ClawTheme.colors.success, description)
-    ChatSwarmDotStatus.Failed ->
+
+    ChatSwarmDotStatus.Running -> {
+      StatusDot(ClawTheme.colors.primary, description)
+    }
+
+    ChatSwarmDotStatus.Done -> {
+      StatusDot(ClawTheme.colors.success, description)
+    }
+
+    ChatSwarmDotStatus.Failed -> {
       Box(
         modifier =
           Modifier
@@ -160,6 +167,7 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
             .border(4.dp, ClawTheme.colors.danger, RoundedCornerShape(2.dp))
             .semantics { contentDescription = description },
       )
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
@@ -7,9 +8,17 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import {
+  isRestartRecoveryTombstone,
+  SessionWorkStartChangedError,
+  resolveSessionWorkStartError,
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+} from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -18,7 +27,14 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
   beginSessionWorkAdmission,
+  getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -40,6 +56,7 @@ import {
   waitForReplyRunFollowupAdmission,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
+import { isReplyRunRecoveryBlocked } from "./reply-run-registry.state.js";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
@@ -79,12 +96,31 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const admission = lifecycleAdmissionByOperation.get(operation);
-  return admission ? await admission.run(run) : await run();
+  if (admission) {
+    return await admission.run(run);
+  }
+  const resolver = getGatewayContextResolver(operation);
+  return await withPluginRuntimeGatewayContextResolver(resolver, run);
 }
 
-function rejectLifecycleInvalidatedWork(params: { kind: ReplyTurnKind; message: string }): never {
+function rejectLifecycleInvalidatedWork(params: {
+  kind: ReplyTurnKind;
+  message: string;
+  restartRecoveryTombstone?: boolean;
+  transientSessionChange?: boolean;
+}): never {
   if (params.kind === "queued_followup") {
-    throw new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    if (params.restartRecoveryTombstone === true) {
+      Object.assign(error, { code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
+    }
+    throw error;
+  }
+  if (params.restartRecoveryTombstone === true) {
+    throw new SessionRestartRecoveryTombstoneError(params.message);
+  }
+  if (params.kind === "visible" && params.transientSessionChange === true) {
+    throw new SessionWorkStartChangedError(params.message);
   }
   throw new Error(params.message);
 }
@@ -108,7 +144,7 @@ function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boo
 }
 
 function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
-  if (!operation) {
+  if (!operation || isReplyRunRecoveryBlocked(operation)) {
     return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
   }
   const ageMs = Date.now() - operation.lastActivityAtMs;
@@ -118,7 +154,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
   });
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveRunStaleThresholdMs(activity) - ageMs;
+    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 
@@ -130,6 +166,8 @@ type ReplyTurnAdmissionParams = {
   storePath?: string;
   kind: ReplyTurnKind;
   resetTriggered: boolean;
+  allowRestartTombstoneParentFork?: boolean;
+  allowRestartTombstoneReset?: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
   /**
@@ -139,6 +177,7 @@ type ReplyTurnAdmissionParams = {
    */
   adoptOperation?: ReplyOperation;
   upstreamAbortSignal?: AbortSignal;
+  resolveGatewayContext?: GatewayContextResolver;
   waitTimeoutMs?: number;
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
@@ -150,6 +189,11 @@ export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
+  const resolveGatewayContext = params.adoptOperation
+    ? getGatewayContextResolver(params.adoptOperation)
+    : Object.hasOwn(params, "resolveGatewayContext")
+      ? params.resolveGatewayContext
+      : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
@@ -188,6 +232,7 @@ export async function admitReplyTurn(
       const admission = storePath
         ? await beginSessionWorkAdmission({
             scope: storePath,
+            resolveGatewayContext,
             identities: [params.sessionKey],
             signal: params.upstreamAbortSignal,
             onInterrupt: () => {
@@ -206,6 +251,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               const registeredOperation = replyRunRegistry.get(params.sessionKey);
@@ -239,6 +285,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               if (activeOperationRotatedExpectedSession) {
@@ -247,11 +294,17 @@ export async function admitReplyTurn(
               const archivedSessionError = resolveSessionWorkStartError(
                 params.sessionKey || sessionId,
                 currentEntry,
+                {
+                  allowRestartTombstoneReplacement:
+                    (params.resetTriggered && params.allowRestartTombstoneReset === true) ||
+                    params.allowRestartTombstoneParentFork === true,
+                },
               );
               if (archivedSessionError) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: archivedSessionError,
+                  restartRecoveryTombstone: isRestartRecoveryTombstone(currentEntry),
                 });
               }
               sessionId = currentEntry?.sessionId ?? sessionId;
@@ -262,17 +315,26 @@ export async function admitReplyTurn(
         if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
           throw new ReplyRunSuccessorAdmissionBlockedError(params.sessionKey);
         }
-        if (
-          storePath &&
-          !params.resetTriggered &&
+        const mayWaitForRecoveryOwner =
+          storePath && !params.resetTriggered && params.allowRestartTombstoneParentFork !== true;
+        // The named admission is the authoritative process-local busy fact even
+        // after startup recovery has cleared the durable aborted marker.
+        const recoveryOwnerRelease = mayWaitForRecoveryOwner
+          ? getSessionWorkAdmissionOwnerRelease({
+              scope: storePath,
+              identities: [params.sessionKey, sessionId],
+              owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+            })
+          : undefined;
+        const shouldClaimRecoveryOwner =
+          mayWaitForRecoveryOwner &&
           admittedSessionEntry &&
           ((admittedSessionEntry.status === "running" &&
             (admittedSessionEntry.abortedLastRun === true ||
-              admittedSessionEntry.restartRecoveryRuns !== undefined ||
-              admittedSessionEntry.mainRestartRecovery !== undefined)) ||
+              admittedSessionEntry.restartRecoveryRuns !== undefined)) ||
             admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
-          isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey)
-        ) {
+          isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
+        if (shouldClaimRecoveryOwner && recoveryOwnerRelease === undefined) {
           const ownerClaim = await claimMainSessionRecoveryOwner({
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
             sessionId,
@@ -282,14 +344,21 @@ export async function admitReplyTurn(
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
               message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+              transientSessionChange: true,
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
+        }
+        if (params.kind === "queued_followup" && recoveryOwnerRelease) {
+          admission?.release();
+          await racePromiseWithAbortSignal(recoveryOwnerRelease, params.upstreamAbortSignal);
+          continue;
         }
         if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
           rejectLifecycleInvalidatedWork({
             kind: params.kind,
             message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+            transientSessionChange: true,
           });
         }
         if (params.adoptOperation) {
@@ -310,6 +379,7 @@ export async function admitReplyTurn(
             respectFollowupAdmissionBarrier:
               params.kind === "queued_followup" || params.kind === "heartbeat",
           });
+          bindGatewayContextResolver(operation, resolveGatewayContext);
         }
       } catch (error) {
         const pendingRecovery = recoveryOwnerLease

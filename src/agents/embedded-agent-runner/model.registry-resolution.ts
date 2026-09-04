@@ -93,6 +93,9 @@ export function resolveExplicitModelWithRegistry(params: {
       return { kind: "suppressed" };
     }
     const staticCatalogModel = params.getStaticCatalogModel?.();
+    // Inline config owns transport and sizing; the current registry owns the lower price schedule.
+    const catalogCost =
+      modelRegistry.find(provider, modelId)?.cost ?? staticCatalogModel?.cost ?? inlineMatch.cost;
     return {
       kind: "resolved",
       source: "configured",
@@ -103,7 +106,10 @@ export function resolveExplicitModelWithRegistry(params: {
         workspaceDir,
         model: applyConfiguredProviderOverrides({
           provider,
-          discoveredModel: mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
+          discoveredModel: {
+            ...mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
+            cost: catalogCost,
+          },
           providerConfig,
           modelId,
           cfg,
@@ -209,37 +215,31 @@ export function resolveDynamicModelAuthProfile(params: {
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
 } {
   const explicitProfileId = params.authProfileId?.trim() || undefined;
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-  if (explicitProfileId) {
-    const credential = store.profiles[explicitProfileId];
-    const configuredMode = params.cfg?.auth?.profiles?.[explicitProfileId]?.mode;
+  // A prepared mode is authoritative; model discovery does not reselect its credentials.
+  if (params.authProfileMode) {
     return {
-      authProfileId: explicitProfileId,
-      ...(params.authProfileMode || credential?.type || configuredMode
-        ? { authProfileMode: params.authProfileMode ?? credential?.type ?? configuredMode }
-        : {}),
+      ...(explicitProfileId ? { authProfileId: explicitProfileId } : {}),
+      authProfileMode: params.authProfileMode,
     };
   }
-  if (params.authProfileMode) {
-    return { authProfileMode: params.authProfileMode };
-  }
-  const order = [
-    ...new Set(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: params.provider,
-        config: params.cfg,
-      }).flatMap((provider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider,
-          preferredProfile: params.preferredProfile,
-          forModel: params.modelId,
-        }),
-      ),
-    ),
-  ];
-  const profileId = order[0];
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    profileId: explicitProfileId,
+  });
+  const profileId =
+    explicitProfileId ??
+    listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      config: params.cfg,
+    }).flatMap((provider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider,
+        preferredProfile: params.preferredProfile,
+        forModel: params.modelId,
+      }),
+    )[0];
   if (!profileId) {
     return {};
   }
@@ -259,33 +259,17 @@ function resolvePluginDynamicModelWithRegistry(
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
-  const inferredAgentRuntimeId =
-    agentHarnessPolicy.runtimeSource !== "implicit" ||
-    cfg?.plugins?.entries?.codex?.enabled === true
-      ? agentHarnessPolicy.runtime
-      : undefined;
-  const agentRuntimeId = params.agentRuntimeId ?? inferredAgentRuntimeId;
-  const authProfile = resolveDynamicModelAuthProfile({
-    provider,
-    modelId,
-    cfg,
-    agentDir,
-    authProfileId: params.authProfileId,
-    authProfileMode: params.authProfileMode,
-    preferredProfile: params.preferredProfile,
-  });
-  const preferDiscoveredModelMetadata = shouldCompareProviderRuntimeResolvedModel({
-    provider,
-    modelId,
-    cfg,
-    agentDir,
-    workspaceDir,
-    runtimeHooks,
-  });
-  const pluginDynamicModel =
-    params.preparedDynamicModel ??
-    (runtimeHooks.runProviderDynamicModel({
+  let pluginDynamicModel = params.preparedDynamicModel;
+  if (!pluginDynamicModel) {
+    // Prepared models already consumed discovery inputs; only a sync hook needs them again.
+    const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
+    const inferredAgentRuntimeId =
+      agentHarnessPolicy.runtimeSource !== "implicit" ||
+      cfg?.plugins?.entries?.codex?.enabled === true
+        ? agentHarnessPolicy.runtime
+        : undefined;
+    const agentRuntimeId = params.agentRuntimeId ?? inferredAgentRuntimeId;
+    pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
       provider,
       config: cfg,
       workspaceDir,
@@ -298,9 +282,10 @@ function resolvePluginDynamicModelWithRegistry(
         modelId,
         modelRegistry,
         providerConfig,
-        ...authProfile,
+        ...resolveDynamicModelAuthProfile(params),
       },
-    }) as ProviderRuntimeModel | undefined);
+    }) as ProviderRuntimeModel | undefined;
+  }
   if (!pluginDynamicModel) {
     return undefined;
   }
@@ -314,7 +299,10 @@ function resolvePluginDynamicModelWithRegistry(
     providerMetadataOwners: getRegistryProviderMetadataOwners(modelRegistry),
     runtimeHooks,
     workspaceDir,
-    preferDiscoveredModelMetadata,
+    preferDiscoveredModelMetadata: shouldCompareProviderRuntimeResolvedModel({
+      ...params,
+      runtimeHooks,
+    }),
     getStaticCatalogModel: params.getStaticCatalogModel,
   });
   return normalizeResolvedModel({

@@ -3,44 +3,36 @@ import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<StateMigrationResult> => ({
-      migrated: false,
-      skipped: false,
-      changes: [],
-      warnings: [],
-    }),
-  ),
+  vi.fn(async (): Promise<StateMigrationResult> => ({
+    migrated: false,
+    skipped: false,
+    changes: [],
+    warnings: [],
+  })),
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
-  vi.fn(
-    async (_params?: unknown): Promise<StateMigrationResult> => ({
-      migrated: true,
-      skipped: false,
-      changes: ["imported"],
-      warnings: [],
-    }),
-  ),
+  vi.fn(async (_params?: unknown): Promise<StateMigrationResult> => ({
+    migrated: true,
+    skipped: false,
+    changes: ["imported"],
+    warnings: [],
+  })),
 );
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<StateMigrationResult> => ({
-      migrated: true,
-      skipped: false,
-      changes: ["plugin-imported"],
-      warnings: [],
-    }),
-  ),
+  vi.fn(async (): Promise<StateMigrationResult> => ({
+    migrated: true,
+    skipped: false,
+    changes: ["plugin-imported"],
+    warnings: [],
+  })),
 );
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<StateMigrationResult> => ({
-      migrated: true,
-      skipped: false,
-      changes: ["task-imported"],
-      warnings: [],
-    }),
-  ),
+  vi.fn(async (): Promise<StateMigrationResult> => ({
+    migrated: true,
+    skipped: false,
+    changes: ["task-imported"],
+    warnings: [],
+  })),
 );
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
@@ -82,12 +74,24 @@ const addDoctorLegacyIssues = vi.hoisted(() =>
 );
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("./doctor-state-migrations.js", () => ({
+vi.mock("../infra/state-migrations.doctor.js", () => ({
   autoMigrateLegacyState,
+}));
+
+vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+}));
+
+vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
+}));
+
+vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
   migrateLegacyConfigMachineState,
+}));
+
+vi.mock("../infra/state-migrations.media-persistence.js", () => ({
   migrateLegacyMediaPersistence,
 }));
 

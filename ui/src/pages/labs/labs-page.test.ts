@@ -140,8 +140,9 @@ describe("LabsPage", () => {
       tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
     });
 
-    expect(page.querySelector(".settings-page__intro")?.textContent).toContain("experimental");
-    const introLink = page.querySelector<HTMLAnchorElement>(".settings-page__intro a");
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain("experimental");
+    expect(page.querySelector(".settings-page__intro")).toBeNull();
+    const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(introLink?.textContent?.trim()).toBe("Learn more");
     expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
@@ -180,7 +181,7 @@ describe("LabsPage", () => {
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: false } } },
+      raw: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
     });
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
@@ -210,18 +211,12 @@ describe("LabsPage", () => {
 
   it.each([
     {
-      // The on position restores the shipped "auto" tier, never `true`: Labs
-      // offers Auto/Off, and force-on stays a config-only power-user state.
+      // The on position selects the "auto" tier, never `true`: Labs offers
+      // Auto/Off, and force-on stays a config-only power-user state.
       label: "Code Mode",
       sourceConfig: { tools: { codeMode: { enabled: false } } },
-      expectedPatch: { tools: { codeMode: { enabled: null } } },
+      expectedPatch: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
-    },
-    {
-      label: "Swarm",
-      sourceConfig: { tools: { swarm: { enabled: false } } },
-      expectedPatch: { tools: { swarm: { enabled: true } } },
-      note: "labs: update swarm",
     },
     {
       // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
@@ -331,13 +326,10 @@ describe("LabsPage", () => {
     );
   });
 
-  it("shows default provenance without reset actions", async () => {
+  it("shows default provenance", async () => {
     const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Enabled");
-    expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
-    expect(inherited.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      0,
-    );
+    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
+    expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Enabled");
     inherited.provider.remove();
 
     const overridden = await mountPage({
@@ -346,11 +338,8 @@ describe("LabsPage", () => {
         swarm: { enabled: false },
       },
     });
-    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Enabled");
-    expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
-    expect(overridden.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      0,
-    );
+    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+    expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Enabled");
   });
 
   it.each([{ model: "ollama/qwen3:8b" }, { model: { primary: "ollama/qwen3:8b", fallbacks: [] } }])(
@@ -368,7 +357,6 @@ describe("LabsPage", () => {
       const row = labRow(page, "Lean tools for local models");
 
       expect(row.textContent).toContain("Using default: Enabled");
-      expect(row.querySelector("button[aria-label='Reset to default']")).toBeNull();
     },
   );
 
@@ -423,16 +411,99 @@ describe("LabsPage", () => {
   });
 });
 
-describe("LabsPage code mode enablement", () => {
-  // Mirrors resolveCodeModeConfig: the shipped default is "auto", so the row
-  // reads as on until an explicit `false` opts out. `true` stays a valid
-  // config-only force-on and must also read as on.
+describe("LabsPage swarm enablement", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
   it.each([
-    { label: "unset", config: {}, expected: true },
+    { label: "unset", config: {}, expected: true, overridden: false },
+    { label: "empty object", config: { tools: { swarm: {} } }, expected: true, overridden: false },
     {
-      label: "object without enabled",
-      config: { tools: { codeMode: { timeoutMs: 5000 } } },
+      label: "limits-only object",
+      config: { tools: { swarm: { maxConcurrent: 3 } } },
       expected: true,
+      overridden: false,
+    },
+    { label: "boolean true", config: { tools: { swarm: true } }, expected: true, overridden: true },
+    {
+      label: "explicit enabled",
+      config: { tools: { swarm: { enabled: true } } },
+      expected: true,
+      overridden: true,
+    },
+    {
+      label: "boolean false",
+      config: { tools: { swarm: false } },
+      expected: false,
+      overridden: true,
+    },
+    {
+      label: "explicit disabled with limits",
+      config: { tools: { swarm: { enabled: false, maxConcurrent: 3 } } },
+      expected: false,
+      overridden: true,
+    },
+  ])(
+    "reads $label as $expected with an enabled default",
+    async ({ config, expected, overridden }) => {
+      const { page } = await mountPage(config);
+
+      expect(labToggle(page, "Swarm").checked).toBe(expected);
+      expect(labRow(page, "Swarm").textContent).toContain(
+        overridden ? "Default: Enabled" : "Using default: Enabled",
+      );
+    },
+  );
+
+  it("writes an explicit opt-out when disabling the default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Swarm");
+    expect(toggle.checked).toBe(true);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { swarm: { enabled: false } } },
+      note: "labs: update swarm",
+    });
+  });
+
+  it.each([
+    {
+      label: "object gate without removing limits",
+      swarm: { enabled: false, maxConcurrent: 3 },
+      reset: { enabled: null },
+    },
+    { label: "boolean shorthand", swarm: false, reset: null },
+  ])("restores the enabled default by resetting the $label", async ({ swarm, reset }) => {
+    const { page, runtimeConfig } = await mountPage({ tools: { swarm } });
+    const toggle = labToggle(page, "Swarm");
+    expect(toggle.checked).toBe(false);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { swarm: reset } },
+      note: "labs: update swarm",
+    });
+  });
+});
+
+describe("LabsPage code mode enablement", () => {
+  // Mirrors resolveCodeModeConfig: omitted `enabled` is off for every object
+  // shape, while explicit `true` and `"auto"` remain opt-ins.
+  it.each([
+    { label: "unset", config: {}, expected: false },
+    { label: "empty object", config: { tools: { codeMode: {} } }, expected: false },
+    {
+      label: "object with options",
+      config: { tools: { codeMode: { timeoutMs: 5000 } } },
+      expected: false,
     },
     { label: "explicit true", config: { tools: { codeMode: { enabled: true } } }, expected: true },
     {
@@ -449,21 +520,21 @@ describe("LabsPage code mode enablement", () => {
     provider.remove();
   });
 
-  it("writes an explicit false when disabling the shipped default", async () => {
+  it("writes the auto tier when enabling the shipped default", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = codeModeToggle(page);
 
-    toggle.checked = false;
+    toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: false } } },
+      raw: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     });
   });
 
-  it("restores the inherited auto tier instead of pinning it when re-enabled", async () => {
+  it("writes the auto tier when re-enabling an option-bearing object", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: false, timeoutMs: 5000 } },
     });
@@ -474,7 +545,7 @@ describe("LabsPage code mode enablement", () => {
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: null } } },
+      raw: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     });
   });

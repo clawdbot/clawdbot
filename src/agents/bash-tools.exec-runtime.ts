@@ -49,16 +49,19 @@ import {
 import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
+  renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
@@ -256,17 +259,24 @@ export function resolveExecTarget(params: {
 }) {
   const sandboxRequired = params.sandboxRequired === true;
   if (sandboxRequired && !params.sandboxAvailable) {
-    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+    throw registerTrustedToolNoStartError(
+      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
+    );
   }
   if (sandboxRequired && params.elevatedRequested) {
-    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+    throw registerTrustedToolNoStartError(
+      new Error("Elevated execution is unavailable because this session requires a sandbox."),
+    );
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget = params.requestedTarget ?? null;
+  const requestedTarget =
+    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+      ),
     );
   }
   if (
@@ -288,10 +298,12 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-        `set tools.exec.host=${allowedConfig} to allow this override).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+          `set tools.exec.host=${allowedConfig} to allow this override).`,
+      ),
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
@@ -376,10 +388,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {
-    mainKey: session.mainKey,
-    sessionScope: session.sessionScope,
-  };
+  const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
   const eventOptions = {
     sessionKey: eventSessionKey,
@@ -558,7 +567,7 @@ function buildExecExitOutcome(params: {
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
@@ -657,6 +666,8 @@ export async function runExecProcess({
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  /** Host-selected managed profile; never inferred from the requested environment. */
+  githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
@@ -669,15 +680,6 @@ export async function runExecProcess({
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
-  /** `session.mainKey` from the runtime config; snapshotted onto the
-   *  ProcessSession so background-exit notifications can remap cron-run
-   *  keys without an ambient config load. Long-running background exits use
-   *  this start-time value even if config changes while the process runs. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; snapshotted alongside
-   *  `mainKey` so the cron-run remap can route global-scope agents to
-   *  the "global" queue instead of agent-main. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -708,8 +710,6 @@ export async function runExecProcess({
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
     eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
@@ -867,8 +867,6 @@ export async function runExecProcess({
         // retain it, including when a task callback or notification throws.
         delete session.sessionKey;
         delete session.agentId;
-        delete session.mainKey;
-        delete session.sessionScope;
         delete session.eventRouting;
         delete session.notifyDeliveryContext;
         delete session.notifyOnExit;
@@ -916,21 +914,15 @@ export async function runExecProcess({
       env: shellRuntimeEnv,
     });
 
-    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
-    if (opts.usePty) {
-      return {
-        mode: "pty" as const,
-        ptyCommand: commandWithShellSnapshot,
-        childFallbackArgv: childArgv,
-        env: shellRuntimeEnv,
-        stdinMode: "pipe-open" as const,
-      };
-    }
+    const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+    const argv = opts.githubProfileDir
+      ? buildGitHubExecLaunchArgv(shellArgv, opts.githubProfileDir)
+      : shellArgv;
     return {
-      mode: "child" as const,
-      argv: childArgv,
+      mode: opts.usePty ? ("pty" as const) : ("child" as const),
+      argv,
       env: shellRuntimeEnv,
-      stdinMode: "pipe-closed" as const,
+      stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
     };
   };
 
@@ -988,7 +980,7 @@ export async function runExecProcess({
         managedRun = await spawn({
           ...spawnBase,
           mode: "pty",
-          ptyCommand: spawnSpec.ptyCommand,
+          argv: spawnSpec.argv,
         });
       } catch (err) {
         startupSignal?.throwIfAborted();
@@ -999,15 +991,9 @@ export async function runExecProcess({
         opts.warnings.push(warning);
         usingPty = false;
         await assertPreSpawnAuthorized();
-        managedRun = await spawn({
-          ...spawnBase,
-          mode: "child",
-          argv: spawnSpec.childFallbackArgv,
-          stdinMode: "pipe-open",
-          onStdout: handleStdout,
-        });
       }
-    } else {
+    }
+    if (!managedRun) {
       managedRun = await spawn({
         ...spawnBase,
         mode: "child",

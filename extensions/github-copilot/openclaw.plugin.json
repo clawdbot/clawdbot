@@ -97,6 +97,13 @@
           {
             "id": "gemini-3.6-flash",
             "name": "Gemini 3.6 Flash",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "input": ["text", "image"],
             "contextWindow": 1048576,
             "maxTokens": 65536,
@@ -105,6 +112,13 @@
           {
             "id": "gemini-3.1-pro-preview",
             "name": "Gemini 3.1 Pro Preview",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "input": ["text", "image"],
             "contextWindow": 1048576,
             "maxTokens": 65536,
@@ -113,6 +127,13 @@
           {
             "id": "gemini-3.5-flash",
             "name": "Gemini 3.5 Flash",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "status": "deprecated",
             "replacedBy": "gemini-3.6-flash",
             "input": ["text", "image"],
@@ -123,6 +144,13 @@
           {
             "id": "gemini-2.5-pro",
             "name": "Gemini 2.5 Pro",
+            "api": "openai-completions",
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            },
             "status": "deprecated",
             "replacedBy": "gemini-3.1-pro-preview",
             "input": ["text", "image"],
@@ -211,6 +239,8 @@
             "status": "deprecated",
             "replacedBy": "gpt-5.6-luna",
             "reasoning": true,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": null },
+            "compat": { "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh"] },
             "input": ["text", "image"],
             "contextWindow": 400000,
             "contextTokens": 272000,

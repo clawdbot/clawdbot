@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import "../test-helpers/load-styles.ts";
 import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import "./session-owner-chip.ts";
 
 type OwnerChipElement = HTMLElement & {
   owner: SessionCreatedActor | null;
-  participants: readonly SessionCreatedActor[];
+  participants: readonly SessionParticipant[];
   participantCount: number;
   size: "row" | "header";
   updateComplete: Promise<boolean>;
@@ -18,7 +19,7 @@ afterEach(() => {
 });
 
 async function mountOwnerChip(params: {
-  participants?: readonly SessionCreatedActor[];
+  participants?: readonly SessionParticipant[];
   participantCount?: number;
 }) {
   // SAFETY: the imported module registers this custom element with these reactive properties.
@@ -38,15 +39,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       backSelector: ".session-owner-stack__back .viewer-avatar",
       name: "one participant avatar",
       participantCount: 1,
-      participants: [{ type: "human" as const, id: "profile-bob", label: "Bob" }],
+      participants: [{ identity: { type: "profile" as const, id: "profile-bob" }, label: "Bob" }],
     },
     {
       backSelector: ".session-owner-stack__overflow",
       name: "participant overflow",
       participantCount: 2,
       participants: [
-        { type: "human" as const, id: "profile-bob", label: "Bob" },
-        { type: "agent" as const, id: "research", label: "Research" },
+        { identity: { type: "profile" as const, id: "profile-bob" }, label: "Bob" },
+        { identity: { type: "agent" as const, id: "research" }, label: "Research" },
       ],
     },
   ])("keeps $name legible as an equal peer behind the owner", async (fixture) => {

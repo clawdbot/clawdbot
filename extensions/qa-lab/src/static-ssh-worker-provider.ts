@@ -68,17 +68,20 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
 }
 
 export function createStaticSshWorkerProvider(): WorkerProvider {
+  const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, opId) => {
+    if (!opId.trim()) {
+      throw new Error("static-ssh provision operation id must be non-empty");
+    }
+    return { leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`, sharedHost: true };
+  };
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["remote-exec"],
+    resolveAllocation,
     async provision(profile, opId) {
-      if (!opId.trim()) {
-        throw new Error("static-ssh provision operation id must be non-empty");
-      }
       return {
-        leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`,
+        ...(await resolveAllocation(profile, opId)),
         ssh: parseStaticSshWorkerSettings(profile),
-        sharedHost: true,
       };
     },
     async inspect({ leaseId }) {

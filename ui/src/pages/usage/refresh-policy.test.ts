@@ -75,18 +75,18 @@ describe("UsageRefreshPolicy", () => {
   it("restarts an exhausted retry budget for manual and focus cycles", async () => {
     const { policy, reload } = createPolicy();
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      policy.markLoaded({ incomplete: true });
+      policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
       await vi.advanceTimersByTimeAsync(5_000);
     }
     expect(reload).toHaveBeenCalledTimes(3);
 
     policy.request("manual");
-    policy.markLoaded({ incomplete: true });
+    policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(5);
 
     policy.request("focus");
-    policy.markLoaded({ incomplete: true });
+    policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(7);
   });

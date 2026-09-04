@@ -1,23 +1,30 @@
 // Dashboard title tests cover eligibility, routing, normalization, and guarded persistence.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
 const readSessionTitleFieldsFromTranscript = vi.hoisted(() => vi.fn());
 const updateSessionEntry = vi.hoisted(() => vi.fn());
+const loadSessionEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent }));
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  patchSessionEntryCore: updateSessionEntry,
+  loadSessionEntry,
+}));
 vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import {
   buildDashboardSessionTitleSource,
+  generateWorktreeSessionTitle,
   maybeGenerateDashboardSessionTitle,
 } from "./dashboard-session-title.js";
 
@@ -30,6 +37,7 @@ const baseEntry: SessionEntry = {
 };
 
 function titleParams(entry: SessionEntry | undefined = baseEntry) {
+  loadSessionEntry.mockReturnValue(entry);
   return {
     cfg,
     agentId: "main",
@@ -44,15 +52,29 @@ function titleParams(entry: SessionEntry | undefined = baseEntry) {
 function mockSessionUpdate(current: SessionEntry): void {
   updateSessionEntry.mockImplementation(async (_scope, update) => {
     const patch = await update({ ...current });
-    return patch ? { ...current, ...patch } : current;
+    const result = patch ? { ...current, ...patch } : current;
+    loadSessionEntry.mockReturnValue(result);
+    return result;
   });
 }
 
 describe("maybeGenerateDashboardSessionTitle", () => {
   beforeEach(() => {
+    // Exercise runtime compatibility with a registered backend; setup loading has its own tests.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
     generateConversationLabelWithFallback.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
     updateSessionEntry.mockReset();
+    loadSessionEntry.mockReset().mockReturnValue(baseEntry);
     readSessionTitleFieldsFromTranscript.mockReset();
     readSessionTitleFieldsFromTranscript.mockReturnValue({
       firstUserMessage: null,
@@ -61,6 +83,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     generateConversationLabelWithFallback.mockResolvedValue("Release Planning");
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
     mockSessionUpdate(baseEntry);
+  });
+
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    vi.useRealTimers();
   });
 
   it("generates and persists a dashboard display name", async () => {
@@ -241,9 +268,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["channel name", { entry: { ...baseEntry, groupChannel: "releases" } }],
     ["space name", { entry: { ...baseEntry, space: "Engineering" } }],
   ])("skips %s", async (_name, override) => {
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
-    ).resolves.toBe(false);
+    const params = { ...titleParams(), ...override };
+    loadSessionEntry.mockReturnValue(params.entry);
+    await expect(maybeGenerateDashboardSessionTitle({ ...params, entry: baseEntry })).resolves.toBe(
+      false,
+    );
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
@@ -315,6 +344,63 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+  });
+
+  it("bounds a worktree join without cancelling the canonical background naming request", async () => {
+    vi.useFakeTimers();
+    const naming = createDeferredCore<string>();
+    generateConversationLabelWithFallback.mockReturnValue(naming.promise);
+    const params = titleParams();
+    const background = maybeGenerateDashboardSessionTitle(params);
+    const onError = vi.fn();
+    const onPersisted = vi.fn();
+    const worktree = generateWorktreeSessionTitle({
+      ...params,
+      sessionKey: "dashboard:chat-1",
+      onError,
+      onPersisted,
+    });
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expect(worktree).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledOnce();
+    naming.resolve("Release Planning");
+    await expect(background).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    expect(onPersisted).not.toHaveBeenCalled();
+    expect(loadSessionEntry()).toMatchObject({ displayName: "Release Planning" });
+  });
+
+  it("revalidates worktree authority inside the final title commit", async () => {
+    const writePrepared = createDeferredCore();
+    const releaseWrite = createDeferredCore();
+    let active = true;
+    const commitGuard = () => {
+      if (!active) {
+        throw new Error("run closed");
+      }
+    };
+    updateSessionEntry.mockImplementation(async (_scope, update, options) => {
+      const patch = await update({ ...baseEntry });
+      writePrepared.resolve();
+      await releaseWrite.promise;
+      options.assertCommitAllowed?.();
+      loadSessionEntry.mockReturnValue({ ...baseEntry, ...patch });
+      return loadSessionEntry();
+    });
+    const onPersisted = vi.fn();
+    const worktree = generateWorktreeSessionTitle({
+      ...titleParams(),
+      commitGuard,
+      onError: vi.fn(),
+      onPersisted,
+    });
+    const rejected = expect(worktree).rejects.toThrow("run closed");
+    await writePrepared.promise;
+    active = false;
+    releaseWrite.resolve();
+    await rejected;
+    expect(loadSessionEntry()).not.toHaveProperty("displayName");
+    expect(onPersisted).not.toHaveBeenCalled();
   });
 
   it("deduplicates concurrent title requests for one session generation", async () => {

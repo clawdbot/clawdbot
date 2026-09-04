@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
-import { resolveConfiguredInternalHookNames } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
@@ -231,7 +231,7 @@ describe("hooks CLI metadata config keys", () => {
       baseHash: "config-hash",
     });
     const writtenConfig = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig as OpenClawConfig;
-    expect(resolveConfiguredInternalHookNames(writtenConfig)).toEqual(
+    expect(resolveInternalHookSelection(writtenConfig).names).toEqual(
       new Set(testCase.enabled ? ["metadata-key"] : []),
     );
     expect(capture.runtimeLogs.at(-1)).toContain("display-name");

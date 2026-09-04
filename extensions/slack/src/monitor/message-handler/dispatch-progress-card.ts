@@ -1,5 +1,4 @@
 import {
-  createChannelProgressWorkCounter,
   formatChannelProgressDraftText,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -8,6 +7,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
+import { normalizeSlackOutboundText } from "../../format.js";
 import { buildSlackProgressCardBlocks } from "../../progress-blocks.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
@@ -23,7 +23,6 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
-  progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter>;
   progressSeed: string;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -63,6 +62,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   const resolveText = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
     latestFallbackText ||
     formatChannelProgressDraftText({
+      presentation: "summary",
       entry: account.config,
       lines: [...snapshot.lines],
       seed: params.progressSeed,
@@ -88,13 +88,7 @@ export function createSlackDraftProgressCardRuntime(params: {
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
       maxLineChars: params.maxLineChars,
-      diffStat: snapshot.diffStat,
-      ...(state === "working"
-        ? {
-            toolCalls: params.progressWorkCounter.toolCalls,
-            elapsedSeconds: params.progressWorkCounter.elapsedSeconds,
-          }
-        : { sessionUrl: resolveSessionUrl() }),
+      ...(state !== "working" ? { sessionUrl: resolveSessionUrl() } : {}),
     });
   };
 
@@ -169,20 +163,10 @@ export function formatSlackProgressDraftLine(line: string): string {
     return escapeSlackMrkdwn(line);
   }
 
-  const content = italicCommentary[1]!
-    .split(/(`[^`\n]+`)/u)
-    .map((segment, index) => {
-      if (index % 2 === 0) {
-        return escapeSlackMrkdwn(segment);
-      }
-      const code = segment
-        .slice(1, -1)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-      return `\`${code}\``;
-    })
-    .join("");
+  const content = normalizeSlackOutboundText(italicCommentary[1]!, {
+    mentions: "escape",
+    enclosingStyle: "italic",
+  });
 
   return `_${content}_`;
 }

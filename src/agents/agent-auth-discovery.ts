@@ -1,5 +1,9 @@
 /** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
-import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  prepareProviderSyntheticAuthWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
   resolveAgentCredentialMapFromStore,
@@ -29,34 +33,33 @@ export type DiscoverAuthStorageOptions = {
   syntheticAuthProviderRefs?: Iterable<string>;
 } & AgentDiscoveryAuthLookupOptions;
 
+type SyntheticAuth = { apiKey?: string } | undefined;
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
-  resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined;
+  authoritativeSyntheticAuthProviderRefs?: Iterable<string>;
+  resolveSyntheticAuth?: (provider: string) => SyntheticAuth;
   syntheticAuthProviderRefs?: Iterable<string>;
 };
 
-/** Resolves workspace/config/env-stable credentials independently of agent-local profiles. */
-export function resolveAmbientAgentCredentialsForDiscovery(
-  options: AmbientAgentCredentialOptions = {},
-): AgentCredentialMap {
+function resolveAmbientCredentialInputs(
+  options: Omit<AmbientAgentCredentialOptions, "resolveSyntheticAuth">,
+) {
   const credentials = addEnvBackedAgentCredentials({}, options);
   const syntheticAuthProviderRefs =
     options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
-  const resolveSyntheticAuth =
-    options.resolveSyntheticAuth ??
-    ((provider: string) =>
-      resolveProviderSyntheticAuthWithPlugin({
-        provider,
-        config: options.config,
-        workspaceDir: options.workspaceDir,
-        env: options.env,
-        context: {
-          config: options.config,
-          provider,
-          providerConfig: options.config?.models?.providers?.[provider],
-        },
-      }));
+  const authoritativeSyntheticAuthProviderRefs = new Set(
+    [...(options.authoritativeSyntheticAuthProviderRefs ?? [])]
+      .map(normalizeProviderId)
+      .filter(Boolean),
+  );
+  // CLI-runtime authentication is a separate authority. Aliased provider
+  // credentials must not suppress or replace native account checks.
+  for (const provider of authoritativeSyntheticAuthProviderRefs) {
+    delete credentials[provider];
+  }
+  const providers: string[] = [];
   for (const provider of syntheticAuthProviderRefs) {
-    if (credentials[provider]) {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (!authoritativeSyntheticAuthProviderRefs.has(normalizedProvider) && credentials[provider]) {
       continue;
     }
     if (
@@ -72,15 +75,71 @@ export function resolveAmbientAgentCredentialsForDiscovery(
     ) {
       continue;
     }
-    const resolved = resolveSyntheticAuth(provider);
-    const apiKey = resolved?.apiKey?.trim();
-    if (!apiKey) {
-      continue;
-    }
-    credentials[provider] = {
-      type: "api_key",
-      key: apiKey,
-    };
+    providers.push(provider);
+  }
+  return { credentials, providers };
+}
+
+function syntheticAuthParams(options: AgentDiscoveryAuthLookupOptions, provider: string) {
+  return {
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    env: options.env,
+    provider,
+    context: {
+      config: options.config,
+      provider,
+      providerConfig: options.config?.models?.providers?.[provider],
+    },
+  };
+}
+
+function addSyntheticCredential(
+  credentials: AgentCredentialMap,
+  provider: string,
+  resolved: SyntheticAuth,
+) {
+  const apiKey = resolved?.apiKey?.trim();
+  if (apiKey) {
+    credentials[normalizeProviderId(provider) || provider] = { type: "api_key", key: apiKey };
+  }
+}
+
+/** Reads prepared workspace/config/env credentials independently of agent-local profiles. */
+export function resolveAmbientAgentCredentialsForDiscovery(
+  options: AmbientAgentCredentialOptions = {},
+): AgentCredentialMap {
+  const { credentials, providers } = resolveAmbientCredentialInputs(options);
+  for (const provider of providers) {
+    addSyntheticCredential(
+      credentials,
+      provider,
+      options.resolveSyntheticAuth
+        ? options.resolveSyntheticAuth(provider)
+        : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider)),
+    );
+  }
+  return credentials;
+}
+
+/** Prepares external availability before publishing a generation's synchronous auth facts. */
+export async function prepareAmbientAgentCredentialsForDiscovery(
+  options: Omit<AmbientAgentCredentialOptions, "resolveSyntheticAuth"> & {
+    resolveSyntheticAuth?: (provider: string) => Promise<SyntheticAuth>;
+    signal?: AbortSignal;
+  } = {},
+): Promise<AgentCredentialMap> {
+  const { credentials, providers } = resolveAmbientCredentialInputs(options);
+  for (const provider of providers) {
+    options.signal?.throwIfAborted();
+    const resolved = options.resolveSyntheticAuth
+      ? await options.resolveSyntheticAuth(provider)
+      : await prepareProviderSyntheticAuthWithPlugin({
+          ...syntheticAuthParams(options, provider),
+          signal: options.signal,
+        });
+    options.signal?.throwIfAborted();
+    addSyntheticCredential(credentials, provider, resolved);
   }
   return credentials;
 }

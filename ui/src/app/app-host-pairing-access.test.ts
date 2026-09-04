@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type TemplateResult } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -13,6 +13,7 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
+  refreshControlUi: () => Promise<boolean>;
   routeState: {
     routeId?: string;
     location?: { pathname: string; search: string; hash: string };
@@ -109,6 +110,9 @@ function createPairingShell(params: {
     location: { pathname: "/chat", search: "", hash: "" },
   };
   const container = document.createElement("div");
+  onTestFinished(() => {
+    render(null, container);
+  });
 
   const renderSidebar = () => {
     render(shell.render(), container);
@@ -123,6 +127,7 @@ function createPairingShell(params: {
   // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
+    await vi.dynamicImportSettled();
     return await waitForFast(() => {
       render(shell.render(), container);
       const dialog = container.querySelector<HTMLElement>(
@@ -146,7 +151,8 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -260,7 +266,11 @@ describe("application shell pairing access", () => {
 
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     expect(sidebar?.getAttribute("aria-busy")).toBe("true");
-    expect(sidebar?.textContent).toContain("Loading…");
+    const loadingSkeleton = sidebar?.querySelector<HTMLElement>(
+      '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+    );
+    expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-row")).toHaveLength(7);
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 
@@ -285,6 +295,27 @@ describe("application shell pairing access", () => {
     );
     retry?.click();
     expect(retryRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the settings refresh result for stale-client recovery", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const refreshResult = new Promise<boolean>(() => {
+      // Keep the probe pending so the callback must preserve its lifecycle.
+    });
+    const refreshControlUi = vi.fn(() => refreshResult);
+    const settingsSidebarRenderer = vi.fn((_props: { onRefresh: () => Promise<boolean> }) => null);
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.refreshControlUi = refreshControlUi;
+    shell.settingsSidebarRenderer = settingsSidebarRenderer;
+
+    render(shell.render(), container);
+
+    const onRefresh = settingsSidebarRenderer.mock.calls[0]?.[0].onRefresh;
+    expect(onRefresh?.()).toBe(refreshResult);
+    expect(refreshControlUi).toHaveBeenCalledOnce();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
@@ -329,6 +360,7 @@ describe("application shell pairing access", () => {
     });
 
     renderSidebar();
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       render(shell.render(), container);
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");

@@ -23,7 +23,9 @@ import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsSection,
   renderSettingsStatus,
 } from "./settings-ui.ts";
@@ -57,22 +59,36 @@ class McpServersCard extends OpenClawLightDomElement {
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
+  private feedbackGeneration = 0;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
+        const generation = this.feedbackGeneration;
         this.syncRows();
-        void runtimeConfig
-          .ensureLoaded()
-          .then(() => this.syncRows())
-          .catch((error: unknown) => {
-            this.message = {
-              kind: "error",
-              text: formatUiError(error),
-            };
-          });
-        return runtimeConfig.subscribe(() => this.syncRows());
+        void runtimeConfig.ensureLoaded().catch((error: unknown) => {
+          if (
+            generation !== this.feedbackGeneration ||
+            !this.isConnected ||
+            runtimeConfig !== this.context?.runtimeConfig
+          ) {
+            return;
+          }
+          this.message = {
+            kind: "error",
+            text: formatUiError(error),
+          };
+        });
+        const unsubscribe = runtimeConfig.subscribe(() => this.syncRows());
+        return () => {
+          // Async config work belongs to one connected source. Retire its UI
+          // feedback before a replacement source or retained card can reuse it.
+          this.feedbackGeneration += 1;
+          this.busy = false;
+          this.message = null;
+          unsubscribe();
+        };
       },
     )
     .effect(
@@ -113,9 +129,13 @@ class McpServersCard extends OpenClawLightDomElement {
     if (!this.context || !this.canMutate() || this.busy) {
       return false;
     }
+    const generation = this.feedbackGeneration;
     this.busy = true;
     this.message = null;
     const result = await patchMcpServers(this.context.runtimeConfig, options);
+    if (generation !== this.feedbackGeneration) {
+      return false;
+    }
     this.busy = false;
     if (!result.ok) {
       this.message = { kind: "error", text: result.error };
@@ -200,11 +220,13 @@ class McpServersCard extends OpenClawLightDomElement {
             ?disabled=${disabled}
             @click=${() => void this.toggleServer(server.name, !server.enabled)}
           >
-            ${this.busy
-              ? t("mcpServers.working")
-              : server.enabled
-                ? t("mcpServers.disable")
-                : t("mcpServers.enable")}
+            ${
+              this.busy
+                ? t("mcpServers.working")
+                : server.enabled
+                  ? t("mcpServers.disable")
+                  : t("mcpServers.enable")
+            }
           </button>
           <button
             type="button"
@@ -225,7 +247,7 @@ class McpServersCard extends OpenClawLightDomElement {
     const blockedReason = this.mutationBlockedReason();
     const rows = this.rows;
     const body = !rows
-      ? html`<div class="mcp-server-loading" role="status">${t("common.loading")}</div>`
+      ? renderSettingsLoadingSkeleton({ rows: 2 })
       : rows.length === 0
         ? renderSettingsEmpty(html`
             ${t("mcpPage.noServers")} ${renderDocsLink(this.docsUrl, t("mcpPage.setUpFirstServer"))}
@@ -237,8 +259,7 @@ class McpServersCard extends OpenClawLightDomElement {
           {
             title: t("mcpPage.configuredServers"),
             description: html`
-              ${t("mcpPage.runtimeHint")}
-              <a href=${this.pluginsHref}>${t("mcpPage.connectorsLink")}</a>
+              ${t("mcpPage.runtimeHint")} ${renderLearnMoreLink(this.pluginsHref)}
             `,
             actions: html`
               <button
@@ -259,25 +280,29 @@ class McpServersCard extends OpenClawLightDomElement {
             `,
           },
           html`
-            ${this.formOpen
-              ? renderMcpServerForm({
-                  busy: this.busy,
-                  disabled: !this.canMutate(),
-                  blockedReason,
-                  onSubmit: (form) => void this.addServer(form),
-                  onCancel: () => {
-                    this.formOpen = false;
-                  },
-                })
-              : nothing}
-            ${this.message
-              ? html`<div
-                  class="mcp-server-message mcp-server-message--${this.message.kind}"
-                  role=${this.message.kind === "error" ? "alert" : "status"}
-                >
-                  ${this.message.text}
-                </div>`
-              : nothing}
+            ${
+              this.formOpen
+                ? renderMcpServerForm({
+                    busy: this.busy,
+                    disabled: !this.canMutate(),
+                    blockedReason,
+                    onSubmit: (form) => void this.addServer(form),
+                    onCancel: () => {
+                      this.formOpen = false;
+                    },
+                  })
+                : nothing
+            }
+            ${
+              this.message
+                ? html`<div
+                    class="mcp-server-message mcp-server-message--${this.message.kind}"
+                    role=${this.message.kind === "error" ? "alert" : "status"}
+                  >
+                    ${this.message.text}
+                  </div>`
+                : nothing
+            }
             ${body}
           `,
         )}

@@ -1,16 +1,11 @@
 // Implements trajectory export command packaging for the active session agent.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import { parseExportCommandOutputPath } from "./commands-export-common.js";
-import {
-  buildCurrentOpenClawCliArgv,
-  buildCurrentOpenClawCliCommand,
-  buildCurrentOpenClawCliExecEnv,
-} from "./commands-openclaw-cli.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
@@ -137,19 +132,13 @@ function buildTrajectoryExportApprovalRequest(
   request: TrajectoryExportExecRequest,
 ): ExecApprovalRequest {
   const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   return {
     approvalKind: "exec",
     id: "trajectory-export-private-route",
     request: {
       command: request.command,
       commandArgv: request.argv,
-      agentId,
+      agentId: params.agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
       turnSourceTo: readCommandDeliveryTarget(params) ?? null,
@@ -168,12 +157,6 @@ async function requestTrajectoryExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -185,12 +168,14 @@ async function requestTrajectoryExportApproval(
       approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
-      agentId,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionEntry?.sessionId,
       sessionStore: params.cfg.session?.store,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       ...resolveCommandExecApprovalRoute({
         commandParams: params,
         privateApprovalTarget: options.privateApprovalTarget,
@@ -200,8 +185,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
-      env: buildCurrentOpenClawCliExecEnv(),
-      security: "allowlist",
+      env: request.env,
       ask: "always",
       background: true,
       timeoutSeconds: timeoutSec,
@@ -261,12 +245,13 @@ type TrajectoryExportCliRequest = {
   workspace: string;
   output?: string;
   store?: string;
-  agent?: string;
+  agent: string;
 };
 
 type TrajectoryExportExecRequest = {
   argv: string[];
   command: string;
+  env: Record<string, string> | undefined;
   displayCommand: string;
   encodedRequest: string;
   request: TrajectoryExportCliRequest;
@@ -279,6 +264,7 @@ function buildTrajectoryExportExecRequest(
   const request: TrajectoryExportCliRequest = {
     sessionKey: params.sessionKey,
     workspace: params.workspaceDir,
+    agent: params.agentId,
   };
   if (outputPath) {
     request.output = outputPath;
@@ -286,17 +272,13 @@ function buildTrajectoryExportExecRequest(
   if (params.storePath && params.storePath !== "(multiple)") {
     request.store = params.storePath;
   }
-  if (params.agentId) {
-    request.agent = params.agentId;
-  }
   const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
   if (encodedRequest.length > MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS) {
     throw new Error("Encoded trajectory export request is too large");
   }
   const args = ["sessions", "export-trajectory", "--request-json-base64", encodedRequest, "--json"];
   return {
-    argv: buildCurrentOpenClawCliArgv(args),
-    command: buildCurrentOpenClawCliCommand(args),
+    ...buildCurrentOpenClawCliExecRequest(args),
     displayCommand: ["openclaw", ...args].join(" "),
     encodedRequest,
     request,
@@ -312,8 +294,6 @@ function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliReques
   if (request.store) {
     lines.push(`Store: ${request.store}`);
   }
-  if (request.agent) {
-    lines.push(`Agent: ${request.agent}`);
-  }
+  lines.push(`Agent: ${request.agent}`);
   return lines.join("\n");
 }

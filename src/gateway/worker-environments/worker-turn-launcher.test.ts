@@ -5,15 +5,21 @@ import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import {
+  resolveSessionPlacementForcedTerminalSettlement,
+  resolveSessionPlacementTurnSettlementAssertion,
+} from "../../agents/session-placement-forced-terminal-settlement.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
+import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { success } from "./tunnel.test-support.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -23,6 +29,7 @@ import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  measureLaunchTurn,
   placements,
   root,
   seedActivePlacement,
@@ -30,6 +37,7 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
+  withWorkerCompactionAdoption,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -98,24 +106,38 @@ describe("worker turn launcher local placement", () => {
       }),
     ).toThrow("transcript identity is no longer current");
   });
-  it("atomically claims and releases a local turn around the local loop", async () => {
+  it("keeps the exact local claim cleanup across compaction successor acceptance", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const uninstall = installSessionPlacementAdmissionProvider(provider);
+    try {
+      const result = await provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
+        turn("run-local"),
+        async () => {
+          const placement = placements.get(SESSION_ID);
+          expect(placement?.turnClaim).toMatchObject({ owner: "local", runId: "run-local" });
+          const settle = resolveSessionPlacementForcedTerminalSettlement();
+          if (!settle) {
+            throw new Error("expected exact local claim cleanup");
+          }
+          await withWorkerCompactionAdoption("run-local", async (adopt) => {
+            await expect(adopt("session-local-successor")).resolves.toBe(SESSION_ID);
+            expect(loadSessionEntry(sessionTarget)?.sessionId).toBe("session-local-successor");
+            expect(placements.get(SESSION_ID)).toEqual(placement);
+            expect(placements.get("session-local-successor")).toBeUndefined();
+            await settle();
+            expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+          });
+          return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
+        },
+      );
 
-    const result = await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
-      turn("run-local"),
-      async () => {
-        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
-          owner: "local",
-          runId: "run-local",
-        });
-        return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
-      },
-    );
-
-    expect(result.payloads).toEqual([{ text: "local" }]);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expect(result.payloads).toEqual([{ text: "local" }]);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 
   it("leaves no placement row for an auxiliary model run without a session key", async () => {
@@ -193,10 +215,13 @@ describe("worker turn launcher local placement", () => {
   it("holds a local placement claim around CLI execution", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    let assertSettlementCurrent: (() => void) | undefined;
 
     const result = await provider.executeLocalTurn(
       { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-cli" },
       async () => {
+        assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+        assertSettlementCurrent?.();
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "local",
           runId: "run-cli",
@@ -207,6 +232,8 @@ describe("worker turn launcher local placement", () => {
 
     expect(result).toEqual({ kind: "cli" });
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(assertSettlementCurrent).toBeDefined();
+    expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
   });
 
   it("mints a fresh claim token when a later turn reuses the run id", async () => {
@@ -304,6 +331,7 @@ describe("worker turn launcher local placement", () => {
     const finishOldRun = createDeferred();
     const replacementStarted = createDeferred();
     const finishReplacement = createDeferred();
+    let assertOldSettlementCurrent: (() => void) | undefined;
     const handle = {
       queueMessage: async () => {},
       isStreaming: () => true,
@@ -319,6 +347,8 @@ describe("worker turn launcher local placement", () => {
         runId: "run-force-cleared",
       },
       async () => {
+        assertOldSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+        assertOldSettlementCurrent?.();
         setActiveEmbeddedRun(SESSION_ID, handle, SESSION_KEY);
         oldRunStarted.resolve();
         await finishOldRun.promise;
@@ -337,6 +367,8 @@ describe("worker turn launcher local placement", () => {
         reason: "stuck_recovery",
       }),
     ).resolves.toMatchObject({ forceCleared: true });
+    expect(assertOldSettlementCurrent).toBeDefined();
+    expect(() => assertOldSettlementCurrent?.()).toThrow("settlement is closed");
     const killedEntry = loadSessionEntry(sessionTarget);
     expect(killedEntry).toMatchObject({
       sessionId: SESSION_ID,
@@ -359,7 +391,8 @@ describe("worker turn launcher local placement", () => {
       removeChatRun: vi.fn(),
       workerSessionPlacementService: placements,
     } as unknown as GatewayRequestContext;
-    const archiveDrain = await prepareSessionArchiveLifecycle({
+    const archiveDrain = await prepareSessionLifecycleDrain({
+      action: "archive",
       context,
       storePath: sessionTarget.storePath,
       sessionKeys: [SESSION_KEY],
@@ -457,82 +490,6 @@ describe("worker turn launcher local placement", () => {
       expect(runLocal).not.toHaveBeenCalled();
       expect(getEnvironment).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    },
-  );
-
-  it.each([
-    { label: "SSH", nodeDeviceId: undefined, providerId: "fake" },
-    { label: "paired-device", nodeDeviceId: "paired-node-1", providerId: "device" },
-    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox" },
-  ])(
-    "runs a $label remote-exec placement locally and reconciles without launching a worker child",
-    async ({ nodeDeviceId, providerId }) => {
-      seedActivePlacement("remote-exec");
-      const order: string[] = [];
-      const launchTurn = vi.fn();
-      const quiesceWorkspace = vi.fn(async () => {
-        order.push("quiesce");
-        return {
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {
-            order.push("resume");
-          }),
-        };
-      });
-      const reconcileWorkspace = vi.fn(
-        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-          order.push("reconcile");
-          request.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: vi.fn(async () => {}),
-            verifyLocalStable: vi.fn(async () => {}),
-          };
-        },
-      );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        launchTurn,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace,
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace,
-        stop: vi.fn(async () => {}),
-      };
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
-        get: vi.fn(() =>
-          nodeDeviceId
-            ? { ...attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
-            : attachedEnvironment(),
-        ),
-        startTunnel: vi.fn(async () => tunnel),
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const runLocal = vi.fn(async () => {
-        order.push("local");
-        return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
-      });
-
-      await provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-remote-exec",
-        },
-        turn("run-remote-exec"),
-        runLocal,
-      );
-
-      expect(order).toEqual(["local", "quiesce", "reconcile", "resume"]);
-      expect(launchTurn).not.toHaveBeenCalled();
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      const placement = placements.get(SESSION_ID);
-      expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
     },
   );
 
@@ -637,7 +594,10 @@ describe("worker turn launcher local placement", () => {
     {
       scenario: "failed execution",
       executionFailure: "Codex paired execution device disconnected; start a fresh attempt",
-      expectedError: "Codex paired execution device disconnected; start a fresh attempt",
+      expectedError:
+        "Codex paired execution device disconnected; start a fresh attempt\n\n" +
+        "Workspace recovery also failed: workspace manifest memo exceeds its entry limit. " +
+        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
       expectedTerminalReason: "Codex paired execution device disconnected; start a fresh attempt",
     },
   ])(
@@ -648,8 +608,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
@@ -752,8 +711,9 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
+        measureLaunchTurn,
         launchTurn,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,
@@ -798,7 +758,11 @@ describe("worker turn launcher local placement", () => {
         ),
       ).rejects.toMatchObject({
         message:
-          executionFailure ?? expect.stringContaining("workspace result could not be reconciled"),
+          executionFailure === undefined
+            ? expect.stringContaining("workspace result could not be reconciled")
+            : expect.stringContaining(
+                `${executionFailure}\n\nWorkspace recovery also failed: device worker node is not connected`,
+              ),
         cause: expect.any(Error),
       });
 

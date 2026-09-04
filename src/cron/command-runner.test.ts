@@ -1,9 +1,12 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
+import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as execSpawn from "../process/exec-spawn.js";
 import * as processExecution from "../process/exec.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
 
@@ -21,23 +24,6 @@ function makeCommandJob(payload: Extract<CronJob["payload"], { kind: "command" }
     payload,
     state: {},
   };
-}
-
-function isProcessRunning(pid: number): boolean {
-  const result = spawnSync("ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
-  if (result.error) {
-    throw result.error;
-  }
-  const state = result.stdout.trim();
-  if (result.status === 0) {
-    return !state.startsWith("Z");
-  }
-  if (result.status === 1 && state === "" && result.stderr.trim() === "") {
-    return false;
-  }
-  throw new Error(
-    `ps failed with status ${result.status ?? "unknown"}: ${result.stderr.trim() || "no output"}`,
-  );
 }
 
 describe("runCronCommandJob", () => {
@@ -145,32 +131,81 @@ describe("runCronCommandJob", () => {
     });
   });
 
-  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
-    const childPidPath = path.join(tempDir, "child.pid");
-    const shellCommand = [
-      "sleep 60 &",
-      "child_pid=$!",
-      `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
-      'wait "$child_pid"',
-    ].join("\n");
+  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () =>
+    withTempDir("openclaw-cron-command-", async (tempDir) => {
+      const childPidPath = path.join(tempDir, "child.pid");
+      const shellCommand = [
+        "sleep 60 &",
+        "child_pid=$!",
+        `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
+        'wait "$child_pid"',
+      ].join("\n");
 
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.5,
-      }),
-    });
+      const controller = new AbortController();
+      const realSetTimeout = setTimeout;
+      const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+      let parent: ChildProcess | undefined;
+      let command: ReturnType<typeof runCronCommandJob> | undefined;
+      try {
+        // Freeze the deadline until the real shell has published a live child;
+        // startup time must not consume the behavior this test is exercising.
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        command = runCronCommandJob({
+          job: makeCommandJob({
+            kind: "command",
+            argv: ["sh", "-lc", shellCommand],
+            timeoutSeconds: 0.5,
+          }),
+          abortSignal: controller.signal,
+        });
+        const spawnResult = spawnSpy.mock.results[0];
+        if (spawnResult?.type !== "return") {
+          throw new Error("command did not spawn");
+        }
+        parent = spawnResult.value.child.nodeChildProcess;
+        let childPid = 0;
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          if (existsSync(childPidPath)) {
+            childPid = await readPidFile(childPidPath);
+            if (Number.isSafeInteger(childPid) && isPidAlive(childPid)) {
+              break;
+            }
+          }
+          await new Promise<void>((resolve) => {
+            realSetTimeout(resolve, 25);
+          });
+        }
+        expect(Number.isSafeInteger(childPid)).toBe(true);
+        expect(isPidAlive(childPid)).toBe(true);
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command timed out");
-
-    const childPid = Number.parseInt(await fs.readFile(childPidPath, "utf8"), 10);
-    expect(Number.isSafeInteger(childPid)).toBe(true);
-    await expect.poll(() => isProcessRunning(childPid)).toBe(false);
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+        await vi.advanceTimersByTimeAsync(500);
+        await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+        const result = await command;
+        expect(result.status).toBe("error");
+        expect(result.error).toBe("command timed out");
+        vi.useRealTimers();
+        expect(await waitForPidToExit(childPid)).toBe(true);
+      } finally {
+        try {
+          controller.abort();
+          if (parent?.pid) {
+            try {
+              process.kill(-parent.pid, "SIGKILL");
+            } catch {
+              // The command may already have reaped its process group.
+            }
+          }
+          if (vi.isFakeTimers()) {
+            await vi.runAllTimersAsync();
+          }
+        } finally {
+          vi.useRealTimers();
+          spawnSpy.mockRestore();
+          await command;
+        }
+      }
+    }),
+  );
 
   it("marks no-output timeouts as cron errors", async () => {
     const result = await runCronCommandJob({

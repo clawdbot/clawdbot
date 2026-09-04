@@ -257,6 +257,15 @@ direct Urbit operations, available automatically once the plugin is installed:
 
 ## Capabilities
 
+`channels.tlon.mediaMaxMb` limits each inbound image download and outbound image
+load in MiB. Named accounts can override it with `accounts.<id>.mediaMaxMb`;
+otherwise the channel root and then `agents.defaults.mediaMaxMb` apply. The
+existing 6 MiB ceiling applies to image downloads and uploads. With a configured cap, a failed
+size check or download fails the send instead of embedding an unchecked URL.
+Upload failures after a successful bounded download can still use the original URL.
+Without a configured cap, the existing link fallback remains available even when
+the image cannot be downloaded within that ceiling.
+
 | Feature         | Status                                        |
 | --------------- | --------------------------------------------- |
 | Direct messages | Supported                                     |

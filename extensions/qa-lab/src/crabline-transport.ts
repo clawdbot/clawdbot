@@ -82,7 +82,14 @@ function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawC
   } as OpenClawConfig;
 }
 
-function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageInput) {
+function resolveLogicalQaTarget(
+  { conversation, threadId }: QaBusInboundMessageInput,
+  providerQaTarget: string,
+  providerPreservesConversationId: boolean,
+) {
+  if (conversation.kind !== "channel" && providerPreservesConversationId) {
+    return providerQaTarget;
+  }
   const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
   return threadId ? `thread:${conversation.id}/${threadId}` : `${prefix}:${conversation.id}`;
 }
@@ -255,9 +262,16 @@ function createCrablineState(params: {
       const providerInbound = params.adapter.createInbound({
         input: createCrablineProviderInboundInput(params.adapter, input),
       });
-      // Providers may coerce channel conversations to groups; preserve the scenario's logical
-      // target so outbound waits and assertions still match the original input.
-      targetByProviderTarget.set(providerInbound.providerTargetKey, formatLogicalQaTarget(input));
+      // Provider targets carry typed thread identity. Synthetic channels and Matrix's
+      // provider-native room ids still need their scenario-owned logical target restored.
+      targetByProviderTarget.set(
+        providerInbound.providerTargetKey,
+        resolveLogicalQaTarget(
+          input,
+          providerInbound.qaTarget,
+          params.adapter.channel !== "matrix",
+        ),
+      );
       const providerMessageId = await postCrablineInbound({
         adapter: params.adapter,
         providerInbound,

@@ -35,7 +35,11 @@ import {
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -178,13 +182,7 @@ async function arrangeAgentsDeleteTest(params: {
     recursive: true,
   });
 
-  configMocks.readConfigFileSnapshot.mockResolvedValue({
-    ...baseConfigSnapshot,
-    config: cfg,
-    runtimeConfig: cfg,
-    sourceConfig: cfg,
-    resolved: cfg,
-  });
+  configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
 
   return storePath;
 }
@@ -434,13 +432,7 @@ describe("agents delete command", () => {
       },
       "ops",
     );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: cfg,
-      runtimeConfig: cfg,
-      sourceConfig: cfg,
-      resolved: cfg,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
 
     await agentsDeleteCommand({ id: "ops", force: true }, runtime);
 

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -200,6 +199,81 @@ describe("skill collection backup and restore", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 
+  it.each(["unchanged", "edited", "file-deleted", "subtree-deleted"])(
+    "preserves a legacy backup and %s deep content when restore cannot verify the tree",
+    async (deepContent) => {
+      await writeWorkshopOwnedSkills([
+        { name: "procedure", description: "Original procedure", body: "# Original\n" },
+      ]);
+      const result = await reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [
+          {
+            action: "write",
+            name: "procedure",
+            description: "Clean procedure",
+            content: "# Clean\n",
+          },
+        ],
+      });
+      const skillDir = path.join(workspaceDir, "skills", "procedure");
+      const backupDir = path.join(
+        resolveSkillCollectionBackupRoot(workspaceDir, testState.env),
+        result.backupId,
+      );
+      const backupSkillDir = path.join(backupDir, "workspace", "skills", "procedure");
+      const deepPath = path.join(
+        "references",
+        ...Array.from({ length: 16 }, (_, index) => `d${index}`),
+        "proof.txt",
+      );
+      const currentDeepFile = path.join(skillDir, deepPath);
+      const backupDeepFile = path.join(backupSkillDir, deepPath);
+      // The old sixteen-level digest omitted these files, just as if they were absent.
+      // Keep the real shallow result digest to recreate that legacy backup without a mock.
+      await fs.mkdir(path.dirname(backupDeepFile), { recursive: true });
+      await fs.writeFile(backupDeepFile, "Original support\n");
+      await fs.mkdir(path.dirname(currentDeepFile), { recursive: true });
+      await fs.writeFile(
+        currentDeepFile,
+        deepContent === "edited" ? "Later operator edit\n" : "Original support\n",
+      );
+      if (deepContent === "file-deleted") {
+        await fs.rm(currentDeepFile);
+      } else if (deepContent === "subtree-deleted") {
+        await fs.rm(path.dirname(currentDeepFile), { recursive: true });
+      }
+      const preservedFiles = [
+        path.join(skillDir, "SKILL.md"),
+        ...(["file-deleted", "subtree-deleted"].includes(deepContent) ? [] : [currentDeepFile]),
+        path.join(backupSkillDir, "SKILL.md"),
+        backupDeepFile,
+        path.join(backupDir, "manifest.json"),
+      ];
+      const snapshot = async () => ({
+        bytes: await Promise.all(preservedFiles.map((file) => fs.readFile(file))),
+        entries: await Promise.all(
+          [workspaceDir, backupDir].map(async (dir) =>
+            (await fs.readdir(dir, { recursive: true })).toSorted(),
+          ),
+        ),
+      });
+      const before = await snapshot();
+      dispatchCommittedSkillChangeBestEffort.mockClear();
+      snapshotCommittedSkillArtifactBestEffort.mockClear();
+
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).rejects.toThrow("Skill evaluation bundle exceeds traversal limits.");
+
+      expect(await snapshot()).toEqual(before);
+      expect(dispatchCommittedSkillChangeBestEffort).not.toHaveBeenCalled();
+      expect(snapshotCommittedSkillArtifactBestEffort).not.toHaveBeenCalled();
+    },
+  );
+
   it("restores an owned skill without rewriting a kept external skill", async () => {
     await writeWorkshopOwnedSkills([
       { name: "owned", description: "Workshop procedure", body: "# Owned original\n" },
@@ -239,7 +313,7 @@ describe("skill collection backup and restore", () => {
       { name: "updated", description: "Updated procedure", body: "# Updated original\n" },
       { name: "dropped", description: "Dropped procedure", body: "# Dropped original\n" },
     ]);
-    await reconcileSkillCollection({
+    const result = await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
       ...(await readCollectionReceipt()),
@@ -259,8 +333,27 @@ describe("skill collection backup and restore", () => {
         },
       ],
     });
+    const deepPath = path.join(
+      "skills",
+      "dropped",
+      "references",
+      ...Array.from({ length: 16 }, (_, index) => `d${index}`),
+      "proof.txt",
+    );
+    const savedDeepFile = path.join(
+      resolveSkillCollectionBackupRoot(workspaceDir, testState.env),
+      result.backupId,
+      "workspace",
+      deepPath,
+    );
+    // A dropped legacy skill has no current result whose digest can hide an edit.
+    await fs.mkdir(path.dirname(savedDeepFile), { recursive: true });
+    await fs.writeFile(savedDeepFile, "Original deep support\n");
 
     await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+    await expect(fs.readFile(path.join(workspaceDir, deepPath), "utf8")).resolves.toBe(
+      "Original deep support\n",
+    );
 
     expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
       expect.objectContaining({ name: "dropped", workshopOwned: true }),
@@ -279,7 +372,7 @@ describe("skill collection backup and restore", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        ...(await readCollectionReceipt()),
+        ...(await readCollectionReceipt(["updated"])),
         plan: [
           {
             action: "write",
@@ -724,8 +817,10 @@ describe("skill collection backup and restore", () => {
   });
 });
 
-async function readCollectionReceipt(config?: OpenClawConfig) {
-  const skills = listWritableSkillCollection(workspaceDir, { config, env: testState.env });
+async function readCollectionReceipt(names?: readonly string[]) {
+  const skills = listWritableSkillCollection(workspaceDir, { env: testState.env }).filter(
+    (skill) => !names || names.includes(skill.name),
+  );
   return {
     readSkillHashes: new Map(
       await Promise.all(

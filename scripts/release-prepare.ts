@@ -375,7 +375,7 @@ function printUsage(): void {
       "  --write    align versions and refresh version-owned generated metadata",
       "",
       "Options:",
-      "  --android         include the independently pinned Android release train",
+      "  --android         prepare shared mobile and Android release metadata",
       "  --jobs <count>    preflight concurrency, 1 through 16 (default: 4)",
       "  --manifest <path> override the git-local candidate manifest path",
       "  --json            emit machine-readable output",

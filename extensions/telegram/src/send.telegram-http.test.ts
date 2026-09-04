@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deliverReplies } from "./bot/delivery.js";
@@ -111,6 +112,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     dispatch: () => Promise<void>,
     mediaUrl?: string,
     rich = false,
+    assertPlatformSendAuthorized?: () => void,
   ) {
     if (entry === "public") {
       return sendMessageTelegram("123", text, {
@@ -120,6 +122,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         replyToMessageId: 7,
         quoteText: "quote",
         onPlatformSendDispatch: dispatch,
+        assertPlatformSendAuthorized,
         ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [mediaDir], buttons } : {}),
         ...(rich ? { buttons } : {}),
       });
@@ -152,8 +155,37 @@ describe("Telegram physical send acceptance over HTTP", () => {
       textMode: rich ? undefined : "html",
       richMessages: rich,
       onPlatformSendDispatch: dispatch,
+      assertPlatformSendAuthorized,
     });
   }
+
+  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
+    const source = "<https://example.com/a.pdf|Manual>";
+    const text = sanitizeForPlainText(source, { style: "markdown" });
+
+    await sendThrough("public", text, async () => {});
+
+    expect(requests.at(-1)?.fields.text).toBe("Manual");
+  });
+
+  it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
+    const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
+    let authorityActive = true;
+    const dispatch = async () => {
+      await Promise.resolve();
+      authorityActive = false;
+    };
+    const assertPlatformSendAuthorized = () => {
+      if (!authorityActive) {
+        throw authorityRevoked;
+      }
+    };
+
+    await expect(
+      sendThrough("direct", "answer", dispatch, undefined, false, assertPlatformSendAuthorized),
+    ).rejects.toBe(authorityRevoked);
+    expect(requests).toHaveLength(0);
+  });
 
   it.each(["direct", "public"] as const)(
     "preserves %s operation callbacks through quote and format fallback",

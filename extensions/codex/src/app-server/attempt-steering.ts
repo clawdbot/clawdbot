@@ -4,7 +4,6 @@
  */
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -12,7 +11,7 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
-import { buildCodexUserInput } from "./user-input.js";
+import type { CodexUserInput } from "./protocol.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
@@ -25,13 +24,16 @@ export class CodexSteeringAcceptedUnconfirmedError extends Error {
 }
 
 /** Per-message options for Codex steering queue behavior. */
-export type CodexSteeringQueueOptions = {
-  debounceMs?: number;
-  images?: EmbeddedRunAttemptParams["images"];
-  isInboundUserMessage?: boolean;
-  onQueueAccepted?: (accepted: boolean) => void;
-  userTurnTranscriptRecorder?: AgentHarnessQueueMessageOptions["userTurnTranscriptRecorder"];
-};
+export type CodexSteeringQueueOptions = Pick<
+  AgentHarnessQueueMessageOptions,
+  | "debounceMs"
+  | "images"
+  | "imageOrder"
+  | "media"
+  | "isInboundUserMessage"
+  | "onQueueAccepted"
+  | "userTurnTranscriptRecorder"
+>;
 
 type CodexSteeringCommitItem = Pick<
   CodexSteeringQueueOptions,
@@ -48,18 +50,17 @@ export function createCodexSteeringQueue(params: {
   turnId: string;
   requestTimeoutMs: number;
   signal: AbortSignal;
+  assertActive: () => void;
+  prepareMessage: (text: string, options: CodexSteeringQueueOptions) => Promise<CodexUserInput[]>;
   beforeConfirmConsumed?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
 }) {
-  type PendingSteerMessage = {
+  type PendingSteerMessage = CodexSteeringQueueOptions & {
+    assertCurrent: () => void;
     acceptance: "open" | "accepted" | "rejected";
     text: string;
-    images?: EmbeddedRunAttemptParams["images"];
-    isInboundUserMessage?: boolean;
-    onQueueAccepted?: (accepted: boolean) => void;
     resolve: () => void;
     reject: (error: unknown) => void;
     settled: boolean;
-    userTurnTranscriptRecorder?: CodexSteeringQueueOptions["userTurnTranscriptRecorder"];
   };
   type PendingSteerBatch = {
     items: PendingSteerMessage[];
@@ -72,6 +73,15 @@ export function createCodexSteeringQueue(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let sealedError: Error | undefined;
   let closedError: Error | undefined;
+
+  const assertActive = () => {
+    const unavailableError = closedError ?? sealedError;
+    if (unavailableError) {
+      throw unavailableError;
+    }
+    params.signal.throwIfAborted();
+    params.assertActive();
+  };
 
   const clearBatchTimer = () => {
     if (batchTimer) {
@@ -161,48 +171,91 @@ export function createCodexSteeringQueue(params: {
   };
 
   const sendBatch = async (items: PendingSteerMessage[]) => {
-    const liveItems = items.filter((item) => !item.settled);
+    let liveItems = items.filter((item) => !item.settled);
     if (liveItems.length === 0) {
       return;
     }
-    const unavailableError =
-      closedError ??
-      sealedError ??
-      (params.signal.aborted ? new Error("codex app-server steering queue aborted") : undefined);
-    if (unavailableError) {
-      for (const item of liveItems) {
-        rejectItem(item, unavailableError);
-      }
-      throw unavailableError;
-    }
-    const clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
-    const batch = { items: liveItems };
-    // RPC acceptance is not delivery: interrupt clears accepted pending input.
-    // Keep the batch unsettled until Codex echoes this id on userMessage completion.
-    dispatchedBatches.set(clientUserMessageId, batch);
+    let clientUserMessageId: string | undefined;
+    let skippedRevokedBatch = false;
     try {
+      assertActive();
+      const prepared = new Map<PendingSteerMessage, CodexUserInput[]>();
+      const isCurrent = (item: PendingSteerMessage) => {
+        if (item.settled) {
+          return false;
+        }
+        try {
+          item.assertCurrent();
+          return true;
+        } catch (error) {
+          rejectItem(item, error);
+          return false;
+        }
+      };
+      // Reserve sendChain ownership before any preparation so later text cannot
+      // overtake an image read. Preparing input has not crossed the wire boundary.
+      for (const item of liveItems) {
+        if (!isCurrent(item)) {
+          continue;
+        }
+        try {
+          prepared.set(item, await params.prepareMessage(item.text, item));
+        } catch (error) {
+          if (isCurrent(item)) {
+            throw error;
+          }
+        }
+        assertActive();
+        isCurrent(item);
+      }
+      liveItems = liveItems.filter(isCurrent);
+      if (liveItems.length === 0) {
+        return;
+      }
+      // No await between final owner validation and RPC dispatch. Only these
+      // batches become accepted-unconfirmed if cancellation races the response.
+      clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
+      dispatchedBatches.set(clientUserMessageId, { items: liveItems });
+      const request = {
+        threadId: params.threadId,
+        expectedTurnId: params.turnId,
+        input: liveItems.flatMap((item) => prepared.get(item) ?? []),
+        clientUserMessageId,
+      };
       // turn/steer is an ack, but nothing guarantees the app-server answers it.
       // Without a deadline and the run signal the caller only unblocks when the
       // app-server client closes, which strands whichever channel handler is
       // awaiting delivery and wedges every later steer behind sendChain.
-      await params.client.request(
-        "turn/steer",
-        {
-          threadId: params.threadId,
-          expectedTurnId: params.turnId,
-          input: liveItems.flatMap((item) => buildCodexUserInput(item.text, item.images)),
-          clientUserMessageId,
+      await params.client.request("turn/steer", request, {
+        timeoutMs: params.requestTimeoutMs,
+        signal: params.signal,
+        assertCurrent: () => {
+          assertActive();
+          // A later preparation or overload retry can revoke earlier items.
+          // Rebuild only surviving material immediately before each physical write.
+          liveItems = liveItems.filter(isCurrent);
+          request.input = liveItems.flatMap((item) => prepared.get(item) ?? []);
+          dispatchedBatches.set(request.clientUserMessageId, { items: liveItems });
+          if (liveItems.length === 0) {
+            skippedRevokedBatch = true;
+            throw new Error("Codex steering batch has no authorized inputs");
+          }
         },
-        { timeoutMs: params.requestTimeoutMs, signal: params.signal },
-      );
+      });
       for (const item of liveItems) {
         reportItemAcceptance(item, true);
       }
     } catch (error) {
-      dispatchedBatches.delete(clientUserMessageId);
+      if (clientUserMessageId) {
+        dispatchedBatches.delete(clientUserMessageId);
+      }
+      if (skippedRevokedBatch) {
+        return;
+      }
       const acceptedUnconfirmed =
-        isCodexAppServerIndeterminateRequestCancellationError(error) ||
-        isCodexAppServerIndeterminateTransportError(error);
+        clientUserMessageId !== undefined &&
+        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+          isCodexAppServerIndeterminateTransportError(error));
       for (const item of liveItems) {
         if (acceptedUnconfirmed) {
           reportItemAcceptance(item, true);
@@ -242,6 +295,7 @@ export function createCodexSteeringQueue(params: {
   const createPendingMessage = (
     text: string,
     options?: CodexSteeringQueueOptions,
+    assertCurrent: () => void = () => {},
   ): { item: PendingSteerMessage; delivery: Promise<void> } => {
     let resolveDelivery!: () => void;
     let rejectDelivery!: (error: unknown) => void;
@@ -250,15 +304,13 @@ export function createCodexSteeringQueue(params: {
       rejectDelivery = reject;
     });
     const item = {
+      ...options,
+      assertCurrent,
       acceptance: "open" as const,
       text,
-      images: options?.images,
-      isInboundUserMessage: options?.isInboundUserMessage,
-      onQueueAccepted: options?.onQueueAccepted,
       resolve: resolveDelivery,
       reject: rejectDelivery,
       settled: false,
-      userTurnTranscriptRecorder: options?.userTurnTranscriptRecorder,
     };
     pendingMessages.add(item);
     return { item, delivery };
@@ -270,16 +322,19 @@ export function createCodexSteeringQueue(params: {
   }
 
   return {
-    async queue(text: string, options?: CodexSteeringQueueOptions) {
-      const unavailableError =
-        closedError ??
-        sealedError ??
-        (params.signal.aborted ? new Error("codex app-server steering queue aborted") : undefined);
-      if (unavailableError) {
+    async queue(
+      text: string,
+      options?: CodexSteeringQueueOptions,
+      assertCurrent: () => void = () => {},
+    ) {
+      try {
+        assertActive();
+        assertCurrent();
+      } catch (error) {
         options?.onQueueAccepted?.(false);
-        throw unavailableError;
+        throw error;
       }
-      const { item, delivery } = createPendingMessage(text, options);
+      const { item, delivery } = createPendingMessage(text, options, assertCurrent);
       batchedMessages.push(item);
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);

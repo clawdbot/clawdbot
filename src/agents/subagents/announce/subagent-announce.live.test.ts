@@ -6,27 +6,22 @@ import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
-import { callGateway as realCallGateway } from "../../../gateway/call.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { GatewayClient } from "../../../gateway/client.js";
-import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import { startGatewayServer, type GatewayServer } from "../../../gateway/server.js";
+import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import { extractPayloadText } from "../../../gateway/test-helpers.agent-results.js";
-import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
-import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
+import { normalizeInputProvenance } from "../../../sessions/input-provenance.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../../../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
-import { isLiveTestEnabled, readLiveTestConfig } from "../../live-test-helpers.js";
-import {
-  resolveSubagentController,
-  steerControlledSubagentRun,
-} from "../registry/subagent-control.js";
+import { isLiveTestEnabled } from "../../live-test-helpers.js";
 import { listSubagentRunsForRequester } from "../registry/subagent-registry.test-helpers.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
 const describeLive = LIVE ? describe : describe.skip;
@@ -35,10 +30,6 @@ type AgentPayload = {
   status?: string;
   result?: unknown;
 };
-
-type InProcessAgentDispatch =
-  | { phase: "started"; resultText?: undefined }
-  | { phase: "completed"; resultText: string };
 
 const REQUEST_TIMEOUT_MS = 8 * 60_000;
 const WAIT_TIMEOUT_MS = 8 * 60_000;
@@ -49,15 +40,21 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-type LiveSubagentModelConfig = {
-  modelKey: string;
-  provider: "openai" | "google";
-  requiredEnv: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY";
-};
+type LiveSubagentModelConfig =
+  | { modelKey: string; provider: "ollama" }
+  | { modelKey: string; provider: "openai"; requiredEnv: "OPENAI_API_KEY" }
+  | {
+      modelKey: string;
+      provider: "google";
+      requiredEnv: "GEMINI_API_KEY" | "GOOGLE_API_KEY";
+    };
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
   const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
+  if (modelKey.startsWith("ollama/")) {
+    return { modelKey, provider: "ollama" };
+  }
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,
@@ -71,7 +68,9 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
   // Live E2E runs need the provider credential that matches the selected model
   // family; fail early before gateway startup.
-  expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
+  if (config.provider !== "ollama") {
+    expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
+  }
 }
 
 function liveSubagentConfig(
@@ -85,9 +84,32 @@ function liveSubagentConfig(
   },
 ): OpenClawConfig {
   const providerConfig = resolveLiveSubagentModelConfig();
-  const modelId = modelKey.replace(/^(openai|google)\//u, "");
+  const modelId = modelKey.replace(/^(openai|google|ollama)\//u, "");
   const providers: LiveSubagentModelProviders = {};
-  if (providerConfig.provider === "google") {
+  if (providerConfig.provider === "ollama") {
+    providers.ollama = {
+      api: "ollama" as const,
+      agentRuntime: { id: "openclaw" },
+      baseUrl:
+        process.env.OPENCLAW_LIVE_SUBAGENT_E2E_OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434",
+      apiKey: "ollama-local",
+      timeoutSeconds: 300,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          api: "ollama" as const,
+          agentRuntime: { id: "openclaw" },
+          input: ["text" as const],
+          reasoning: false,
+          contextWindow: 32_768,
+          maxTokens: 2_048,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          params: { num_ctx: 32_768, keep_alive: "5m" },
+        },
+      ],
+    };
+  } else if (providerConfig.provider === "google") {
     providers.google = {
       api: "google-generative-ai" as const,
       agentRuntime: { id: "openclaw" },
@@ -145,7 +167,7 @@ function liveSubagentConfig(
       auth: { mode: "token", token },
       controlUi: { enabled: false },
     },
-    plugins: { enabled: false },
+    plugins: { enabled: providerConfig.provider === "ollama" },
     tools: { allow: options?.toolAllow ?? ["sessions_spawn", "sessions_yield", "subagents"] },
     ...(options?.queue ? { messages: { queue: options.queue } } : {}),
     models: {
@@ -185,44 +207,6 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForRequester>): string {
-  return JSON.stringify(
-    runs.map((run) => ({
-      runId: run.runId,
-      taskName: run.taskName,
-      ended: typeof run.execution.endedAt === "number",
-      endedReason: run.endedReason,
-      pauseReason: run.pauseReason,
-      outcome: run.execution.outcome?.status,
-      outcomeError:
-        run.execution.outcome?.status === "error" ? run.execution.outcome.error : undefined,
-      delivery: run.delivery?.status,
-      deliveryError: run.delivery?.lastError,
-      suppressAnnounceReason: run.suppressAnnounceReason,
-      resultText: run.completion?.resultText?.slice(0, 200),
-    })),
-  );
-}
-
-function summarizeAgentEvents(events: AgentEventPayload[], runId: string): string {
-  return JSON.stringify(
-    events
-      .filter((event) => event.runId === runId)
-      .slice(-20)
-      .map((event) => ({
-        stream: event.stream,
-        phase: event.data.phase,
-        name: event.data.name,
-        toolCallId: event.data.toolCallId,
-        isError: event.data.isError,
-      })),
-  );
-}
-
-function isBashToolEventName(value: unknown): boolean {
-  return value === "bash" || value === "exec";
-}
-
 function createGatewayClient(params: {
   port: number;
   token: string;
@@ -245,32 +229,126 @@ function createGatewayClient(params: {
   });
 }
 
+async function readCompletionProvenance(sessionKey: string, agentId: string) {
+  const entry = loadSessionEntry({ agentId, sessionKey });
+  if (!entry?.sessionId) {
+    return undefined;
+  }
+  const messages = await readSessionMessagesAsync(
+    {
+      agentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+    },
+    { mode: "full", reason: "live subagent completion provenance verification" },
+  );
+  for (const message of messages) {
+    const record = message as { role?: unknown; provenance?: unknown };
+    const provenance = normalizeInputProvenance(record.provenance);
+    if (record.role === "user" && provenance?.sourceTool === "subagent_announce") {
+      return provenance;
+    }
+  }
+  return undefined;
+}
+
 describeLive("subagent announce live", () => {
   let state: OpenClawTestState | undefined;
   let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
-  let stopAgentEventCapture: (() => void) | undefined;
 
   afterEach(async () => {
-    stopAgentEventCapture?.();
-    stopAgentEventCapture = undefined;
-    subagentAnnounceTesting.setDepsForTest();
-    subagentAnnounceDeliveryTesting.setDepsForTest();
     await client?.stopAndWait().catch(() => undefined);
     await server?.close({ reason: "subagent announce live test done" }).catch(() => undefined);
     await state?.cleanup().catch(() => undefined);
     clearRuntimeConfigSnapshot();
-    clearPluginMetadataLifecycleCaches();
+    resetPluginRuntimeStateForTest();
     client = undefined;
     server = undefined;
     state = undefined;
   });
 
   it(
-    "keeps issue 82913 busy-parent completion announce pending until transcript delivery",
+    "records internal provenance through a real Gateway and provider",
     async () => {
+      const modelConfig = resolveLiveSubagentModelConfig();
+      requireLiveSubagentAuth(modelConfig);
+
+      const token = `subagent-provenance-${randomUUID()}`;
+      const port = await getFreePort();
+      const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const childToken = `PROVENANCE_CHILD_${nonce}`;
+      const sessionKey = `agent:main:live-subagent-provenance-${nonce.toLowerCase()}`;
+
+      state = await createOpenClawTestState({
+        label: "subagent-provenance-live",
+        layout: "split",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
+          OPENCLAW_PLUGINS_PATHS: undefined,
+        },
+      });
+      await state.writeConfig(
+        liveSubagentConfig(modelConfig.modelKey, state.workspaceDir, port, token),
+      );
+      clearRuntimeConfigSnapshot();
+      resetPluginRuntimeStateForTest();
+
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      await server.startupSettled;
+      client = await createGatewayClient({ port, token });
+
+      await client.request<AgentPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `subagent-provenance-${randomUUID()}`,
+          deliver: false,
+          timeout: 300,
+          message: [
+            "Run this exact OpenClaw subagent scenario. Use tool calls, not prose.",
+            `Call sessions_spawn once with exactly this JSON input: ${JSON.stringify({
+              task: `Reply exactly ${childToken} and nothing else.`,
+              taskName: "provenance_child",
+              cleanup: "keep",
+              context: "isolated",
+            })}.`,
+            `After the spawn is accepted, call sessions_yield with message="waiting for ${childToken}".`,
+          ].join("\n"),
+        },
+        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+
+      const provenance = await waitFor("internal completion provenance", () =>
+        readCompletionProvenance(sessionKey, "main"),
+      );
+      expect(provenance).toMatchObject({
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      });
+    },
+    10 * 60_000,
+  );
+
+  it(
+    "keeps issue 82913 busy-parent completion announce pending until transcript delivery",
+    async ({ skip }) => {
       if (!isTruthyEnvValue(process.env.OPENCLAW_SUBAGENT_ISSUE_82913_REPRO)) {
-        console.warn(
+        skip(
           "[issue-82913] skip: set OPENCLAW_SUBAGENT_ISSUE_82913_REPRO=1 to run this focused repro",
         );
         return;
@@ -279,7 +357,7 @@ describeLive("subagent announce live", () => {
       requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-82913-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const port = await getFreePort();
       const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `ISSUE_82913_CHILD_${nonce}`;
@@ -294,7 +372,8 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
           OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          // Agent admission needs the reply runtime published by normal startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
@@ -309,13 +388,14 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;
@@ -407,260 +487,11 @@ describeLive("subagent announce live", () => {
   );
 
   it(
-    "lets a parent steer an active subagent and receives completion through in-process agent dispatch",
-    async () => {
-      const modelConfig = resolveLiveSubagentModelConfig();
-      requireLiveSubagentAuth(modelConfig);
-
-      const token = `subagent-live-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
-      const modelKey = modelConfig.modelKey;
-      const nonce = randomBytes(3).toString("hex").toUpperCase();
-      const childToken = `CHILD_STEERED_${nonce}`;
-      const unsteeredToken = `UNSTEERED_${nonce}`;
-      const parentToken = `PARENT_SAW_${childToken}`;
-      const parentStartedToken = `PARENT_READY_${nonce}`;
-      const steerToken = `STEER_${nonce}`;
-      const steerMessage = [
-        `${steerToken} has arrived.`,
-        "Stop waiting and do not call any tools.",
-        `Reply exactly ${childToken} and nothing else.`,
-      ].join(" ");
-      const childTask = [
-        `Immediately call the bash tool with exactly this JSON input: ${JSON.stringify({
-          command: `sleep 60; printf ${unsteeredToken}`,
-          yieldMs: 120_000,
-        })}.`,
-        "Do not reply directly before that bash command finishes.",
-        `Do not reply with ${childToken} before receiving ${steerToken}.`,
-        `After receiving ${steerToken}, reply exactly ${childToken} and nothing else.`,
-      ].join(" ");
-      const sessionKey = `agent:main:live-subagent-${nonce.toLowerCase()}`;
-      const inProcessAgentDispatches: InProcessAgentDispatch[] = [];
-      const agentEvents: AgentEventPayload[] = [];
-      stopAgentEventCapture = onAgentEvent((event) => {
-        agentEvents.push(event);
-      });
-
-      const forbiddenAgentRpc: typeof realCallGateway = async (request) => {
-        if (request.method === "agent") {
-          throw new Error("subagent announce live test forbids gateway RPC method=agent");
-        }
-        return await realCallGateway(request);
-      };
-      const instrumentedDispatch: typeof realDispatchGatewayMethodInProcess = async <T>(
-        method: string,
-        params: Record<string, unknown>,
-        options?: Parameters<typeof realDispatchGatewayMethodInProcess>[2],
-      ): Promise<T> => {
-        if (method === "agent") {
-          inProcessAgentDispatches.push({ phase: "started" });
-        }
-        const result = await realDispatchGatewayMethodInProcess<T>(method, params, options);
-        if (method === "agent") {
-          inProcessAgentDispatches.push({
-            phase: "completed",
-            resultText: extractPayloadText((result as AgentPayload).result),
-          });
-        }
-        return result;
-      };
-
-      subagentAnnounceTesting.setDepsForTest({
-        callGateway: forbiddenAgentRpc,
-        dispatchGatewayMethodInProcess: instrumentedDispatch,
-      });
-      subagentAnnounceDeliveryTesting.setDepsForTest({
-        callGateway: forbiddenAgentRpc,
-        dispatchGatewayMethodInProcess: instrumentedDispatch,
-        getRequesterSessionActivity: () => ({
-          sessionId: "requester-session-local",
-          isActive: false,
-        }),
-      });
-
-      state = await createOpenClawTestState({
-        label: "subagent-announce-live",
-        layout: "split",
-        env: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
-          OPENCLAW_PLUGINS_PATHS: undefined,
-        },
-      });
-      await state.writeConfig(
-        liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
-          toolAllow: ["sessions_spawn", "bash"],
-        }),
-      );
-      clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
-
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      client = await createGatewayClient({ port, token });
-
-      let initialError: unknown;
-      const initialRequest = client.request<AgentPayload>(
-        "agent",
-        {
-          sessionKey,
-          idempotencyKey: `live-subagent-${randomUUID()}`,
-          deliver: false,
-          timeout: 180,
-          message: [
-            "Run this exact OpenClaw subagent steering scenario. Use tool calls, not prose.",
-            `Use nonce ${nonce}.`,
-            `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify({
-              task: childTask,
-              taskName: "steered_child",
-              cleanup: "keep",
-              context: "isolated",
-            })}.`,
-            'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
-            `Step 3: reply exactly ${parentStartedToken}.`,
-            `In a future continuation after the child completion event arrives, reply exactly ${parentToken}.`,
-            `Do not reply with ${parentToken} before the child completion event is visible.`,
-          ].join("\n"),
-        },
-        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
-      );
-      initialRequest.catch((error: unknown) => {
-        initialError = error;
-      });
-
-      const listSteeredChildRuns = () =>
-        listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
-      const spawnedRun = await waitFor("steered child spawn", () => {
-        if (initialError) {
-          throw toLintErrorObject(initialError, "Non-Error thrown");
-        }
-        return listSteeredChildRuns()[0];
-      });
-      expect(spawnedRun.taskName).toBe("steered_child");
-      const initialResponse = await initialRequest;
-      expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
-      const runBeforeSteer = await waitFor("steered child bash tool start", () => {
-        if (initialError) {
-          throw toLintErrorObject(initialError, "Non-Error thrown");
-        }
-        const currentRun =
-          listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
-        const sawBashStart = agentEvents.some(
-          (event) =>
-            event.runId === currentRun.runId &&
-            event.stream === "tool" &&
-            event.data.phase === "start" &&
-            isBashToolEventName(event.data.name),
-        );
-        return sawBashStart ? currentRun : undefined;
-      }).catch((error: unknown) => {
-        throw new Error(
-          `timed out waiting for child bash start; runs=${summarizeSubagentRuns(
-            listSteeredChildRuns(),
-          )}; events=${summarizeAgentEvents(agentEvents, spawnedRun.runId)}`,
-          { cause: error },
-        );
-      });
-      const runStateBeforeSteer = summarizeSubagentRuns(listSteeredChildRuns());
-      expect(runBeforeSteer.execution.endedAt, runStateBeforeSteer).toBeUndefined();
-      expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
-      expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
-      console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
-
-      const cfg = await readLiveTestConfig();
-      const steerResult = await steerControlledSubagentRun({
-        cfg,
-        controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),
-        entry: runBeforeSteer,
-        message: steerMessage,
-      });
-      expect(
-        steerResult.status,
-        `steer result ${JSON.stringify(steerResult)}; runs=${summarizeSubagentRuns(
-          listSteeredChildRuns(),
-        )}`,
-      ).toBe("accepted");
-
-      const steeredRun = await waitFor("steered child completion", () => {
-        if (initialError) {
-          throw toLintErrorObject(initialError, "Non-Error thrown");
-        }
-        return listSteeredChildRuns().find(
-          (run) =>
-            run.completion?.resultText?.includes(childToken) === true &&
-            run.execution.outcome?.status === "ok",
-        );
-      }).catch((error: unknown) => {
-        throw new Error(
-          `timed out waiting for steered child completion after steer ${JSON.stringify(
-            steerResult,
-          )}; runs=${summarizeSubagentRuns(listSteeredChildRuns())}`,
-          { cause: error },
-        );
-      });
-      expect(steeredRun.endedReason).toBe("subagent-complete");
-      expect(steeredRun.delivery?.lastError).toBeUndefined();
-      expect(summarizeSubagentRuns(listSteeredChildRuns())).not.toContain(unsteeredToken);
-      expect(summarizeAgentEvents(agentEvents, runBeforeSteer.runId)).not.toContain(unsteeredToken);
-
-      await waitFor("in-process subagent completion agent dispatch start", () => {
-        if (initialError) {
-          throw toLintErrorObject(initialError, "Non-Error thrown");
-        }
-        return inProcessAgentDispatches.some((entry) => entry.phase === "started")
-          ? true
-          : undefined;
-      });
-
-      const completedDispatch = await waitFor(
-        "in-process subagent completion agent dispatch with parent token",
-        () => {
-          if (initialError) {
-            throw toLintErrorObject(initialError, "Non-Error thrown");
-          }
-          return inProcessAgentDispatches.find(
-            (entry) => entry.phase === "completed" && entry.resultText.includes(parentToken),
-          );
-        },
-      ).catch((error: unknown) => {
-        throw new Error(
-          `timed out waiting for parent token in completion dispatch; dispatches=${JSON.stringify(
-            inProcessAgentDispatches,
-          )}`,
-          { cause: error },
-        );
-      });
-      expect(completedDispatch.resultText).toContain(parentToken);
-      expect(
-        inProcessAgentDispatches.some((entry) => {
-          if (initialError) {
-            throw toLintErrorObject(initialError, "Non-Error thrown");
-          }
-          return entry.phase === "started";
-        }),
-      ).toBe(true);
-      expect(inProcessAgentDispatches.length).toBeGreaterThanOrEqual(1);
-    },
-    10 * 60_000,
-  );
-
-  it(
     "runs parallel isolated Gemini subagents with tool-heavy schemas",
-    async () => {
+    async ({ skip }) => {
       const modelConfig = resolveLiveSubagentModelConfig();
       if (!modelConfig.modelKey.startsWith("google/")) {
-        console.warn(
+        skip(
           "[subagent-stress] skip: set OPENCLAW_LIVE_SUBAGENT_E2E_MODEL=google/gemini-3.1-pro-preview",
         );
         return;
@@ -668,7 +499,7 @@ describeLive("subagent announce live", () => {
       requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-stress-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const port = await getFreePort();
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const sessionKey = `agent:main:live-subagent-stress-${nonce.toLowerCase()}`;
       const childTokens = [1, 2, 3].map((index) => `GEMINI_STRESS_${nonce}_${index}`);
@@ -682,7 +513,7 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
           OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
@@ -717,13 +548,14 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;

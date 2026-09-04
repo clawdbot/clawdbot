@@ -42,7 +42,29 @@ export type ProviderModelAuthSource =
   | ProviderModelAuthProfileSource
   | ProviderModelAuthDirectSource;
 
-type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "user-lock";
+/** Secret-free credential-source fact safe to carry across request boundaries. */
+export type ProviderModelAuthSourceClassification =
+  | { kind: "profile" }
+  | {
+      kind: "direct";
+      evidence: ProviderModelAuthEvidence;
+      authorization: ProviderModelAuthAuthorization;
+    };
+
+/** Drops profile ids, modes, readiness, and cooldown state from a selected source. */
+export function classifyProviderModelAuthSource(
+  source: ProviderModelAuthSource,
+): ProviderModelAuthSourceClassification {
+  return source.kind === "profile"
+    ? { kind: "profile" }
+    : {
+        kind: "direct",
+        evidence: source.evidence,
+        authorization: source.authorization,
+      };
+}
+
+type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "runtime-binding";
 
 type ProviderModelAuthAutomaticProfiles =
   | { kind: "empty"; explicitOrder: boolean }

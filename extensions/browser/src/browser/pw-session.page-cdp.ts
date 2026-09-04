@@ -7,8 +7,8 @@
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { readCdpMainFrameDocumentIdentity } from "./cdp-page-session.js";
+import { bindPlaywrightCdpSend } from "./pw-cdp-send.js";
 
-type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 
 /** Attribute used to mark DOM nodes that correspond to generated browser refs. */
@@ -31,17 +31,10 @@ export async function withPageScopedCdpClient<T>(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
-  fn: (send: PageCdpSend) => Promise<T>;
+  fn: (send: ReturnType<typeof bindPlaywrightCdpSend>) => Promise<T>;
 }): Promise<T> {
   return await withPlaywrightPageCdpSession(opts.page, async (session) => {
-    return await opts.fn((method, params) =>
-      (
-        session.send as unknown as (
-          method: string,
-          params?: Record<string, unknown>,
-        ) => Promise<unknown>
-      )(method, params),
-    );
+    return await opts.fn(bindPlaywrightCdpSend(session));
   });
 }
 
@@ -51,15 +44,7 @@ export async function readMainFrameDocumentIdentityForPage(
 ): Promise<string | undefined> {
   return await withPlaywrightPageCdpSession(
     page,
-    async (session) =>
-      await readCdpMainFrameDocumentIdentity((method, params) =>
-        (
-          session.send as unknown as (
-            method: string,
-            params?: Record<string, unknown>,
-          ) => Promise<unknown>
-        )(method, params),
-      ),
+    async (session) => await readCdpMainFrameDocumentIdentity(bindPlaywrightCdpSend(session)),
   );
 }
 
@@ -81,7 +66,7 @@ export async function markBackendDomRefsOnPage(opts: {
 
   const refs = opts.refs.filter(
     (entry) =>
-      /^ax\d+$/.test(entry.ref) &&
+      /^(?:e|ax)\d+$/.test(entry.ref) &&
       Number.isFinite(entry.backendDOMNodeId) &&
       Math.floor(entry.backendDOMNodeId) > 0,
   );

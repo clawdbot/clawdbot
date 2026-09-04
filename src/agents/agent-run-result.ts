@@ -1,6 +1,32 @@
-/** Minimal agent-run result projection shared by setup and diagnostic probes. */
+/** Agent-run result projections shared by execution owners and diagnostic probes. */
 import { isReplyPayloadTerminalContent, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+
+/** Adds an owner-bounded, redacted diagnostic without discarding returned work. */
+export function appendAgentRunFailure(
+  result: EmbeddedAgentRunResult,
+  diagnostic: string,
+): EmbeddedAgentRunResult {
+  const primaryError = result.meta.error;
+  // Preserve interruptions and delivery evidence. A replacement also owns a fresh
+  // fallback classification rather than mutating an already-classified result.
+  return {
+    ...result,
+    payloads: [...(result.payloads ?? []), { text: diagnostic, isError: true }],
+    meta: {
+      ...result.meta,
+      replayInvalid: true,
+      error: {
+        ...primaryError,
+        kind: primaryError?.kind ?? "incomplete_turn",
+        message: primaryError ? `${primaryError.message}\n${diagnostic}` : diagnostic,
+        // Incomplete-turn fallbackSafe otherwise overrides replayInvalid.
+        fallbackSafe: false,
+      },
+    },
+  };
+}
 
 export type AgentRunResultView = {
   payloads?: Array<ReplyPayload & { visible?: boolean }>;

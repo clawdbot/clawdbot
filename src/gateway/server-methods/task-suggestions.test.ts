@@ -78,7 +78,7 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
       sessionId: "shared-task-source",
       updatedAt: 1,
       visibility: "shared",
-      createdActor: { type: "human", id: owner.id },
+      createdActor: { type: "human", source: "profile", id: owner.id },
     },
   );
   const taskId = await createRoleSuggestion(SOURCE_SESSION_KEY);
@@ -137,7 +137,7 @@ describe("task suggestion gateway methods", () => {
             {
               sessionId: "own-task-source",
               updatedAt: 1,
-              createdActor: { type: "human", id: profile.id },
+              createdActor: { type: "human", source: "profile", id: profile.id },
             },
           );
           const ownTaskId = await createRoleSuggestion(ownSessionKey);

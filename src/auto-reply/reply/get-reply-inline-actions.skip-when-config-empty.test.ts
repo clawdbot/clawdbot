@@ -358,6 +358,49 @@ describe("handleInlineActions", () => {
     });
   });
 
+  it("propagates skill selections returned by a continuing built-in command", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({ Body: "/dashboard", CommandBody: "/dashboard" });
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: true,
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/dashboard",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/dashboard",
+        commandBodyNormalized: "/dashboard",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [
+          {
+            name: "release_notes",
+            skillName: "release-notes",
+            description: "Release notes",
+            skillFile: "/tmp/skills/release-notes/SKILL.md",
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+  });
+
   it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({
@@ -2045,7 +2088,7 @@ describe("handleInlineActions", () => {
     expect(toolExecute).toHaveBeenCalled();
   });
 
-  it("marks command-handler terminal replies with deliverDespiteSourceReplySuppression so they are not dropped under message_tool_only delivery (#87107)", async () => {
+  it("marks command-handler terminal replies for direct delivery (#87107)", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
@@ -2080,12 +2123,12 @@ describe("handleInlineActions", () => {
       throw new Error("expected reply");
     }
     expect(result.reply).toEqual({ text: "⚙️ Compacted (76k → 934 tokens)" });
-    // Reply must carry deliverDespiteSourceReplySuppression so dispatch-from-config
-    // does not silently `continue` past it when sourceReplyDeliveryMode is
-    // "message_tool_only" (Feishu group / WebChat default).
-    expect(
-      getReplyPayloadMetadata(result.reply as object)?.deliverDespiteSourceReplySuppression,
-    ).toBe(true);
+    // Source suppression keeps the existing message-tool contract; command
+    // provenance permits final delivery beside an active session operation.
+    expect(getReplyPayloadMetadata(result.reply as object)).toMatchObject({
+      commandReply: true,
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

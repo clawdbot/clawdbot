@@ -1,6 +1,5 @@
 {
   "id": "mistral",
-  "icon": "https://cdn.simpleicons.org/mistralai",
   "activation": {
     "onStartup": false
   },

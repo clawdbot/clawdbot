@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadStoredSidebarSessionOwnerFilter,
@@ -41,21 +41,23 @@ describe("SessionOwnerFilterController", () => {
       removeController: vi.fn(),
       requestUpdate: vi.fn(),
       updateComplete: Promise.resolve(true),
-    } satisfies ReactiveControllerHost;
+      sessionData: {
+        resetSessionList: vi.fn(),
+        refreshSidebarSessions: () => refresh(),
+      },
+    };
     let selfUserId = "profile-ada";
-    let canonicalListRevision = 1;
-    const setOwnerFilter = vi.fn(() => Promise.resolve());
+    let finishRefresh!: () => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
     const ownerFilter = new SessionOwnerFilterController(host, () => ({
       gateway: {
         connection: { gatewayUrl: "wss://one.example/ws" },
         snapshot: { selfUser: { id: selfUserId } },
-      },
-      sessions: {
-        get canonicalListRevision() {
-          return canonicalListRevision;
-        },
-        setInvolvingMeFilter: vi.fn(() => Promise.resolve()),
-        setOwnerFilter,
       },
     }));
     expect(controller).toBe(ownerFilter);
@@ -73,19 +75,19 @@ describe("SessionOwnerFilterController", () => {
     ownerFilter.hostUpdated();
 
     expect(ownerFilter.ownerId).toBe("owner-bob");
-    expect(setOwnerFilter).toHaveBeenCalledWith("owner-bob");
-    expect(setOwnerFilter).not.toHaveBeenCalledWith(null);
+    expect(refresh).toHaveBeenCalledOnce();
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
       ownerId: "owner-bob",
       involvingMe: false,
     });
 
-    canonicalListRevision += 1;
+    finishRefresh();
+    await Promise.resolve();
     ownerFilter.hostUpdated();
     ownerFilter.observeOwnerFacet(true, [{ id: "owner-bob" }]);
     ownerFilter.hostUpdated();
     expect(ownerFilter.ownerId).toBe("owner-bob");
-    expect(setOwnerFilter).not.toHaveBeenCalledWith(null);
+    expect(refresh).toHaveBeenCalledOnce();
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
       ownerId: "owner-bob",
       involvingMe: false,

@@ -69,7 +69,11 @@ internal fun NativeText.resolveNativeTextResource(): String =
       }
       nativeStringResource(source, *resolvedArgs.toTypedArray())
     }
-    is NativeText.Verbatim -> value
+
+    is NativeText.Verbatim -> {
+      value
+    }
+
     is NativeText.Composite -> {
       val resolvedParts = mutableListOf<String>()
       for (part in parts) {
@@ -87,7 +91,7 @@ internal fun notifyNativeLocaleChanged() {
 }
 
 @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
-private class LocaleResolvingStateFlow<T, R>(
+internal class LocaleResolvingStateFlow<T, R>(
   private val source: StateFlow<T>,
   private val transform: (T) -> R,
 ) : StateFlow<R> {
@@ -315,11 +319,26 @@ private fun String.kotlinInterpolationEnd(start: Int): Int? {
   while (end < length) {
     val character = this[end]
     when {
-      escaped -> escaped = false
-      quote != null && character == '\\' -> escaped = true
-      character == quote -> quote = null
-      quote == null && (character == '"' || character == '\'') -> quote = character
-      quote == null && character == '{' -> depth += 1
+      escaped -> {
+        escaped = false
+      }
+
+      quote != null && character == '\\' -> {
+        escaped = true
+      }
+
+      character == quote -> {
+        quote = null
+      }
+
+      quote == null && (character == '"' || character == '\'') -> {
+        quote = character
+      }
+
+      quote == null && character == '{' -> {
+        depth += 1
+      }
+
       quote == null && character == '}' -> {
         depth -= 1
         if (depth == 0) return end + 1

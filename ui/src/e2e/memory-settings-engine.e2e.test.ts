@@ -1,7 +1,7 @@
 // Control UI tests cover memory engine ordering and serialized config writes.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "memory-settings-engine",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("memory-settings-engine");
+  }
+});
 
 function configResponse(engineId: string, hash: string) {
   const config = { plugins: { slots: { memory: engineId } } };
@@ -94,7 +94,6 @@ suite.define(() => {
         const pendingOffSave = await gateway.waitForRequest("config.set");
         expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()
@@ -124,7 +123,6 @@ suite.define(() => {
           .toBe(0);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()
@@ -213,7 +211,6 @@ suite.define(() => {
         expect(pageErrors).toEqual([]);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator("openclaw-memory-settings").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
@@ -262,7 +259,6 @@ suite.define(() => {
           .toBe("true");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page
             .locator(".settings-page > .settings-section")
             .first()

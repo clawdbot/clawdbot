@@ -2,7 +2,7 @@
  * Brave web-search provider factory. It builds the agent tool definition and
  * lazy-loads HTTP execution only when a search is run.
  */
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,

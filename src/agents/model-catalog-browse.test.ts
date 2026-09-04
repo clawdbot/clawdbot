@@ -8,10 +8,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
+  MODEL_CATALOG_BROWSE_TIMEOUT_MS,
 } from "./model-catalog-browse.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 
-const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 const readOnlyCatalog: ModelCatalogSnapshot = {
   entries: [{ id: "gpt-readonly", name: "GPT Readonly", provider: "openai" }],
   routeVariants: [{ id: "gpt-readonly", name: "GPT Readonly", provider: "openai" }],
@@ -118,22 +119,25 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
   });
 
-  it("forwards explicit refresh to full discovery", async () => {
-    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
-      readOnly ? readOnlyCatalog : fullCatalog,
-    );
+  it.each(["all", "configured"] as const)(
+    "forwards explicit %s refresh to full discovery",
+    async (view) => {
+      const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+        readOnly ? readOnlyCatalog : fullCatalog,
+      );
 
-    await expect(
-      loadPreparedModelCatalogSnapshotForBrowse({
-        cfg: config(),
-        view: "all",
-        refresh: true,
-        loadCatalog,
-      }),
-    ).resolves.toBe(fullCatalog);
+      await expect(
+        loadPreparedModelCatalogSnapshotForBrowse({
+          cfg: config(),
+          view,
+          refresh: true,
+          loadCatalog,
+        }),
+      ).resolves.toBe(fullCatalog);
 
-    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false, refresh: true });
-  });
+      expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false, refresh: true });
+    },
+  );
 
   it("uses the read-only catalog for provider-config views without picker allowlists", async () => {
     const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
@@ -255,6 +259,29 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
   });
 
+  it("quietly consumes publication supersession after the browse deadline", async () => {
+    vi.useFakeTimers();
+    const loadCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogSnapshot>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new PreparedModelRuntimePublicationSupersededError("late supersession")),
+            10,
+          );
+        }),
+    );
+
+    const resultPromise = loadPreparedModelCatalogSnapshotForBrowse({
+      cfg: config(),
+      loadCatalog,
+      timeoutMs: 5,
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(resultPromise).resolves.toEqual({ entries: [], routeVariants: [] });
+    await vi.advanceTimersByTimeAsync(5);
+  });
+
   it("can preserve the timeout fallback while escalating to full discovery", async () => {
     vi.useFakeTimers();
     const onTimeout = vi.fn();
@@ -313,7 +340,7 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     await expect(resultPromise).resolves.toBe(readOnlyCatalog);
     expect(setTimeout).toHaveBeenCalledExactlyOnceWith(
       expect.any(Function),
-      DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS,
+      MODEL_CATALOG_BROWSE_TIMEOUT_MS,
     );
     expect(clearTimeout).toHaveBeenCalledOnce();
     expect(onTimeout).not.toHaveBeenCalled();

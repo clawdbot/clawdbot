@@ -116,8 +116,17 @@ by parsed host or other beacon metadata. A stable `instanceId` helps consumers
 associate rows with the same client; it does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
-The Control UI groups connection rows by authenticated identity when displaying
-people. The [people card](/concepts/multi-user#people-cards) keeps online duration
+The Control UI groups connection rows by their recorded identity namespace when
+displaying people. Connections with the same qualified profile identity share one
+person; unqualified connections with the same raw ID form a separate group. A raw
+ID matching a profile ID never combines their watched sessions, connection facts,
+or viewer counts. The Gateway uses the same namespace boundary for online/activity
+timing and collaborative typing counts. Overlapping tabs share timing facts only
+within their namespace; later activity stays separate if a raw tab gains profile
+qualification. Self exclusion follows the authenticated user's recorded
+qualification, using the current connection only when that user is unavailable.
+Only a displayed owner with the exact qualified profile identity is deduplicated
+from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration
 and observed activity separate from each entry's heartbeat freshness.
 
 ## TTL and bounded size

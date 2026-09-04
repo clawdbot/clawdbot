@@ -25,7 +25,7 @@ scenario:
   execution:
     kind: playwright
     path: ui/src/e2e/mobile-pairing.e2e.test.ts
-    testNamePattern: defaults to full before issuance, supports limited fallback, and resets when reopened
+    testNamePattern: retires exact setup credentials across success, expiry, regeneration, and errors
     summary: >-
       Real Chromium coverage for the operator mobile-pairing flow and its
       observable setup-code access selections.

@@ -42,7 +42,11 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/ap
     npm --version; \
   fi
 
-RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm && pnpm --version; fi
+RUN --mount=type=bind,source=package.json,target=/tmp/openclaw-package.json \
+  if [ "${INSTALL_PNPM}" = "1" ]; then \
+    pnpm_spec="$(node -p 'require("/tmp/openclaw-package.json").packageManager.split("+")[0]')"; \
+    npm install -g "$pnpm_spec" "--allow-scripts=$pnpm_spec" && pnpm --version; \
+  fi
 
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \
   installer="$(mktemp)"; \

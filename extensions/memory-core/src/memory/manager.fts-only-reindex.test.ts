@@ -613,6 +613,21 @@ describe("memory manager FTS-only reindex", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "syncs regular memory when USER.md is a symlink",
+    async () => {
+      const linkedUserPath = path.join(workspaceDir, "shared-user.md");
+      await fs.writeFile(linkedUserPath, "Linked user content must not be indexed.");
+      await fs.symlink(linkedUserPath, path.join(workspaceDir, "USER.md"));
+      const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+      await expect(memoryManager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
+
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+      expect(countChunksContaining("Linked user content")).toBe(0);
+    },
+  );
+
   it("reports explicit provider-none probes as FTS-only without resolving providers", async () => {
     const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
 
@@ -638,6 +653,28 @@ describe("memory manager FTS-only reindex", () => {
     expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
     expect(status.vector).toMatchObject({ enabled: false });
     expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
+    const memoryManager = await createManager({ provider: "none" });
+    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    db.prepare(
+      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
+    ).run();
+
+    await memoryManager.sync({ force: true });
+    await memoryManager.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+
+    const reopened = await createManager({ provider: "none", purpose: "status" });
+    expect(reopened.status()).toMatchObject({
+      dirty: false,
+      vector: { enabled: false, index: { state: "empty" } },
+      custom: { indexIdentity: { status: "valid" } },
+    });
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 

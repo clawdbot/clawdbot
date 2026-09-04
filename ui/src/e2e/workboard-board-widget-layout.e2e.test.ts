@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -76,7 +77,7 @@ suite.define(() => {
         },
       });
       await showDashboard(page);
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
 
       const board = page.locator('[data-test-id="workboard-board-widget"] .workboard-board');
       await board.waitFor();

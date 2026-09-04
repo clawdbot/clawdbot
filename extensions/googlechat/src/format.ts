@@ -309,7 +309,7 @@ function renderGoogleChatIR(ir: MarkdownIR, markers: GoogleChatMarkers): string 
           (span) => span.start < link.end && span.end > link.start,
         );
         return /[<>|]/u.test(href) || /[<>|*_~`]/u.test(label) || labelHasStyles
-          ? { start: link.start, end: link.end, open: "", close: ` (${href})` }
+          ? { start: link.end, end: link.end, open: "", close: ` (${href})` }
           : { start: link.start, end: link.end, open: `<${href}|`, close: ">" };
       },
     },
@@ -328,7 +328,7 @@ export function formatGoogleChatTextChunks(
   return renderMarkdownIRChunksWithinLimit<string>({
     ir: prepared.ir,
     limit: Math.min(limit, GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit),
-    measureRendered: (rendered: string) => new TextEncoder().encode(rendered).byteLength,
+    measureRendered: (rendered: string) => Buffer.byteLength(rendered, "utf8"),
     renderChunk: (chunk) => renderGoogleChatIR(chunk, prepared.markers),
   }).map((chunk) => chunk.rendered);
 }

@@ -7,6 +7,8 @@
     "../../src/auto-reply/**/*.test.ts",
     "../../src/auto-reply/**/*.test.tsx",
     "../../src/channels/**/*.test.ts",
-    "../../src/channels/**/*.test.tsx"
+    "../../src/channels/**/*.test.tsx",
+    "../../src/media/**/*.test.ts",
+    "../../src/media/**/*.test.tsx"
   ]
 }

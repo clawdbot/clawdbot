@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
@@ -14,6 +16,7 @@ import type {
 } from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -195,6 +198,7 @@ describe("node host invoke", () => {
     expect(handle).toHaveBeenCalledWith("{}", undefined, {
       sendNodeEvent,
       sessionKey: "agent:main:canvas",
+      prepareExecAuthorization: expect.any(Function),
     });
   });
 
@@ -365,29 +369,44 @@ describe("node host invoke", () => {
     expect(secondController.signal.aborted).toBe(false);
   });
 
-  it("lists node-host directories for the folder browser", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
-    fs.mkdirSync(path.join(root, "Projects"));
-    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-fs-listdir",
-        nodeId: "node-1",
-        command: "fs.listDir",
-        paramsJSON: JSON.stringify({ path: root }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls[0]?.[1] as InvokeResult | undefined;
-    expect(JSON.parse(result?.payloadJSON ?? "{}")).toMatchObject({
-      path: root,
-      entries: [{ name: "Projects", path: path.join(root, "Projects") }],
-    });
-  });
+  it.each(["Projects", "Projects "])(
+    "lists and reopens node-host directory %j",
+    async (directory) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+      fs.mkdirSync(path.join(root, "Projects"));
+      fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
+      fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+      const list = async (directoryPath: string) => {
+        await handleInvoke(
+          {
+            id: `invoke-fs-listdir-${request.mock.calls.length}`,
+            nodeId: "node-1",
+            command: "fs.listDir",
+            paramsJSON: JSON.stringify({ path: directoryPath }),
+          },
+          { request } as unknown as GatewayClient,
+          { current: async () => [] },
+        );
+        const result = request.mock.calls.at(-1)?.[1] as InvokeResult | undefined;
+        expect(result?.ok).toBe(true);
+        return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
+      };
+      const initial = await list(root);
+      expect(initial.path).toBe(root);
+      expect(initial.entries.map((entry) => entry.name)).toEqual(
+        directory === "Projects" ? ["Projects"] : ["Projects", directory],
+      );
+      const selected = expectDefined(
+        initial.entries.find((entry) => entry.name === directory),
+        "directory returned by the node host",
+      );
+      expect(await list(selected.path)).toMatchObject({
+        path: selected.path,
+        entries: [{ name: "child", path: path.join(selected.path, "child") }],
+      });
+    },
+  );
 
   it("stages terminal uploads on the node host", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -957,6 +976,50 @@ describe("node host invoke", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["system.run", "agent.cli.claude.run.v1"])(
+    "executes %s with omitted exec config and full/off host approvals",
+    async (command) => {
+      const state = await createOpenClawTestState({ label: "node-default-policy" });
+      try {
+        await state.writeConfig({});
+        saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
+        const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
+        fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {
+          mode: 0o700,
+        });
+        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "default-policy",
+            nodeId: "node-1",
+            command,
+            paramsJSON: JSON.stringify(
+              command === "system.run"
+                ? { command: [process.execPath, "--version"] }
+                : { argv: ["-p"], timeoutMs: 5000, idleTimeoutMs: 1000 },
+            ),
+          },
+          {
+            request: async <T>(...args: Parameters<GatewayClient["request"]>) => {
+              await request(...args);
+              return {} as T;
+            },
+          },
+          { current: async () => [] },
+          undefined,
+          { claudePath: executable },
+        );
+        const result = request.mock.calls.find(
+          ([method]) => method === "node.invoke.result",
+        )?.[1] as InvokeResult;
+        expect(result).toMatchObject({ ok: true });
+        expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({ exitCode: 0 });
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
   it("includes effective exec policy in system.run.prepare responses", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
     const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -991,7 +1054,7 @@ describe("node host invoke", () => {
       execPolicy?: { security?: string; ask?: string };
       plan?: { policySnapshot?: unknown };
     };
-    expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
+    expect(payload.execPolicy).toEqual({ security: "full", ask: "off" });
     // The plan snapshot binds persisted approval state. Effective config-layer
     // policy is returned separately above and re-evaluated at execution.
     expect(payload.plan?.policySnapshot).toEqual({

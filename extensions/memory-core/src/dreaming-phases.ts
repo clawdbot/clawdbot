@@ -19,6 +19,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -30,7 +31,6 @@ import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   type DreamNarrativeRequest,
   type DreamNarrativeOutcome,
-  readRecentDreamDiaryEntries,
   type NarrativePhaseData,
   runDreamNarrative,
 } from "./dreaming-narrative.js";
@@ -1545,7 +1545,7 @@ type DreamingSweepPhaseResult = {
 
 export async function runDreamingSweepPhases(params: {
   /**
-   * Agent that owns this workspace; narrative subagent sessions are stored under it.
+   * Agent whose model and credentials own this workspace's narrative completions.
    * Absent only when no roster or triggering agent can be attributed, which downgrades
    * narratives to the local diary fallback without stopping the sweep.
    */
@@ -1558,83 +1558,41 @@ export async function runDreamingSweepPhases(params: {
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<DreamingSweepPhaseResult> {
-  // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
+  // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
   let degradedPhases = 0;
   let pendingNarratives = 0;
-  const recordNarrativeOutcome = (outcome: DreamNarrativeOutcome): void => {
-    if (outcome.status === "degraded") {
-      degradedPhases += 1;
-    } else if (outcome.status === "pending") {
-      pendingNarratives += 1;
+  async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
+    phase: "light" | "rem",
+    config: TConfig,
+    run: (params: DreamingPhaseRunParams<TConfig>) => Promise<DreamNarrativeOutcome>,
+  ): Promise<void> {
+    if (!config.enabled || config.limit <= 0) {
+      return;
     }
-  };
-
-  const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (light.enabled && light.limit > 0) {
     try {
-      recordNarrativeOutcome(
-        await runLightDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: light,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-          admissionPolicy,
-        }),
-      );
+      const outcome = await run({ ...params, config, nowMs: sweepNowMs, admissionPolicy });
+      if (outcome.status === "degraded") {
+        degradedPhases += 1;
+      } else if (outcome.status === "pending") {
+        pendingNarratives += 1;
+      }
     } catch (err) {
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
-        phase: "light",
+        phase,
         error: formatErrorMessage(err),
-        storageMode: light.storage.mode,
+        storageMode: config.storage.mode,
         nowMs: sweepNowMs,
         logger: params.logger,
       });
       throw err;
     }
   }
-
-  const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (rem.enabled && rem.limit > 0) {
-    try {
-      recordNarrativeOutcome(
-        await runRemDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: rem,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-          admissionPolicy,
-        }),
-      );
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir: params.workspaceDir,
-        phase: "rem",
-        error: formatErrorMessage(err),
-        storageMode: rem.storage.mode,
-        nowMs: sweepNowMs,
-        logger: params.logger,
-      });
-      throw err;
-    }
-  }
+  await runPhase("light", resolveMemoryLightDreamingConfig(params), runLightDreaming);
+  await runPhase("rem", resolveMemoryRemDreamingConfig(params), runRemDreaming);
   return { degradedPhases, pendingNarratives };
 }
 

@@ -14,8 +14,9 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -52,7 +53,6 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -132,6 +132,7 @@ class AgentsPage
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
   private readonly githubIdentity = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
     runExternalMutation: (task, options) =>
@@ -320,10 +321,19 @@ class AgentsPage
     this.syncCurrentAgentFiles(agents);
   }
 
-  private ensureSelectedAgentInList(agentsList: AgentsListResult) {
-    const selected = this.agentsSelectedId;
-    if (!selected || !agentsList.agents.some((entry) => entry.id === selected)) {
-      this.agentsSelectedId = agentsList.defaultId ?? agentsList.agents[0]?.id ?? null;
+  private ensureSelectedAgentInList(
+    agentsList: AgentsListResult,
+    selected = this.routeData?.requestedAgentId ?? this.agentsSelectedId,
+  ) {
+    // Route intent survives hello/reconnect; only the roster is connection-scoped.
+    // Unknown explicit ids retain their URL while the picker uses the default.
+    const nextSelectedId =
+      selected && agentsList.agents.some((entry) => entry.id === selected)
+        ? selected
+        : (agentsList.defaultId ?? agentsList.agents[0]?.id ?? null);
+    if (nextSelectedId !== this.agentsSelectedId) {
+      this.agentsSelectedId = nextSelectedId;
+      this.resetSelectionState();
     }
   }
 
@@ -393,18 +403,11 @@ class AgentsPage
       return;
     }
     this.routeDataInitialized = true;
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      return;
-    }
-    if (data.agentsList) {
+    if (this.gateway.isRouteDataCurrent(data) && data.agentsList) {
       this.agentsList = data.agentsList;
-      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
-      if (nextSelectedId !== this.agentsSelectedId) {
-        this.agentsSelectedId = nextSelectedId;
-        // Route-driven agent switches (chip menu "Agent settings") must not
-        // carry per-agent panel caches or identity drafts across agents.
-        this.resetSelectionState();
-      }
+    }
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList, data.requestedAgentId);
     }
   }
 
@@ -564,13 +567,24 @@ class AgentsPage
 
   private syncGitHubIdentity(agentId: string | null) {
     const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
     const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
       canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     this.githubIdentity.sync({
       client: this.client,
       connected: this.connected,
-      agentId,
-      config: currentConfigObject(this.context.runtimeConfig.state),
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
       configurable: hasScope("tools.github.configure", "operator.admin"),
       authorizable: [
@@ -589,7 +603,7 @@ class AgentsPage
       return;
     }
     if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
         this.chatModelCatalogAgentId = agentId;
@@ -615,8 +629,8 @@ class AgentsPage
     // Chat metadata carries the selected agent's already-prepared startup models
     // without initiating the live discovery reserved for explicit picker use.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
     void metadataRequest
       .then((result) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
@@ -927,7 +941,7 @@ class AgentsPage
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -998,6 +1012,8 @@ class AgentsPage
             result: this.toolsEffectiveResult,
           },
           githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
