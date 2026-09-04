@@ -71,7 +71,6 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   cloneSessionEntry,
@@ -81,8 +80,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { appendSessionResetBoundaryEventsInTransaction } from "./session-reset-boundary-event.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -404,20 +402,12 @@ export async function applySessionEntryLifecycleMutation(params: {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
         }
         if (resetBoundary && expectedEntry?.sessionId) {
-          const event = buildSessionResetBoundaryEvent({
-            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {
-              projection: "reset-boundary",
-            }),
-            ...resetBoundary,
-          });
-          const appended = appendTranscriptEventsInTransaction(
+          appendSessionResetBoundaryEventsInTransaction(
             transactionDb,
             { ...resolved, sessionId: expectedEntry.sessionId, sessionKey },
-            [event],
+            resetBoundary,
+            { cwd: expectedEntry.spawnedCwd },
           );
-          if (appended !== 1) {
-            throw new Error(`Failed to append reset boundary for ${sessionKey}`);
-          }
         }
         writeSessionEntry(transactionDb, sessionKey, entry, {
           allowStoredAliases: params.allowCanonicalRepair === true,

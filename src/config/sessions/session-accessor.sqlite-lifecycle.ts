@@ -50,7 +50,6 @@ import {
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   createHistoricalGenerationReclamationPlan,
   createLifecycleArtifactReclamationPlan,
@@ -67,12 +66,11 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
-import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { appendSessionResetBoundaryEventsInTransaction } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
@@ -223,24 +221,16 @@ export async function resetSessionEntryLifecycle(
           params.commitGuard?.();
           assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
           if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
-            const event = buildSessionResetBoundaryEvent({
-              events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId, {
-                projection: "reset-boundary",
-              }),
-              ...params.resetBoundary,
-            });
-            const appended = appendTranscriptEventsInTransaction(
+            appendSessionResetBoundaryEventsInTransaction(
               transactionDb,
               {
                 ...resolved,
                 sessionId: current.entry.sessionId,
                 sessionKey: current.sessionKey,
               },
-              [event],
+              params.resetBoundary,
+              { cwd: current.entry.spawnedCwd },
             );
-            if (appended !== 1) {
-              throw new Error(`Failed to append reset boundary for ${current.sessionKey}`);
-            }
           }
           writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
             previousEntry: current?.entry ?? null,

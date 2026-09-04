@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
+import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
@@ -67,6 +72,43 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
           return role === "user" || role === "assistant";
         });
   return [...kept, ...entries.slice(boundaryIndex + 1)];
+}
+
+function isSessionHeaderEvent(event: unknown): boolean {
+  return (
+    event !== null &&
+    typeof event === "object" &&
+    !Array.isArray(event) &&
+    (event as { type?: unknown }).type === "session"
+  );
+}
+
+/**
+ * Appends a reset boundary, prepending a canonical session header when the
+ * transcript has no header yet. Fresh /new resets otherwise persist the reset
+ * as seq 0 and later turns fail the runtime legacy-transcript assertion.
+ */
+export function appendSessionResetBoundaryEventsInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  request: SessionResetBoundaryRequest,
+  options: { cwd?: string } = {},
+): number {
+  const events = loadTranscriptEventsFromDatabase(database, scope.sessionId, {
+    projection: "reset-boundary",
+  });
+  const event = buildSessionResetBoundaryEvent({
+    events,
+    ...request,
+  });
+  const batch = events.some(isSessionHeaderEvent)
+    ? [event]
+    : [createSessionTranscriptHeader({ cwd: options.cwd, sessionId: scope.sessionId }), event];
+  const appended = appendTranscriptEventsInTransaction(database, scope, batch);
+  if (appended !== batch.length) {
+    throw new Error(`Failed to append reset boundary for ${scope.sessionKey}`);
+  }
+  return appended;
 }
 
 export function buildSessionResetBoundaryEvent(
