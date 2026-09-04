@@ -12,6 +12,12 @@ import MarkdownIt from "markdown-it";
 import type { Nodes } from "mdast";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
 import { parseDocsDocument, resolveDocsFragment } from "./lib/docs-markdown.mjs";
+import {
+  addRoute,
+  collectMirroredDocsRoutes,
+  collectNavPageEntries,
+  normalizeRoute,
+} from "./lib/docs-published-routes.mts";
 import { resolveRedirects } from "./lib/docs-redirects.mjs";
 
 const ROOT = process.cwd();
@@ -271,28 +277,12 @@ function normalizeSlashes(p: string) {
   return p.replace(/\\/g, "/");
 }
 
-/** Normalizes a docs route by stripping query, hash, and edge slashes. */
-export function normalizeRoute(p: string) {
-  const withoutFragment = p.split("#")[0] ?? "";
-  const withoutQuery = withoutFragment.split("?")[0] ?? "";
-  const stripped = withoutQuery.replace(/^\/+|\/+$/g, "");
-  return stripped ? `/${stripped}` : "/";
-}
-
 function isLocalizedDocPath(p: string) {
   return /^\/?[a-z]{2}(?:-[A-Za-z]{2,8})+\//.test(p);
 }
 
 function isGeneratedTranslatedDoc(relPath: string) {
   return isLocalizedDocPath(relPath);
-}
-
-function addRoute(routes: Set<string>, slug: string) {
-  const route = normalizeRoute(slug);
-  routes.add(route);
-  if (slug.endsWith("/index")) {
-    routes.add(normalizeRoute(slug.slice(0, -"/index".length)));
-  }
 }
 
 function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, string> {
@@ -357,14 +347,8 @@ function buildAuditIndex(
   }
 
   if (options.allowExternalClawHubRoutes === true) {
-    for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
-      if (isGeneratedTranslatedDoc(page)) {
-        continue;
-      }
-      const route = normalizeRoute(page);
-      if (route === "/clawhub" || route.startsWith("/clawhub/")) {
-        addRoute(routes, page);
-      }
+    for (const route of collectMirroredDocsRoutes(docsConfig.navigation)) {
+      routes.add(route);
     }
   }
 
@@ -398,39 +382,6 @@ export function resolveRoute(
     seen.add(current);
   }
   return { ok: publishedRoutes.has(current), terminal: current };
-}
-
-function collectNavPageEntries(node: unknown): string[] {
-  const entries: string[] = [];
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      entries.push(...collectNavPageEntries(item));
-    }
-    return entries;
-  }
-
-  if (!isRecord(node)) {
-    return entries;
-  }
-
-  const record = node;
-  if (Array.isArray(record.pages)) {
-    for (const page of record.pages) {
-      if (typeof page === "string") {
-        entries.push(page);
-      } else {
-        entries.push(...collectNavPageEntries(page));
-      }
-    }
-  }
-
-  for (const value of Object.values(record)) {
-    if (value !== record.pages) {
-      entries.push(...collectNavPageEntries(value));
-    }
-  }
-
-  return entries;
 }
 
 /** Prepares a docs directory, mirroring ClawHub docs when available. */
