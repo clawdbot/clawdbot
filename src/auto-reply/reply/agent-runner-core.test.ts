@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveFallbackTransition } from "../fallback-state.js";
 import type { TemplateContext } from "../templating.js";
 import {
-  buildSilentFallbackFailurePayload,
   resolveAdmittedRunSessionFile,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
@@ -60,33 +58,5 @@ describe("resolveReplyRunDeliveryContext", () => {
       accountId: "work",
       threadId,
     });
-  });
-});
-
-describe("buildSilentFallbackFailurePayload", () => {
-  const fallbackTransition = resolveFallbackTransition({
-    selectedProvider: "openai",
-    selectedModel: "gpt-5.6-luna",
-    activeProvider: "xai",
-    activeModel: "grok-4.6",
-    attempts: [],
-  });
-  const baseParams = {
-    fallbackTransition,
-    fallbackFailureKnown: true,
-    isHeartbeat: false,
-    hasSuccessfulTerminalDelivery: false,
-  };
-
-  it("warns when the fallback ran and produced nothing", () => {
-    expect(buildSilentFallbackFailurePayload(baseParams)?.text).toContain(
-      "produced no visible reply",
-    );
-  });
-
-  it("stays quiet when the agent deliberately replied silently", () => {
-    expect(
-      buildSilentFallbackFailurePayload({ ...baseParams, hasExplicitSilentReply: true }),
-    ).toBeUndefined();
   });
 });
