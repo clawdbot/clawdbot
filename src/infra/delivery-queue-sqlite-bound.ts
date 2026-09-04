@@ -140,7 +140,7 @@ export function terminalizeBoundDeliveryQueueEntry(
           failed_at: now,
         })
     : queueDb.deleteFrom("delivery_queue_entries").where((eb) => eb.and(expected));
-  return executeSqliteQuerySync<unknown>(db, query).numAffectedRows === 1n;
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
 function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
