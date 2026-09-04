@@ -32,6 +32,8 @@ import type {
   SidebarRegionCallbacks,
 } from "./chat-sidebar-region-types.ts";
 
+const DASHBOARD_COMMAND = "/dashboard ";
+
 function panelType(
   definitions: SidebarPanelDefinition[],
   slot: SidebarSlotId,
@@ -263,15 +265,22 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         })}
       </div>`;
     }
+    const dashboard = panelType(this.panelDefinitions, "dashboard");
+    const panelTypes = [
+      ...this.panelTypes().filter((type) => type.slot !== "dashboard"),
+      dashboard,
+    ];
     return html`<div class="side-panel-empty side-panel-empty--selector">
-      <strong class="side-panel-empty__title">${t("chat.sidePanel.emptyTitle")}</strong>
       <div class="side-panel-empty__types" role="list">
-        ${this.panelTypes().map(
+        ${panelTypes.map(
           (type) => html`<button
             class="side-panel-empty__type"
             type="button"
             role="listitem"
-            @click=${() => this.callbacks?.openSlot(type.slot)}
+            @click=${() =>
+              type.slot === "dashboard"
+                ? this.callbacks?.appendComposerText(DASHBOARD_COMMAND)
+                : this.callbacks?.openSlot(type.slot)}
           >
             ${renderPanelTypeOption(type)}
           </button>`,

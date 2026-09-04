@@ -216,7 +216,7 @@ export function sidebarPanelDefinitions(
     definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
-    definePanel("companion", "companion", icons.bot, companion, {
+    definePanel("companion", "companion", icons.messageSquarePlus, companion, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat),
       ...(params
         ? {

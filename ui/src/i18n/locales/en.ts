@@ -5898,7 +5898,6 @@ export const en: TranslationMap & {
       restore: "Collapse",
       minimize: "Minimize side panel",
       resize: "Resize side panel",
-      emptyTitle: "Open a tab",
       review: "Review",
       reviewEmpty: "Open a change, file, image, or tool result to review it here.",
       terminal: "Terminal",

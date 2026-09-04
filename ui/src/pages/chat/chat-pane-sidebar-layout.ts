@@ -107,6 +107,7 @@ export function sidebarRegionCallbacks(params: {
   layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
+  appendComposerText: (text: string) => void;
   forgetDiscussionUrl: () => void;
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
@@ -128,6 +129,7 @@ export function sidebarRegionCallbacks(params: {
       params.closePanelSlot(slot);
     },
     openSlot: params.openPanelSlot,
+    appendComposerText: params.appendComposerText,
     reorderPanel: (panelId, targetPanelId, placement) =>
       state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,

@@ -1776,27 +1776,35 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("keeps tooling imports direct while preserving literal file references", () => {
-    withTinyGitRepo(
-      {
-        "scripts/fixture-source.mts": "export const value = 1;\n",
-        "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
-        "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
-        "test/scripts/transitive.consumer.test.ts": 'import "../../scripts/fixture-bridge.mjs";\n',
-        "test/scripts/literal.consumer.test.ts": 'const fixture = "scripts/fixture-source.mts";\n',
-        "test/scripts/substring.consumer.test.ts":
-          'const fixture = "scripts/fixture-source.mts.bak";\n',
-      },
-      (cwd) => {
-        expect(
-          resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
-        ).toEqual([
-          "test/scripts/direct.consumer.test.ts",
-          "test/scripts/literal.consumer.test.ts",
-        ]);
-      },
-    );
-  });
+  it.each([
+    { name: "Git inventory", withRepo: withTinyGitRepo },
+    { name: "filesystem inventory", withRepo: withTinyFileTree },
+  ])(
+    "keeps tooling imports direct while preserving literal file references ($name)",
+    ({ withRepo }) => {
+      withRepo(
+        {
+          "scripts/fixture-source.mts": "export const value = 1;\n",
+          "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
+          "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
+          "test/scripts/transitive.consumer.test.ts":
+            'import "../../scripts/fixture-bridge.mjs";\n',
+          "test/scripts/literal.consumer.test.ts":
+            'const fixture = "scripts/fixture-source.mts";\n',
+          "test/scripts/substring.consumer.test.ts":
+            'const fixture = "scripts/fixture-source.mts.bak";\n',
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
+          ).toEqual([
+            "test/scripts/direct.consumer.test.ts",
+            "test/scripts/literal.consumer.test.ts",
+          ]);
+        },
+      );
+    },
+  );
 
   it("routes many explicit source files through one import-graph-backed owner set", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
@@ -3967,7 +3975,6 @@ describe("test selector native source facts", () => {
         ];
         const expectedFacts = {
           imports: ["./barrel.js", "./dynamic.mjs"],
-          reexports: ["./barrel.js"],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -4005,7 +4012,6 @@ describe("test selector native source facts", () => {
             {
               file: "large.mts",
               imports: [],
-              reexports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },

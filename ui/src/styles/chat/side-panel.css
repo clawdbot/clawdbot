@@ -445,19 +445,6 @@
   text-align: center;
 }
 
-.side-panel-empty__title {
-  margin-top: 14px;
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.side-panel-empty--selector .side-panel-empty__title {
-  margin-top: 0;
-  font-size: var(--control-ui-text-md);
-}
-
 .side-panel-empty--selector {
   transform: translateY(-18px);
 }
@@ -465,7 +452,7 @@
 .side-panel-empty__types {
   display: grid;
   width: min(100%, 320px);
-  margin-top: 16px;
+  margin-top: 0;
   gap: 6px;
 }
 

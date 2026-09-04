@@ -34,6 +34,7 @@ async function createRegion(layout: SidebarLayout = openSlot({ columns: [] }, "d
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
+    appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
     setDock: vi.fn(),
@@ -209,16 +210,29 @@ describe("chat sidebar region", () => {
     const region = await createRegion(setSidebarOpen({ columns: [], expanded: false }, true));
     const selector = root(region).querySelector(".side-panel-empty--selector");
 
-    expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a tab");
+    expect(selector?.querySelector(".side-panel-empty__title")).toBeNull();
     expect(selector?.querySelector(".side-panel-empty__description")).toBeNull();
     expect(selector?.querySelector(":scope > .side-panel-empty__icon")).toBeNull();
     expect(
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat Ctrl+Shift+S"]);
+    ).toEqual([
+      "Review",
+      "Terminal Ctrl+`",
+      "Files Ctrl+Shift+B",
+      "Side chat Ctrl+Shift+S",
+      "Dashboard",
+    ]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
+
+    const dashboard = Array.from(
+      root(region).querySelectorAll<HTMLButtonElement>(".side-panel-empty__type"),
+    ).find((button) => button.textContent?.trim() === "Dashboard");
+    dashboard?.click();
+    expect(region.callbacks?.appendComposerText).toHaveBeenCalledWith("/dashboard ");
+    expect(region.callbacks?.openSlot).not.toHaveBeenCalledWith("dashboard");
   });
 
   it("gives every surface the shared icon, title, and description empty state", async () => {
