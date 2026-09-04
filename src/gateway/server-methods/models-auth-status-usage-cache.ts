@@ -76,9 +76,8 @@ function scopeProviderUsageCredentialKey(
   // Scope the prepared credential evidence to this fetch set so unrelated
   // provider credentials do not invalidate its snapshot.
   try {
-    // Produced only by fingerprintProviderUsageCredentials below, which always
-    // stringifies an object with a `direct` array; a parse failure returns the input.
-    // SAFETY: in-module producer guarantees this shape, and `direct` is re-checked.
+    // Prepared by the provider-usage runtime as an object with a `direct` array.
+    // SAFETY: the runtime producer guarantees this shape, and `direct` is re-checked.
     const parsed = JSON.parse(credentialKey) as {
       direct?: Array<[string, string | null]>;
       [key: string]: unknown;
@@ -255,7 +254,9 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const cacheOwnerKey = params.cacheOwnerKey ?? params.agentId;
   const providerIds = params.providerIds.toSorted();
   const providerKey = providerUsageCacheKey(providerIds);
-  const credentialKey = scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
+  const credentialKey = params.authProfile
+    ? params.credentialKey
+    : scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
   const cached = usageCacheByAgentId.get(cacheOwnerKey);
   const matching =
     cached?.agentDir === params.agentDir &&
@@ -319,7 +320,7 @@ export function readProfileUsageStaleWhileRevalidate(params: {
   workspaceDir: string;
   authStore: AuthProfileStore;
   configRef: OpenClawConfig;
-  credentialKey: string;
+  profileCredentialKeys: ReadonlyMap<string, string>;
   forceRefresh?: boolean;
   targets: Array<{ profileId: string; providerId: UsageProviderId }>;
   now: number;
@@ -349,7 +350,9 @@ export function readProfileUsageStaleWhileRevalidate(params: {
       authProfile: { provider: target.providerId, profileId: target.profileId },
       cacheOwnerKey: `${ownerPrefix}${target.profileId}`,
       configRef: params.configRef,
-      credentialKey: params.credentialKey,
+      // Missing profiles still reach the loader's auth handling, but cannot
+      // match the non-empty fingerprint of a previously present credential.
+      credentialKey: params.profileCredentialKeys.get(target.profileId) ?? "",
       forceRefresh: params.forceRefresh,
       providerIds: [target.providerId],
       now: params.now,

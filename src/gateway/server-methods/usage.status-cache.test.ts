@@ -441,11 +441,18 @@ describe("usage.status provider usage cache", () => {
     },
   );
 
-  it("keeps account usage isolated while sharing the cache machinery", async () => {
+  it.each(["token", "reference"] as const)("isolates quota (%s)", async (change) => {
     store = {
       version: 1,
       profiles: {
-        "openai:first": { type: "token", provider: "openai", token: "first-token" },
+        "openai:first":
+          change === "token"
+            ? { type: "token", provider: "openai", token: "first-token" }
+            : {
+                type: "token",
+                provider: "openai",
+                tokenRef: { source: "env", provider: "default", id: "FIRST_TOKEN" },
+              },
         "openai:second": { type: "token", provider: "openai", token: "second-token" },
       },
     };
@@ -467,29 +474,31 @@ describe("usage.status provider usage cache", () => {
     const agentId = resolveDefaultAgentId(config);
     const agentDir = resolveAgentDir(config, agentId);
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
-    const snapshot = getProviderUsageRuntimeSnapshot({ config, agentId, agentDir, store });
-    const params = {
-      agentId,
-      agentDir,
-      workspaceDir: "/tmp/workspace",
-      authStore: store,
-      configRef: config,
-      credentialKey: snapshot.credentialKey,
-      targets: [
-        { profileId: "openai:first", providerId: "openai" },
-        { profileId: "openai:second", providerId: "openai" },
-      ],
-      now,
+    const readProfiles = () => {
+      const snapshot = getProviderUsageRuntimeSnapshot({ config, agentId, agentDir, store });
+      return readProfileUsageStaleWhileRevalidate({
+        agentId,
+        agentDir,
+        workspaceDir: "/tmp/workspace",
+        authStore: store,
+        configRef: config,
+        profileCredentialKeys: snapshot.profileCredentialKeys,
+        targets: Object.keys(store.profiles).map((profileId) => ({
+          profileId,
+          providerId: "openai",
+        })),
+        now,
+      });
     };
 
-    expect(readProfileUsageStaleWhileRevalidate(params)).toMatchObject({
+    expect(readProfiles()).toMatchObject({
       pendingProfileIds: new Set(["openai:first", "openai:second"]),
       refreshPending: true,
     });
     await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2));
     await Promise.all(mocks.loadProviderUsageSummary.mock.results.map((result) => result.value));
 
-    const warmed = readProfileUsageStaleWhileRevalidate(params);
+    const warmed = readProfiles();
     expect(warmed.refreshPending).toBe(false);
     expect(warmed.pendingProfileIds).toEqual(new Set());
     expect(warmed.usageByProfile.get("openai:first")?.windows[0]?.usedPercent).toBe(10);
@@ -500,5 +509,50 @@ describe("usage.status provider usage cache", () => {
       { provider: "openai", profileId: "openai:first" },
       { provider: "openai", profileId: "openai:second" },
     ]);
+
+    store = {
+      ...store,
+      order: { openai: ["openai:second", "openai:first"] },
+      lastGood: { openai: "openai:second" },
+      usageStats: { "openai:first": { lastUsed: now } },
+    };
+    expect(readProfiles().usageByProfile).toEqual(warmed.usageByProfile);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+
+    store = {
+      ...store,
+      profiles: {
+        ...store.profiles,
+        "openai:first":
+          change === "token"
+            ? { type: "token", provider: "openai", token: "replacement-token" }
+            : {
+                type: "token",
+                provider: "openai",
+                tokenRef: { source: "env", provider: "default", id: "REPLACEMENT_TOKEN" },
+              },
+      },
+    };
+    const rotated = readProfiles();
+    expect(rotated.pendingProfileIds).toEqual(new Set(["openai:first"]));
+    expect(rotated.usageByProfile.has("openai:first")).toBe(false);
+    expect(rotated.usageByProfile.get("openai:second")).toEqual(
+      warmed.usageByProfile.get("openai:second"),
+    );
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
+    const isCurrent = mocks.loadProviderUsageSummary.mock.calls.at(-1)?.[0].isAuthProfileCurrent;
+    expect(isCurrent?.()).toBe(true);
+    store = {
+      ...store,
+      profiles: {
+        "openai:second": expectDefined(store.profiles["openai:second"], "retained profile"),
+      },
+    };
+    expect(readProfiles().usageByProfile.get("openai:second")).toEqual(
+      warmed.usageByProfile.get("openai:second"),
+    );
+    expect(isCurrent?.()).toBe(false);
+    await Promise.all(mocks.loadProviderUsageSummary.mock.results.map((result) => result.value));
+    expect(readProfiles().usageByProfile.has("openai:first")).toBe(false);
   });
 });

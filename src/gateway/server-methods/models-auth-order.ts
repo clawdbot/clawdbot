@@ -14,13 +14,12 @@ import {
 import { refreshPreparedModelRuntimeSnapshots } from "../../agents/prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
-import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import type { ModelAuthOrderSetResult } from "./models-auth-status.types.js";
+import { clearProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -117,7 +116,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      clearModelAuthStatusUsageCache();
+      clearProviderUsageRuntimeSnapshot();
       clearCurrentProviderAuthState();
       // Status reads the prepared owner, so publish the committed order before acknowledging it.
       // Otherwise an immediate refresh can replace the saved order with the previous generation.
@@ -129,10 +128,9 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       });
       const result: ModelAuthOrderSetResult = { provider, profileIds };
       respond(true, result, undefined);
-      void Promise.all([
-        refreshActiveProviderAuthRuntimeSnapshot(),
-        warmCurrentProviderAuthStateOffMainThread(cfg),
-      ]).catch((err: unknown) => {
+      // Order publication already refreshed the auth stores. Refreshing secrets
+      // here would replace config identity and discard unchanged account usage.
+      void warmCurrentProviderAuthStateOffMainThread(cfg).catch((err: unknown) => {
         log.warn(`provider auth state refresh after reorder failed: ${formatForLog(err)}`);
       });
     } catch (err) {

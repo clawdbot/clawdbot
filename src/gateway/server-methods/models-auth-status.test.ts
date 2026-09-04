@@ -143,7 +143,10 @@ vi.mock("../server-model-catalog-auth.js", () => ({
 }));
 
 import { modelsAuthOrderHandlers } from "./models-auth-order.js";
-import { readProviderUsageStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import {
+  loadUsageStatusStaleWhileRevalidate,
+  readProviderUsageStaleWhileRevalidate,
+} from "./models-auth-status-usage-cache.js";
 import {
   aggregateRefreshableAuthStatus,
   invalidateModelAuthStatusCache,
@@ -2585,56 +2588,6 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse usage after profile selection state switches accounts", async () => {
-    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
-    const profiles = {
-      "openai:first": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "first-access",
-        refresh: "first-refresh",
-        expires: 1_000_000,
-      },
-      "openai:second": {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "second-access",
-        refresh: "second-refresh",
-        expires: 1_000_000,
-      },
-    };
-    setPreparedAuthStore({
-      version: 1,
-      profiles,
-      lastGood: { openai: "openai:first" },
-    });
-    mocks.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: 0,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 10 }],
-        },
-      ],
-    });
-
-    await readAuthStatus();
-    await waitForFast(async () => {
-      const warmed = await readAuthStatus();
-      expect(warmed.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
-    });
-
-    setPreparedAuthStore({
-      version: 1,
-      profiles,
-      lastGood: { openai: "openai:second" },
-    });
-    const switched = await readAuthStatus();
-    expect(switched.providers[0]?.usage).toBeUndefined();
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-  });
-
   it("scopes external CLI auth overlays to configured providers", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       auth: {
@@ -2951,6 +2904,78 @@ describe("models.authOrderSet", () => {
       true,
       { provider: "openai", profileIds: ["openai:two", "openai:one"] },
     ]);
+  });
+
+  it("keeps account quotas through reorder and background warming while refreshing selection", async () => {
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir: "/tmp/agent" }] },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const profiles = ["openai:one", "openai:two"].map((profileId) => ({
+      ...expectDefined(createOpenAiCodexOauthHealthSummary().profiles[0], "OAuth health fixture"),
+      profileId,
+    }));
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles,
+      providers: [{ provider: "openai", status: "ok", profiles }],
+    });
+    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          usageScope: "account",
+          windows: [
+            {
+              label: "week",
+              usedPercent: options.authProfile?.profileId === "openai:one" ? 10 : 20,
+            },
+          ],
+        },
+      ],
+    }));
+    await readAuthStatus();
+    await waitForFast(async () =>
+      expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
+    );
+    const warmed = await readAuthStatus();
+    expect(
+      warmed.providers[0]?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent),
+    ).toEqual([10, 20]);
+    await loadUsageStatusStaleWhileRevalidate({ config });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
+
+    const order = ["openai:two", "openai:one"];
+    const reordered = { ...preparedAuthStore, order: { openai: order } };
+    mocks.setAuthProfileOrder.mockResolvedValueOnce(reordered);
+    mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
+      setPreparedAuthStore(reordered);
+    });
+    const warming = Promise.withResolvers<void>();
+    mocks.warmCurrentProviderAuthStateOffMainThread.mockReturnValueOnce(warming.promise);
+    const opts = createOrderOptions({ provider: "openai", profileIds: order });
+    try {
+      await orderHandler(opts);
+      expect(firstRespondCall(opts)?.[0]).toBe(true);
+      expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
+      expect(mocks.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(config);
+      warming.resolve();
+      await warming.promise;
+      expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).not.toHaveBeenCalled();
+      const saved = await readAuthStatus();
+      expect(saved.providers[0]?.profileOrder).toEqual(order);
+      expect(saved.providers[0]?.profiles).toEqual(warmed.providers[0]?.profiles);
+      expect(saved.usageRefreshPending).toBeUndefined();
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
+      await loadUsageStatusStaleWhileRevalidate({ config });
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(4);
+      expect(mocks.loadProviderUsageSummary.mock.calls.at(-1)?.[0].authProfile).toBeUndefined();
+    } finally {
+      warming.resolve();
+    }
   });
 
   it("publishes the durable order before acknowledging it", async () => {

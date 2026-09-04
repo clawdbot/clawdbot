@@ -30,6 +30,7 @@ type ProviderUsageRuntimeSnapshot = {
   agentId: string;
   configRef: OpenClawConfig;
   credentialKey: string;
+  profileCredentialKeys: ReadonlyMap<string, string>;
   descriptors: ProviderUsagePluginDescriptor[];
   directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
   providerIds: UsageProviderId[];
@@ -47,20 +48,25 @@ function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
   return Object.entries(value ?? {}).toSorted(([left], [right]) => left.localeCompare(right));
 }
 
-function fingerprintProviderUsageCredentials(params: {
+function prepareProviderUsageCredentialKeys(params: {
   cfg: OpenClawConfig;
   directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
   providerIds: readonly UsageProviderId[];
   store: AuthProfileStore;
-}): string {
-  const profiles = Object.entries(params.store.profiles)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([profileId, credential]) => {
-      const fingerprint =
-        fingerprintAuthProfileCredential({ profileId, credential }) ??
-        fingerprintAuthProfileOwnerShape({ profileId, credential });
-      return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
-    });
+}): Pick<ProviderUsageRuntimeSnapshot, "credentialKey" | "profileCredentialKeys"> {
+  const profileCredentialKeys = new Map(
+    Object.entries(params.store.profiles)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([profileId, credential]) => {
+        const fingerprint =
+          fingerprintAuthProfileCredential({ profileId, credential }) ??
+          fingerprintAuthProfileOwnerShape({ profileId, credential });
+        return [
+          profileId,
+          fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`,
+        ] as const;
+      }),
+  );
   const direct = [...params.directApiKeys]
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([provider, resolved]) => [
@@ -74,13 +80,16 @@ function fingerprintProviderUsageCredentials(params: {
   // Profile selection can switch accounts without changing the profile set.
   // Record its resolved order so routine bookkeeping writes do not invalidate
   // usage while a real account-selection change still does.
-  return JSON.stringify({
-    profiles,
-    direct,
-    order: sortedRecordEntries(params.store.order),
-    lastGood: sortedRecordEntries(params.store.lastGood),
-    selectedProfiles,
-  });
+  return {
+    profileCredentialKeys,
+    credentialKey: JSON.stringify({
+      profiles: [...profileCredentialKeys.values()],
+      direct,
+      order: sortedRecordEntries(params.store.order),
+      lastGood: sortedRecordEntries(params.store.lastGood),
+      selectedProfiles,
+    }),
+  };
 }
 
 function resolveDirectApiKeys(
@@ -142,7 +151,7 @@ export function getProviderUsageRuntimeSnapshot(params: {
     agentDir,
     agentId,
     configRef,
-    credentialKey: fingerprintProviderUsageCredentials({
+    ...prepareProviderUsageCredentialKeys({
       cfg: configRef,
       directApiKeys,
       providerIds,

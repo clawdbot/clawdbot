@@ -446,7 +446,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             workspaceDir,
             authStore: providerUsageRuntime.store,
             configRef: cfg,
-            credentialKey: providerUsageRuntime.credentialKey,
+            profileCredentialKeys: providerUsageRuntime.profileCredentialKeys,
             forceRefresh: refreshRequested,
             targets: authHealth.profiles.flatMap((profile) => {
               if (externalCliProfileIds.has(profile.profileId)) {
