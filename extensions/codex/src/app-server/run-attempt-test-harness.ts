@@ -471,7 +471,18 @@ export function createAppServerHarness(
   >();
   const serverRequestHandlers = new Set<AppServerRequestHandler>();
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  let closed = false;
   let closeError: Error | undefined;
+  const close = (error?: Error) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    closeError = error;
+    for (const handler of closeHandlers) {
+      handler(client);
+    }
+  };
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
     const result = await requestImpl(
@@ -518,6 +529,11 @@ export function createAppServerHarness(
       return () => closeHandlers.delete(handler);
     },
     getCloseError: () => closeError,
+    close: () => close(new Error("codex app-server client is closed")),
+    closeAndWait: async () => {
+      close(new Error("codex app-server client is closed"));
+      return true;
+    },
   } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(
     async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
@@ -602,12 +618,7 @@ export function createAppServerHarness(
         },
       });
     },
-    close: (error?: Error) => {
-      closeError = error;
-      for (const handler of closeHandlers) {
-        handler(client);
-      }
-    },
+    close,
   };
 }
 

@@ -806,23 +806,13 @@ async function writeTokenPressureState(
 function installFailingThreadStartClient(onThreadStart: () => unknown) {
   const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
   retireSpy.mockClear();
-  const state: { failedClient?: unknown } = {};
-  setCodexAppServerClientFactoryForTest(async () => {
-    const client = {
-      ...mockClientRuntimeMethods(),
-      request: vi.fn(async (method: string) => {
-        if (method === "thread/start") {
-          return await onThreadStart();
-        }
-        return {};
-      }),
-      addNotificationHandler: vi.fn(() => () => undefined),
-      addRequestHandler: vi.fn(() => () => undefined),
-    };
-    state.failedClient = client;
-    return client as never;
+  const { client } = createAppServerHarness(async (method) => {
+    if (method === "thread/start") {
+      return await onThreadStart();
+    }
+    return {};
   });
-  return { retireSpy, state };
+  return { retireSpy, state: { failedClient: client } };
 }
 
 async function runSharedClientRestartTest(closeCount: number) {

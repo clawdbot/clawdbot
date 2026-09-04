@@ -198,7 +198,7 @@ function createFakeClient(options?: {
       return () => requestHandlers.delete(handler);
     },
     addCloseHandler: () => () => undefined,
-    close: vi.fn(),
+    closeAndWait: vi.fn(async () => true),
   } as unknown as CodexAppServerClient;
 
   return { client, requests, approvalResponses };
@@ -493,6 +493,7 @@ describe("codex media understanding provider", () => {
     expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileStore: authStore }),
     );
+    expect(client.closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {
