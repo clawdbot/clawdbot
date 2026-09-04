@@ -284,6 +284,87 @@ describe("Workboard artifact worktree retention", () => {
     expect((await service.gc({ limits: { maxCount: 0 } })).removed).toEqual([worktree.id]);
   });
 
+  it("keeps the new claim when releasing the previous worktree fails", async () => {
+    const previousPath = path.join(root, "previous-worktree");
+    const nextPath = path.join(root, "next-worktree");
+    for (const workspacePath of [previousPath, nextPath]) {
+      await fs.mkdir(path.join(workspacePath, "dist"), { recursive: true });
+      await fs.writeFile(path.join(workspacePath, "dist", "report.txt"), "report\n");
+    }
+    const activeClaims = new Set<string>();
+    let failPreviousRelease = true;
+    const cards = withWorkboardArtifactRetention(sqlite.cards, {
+      async setRetentionClaim(params) {
+        if (!params.active && params.path === previousPath && failPreviousRelease) {
+          failPreviousRelease = false;
+          throw new Error("transient previous retention release failure");
+        }
+        if (params.active) {
+          activeClaims.add(params.path);
+        } else {
+          activeClaims.delete(params.path);
+        }
+        return true;
+      },
+    });
+    store = new WorkboardStore(cards, {
+      boards: sqlite.boards,
+      subscriptions: sqlite.subscriptions,
+      attachments: sqlite.attachments,
+      dataVersion: sqlite.dataVersion,
+    });
+    const card = await store.create({ title: "transition artifact", status: "done" });
+    await store.update(card.id, {
+      workspace: {
+        kind: "worktree",
+        path: previousPath,
+        branch: "previous",
+        sourcePath: repo,
+        sourceBranch: "main",
+      },
+      workspaceAccess: { unrestricted: true },
+      metadata: { artifacts: [{ path: "dist/report.txt" }] },
+    });
+    const persisted = await store.get(card.id);
+
+    await expect(
+      store.update(card.id, {
+        workspace: {
+          kind: "worktree",
+          path: nextPath,
+          branch: "next",
+          sourcePath: repo,
+          sourceBranch: "main",
+        },
+        metadata: {
+          ...persisted?.metadata,
+          artifacts: [{ path: "dist/report.txt" }],
+        },
+      }),
+    ).rejects.toThrow("transient previous retention release failure");
+    await expect(sqlite.cards.lookup(card.id)).resolves.toMatchObject({
+      card: {
+        metadata: {
+          automation: { workspace: { path: nextPath } },
+          artifacts: [{ path: "dist/report.txt" }],
+        },
+      },
+    });
+    expect([...activeClaims].toSorted()).toEqual([nextPath, previousPath].toSorted());
+
+    await expect(store.get(card.id)).resolves.toMatchObject({ id: card.id });
+    expect([...activeClaims]).toEqual([nextPath]);
+
+    const transitioned = await store.get(card.id);
+    await store.update(card.id, {
+      metadata: {
+        ...transitioned?.metadata,
+        artifacts: [{ url: "https://example.invalid/report.txt" }],
+      },
+    });
+    expect([...activeClaims]).toEqual([]);
+  });
+
   it("does not claim URL-only or outside-worktree artifacts", async () => {
     for (const [name, artifact] of [
       ["url-artifact", { url: "https://example.invalid/report.txt" }],

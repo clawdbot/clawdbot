@@ -181,14 +181,15 @@ export function withWorkboardArtifactRetention(
     wasApplied: (result: T) => boolean,
   ): Promise<T> => {
     const transition = await prepareCardTransition(key, value);
+    let result: T;
     try {
-      const result = await update();
-      await settleCardTransition(transition, wasApplied(result));
-      return result;
+      result = await update();
     } catch (error) {
       await settleCardTransition(transition, false);
       throw error;
     }
+    await settleCardTransition(transition, wasApplied(result));
+    return result;
   };
 
   const deleteWithRetention = async (
