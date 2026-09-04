@@ -6,7 +6,10 @@ import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { completeMcpOAuthAuthorization, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const authMock = vi.hoisted(() => vi.fn());
+const { authMock, lookupMock } = vi.hoisted(() => ({
+  authMock: vi.fn(),
+  lookupMock: vi.fn(),
+}));
 
 class TestDispatcher {
   constructor(readonly options: unknown) {}
@@ -14,6 +17,10 @@ class TestDispatcher {
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
   auth: authMock,
+}));
+
+vi.mock("node:dns/promises", () => ({
+  lookup: lookupMock,
 }));
 
 function installRedirectingRuntime(status: number) {
@@ -38,6 +45,8 @@ function installRedirectingRuntime(status: number) {
 describe("MCP OAuth redirects", () => {
   beforeEach(() => {
     authMock.mockReset();
+    lookupMock.mockReset();
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     closeOpenClawStateDatabaseForTest();
   });
 

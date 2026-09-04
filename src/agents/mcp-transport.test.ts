@@ -10,6 +10,12 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
+type OAuthBearerParams = {
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  authFetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  identity: McpOAuthIdentity;
+};
+
 const {
   lookupMock,
   runtimeFetchMock,
@@ -19,9 +25,7 @@ const {
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
-  oauthBearerMock: vi.fn(
-    (params: { fetchFn: unknown; identity: McpOAuthIdentity }) => params.fetchFn,
-  ),
+  oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
 }));
@@ -119,6 +123,14 @@ function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | unde
     throw new Error(`Expected runtime fetch call ${index}`);
   }
   return call;
+}
+
+function latestOAuthBearerParams(): OAuthBearerParams {
+  const params = oauthBearerMock.mock.calls.at(-1)?.[0];
+  if (!params) {
+    throw new Error("Expected native OAuth bearer wrapper parameters");
+  }
+  return params;
 }
 
 describe("resolveMcpTransport", () => {
@@ -396,13 +408,9 @@ describe("resolveMcpTransport", () => {
     await options.fetch?.("https://mcp.example.com/mcp");
     await options.fetch?.("https://auth.example.com/token");
 
-    const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
-      | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
-      | undefined;
-    await oauthParams?.authFetchFn?.(
-      "https://mcp.example.com/.well-known/oauth-protected-resource",
-    );
-    await oauthParams?.authFetchFn?.("https://auth.example.com/token");
+    const oauthParams = latestOAuthBearerParams();
+    await oauthParams.authFetchFn("https://mcp.example.com/.well-known/oauth-protected-resource");
+    await oauthParams.authFetchFn("https://auth.example.com/token");
 
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
@@ -423,16 +431,14 @@ describe("resolveMcpTransport", () => {
         auth: "oauth",
       });
 
-      const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
-        | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
-        | undefined;
+      const oauthParams = latestOAuthBearerParams();
       const tokenBody = new URLSearchParams({
         code: "synthetic-code",
         code_verifier: "synthetic-verifier",
       }).toString();
 
       await expect(
-        oauthParams?.authFetchFn?.("https://auth.example.com/token", {
+        oauthParams.authFetchFn("https://auth.example.com/token", {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: tokenBody,
@@ -454,12 +460,10 @@ describe("resolveMcpTransport", () => {
       auth: "oauth",
     });
 
-    const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
-      | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
-      | undefined;
+    const oauthParams = latestOAuthBearerParams();
     const tokenBody = "code=synthetic-code&code_verifier=synthetic-verifier";
 
-    await oauthParams?.authFetchFn?.("https://auth.example.com/token", {
+    await oauthParams.authFetchFn("https://auth.example.com/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: tokenBody,
