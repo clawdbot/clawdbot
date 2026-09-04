@@ -103,8 +103,6 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    // The /api/users avatar route only accepts shared secrets; a single
-    // device-token candidate would 401 forever. Offer the full ordered list.
     const nextHeroAvatarAuthCandidates = resolveControlUiAuthCandidates({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },

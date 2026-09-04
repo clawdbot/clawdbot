@@ -113,10 +113,6 @@ type GatewayHttpRequestAuthParams = {
   rateLimiter?: AuthRateLimiter;
 };
 
-type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res"> & {
-  cfg?: OpenClawConfig;
-};
-
 type GatewayHttpConnectAuthorizer = (
   params: Parameters<typeof authorizeHttpGatewayConnect>[0],
 ) => Promise<GatewayAuthResult>;
@@ -232,6 +228,20 @@ function resolveControlUiReadOperatorScopes(
 export async function authorizeControlUiReadRequestOrReply(
   params: ControlUiReadAuthParams,
 ): Promise<AuthorizedControlUiReadRequest | null> {
+  return await authorizeControlUiReadRequestWithOrReply(
+    params,
+    authorizeControlUiReadHttpGatewayConnect,
+  );
+}
+
+async function authorizeControlUiReadRequestWithOrReply(
+  params: ControlUiReadAuthParams,
+  authorizeConnect: GatewayHttpConnectAuthorizer,
+  resolveNonDeviceScopes?: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[],
+): Promise<AuthorizedControlUiReadRequest | null> {
   const auth = params.auth;
   if (!auth) {
     params.onPluginFrameGrants?.([]);
@@ -252,7 +262,7 @@ export async function authorizeControlUiReadRequestOrReply(
   const canUseDeviceTokenFallback =
     Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
   const run = async (): Promise<AuthorizedControlUiReadRequest | null> => {
-    const authResult = await authorizeControlUiReadHttpGatewayConnect({
+    const authResult = await authorizeConnect({
       auth,
       connectAuth: token ? { token, password: token } : null,
       req: params.req,
@@ -328,12 +338,21 @@ export async function authorizeControlUiReadRequestOrReply(
     const authMethod = resolvedAuthResult.method ?? "none";
     const trustDeclaredOperatorScopes =
       authMethod === "trusted-proxy" || authMethod === "tailscale";
-    const operatorScopes = resolveControlUiReadOperatorScopes(
-      params.req,
-      authMethod,
-      deviceScopes,
-      authenticatedProfile,
-    );
+    // A device's stored grants remain authoritative even on routes with their
+    // own non-device scope policy; request headers cannot expand those grants.
+    const operatorScopes =
+      authMethod === "device-token" || !resolveNonDeviceScopes
+        ? resolveControlUiReadOperatorScopes(
+            params.req,
+            authMethod,
+            deviceScopes,
+            authenticatedProfile,
+          )
+        : resolveNonDeviceScopes(params.req, {
+            authMethod,
+            trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authMethod),
+            ...authenticatedProfile,
+          });
     params.onPluginFrameGrants?.(
       setControlUiPluginAuthCookieForRequest(
         params.req,
@@ -389,22 +408,10 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   return null;
 }
 
-export async function authorizeGatewayHttpRequestOrReply(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<AuthorizedGatewayHttpRequest | null> {
-  return await authorizeGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
-}
-
-async function authorizeGatewayHttpRequestWithOrReply(
+export async function authorizeGatewayHttpRequestOrReply(
   params: GatewayHttpRequestAuthParams,
-  authorizeConnect: GatewayHttpConnectAuthorizer,
 ): Promise<AuthorizedGatewayHttpRequest | null> {
-  const result = await checkGatewayHttpRequestAuthWith(params, authorizeConnect);
+  const result = await checkGatewayHttpRequestAuth(params);
   if (!result.ok) {
     sendGatewayAuthFailure(params.res, result.authResult);
     return null;
@@ -529,16 +536,9 @@ export async function checkGatewayHttpRequestAuth(params: {
   rateLimiter?: AuthRateLimiter;
   cfg?: OpenClawConfig;
 }): Promise<GatewayHttpRequestAuthCheckResult> {
-  return await checkGatewayHttpRequestAuthWith(params, authorizeHttpGatewayConnect);
-}
-
-async function checkGatewayHttpRequestAuthWith(
-  params: GatewayHttpRequestAuthCheckParams,
-  authorizeConnect: GatewayHttpConnectAuthorizer,
-): Promise<GatewayHttpRequestAuthCheckResult> {
   const token = getBearerToken(params.req);
   const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
-  const authResult = await authorizeConnect({
+  const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
     req: params.req,
@@ -596,35 +596,15 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
 } | null> {
-  return await authorizeScopedGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
-}
-
-/** Authorize the read-only avatar route without broadening ordinary HTTP auth. */
-export async function authorizeScopedUserProfileAvatarHttpRequestOrReply(
-  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
-): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> {
-  return await authorizeScopedGatewayHttpRequestWithOrReply(
-    params,
-    authorizeUserProfileAvatarHttpGatewayConnect,
-  );
-}
-
-async function authorizeScopedGatewayHttpRequestWithOrReply(
-  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
-  authorizeConnect: GatewayHttpConnectAuthorizer,
-): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> {
   const cfg = getRuntimeConfig();
-  const requestAuth = await authorizeGatewayHttpRequestWithOrReply(
-    {
-      req: params.req,
-      res: params.res,
-      auth: params.auth,
-      trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-      rateLimiter: params.rateLimiter,
-    },
-    authorizeConnect,
-  );
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req: params.req,
+    res: params.res,
+    auth: params.auth,
+    trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
+  });
   if (!requestAuth) {
     return null;
   }
@@ -637,6 +617,23 @@ async function authorizeScopedGatewayHttpRequestWithOrReply(
   }
 
   return { cfg, requestAuth, operatorScopes };
+}
+
+/** Profile avatars share paired-device read auth, not ordinary HTTP API authority. */
+export async function authorizeScopedUserProfileAvatarHttpRequestOrReply(
+  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
+): Promise<AuthorizedControlUiReadRequest | null> {
+  const { operatorMethod, resolveOperatorScopes, ...request } = params;
+  return await authorizeControlUiReadRequestWithOrReply(
+    { ...request, requiredOperatorMethod: operatorMethod },
+    (authParams) =>
+      authorizeUserProfileAvatarHttpGatewayConnect({
+        ...authParams,
+        // Ambient Tailscale avatar auth retains its limiter even without a bearer.
+        rateLimiter: params.rateLimiter,
+      }),
+    resolveOperatorScopes,
+  );
 }
 
 export function isGatewayBearerHttpRequest(

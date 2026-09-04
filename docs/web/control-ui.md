@@ -1091,11 +1091,12 @@ The browser-side CSP restriction itself is always on and not configurable.
 
 ## Avatar route auth
 
-When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API:
+With token or password gateway auth, read-only avatar routes accept either the shared gateway credential or a current paired-browser credential with `operator.read`:
 
-- `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
-- Unauthenticated requests to either route are rejected (matching the sibling assistant-media route), so the avatar route cannot leak agent identity on hosts that are otherwise protected.
-- The Control UI forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
+- `GET /avatar/<agentId>` returns the agent avatar image. `GET /avatar/<agentId>?meta=1` returns its metadata under the same auth rule.
+- `GET /api/users/<profileId>/avatar` returns a user profile avatar through the same paired-browser read authorization. Revoked, stale, or insufficiently scoped device credentials are rejected.
+- Unauthenticated requests are rejected (matching the sibling assistant-media route), so avatars cannot leak identity on hosts that are otherwise protected.
+- The Control UI forwards its current credential as a bearer header and uses authenticated blob URLs. A paired-browser credential does not grant access to ordinary HTTP APIs.
 - Bootstrap avatar URLs include an opaque `v` revision. Refreshed metadata uses a new URL after local-file replacement so the browser does not reuse the previous image. The revision is a cache key, not an access token.
 
 If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
