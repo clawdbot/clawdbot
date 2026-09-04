@@ -20,7 +20,7 @@ import {
 } from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
-  isAskUserPromptPending as readAskUserPromptPending,
+  readAskUserPromptPending,
   waitForAskUserPromptDelivery,
 } from "./ask-user-prompt-pending.js";
 import {

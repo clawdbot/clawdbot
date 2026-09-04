@@ -45,7 +45,7 @@ export async function waitForAskUserPromptDelivery(
   return { error: new Error("ask_user prompt is no longer active") };
 }
 
-export async function isAskUserPromptPending(
+export async function readAskUserPromptPending(
   questionId: string,
   getState: () => AskUserPromptState | undefined,
   gatewayCall: GatewayQuestionCall,
