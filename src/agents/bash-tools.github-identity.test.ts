@@ -286,9 +286,12 @@ describe("exec GitHub identity", () => {
       const result = await tool.execute("legacy-pat-echo", { command: "echo hello-legacy" });
 
       expect(result.details.status).toBe("completed");
+      if (result.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
       expect(result.details.exitCode).toBe(0);
-      expect(String(result.details.aggregated)).toContain("hello-legacy");
-      expect(String(result.details.aggregated)).not.toContain(
+      expect(result.details.aggregated).toContain("hello-legacy");
+      expect(result.details.aggregated).not.toContain(
         "GitHub Identity credential is unavailable or insecure",
       );
     } finally {
@@ -324,11 +327,14 @@ describe("exec GitHub identity", () => {
       const result = await tool.execute("missing-identity-echo", { command: "echo hello-missing" });
 
       expect(result.details.status).toBe("completed");
+      if (result.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
       expect(result.details.exitCode).toBe(1);
-      expect(String(result.details.aggregated)).toContain(
+      expect(result.details.aggregated).toContain(
         "GitHub Identity credential is unavailable or insecure",
       );
-      expect(String(result.details.aggregated)).not.toContain("hello-missing");
+      expect(result.details.aggregated).not.toContain("hello-missing");
     } finally {
       await fs.rm(profileRoot, { recursive: true, force: true });
     }
