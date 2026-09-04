@@ -23,7 +23,7 @@ import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
-import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
+import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import {
   renderSessionWorkspaceRail,
@@ -82,7 +82,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     } = params;
     if (this.inputRegion === "page") {
       const file =
-        state.sidebarContent?.kind === "file" && sidebarLayout.open && detailSlotOpen(sidebarLayout)
+        state.sidebarContent?.kind === "file" && isSidebarSlotVisible(sidebarLayout, "detail")
           ? state.sidebarContent
           : undefined;
       const workspace = resolveSessionWorkspace({
@@ -134,7 +134,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ...chatProps,
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
-      header: this.compact ? nothing : html`${header}${recovery}`,
+      header: nothing,
     });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
@@ -192,7 +192,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),
+      detailOpen: this.presented && isSidebarSlotVisible(sidebarLayout, "detail"),
       renderDetail: (content) =>
         renderChatDetailSlot({
           backgroundTasks,
@@ -257,9 +257,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`${content}${renderChatImageLightbox(
-      state.imageLightbox,
-      state.handleCloseImage,
-    )}${this.renderResetConfirmation()}`;
+    return html`<div class="chat-pane-layout">${header}${recovery}${content}</div>
+      ${renderChatImageLightbox(
+        state.imageLightbox,
+        state.handleCloseImage,
+      )}${this.renderResetConfirmation()}`;
   }
 }

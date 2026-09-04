@@ -18,7 +18,13 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import {
+  openSlot,
+  promoteSidebarPanel,
+  setSidebarDock,
+  sidebarActivePanel,
+  sidebarMainPanel,
+} from "./sidebar-layout.ts";
 
 const swarmModuleImport = vi.hoisted(() => {
   let markStarted!: () => void;
@@ -227,21 +233,55 @@ describe("chat pane board shell", () => {
     expect(pane.onFaceChange).toHaveBeenCalledOnce();
   });
 
-  it("applies an expanded dashboard route only once", () => {
+  it("applies an explicit focused dashboard link over a saved main panel only once", () => {
     const pane = createTestPane();
     pane.boardProvider = mockBoardProvider("agent:main:expanded-route");
     pane.state.sessionKey = "agent:main:expanded-route";
     pane.sessionKey = "agent:main:expanded-route";
     pane.routeFace = "dashboard";
     pane.dashboardExpanded = true;
+    const savedLayout = promoteSidebarPanel(openSlot({ columns: [] }, "terminal"), "terminal");
+    pane.state.sidebarLayout = savedLayout;
+    patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
     pane.syncRetainedBoardSession(pane.resolveBoardView());
     expect(pane.state.sidebarLayout.expanded).toBe(true);
+    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("terminal");
 
     pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
     pane.syncRetainedBoardSession(pane.resolveBoardView());
     expect(pane.state.sidebarLayout.expanded).toBe(false);
   });
+
+  it.each([true, false])(
+    "restores saved task layout with side panel open=%s on an ordinary dashboard revisit",
+    (open) => {
+      const pane = createTestPane();
+      pane.state.sessionKey = "agent:main:saved-dashboard-layout";
+      pane.sessionKey = pane.state.sessionKey;
+      pane.boardProvider = mockBoardProvider(pane.sessionKey);
+      pane.routeFace = "dashboard";
+      pane.onFaceChange = vi.fn();
+      const savedLayout = {
+        ...setSidebarDock(
+          promoteSidebarPanel(
+            openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
+            "terminal",
+          ),
+          "left",
+        ),
+        open,
+      };
+      pane.state.sidebarLayout = savedLayout;
+      patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+
+      expect(pane.state.sidebarLayout).toEqual(savedLayout);
+      expect(pane.onFaceChange).not.toHaveBeenCalled();
+    },
+  );
 
   it("opens a dashboard route in split view only once", () => {
     const pane = createTestPane();
@@ -528,6 +568,12 @@ describe("chat pane board shell", () => {
 
     provider.emitCommand({ kind: "set_chat_dock", dock: "hidden" });
     expect(pane.state.sidebarLayout.expanded).toBe(true);
+    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("conversation");
+    provider.emitCommand({ kind: "set_chat_dock", dock: "right" });
+    expect(sidebarMainPanel(pane.state.sidebarLayout)?.slot).toBe("dashboard");
+    expect(sidebarActivePanel(pane.state.sidebarLayout)?.slot).toBe("conversation");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
     expect(pane.onFaceChange).toHaveBeenLastCalledWith(pane.paneId, pane.sessionKey, "dashboard");
     unsubscribe();
   });

@@ -302,10 +302,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const renderedLayout = layout ?? state.sidebarLayout;
+    const nextLayout = setSidebarOpen(renderedLayout, open);
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
-      this.setSessionObserverVisibility(open);
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
     }
-    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(nextLayout);
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {

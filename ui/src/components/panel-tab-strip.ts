@@ -242,7 +242,13 @@ export function renderPanelTabStrip(params: {
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => params.onSelect(event.detail.name)}
+      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+        // Web Awesome also emits for controlled selection updates. Echoing those
+        // as user actions can reopen a panel that its owner just focused away.
+        if (event.detail.name !== params.activeId) {
+          params.onSelect(event.detail.name);
+        }
+      }}
     >
       ${repeat(
         params.tabs,
@@ -253,18 +259,14 @@ export function renderPanelTabStrip(params: {
           // row; the pair touching the active tab is faded out in CSS instead.
           const showSeparator = params.separateTabs === true && index < params.tabs.length - 1;
           const tabContent = html`
-            ${
-              tab.icon == null || tab.icon === nothing
-                ? nothing
-                : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`
-            }
+            ${tab.icon == null || tab.icon === nothing
+              ? nothing
+              : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
             <span class="tabstrip-tab__label" ${ref(panelTabLabelOverflowRef())}>${tab.label}</span>
             ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
-            ${
-              tab.statusLabel
-                ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
-                : nothing
-            }
+            ${tab.statusLabel
+              ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
+              : nothing}
           `;
           return html`
             <wa-tab
@@ -277,17 +279,11 @@ export function renderPanelTabStrip(params: {
               ?active=${selected}
               draggable=${params.onReorder ? "true" : nothing}
               .tabIndex=${selected ? 0 : -1}
-              ${
-                selected
-                  ? ref((element) =>
-                      reconcileSelectedTabElement(
-                        element,
-                        layoutKey,
-                        focusedTabDomId === tab.domId,
-                      ),
-                    )
-                  : nothing
-              }
+              ${selected
+                ? ref((element) =>
+                    reconcileSelectedTabElement(element, layoutKey, focusedTabDomId === tab.domId),
+                  )
+                : nothing}
               @auxclick=${(event: MouseEvent) => {
                 if (event.button === 1) {
                   event.preventDefault();
@@ -361,16 +357,14 @@ export function renderPanelTabStrip(params: {
                 }
               }}
             >
-              ${
-                tab.labelTooltip
-                  ? html`<openclaw-tooltip
-                      class="tabstrip-tab__label-tooltip"
-                      .content=${tab.labelTooltip}
-                    >
-                      <span class="tabstrip-tab__tooltip-trigger">${tabContent}</span>
-                    </openclaw-tooltip>`
-                  : tabContent
-              }
+              ${tab.labelTooltip
+                ? html`<openclaw-tooltip
+                    class="tabstrip-tab__label-tooltip"
+                    .content=${tab.labelTooltip}
+                  >
+                    <span class="tabstrip-tab__tooltip-trigger">${tabContent}</span>
+                  </openclaw-tooltip>`
+                : tabContent}
             </wa-tab>
             <button
               slot="nav"
@@ -425,11 +419,9 @@ export function renderPanelTabStrip(params: {
             >
               <span class="tabstrip-tab__close-box">${icons.x}</span>
             </button>
-            ${
-              showSeparator
-                ? html`<span slot="nav" class="tabstrip-separator" aria-hidden="true"></span>`
-                : nothing
-            }
+            ${showSeparator
+              ? html`<span slot="nav" class="tabstrip-separator" aria-hidden="true"></span>`
+              : nothing}
           `;
         },
       )}

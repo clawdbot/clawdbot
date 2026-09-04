@@ -31,6 +31,7 @@ describe("chat pane embedded panels", () => {
     const expected = {
       browser: "browser",
       companion: "chat",
+      conversation: "chat",
       dashboard: "review",
       desktop: "desktop",
       detail: "review",
@@ -42,6 +43,7 @@ describe("chat pane embedded panels", () => {
 
     const definitions = sidebarPanelDefinitions();
     expect(definitions.map((definition) => definition.slot)).toEqual([
+      "conversation",
       "detail",
       "terminal",
       "browser",

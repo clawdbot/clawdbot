@@ -14,6 +14,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -386,11 +387,12 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       await page.screenshot({ path: `${artifactDir}/01-dashboard.png`, fullPage: true });
     }
 
-    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
 
-    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
     await expectRetainedBoardPresentation(page, "split");
+    await restoreChatAsMain(page);
 
     const draftNote = page
       .frameLocator("mcp-app-view iframe")
@@ -400,7 +402,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     if (artifactDir) {
       await page.screenshot({ path: `${artifactDir}/04-note-before-minimize.png` });
     }
-    await sidePanel.locator(".side-panel__minimize").click();
+    await sidePanel
+      .locator('[data-region-header="side"]')
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
     await page.locator(".chat-thread").waitFor();
     await expect
       .poll(() => readBoardIdentity(page))

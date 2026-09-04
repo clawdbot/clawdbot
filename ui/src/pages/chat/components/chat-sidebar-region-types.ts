@@ -9,7 +9,6 @@ export type SidebarPanelDefinition = {
   icon: TemplateResult;
   shortcut?: string;
   available: boolean;
-  retainWhenClosed?: boolean;
   content: TemplateResult | typeof nothing | null;
   loading: TemplateResult;
   headerAction?: TemplateResult;
@@ -20,6 +19,7 @@ export type SidebarPanelDefinition = {
 };
 
 export type SidebarRegionCallbacks = {
+  makeMain: (panelId: string) => void;
   activatePanel: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;
   openSlot: (slot: SidebarSlotId) => void;

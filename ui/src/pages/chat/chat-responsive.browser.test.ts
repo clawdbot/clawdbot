@@ -287,6 +287,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/working-indicator.css",
     "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/chat/side-panel.css",
   ];
   cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
   return cachedUiCss;
@@ -4274,11 +4275,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div style="width: 620px; height: 600px; display: flex;">
-            <div class="sidebar-region sidebar-region--narrow">
-              <main class="sidebar-region__primary">Primary chat</main>
-              <section class="sidebar-column side-panel side-panel--narrow">
-                <div class="rail-header side-panel__header">Details</div>
-                <div class="side-panel__body">Active detail panel</div>
+            <div class="sidebar-region sidebar-region--narrow sidebar-region--open">
+              <main class="sidebar-region__primary" data-region="main">Primary chat</main>
+              <section class="side-panel">
+                <div class="rail-header side-panel__header" data-region-header="side">Details</div>
+                <div class="side-panel__body">
+                  <div class="side-panel__panel" data-region="side">Active detail panel</div>
+                </div>
               </section>
             </div>
           </div>
@@ -4287,7 +4290,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       await expectNoHorizontalOverflow(page);
       const primary = await getRect(page, ".sidebar-region__primary");
-      const sidebar = await getRect(page, ".side-panel--narrow");
+      const sidebar = await getRect(page, '[data-region="side"]');
       expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
       expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
       expect(sidebar.width).toBeGreaterThanOrEqual(618);
