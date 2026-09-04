@@ -376,7 +376,7 @@ export async function validateAcpResumeSessionOwnership(params: {
             sessionOwnerAgentId: params.sessionOwnerAgentId,
           }))
         ) {
-          break;
+          continue;
         }
         return { ok: true };
       }

@@ -1622,6 +1622,51 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("resumes the canonical row after a shared-store legacy row was already promoted", async () => {
+    const legacySessionKey = "agent:codex:acp:promoted";
+    const ownerSessionKey = "agent:main:acp:promoted";
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [legacySessionKey]: {
+        sessionId: "sess-promoted",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+      [ownerSessionKey]: {
+        sessionId: "sess-promoted",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "promoted-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume the promoted canonical ACP session",
+        agentId: "codex",
+        resumeSessionId: "promoted-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({ resumeSessionId: "promoted-resume" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+  });
+
   it("rejects requester-owned resume IDs from a third owner in a shared store", async () => {
     const foreignSessionKey = "agent:other:acp:foreign";
     hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
