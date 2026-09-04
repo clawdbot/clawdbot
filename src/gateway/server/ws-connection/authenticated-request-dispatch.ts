@@ -17,6 +17,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { handleGatewayPing } from "../../server-methods/gateway-ping.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -247,6 +248,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
         }
         if (!hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          return;
+        }
+        if (req.method === "gateway.ping") {
+          // A transport ACK, not application health: stay ahead of handler loading, start
+          // queues, and plugin/store work, but behind the same socket's authority fences.
+          entry?.assertOpen();
+          if (isClosed()) {
+            return;
+          }
+          handleGatewayPing({ client, respond: respondWithAuthority });
           return;
         }
         const { handleGatewayRequest } = await loadGatewayServerMethods();

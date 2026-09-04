@@ -100,6 +100,22 @@ use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
 
+## Connection liveness
+
+When `hello-ok.features.methods` includes `gateway.ping`, an authenticated
+`node` or `operator` may send `{type:"req", id, method:"gateway.ping"}` on that
+same WebSocket. No operator scope is required. The Gateway returns
+`{type:"res", id, ok:true, payload:{}}` directly from the authenticated transport,
+without collecting health, invoking plugins or providers, or reading a database.
+Existing credential invalidation and socket authority checks still apply.
+
+Use a fresh request ID and accept only its response on the same connection as
+round-trip evidence. Events and replies to older requests do not prove that new
+outbound traffic reaches the Gateway. This ACK is not an application-health check
+or a recovery-time guarantee. Clients connecting to a Gateway that does not
+advertise the method should retain their existing transport/ping detection, not
+substitute the potentially slow `health` RPC.
+
 ## Gateway-controlled WebRTC Talk
 
 `talk.client.create` accepts the additive capability `gateway-control-v1`.

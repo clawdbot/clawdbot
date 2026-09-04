@@ -2,14 +2,16 @@ package ai.openclaw.app.gateway
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Parcel
 import android.util.Log
 
 /**
  * Listens for Android transport restores and signals [onNetworkAvailable] when the device
- * regains a validated internet connection, or when any network newly attaches at all. Used to
+ * regains validation, any network attaches, or an existing network changes link properties. Used to
  * trigger an immediate gateway reconnect instead of waiting out the time-based backoff slot in
  * [GatewaySession].
  *
@@ -54,6 +56,15 @@ internal class NetworkMonitor(
             isTransportValidated(capabilities),
           )
         if (justValidated) {
+          notifyNetworkAvailable()
+        }
+      }
+
+      override fun onLinkPropertiesChanged(
+        network: Network,
+        linkProperties: LinkProperties,
+      ) {
+        if (restoreState.onLinkPropertiesChanged(network, linkProperties)) {
           notifyNetworkAvailable()
         }
       }
@@ -109,19 +120,23 @@ internal fun appUsableNetworkRequest(): NetworkRequest =
     .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
     .build()
 
-// onAvailable and its first capability callback describe one availability episode. Coalesce only
-// that pair per network; a different route must always be able to wake the reconnect fleet.
+// Initial capability/link snapshots describe one availability episode. Later link changes
+// can restore private routes or DNS without another availability or validation transition.
 internal class NetworkRestoreState<T>(
   initialValidatedNetworks: Set<T> = emptySet(),
 ) {
-  private val availableNetworks = initialValidatedNetworks.toMutableSet()
-  private val validatedNetworks = initialValidatedNetworks.toMutableSet()
-  private val awaitingInitialCapabilities = mutableSetOf<T>()
+  private class State(
+    var validated: Boolean = false,
+    var awaitingInitialCapabilities: Boolean = false,
+    var linkProperties: LinkProperties? = null,
+  )
+
+  private val networks = initialValidatedNetworks.associateWith { State(validated = true) }.toMutableMap()
 
   @Synchronized
   fun onAvailable(network: T): Boolean {
-    if (!availableNetworks.add(network)) return false
-    awaitingInitialCapabilities.add(network)
+    if (networks.containsKey(network)) return false
+    networks[network] = State(awaitingInitialCapabilities = true)
     return true
   }
 
@@ -130,28 +145,43 @@ internal class NetworkRestoreState<T>(
     network: T,
     isValidated: Boolean,
   ): Boolean {
-    availableNetworks.add(network)
-    val followsAvailability = awaitingInitialCapabilities.remove(network)
-    val wasValidated = validatedNetworks.contains(network)
-    if (isValidated) {
-      validatedNetworks.add(network)
-    } else {
-      validatedNetworks.remove(network)
-    }
-    return isValidated && !wasValidated && !followsAvailability
+    val state = networks.getOrPut(network) { State() }
+    val restored = isValidated && !state.validated && !state.awaitingInitialCapabilities
+    state.validated = isValidated
+    state.awaitingInitialCapabilities = false
+    return restored
+  }
+
+  @Synchronized
+  fun onLinkPropertiesChanged(
+    network: T,
+    properties: LinkProperties,
+  ): Boolean {
+    val state = networks[network] ?: return false
+    // LinkProperties is mutable and has no public copy constructor in the SDK. Keep an owned
+    // Parcelable snapshot so later callback mutations cannot erase a route/DNS change.
+    val parcel = Parcel.obtain()
+    val snapshot =
+      try {
+        properties.writeToParcel(parcel, 0)
+        parcel.setDataPosition(0)
+        LinkProperties.CREATOR.createFromParcel(parcel)
+      } finally {
+        parcel.recycle()
+      }
+    val previous = state.linkProperties
+    state.linkProperties = snapshot
+    return previous != null && previous != snapshot
   }
 
   @Synchronized
   fun onLost(network: T) {
-    availableNetworks.remove(network)
-    validatedNetworks.remove(network)
-    awaitingInitialCapabilities.remove(network)
+    networks.remove(network)
   }
 
   @Synchronized
   fun seedValidated(network: T) {
-    availableNetworks.add(network)
-    validatedNetworks.add(network)
+    networks.getOrPut(network) { State() }.validated = true
   }
 }
 

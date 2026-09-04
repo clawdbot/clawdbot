@@ -612,6 +612,24 @@ describe("gateway pre-auth hardening", () => {
     await expectIdlePreauthSocketClose();
   });
 
+  it("rejects a liveness request before authentication", async () => {
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const ws = await harness.openWs();
+      await readConnectChallengeNonce(ws);
+      const responses: unknown[] = [];
+      ws.on("message", (data) => responses.push(JSON.parse(rawDataToString(data))));
+      const closed = new Promise<number>((resolve) => {
+        ws.once("close", resolve);
+      });
+      ws.send(JSON.stringify({ type: "req", id: "preauth-ping", method: "gateway.ping" }));
+      expect(await closed).toBe(1008);
+      expect(responses).toContainEqual(expect.objectContaining({ id: "preauth-ping", ok: false }));
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("rejects oversized pre-auth connect frames before application-level auth responses", async () => {
     resetDiagnosticEventsForTest();
     const events: DiagnosticEventPayload[] = [];

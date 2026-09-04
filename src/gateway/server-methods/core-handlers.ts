@@ -4,6 +4,7 @@ import {
   listCoreGatewayHandlerMethodNames,
   type CoreGatewayHandlerFamily,
 } from "../methods/core-descriptors.js";
+import { handleGatewayPing } from "./gateway-ping.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -156,16 +157,20 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),
 } satisfies Record<CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader>;
 
-export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
-  Array.from(listCoreGatewayHandlerMethodNames()).flatMap(([family, methods]) =>
-    Object.entries(
-      createLazyCoreHandlers({
-        methods,
-        // Failed family imports stay cached until restart, just like successful loads.
-        loadHandlers: createLazyPromise(CORE_GATEWAY_HANDLER_MODULES[family], {
-          cacheRejections: true,
+export const coreGatewayHandlers: GatewayRequestHandlers = {
+  ...Object.fromEntries(
+    Array.from(listCoreGatewayHandlerMethodNames()).flatMap(([family, methods]) =>
+      Object.entries(
+        createLazyCoreHandlers({
+          methods,
+          // Failed family imports stay cached until restart, just like successful loads.
+          loadHandlers: createLazyPromise(CORE_GATEWAY_HANDLER_MODULES[family], {
+            cacheRejections: true,
+          }),
         }),
-      }),
+      ),
     ),
   ),
-);
+  // The attached registry advertises only bound handlers, including transport-owned ACKs.
+  "gateway.ping": handleGatewayPing,
+};

@@ -341,6 +341,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { compatibilityRestored: true },
   ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  // Transport-owned: both authenticated roles may ACK without an operator scope.
+  ["gateway.ping", null, "dynamic", "2026.9"],
   ["system-presence", "system", "operator.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
   ["message.action", "send", "operator.write", "<=2026.7"],

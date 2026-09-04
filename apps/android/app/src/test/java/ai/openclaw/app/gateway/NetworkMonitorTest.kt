@@ -1,6 +1,7 @@
 package ai.openclaw.app.gateway
 
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.NetworkCapabilities
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -10,6 +11,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetwork
+import java.net.InetAddress
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -83,6 +85,40 @@ class NetworkMonitorTest {
       false,
       request.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
     )
+  }
+
+  @Test
+  fun linkPropertiesChangesWakeAnExistingNetworkWithoutValidationChange() {
+    val context = RuntimeEnvironment.getApplication()
+    var wakeCount = 0
+    NetworkMonitor(context) { wakeCount += 1 }
+    val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    val callback = shadowOf(connectivity).networkCallbacks.single()
+    val network = ShadowNetwork.newInstance(501)
+    val properties =
+      LinkProperties().apply {
+        interfaceName = "wlan0"
+        setDnsServers(listOf(InetAddress.getByName("192.0.2.1")))
+      }
+    callback.onAvailable(network)
+    callback.onCapabilitiesChanged(network, NetworkCapabilities())
+    callback.onLinkPropertiesChanged(network, properties)
+    callback.onLinkPropertiesChanged(network, properties)
+    assertEquals("Initial properties and identical snapshots coalesce with availability", 1, wakeCount)
+
+    properties.setDnsServers(listOf(InetAddress.getByName("192.0.2.2")))
+    callback.onLinkPropertiesChanged(network, properties)
+    assertEquals("A DNS-only link change must wake without onAvailable or validation change", 2, wakeCount)
+    callback.onLinkPropertiesChanged(network, properties)
+    assertEquals(2, wakeCount)
+
+    callback.onLost(network)
+    properties.setDnsServers(listOf(InetAddress.getByName("192.0.2.3")))
+    callback.onLinkPropertiesChanged(network, properties)
+    assertEquals("A late properties event must not resurrect a lost network", 2, wakeCount)
+    callback.onAvailable(network)
+    callback.onLinkPropertiesChanged(network, properties)
+    assertEquals("Reattachment owns a new initial properties snapshot", 3, wakeCount)
   }
 
   @Test

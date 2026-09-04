@@ -47,7 +47,6 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
 
@@ -963,12 +962,6 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
-  private class PendingRequest {
-    val response = CompletableDeferred<RpcResponse>()
-
-    @Volatile var sentSequence = 0L
-  }
-
   private data class TicketedMediaRequest(
     val url: String,
     val headers: Map<String, String>,
@@ -1020,12 +1013,11 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
-    private val sentRequestSequence = AtomicLong()
-    private val answeredRequestSequence = AtomicLong()
+    private var supportsLivenessAck = false
     private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
-    private val pending = ConcurrentHashMap<String, PendingRequest>()
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
     private val pendingLock = Any()
     private val messagePumpJob =
@@ -1069,8 +1061,8 @@ class GatewaySession(
       if (method == "connect") connectRequestId = id
       val waiter = registerPending(id)
       try {
-        sendJson(buildRequestFrame(id = id, method = method, params = params), waiter, withEnqueue)
-        return withTimeout(timeoutMs) { waiter.response.await() }
+        sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
+        return withTimeout(timeoutMs) { waiter.await() }
       } catch (err: TimeoutCancellationException) {
         throw GatewayRequestOutcomeUnknown("request timeout")
       } finally {
@@ -1194,7 +1186,7 @@ class GatewaySession(
       val id = UUID.randomUUID().toString()
       val waiter = registerPending(id)
       try {
-        sendJson(buildRequestFrame(id = id, method = method, params = params), waiter, withEnqueue)
+        sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
       } catch (err: Throwable) {
         pending.remove(id)
         throw err
@@ -1206,7 +1198,7 @@ class GatewaySession(
           try {
             val response =
               try {
-                withTimeout(timeoutMs) { waiter.response.await() }
+                withTimeout(timeoutMs) { waiter.await() }
               } catch (_: TimeoutCancellationException) {
                 onError(ErrorShape("UNAVAILABLE", "request timeout"))
                 return@withContext
@@ -1224,8 +1216,8 @@ class GatewaySession(
       }
     }
 
-    private fun registerPending(id: String): PendingRequest {
-      val waiter = PendingRequest()
+    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
+      val waiter = CompletableDeferred<RpcResponse>()
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
         if (state.get() == ConnectionState.CLOSED) {
@@ -1238,15 +1230,12 @@ class GatewaySession(
 
     suspend fun sendJson(
       obj: JsonObject,
-      waiter: PendingRequest,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ) {
       val jsonString = obj.toString()
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
-          // Stamp the actual send boundary, not registration before the write-lock wait.
-          waiter.sentSequence = sentRequestSequence.incrementAndGet()
           if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
             // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
@@ -1281,24 +1270,21 @@ class GatewaySession(
     }
 
     fun checkLivenessAfterNetworkRestore() {
-      if (networkRestoreCheck?.isActive == true) return
+      // Older Gateways retain OkHttp transport/ping detection; health is not a liveness fallback.
+      if (!supportsLivenessAck || networkRestoreCheck?.isActive == true) return
       networkRestoreCheck =
         connectionScope.launch(Dispatchers.IO) {
-          val sentBefore = writeLock.withLock { sentRequestSequence.get() }
           try {
-            // health is allowed for both node and operator roles. Even an error response proves
-            // round-trip liveness; do not request channel probes or interpret application health.
-            request(GatewayMethod.Health.rawValue, null, timeoutMs = 8_000, withEnqueue = guardRequestEnqueue(this@Connection) { it() })
-          } catch (_: GatewayRequestNotEnqueued) {
-            // Retirement won before enqueue; its owner already handles recovery.
-          } catch (_: GatewayRequestOutcomeUnknown) {
+            // Only this request's ID on this socket proves the round trip. The Gateway ACK
+            // bypasses health collection; unrelated events and old replies cannot satisfy it.
+            request(GatewayMethod.GatewayPing.rawValue, null, timeoutMs = 8_000, withEnqueue = guardRequestEnqueue(this@Connection) { it() })
+          } catch (error: Exception) {
+            if (error !is GatewayRequestNotEnqueued && error !is GatewayRequestOutcomeUnknown) throw error
+            // OkHttp can refuse an enqueue while this session still appears READY (for example,
+            // after queue overflow). Recheck ownership instead of assuming retirement won.
             synchronized(lifecycleLock) {
-              // Only a reply to a request sent after this check proves both directions are live.
-              // Events and delayed replies to earlier requests cannot rescue a broken send path.
               // Never let a late check retire a replacement or override Disconnect/auth pause.
-              if (currentConnection === this@Connection && desired === target && isReady() &&
-                answeredRequestSequence.get() <= sentBefore
-              ) {
+              if (currentConnection === this@Connection && desired === target && isReady()) {
                 signalReconnect(resumeAuthPaused = false, skipIfReady = false)
               }
             }
@@ -1555,6 +1541,7 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
+      supportsLivenessAck = methods?.contains(GatewayMethod.GatewayPing.rawValue) == true
       val capabilities =
         obj["features"]
           .asObjectOrNull()
@@ -1804,8 +1791,7 @@ class GatewaySession(
           ErrorShape(wireError.code, wireError.message, details)
         }
       pending.remove(id)?.let { waiter ->
-        answeredRequestSequence.accumulateAndGet(waiter.sentSequence) { previous, answered -> maxOf(previous, answered) }
-        waiter.response.complete(RpcResponse(id, response.ok, payloadJson, error))
+        waiter.complete(RpcResponse(id, response.ok, payloadJson, error))
       }
     }
 
@@ -1965,7 +1951,7 @@ class GatewaySession(
           pending.values.toList().also { pending.clear() }
         }
       for (waiter in waiters) {
-        waiter.response.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
+        waiter.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
       }
     }
   }

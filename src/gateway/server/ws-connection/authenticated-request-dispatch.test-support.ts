@@ -5,6 +5,7 @@ import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 export type GatewayTestResponseFrame = {
   type: "res";
@@ -76,6 +77,7 @@ export function createDispatchTestHarness(
     handler: {
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
+      nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
       buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
       send: sendForDispatcher,
       close,

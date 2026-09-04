@@ -86,6 +86,10 @@ function authorizeGatewayMethod(
   if (!role) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`);
   }
+  // Transport liveness is scope-free for either valid authenticated role.
+  if (method === "gateway.ping") {
+    return null;
+  }
   const scopes = client.connect.scopes ?? [];
   if (!isRoleAuthorizedForMethod(role, method)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
