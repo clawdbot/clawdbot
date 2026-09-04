@@ -210,7 +210,7 @@ describe("workboard tools", () => {
         .get("workboard_heartbeat")
         ?.execute("call-2", { id: "card-1", token, note: "alive" }),
     );
-    expect(heartbeat).toMatchObject({
+    expect(heartbeat.card).toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "alive" })] },
     });
 
@@ -225,8 +225,10 @@ describe("workboard tools", () => {
         .get("workboard_release")
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
-    expect(released).toMatchObject({ status: "review" });
-    expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
+    expect(released.card).toMatchObject({ status: "review" });
+    expect(
+      (released.card as { metadata?: { claim?: unknown } } | undefined)?.metadata?.claim,
+    ).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
     expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
@@ -658,5 +660,59 @@ describe("workboard tools", () => {
       }),
     );
     expect(claimed.card).toMatchObject({ status: "review" });
+  });
+
+  it("does not report isError when commenting, heartbeating, or releasing a blocked card", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(keyed);
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    // Create a card and claim it
+    const card = await store.create({ title: "Blocked card", status: "todo" });
+    const claimed = readPayload(
+      await tools.get("workboard_claim")?.execute("call-claim", { id: card.id }),
+    );
+    const token = claimed.token as string;
+
+    // Block the card
+    await store.update(card.id, { status: "blocked" });
+
+    // These operations should succeed without isError even though status is "blocked"
+    const commentResult = await tools.get("workboard_comment")?.execute("call-comment", {
+      id: card.id,
+      body: "Still blocked, adding note",
+      token,
+    });
+    expect(commentResult).not.toHaveProperty("isError");
+    expect(readPayload(commentResult).card).toMatchObject({ status: "blocked" });
+
+    const heartbeatResult = await tools.get("workboard_heartbeat")?.execute("call-heartbeat", {
+      id: card.id,
+      token,
+      note: "Still working on it",
+    });
+    expect(heartbeatResult).not.toHaveProperty("isError");
+    expect(readPayload(heartbeatResult).card).toMatchObject({ status: "blocked" });
+
+    const releaseResult = await tools.get("workboard_release")?.execute("call-release", {
+      id: card.id,
+      token,
+      status: "todo",
+    });
+    expect(releaseResult).not.toHaveProperty("isError");
+    expect(readPayload(releaseResult).card).toMatchObject({ status: "todo" });
   });
 });
