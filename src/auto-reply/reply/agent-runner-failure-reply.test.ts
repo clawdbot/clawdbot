@@ -175,6 +175,28 @@ describe("buildExternalRunFailureReply", () => {
     );
     expect(reply.isGenericRunnerFailure).toBe(false);
   });
+
+  it("does not name the provider for unclassified harness failures (#137845)", () => {
+    const message = "Session transcript projection is rebuilding: sess-123";
+    const reply = buildExternalRunFailureReply(
+      {
+        message,
+        error: new Error(message),
+      },
+      {
+        includeDetails: false,
+        failoverFacts: {
+          provider: "anthropic",
+          model: "claude-3-5-sonnet",
+        },
+      },
+    );
+
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(true);
+    expect(reply.text).not.toContain("anthropic");
+    expect(reply.text).not.toContain("claude-3-5-sonnet");
+  });
 });
 
 describe("buildPreflightCompactionFailureText", () => {
