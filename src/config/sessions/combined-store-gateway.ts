@@ -6,7 +6,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import {
   resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 import {
@@ -22,6 +21,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   countSessionEntryRowsReadOnly,
@@ -31,6 +31,7 @@ import {
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -38,6 +39,7 @@ import {
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
@@ -58,6 +60,7 @@ type ResolvedGatewaySessionStoreTargets = {
   durableTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
   incognitoTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
   requestedAgentId?: string;
+  sharedStoreRowOwner?: { agentId: string; target: SessionStoreTarget };
   storeConfig?: string;
 };
 
@@ -108,6 +111,25 @@ function resolveCombinedDatabasePath(
   return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
 }
 
+function resolveSharedStoreRowOwner(
+  cfg: OpenClawConfig,
+  selected: SessionStoreTarget,
+  sharedStorePaths: ReadonlySet<string>,
+): ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"] {
+  const configuredPath = resolveSessionStorePathCore(cfg.session?.store, {
+    agentId: resolveSessionStoreCompatibilityAgentId(cfg),
+  });
+  // Registry aliases do not turn legacy selectors into shared stores. Reuse the
+  // configured selector's own classification from the physical dedupe pass.
+  if (!sharedStorePaths.has(configuredPath)) {
+    return undefined;
+  }
+  const persistedOwner = resolvePersistedSessionStoreOwner(cfg);
+  return persistedOwner.kind === "configured"
+    ? { agentId: persistedOwner.agentId, target: selected }
+    : undefined;
+}
+
 function loadGatewayStoreEntries(params: {
   agentId: string;
   includeOpenDatabases?: boolean;
@@ -151,15 +173,23 @@ function mergeSessionEntryIntoCombined(params: {
       `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
     );
   }
-  const resolveLineageKey = (sessionKey: string | undefined) =>
-    sessionKey ? resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId }) : undefined;
-  combined[canonicalKey] = {
-    ...entry,
-    ...(entry.parentSessionKey
-      ? { parentSessionKey: resolveLineageKey(entry.parentSessionKey) }
-      : {}),
-    ...(entry.spawnedBy ? { spawnedBy: resolveLineageKey(entry.spawnedBy) } : {}),
-  };
+  const projected = { ...entry };
+  // SQLite validates lineage shape; qualified global aliases still depend on config.
+  // Keep reserved sentinels intact and resolve each alias with its own agent.
+  if (cfg.session?.scope === "global") {
+    for (const field of ["parentSessionKey", "spawnedBy"] as const) {
+      const sessionKey = projected[field];
+      const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
+      if (sessionKey && parsed) {
+        projected[field] = canonicalizeMainSessionAlias({
+          cfg,
+          agentId: parsed.agentId,
+          sessionKey,
+        });
+      }
+    }
+  }
+  combined[canonicalKey] = projected;
   params.agentIdBySessionKey.set(canonicalKey, agentId);
 }
 
@@ -211,8 +241,8 @@ function filterCombinedStoreToConfiguredAgents(params: {
     if (!normalizedKey) {
       return false;
     }
-    const canonicalKey = resolveSessionStoreKey({ cfg: params.cfg, sessionKey: normalizedKey });
-    const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+    // Stored keys already carry canonical owners; incoming aliases can retarget retired lineage.
+    const agentId = resolveSessionStoreAgentId(params.cfg, normalizedKey);
     return params.configuredAgentIds.has(normalizeAgentId(agentId));
   };
   for (const [key, entry] of Object.entries(params.store)) {
@@ -254,6 +284,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
     incognitoTargets.map((target) => `${target.agentId}\0${target.storePath}`),
   );
   const diagnostics: string[] = [];
+  let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
   const candidates = dedupeSessionStoreTargetsBySqliteTarget(
     [
       ...listOpenClawRegisteredAgentDatabases().map(({ agentId, path }) => ({
@@ -269,6 +300,9 @@ function resolvePreparedConfiguredSessionStoreTargets(
     {
       defaultAgentId,
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
+      onSharedTarget: (selected, paths) => {
+        sharedStoreRowOwner ??= resolveSharedStoreRowOwner(cfg, selected, paths);
+      },
     },
   );
   const durableTargets = candidates.filter(
@@ -285,6 +319,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
         .filter((target) => incognitoTargetKeys.has(`${target.agentId}\0${target.storePath}`))
         .map((target) => Object.freeze({ ...target })),
     ),
+    sharedStoreRowOwner,
     storeConfig,
   });
   preparedConfiguredSessionStoreTargets = {
@@ -327,6 +362,7 @@ function resolveGatewaySessionStoreTargets(
         ...(requestedAgentId ? [requestedAgentId] : []),
       ]),
     ];
+    let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
       ownerIds.map((agentId) => ({
         agentId,
@@ -335,6 +371,9 @@ function resolveGatewaySessionStoreTargets(
       {
         defaultAgentId,
         onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
+        onSharedTarget: (selected, paths) => {
+          sharedStoreRowOwner ??= resolveSharedStoreRowOwner(cfg, selected, paths);
+        },
       },
     );
     return {
@@ -343,6 +382,7 @@ function resolveGatewaySessionStoreTargets(
       durableTargets,
       incognitoTargets,
       requestedAgentId,
+      sharedStoreRowOwner,
       storeConfig,
     };
   }
@@ -411,6 +451,7 @@ export function loadCombinedSessionStoreForGatewayCore(
     durableTargets,
     incognitoTargets,
     requestedAgentId,
+    sharedStoreRowOwner,
     storeConfig,
   } = resolveGatewaySessionStoreTargets(cfg, opts);
   const combined: Record<string, SessionEntry> = {};
@@ -421,10 +462,18 @@ export function loadCombinedSessionStoreForGatewayCore(
     const agentId = target.agentId;
     const storePath = target.storePath;
     const store = loadGatewayStoreEntries({ agentId, projection, storePath });
+    // Legacy selector paths can be shared by distinct physical agent partitions.
+    const rowAgentId =
+      sharedStoreRowOwner?.target.storePath === storePath &&
+      sharedStoreRowOwner.target.agentId === agentId
+        ? sharedStoreRowOwner.agentId
+        : agentId;
     for (const { sessionKey: key, entry } of store) {
+      const parsed = parseAgentSessionKey(key);
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,
-        agentId,
+        // Qualified retired-owner keys keep their physical store's canonicalization context.
+        agentId: parsed ? agentId : rowAgentId,
         sessionKey: key,
       });
       if (key !== canonicalKey) {
@@ -432,9 +481,7 @@ export function loadCombinedSessionStoreForGatewayCore(
           `non-canonical persisted row resolves to session key ${canonicalKey}`,
         );
       }
-      const canonicalAgentId = normalizeAgentId(
-        parseAgentSessionKey(canonicalKey)?.agentId ?? agentId,
-      );
+      const canonicalAgentId = normalizeAgentId(parsed?.agentId ?? rowAgentId);
       if (requestedAgentId && canonicalAgentId !== requestedAgentId) {
         continue;
       }
