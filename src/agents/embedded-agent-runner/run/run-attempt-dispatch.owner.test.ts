@@ -195,11 +195,12 @@ it.each([
             },
           })
         : null;
+      const sandboxProvider = { resolveSandbox: async () => remoteSandbox };
       const restorePlacement = installSessionPlacementAdmissionProvider({
         assertCompactionSuccessorAllowed() {},
         executeLocalTurn: async (_claim, runLocal) => runLocal(),
         executeTurn: async (_claim, _params, runLocal) => runLocal(),
-        ...{ resolveSandbox: async () => remoteSandbox },
+        ...sandboxProvider,
       });
       try {
         const result = await dispatchEmbeddedRunAttempt(input);

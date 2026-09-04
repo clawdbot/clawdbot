@@ -108,10 +108,11 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
                 fs.mkdir(dir, { recursive: true }),
               ),
             );
-            for (const file of files)
+            for (const file of files) {
               await fs.writeFile(path.join(skillDir, file.name), file.bytes, {
                 mode: file.executable ? 0o755 : 0o600,
               });
+            }
             published = await createPublishedWireWorkspace(path.join(root, "project"));
             const gateway = await owner.start({
               repoRoot: process.cwd(),
@@ -218,7 +219,11 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
                 }>;
               }>("node.list", {});
               const connected = inventory.nodes.find((entry) => entry.nodeId === nodeId);
-              expect(connected).toMatchObject({ connected: true, approvalState: "approved" });
+              expect(connected).toMatchObject({
+                connected: true,
+                approvalState: "approved",
+                sessionHost: true,
+              });
               expect(connected?.commands).toContain(COMMAND);
             }, WAIT);
             await operator.request("sessions.create", {
@@ -373,7 +378,9 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
               if (history) {
                 let diagnostic = JSON.stringify(history);
                 for (const secret of [API_KEY, gatewayToken]) {
-                  if (secret) diagnostic = diagnostic.replaceAll(secret, "[REDACTED]");
+                  if (secret) {
+                    diagnostic = diagnostic.replaceAll(secret, "[REDACTED]");
+                  }
                 }
                 console.info(`worker-skill-resources history: ${diagnostic.slice(-16000)}`);
               }
