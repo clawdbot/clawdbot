@@ -1154,7 +1154,7 @@ extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
 extensions/slack/src/monitor/message-handler/dispatch.ts	2
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/message-handler/prepare.ts	3
+extensions/slack/src/monitor/message-handler/prepare.ts	2
 extensions/slack/src/monitor/message-handler/preview-finalize.ts	3
 extensions/slack/src/monitor/message-handler/subteam-mentions.ts	1
 extensions/slack/src/monitor/provider-support.ts	3
@@ -2084,7 +2084,7 @@ src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
-src/agents/workspace.ts	9
+src/agents/workspace.ts	7
 src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
 src/agents/worktrees/registry.ts	11
@@ -2324,7 +2324,7 @@ src/cli/directory-cli.ts	7
 src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	10
 src/cli/exec-policy-cli.ts	3
-src/cli/gateway-cli/dev.ts	2
+src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	12
