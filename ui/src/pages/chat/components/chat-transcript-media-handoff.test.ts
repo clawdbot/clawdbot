@@ -214,6 +214,9 @@ describe("canonical image presentation handoff", () => {
     installTranscriptDomMocks();
     // jsdom has no native Blob URL store; retain its actual Blob for byte checks.
     vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      if (!(blob instanceof Blob)) {
+        throw new Error("Attachment preview must allocate a Blob URL");
+      }
       const url = `blob:${crypto.randomUUID()}`;
       previewBlobs.set(url, blob);
       return url;
