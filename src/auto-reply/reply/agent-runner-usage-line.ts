@@ -6,8 +6,6 @@ import {
   estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
-  type ModelCostConfig,
-  resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
@@ -16,11 +14,11 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
-const formatResponseUsageLine = (params: {
-  usage?: NormalizedUsage;
-  showCost: boolean;
-  costConfig?: ModelCostConfig;
-}): string | null => {
+const formatResponseUsageLine = (
+  params: Parameters<typeof estimateAggregateUsageCost>[0] & {
+    showCost: boolean;
+  },
+): string | null => {
   const usage = params.usage;
   if (!usage) {
     return null;
@@ -33,10 +31,7 @@ const formatResponseUsageLine = (params: {
   const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
   const canPriceUsage =
     usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
-  const cost =
-    params.showCost && canPriceUsage
-      ? estimateAggregateUsageCost({ usage, cost: params.costConfig })
-      : undefined;
+  const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   if (typeof input !== "number" && typeof output !== "number" && !costLabel) {
     return null;
@@ -72,17 +67,14 @@ export const resolveResponseUsageLine = (params: {
     return undefined;
   }
 
-  const costConfig = resolveModelCostConfig({
+  const formatted = formatResponseUsageLine({
+    usage: params.usage,
+    showCost,
     provider: params.provider,
     model: params.model,
     config: params.config,
     agentDir: params.agentDir,
     allowPluginNormalization: false,
-  });
-  const formatted = formatResponseUsageLine({
-    usage: params.usage,
-    showCost,
-    costConfig,
   });
   const usageTemplate =
     responseUsageMode === "full" && params.replyUsageState

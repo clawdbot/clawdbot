@@ -34,11 +34,7 @@ import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-st
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
-import {
-  createImageProcessor,
-  getImageMetadata,
-  readImageProbeFromHeader,
-} from "../media/media-services.js";
+import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
   replacePlaybackFileExtension,
   resolvePlaybackModeForSource,
@@ -418,19 +414,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-function orientManagedImageMetadata(
-  buffer: Buffer,
-  metadata: { width: number; height: number } | null,
-): { width: number; height: number } | null {
-  if (!metadata) {
-    return null;
-  }
-  const orientation = readImageProbeFromHeader(buffer)?.orientation;
-  return orientation === 5 || orientation === 6 || orientation === 7 || orientation === 8
-    ? { width: metadata.height, height: metadata.width }
-    : metadata;
 }
 
 async function resizeManagedImageBufferToLimits(params: {
@@ -1621,14 +1604,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
           throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
         }
 
-        const originalMetadata =
+        const originalDisplayMetadata =
           originalStats.width != null && originalStats.height != null
             ? { width: originalStats.width, height: originalStats.height }
             : await getImageMetadata(originalBuffer);
-        const originalDisplayMetadata = orientManagedImageMetadata(
-          originalBuffer,
-          originalMetadata,
-        );
         let effectiveMetadata = originalDisplayMetadata;
         let metadataLimitError = getManagedImageMetadataLimitError(
           effectiveMetadata,
@@ -1661,12 +1640,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
             buffer: originalBuffer,
             sizeBytes: savedOriginal.size,
           });
-          effectiveMetadata = orientManagedImageMetadata(
-            originalBuffer,
+          effectiveMetadata =
             originalStats.width != null && originalStats.height != null
               ? { width: originalStats.width, height: originalStats.height }
-              : await getImageMetadata(originalBuffer),
-          );
+              : await getImageMetadata(originalBuffer);
           metadataLimitError = getManagedImageMetadataLimitError(effectiveMetadata, label, limits);
           if (!metadataLimitError) {
             resizeWarning = buildManagedImageResizeWarningBlock({

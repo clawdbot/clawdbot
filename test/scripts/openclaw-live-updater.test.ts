@@ -333,7 +333,7 @@ describe("openclaw live updater", () => {
     }
   });
 
-  describe.sequential("fixture cleanup boundary", () => {
+  describe("fixture cleanup boundary", { concurrent: false }, () => {
     test("creates a disposable clone fixture", () => {
       cleanupProbeRoot = makeFixture().root;
       expect(existsSync(cleanupProbeRoot)).toBe(true);

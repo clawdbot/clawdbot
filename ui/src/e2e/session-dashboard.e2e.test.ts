@@ -11,7 +11,13 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  dockChatSidePanel,
+  focusChatSidePanel,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session dashboard stitch",
@@ -256,7 +262,17 @@ suite.define(() => {
     if (recordProof) {
       await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
     }
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-pin"),
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
@@ -301,7 +317,7 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
-    await page.locator(".side-panel").waitFor();
+    await page.locator('[data-panel-slot="dashboard"]').waitFor();
     await page.locator(".board-session-surface").waitFor();
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -310,7 +326,7 @@ suite.define(() => {
       });
     }
 
-    await page.locator(".side-panel__dock-bottom").click();
+    await dockChatSidePanel(page, "bottom");
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
     if (recordProof) {
@@ -382,10 +398,17 @@ suite.define(() => {
     const researchTab = page.locator('[data-board-tab-id="research"]');
     await expect.poll(() => researchTab.getAttribute("active")).not.toBeNull();
 
-    const expand = page.getByRole("button", { name: "Expand side panel" });
-    await expand.click();
+    await assertDashboardToolPresentation({
+      page,
+      gateway,
+      sessionKey,
+      proofDir: recordProof ? path.join(suite.artifactDir, "workboard-pin") : undefined,
+    });
+
+    await restoreChatAsMain(page);
+    await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-    await page.getByRole("button", { name: "Collapse", exact: true }).click();
+    await page.getByRole("button", { name: "Restore split", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
@@ -398,8 +421,9 @@ suite.define(() => {
         path: path.join(suite.artifactDir, "workboard-pin", "05-collapsed-bottom.png"),
       });
     }
-    await page.locator(".side-panel__minimize").click();
-    await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+    await restoreChatAsMain(page);
+    await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
       await page.screenshot({
@@ -656,14 +680,15 @@ suite.define(() => {
         Reflect.set(globalThis, "workboardPluginElementIdentity", element);
       });
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      await page.locator(".side-panel__minimize").click();
-      await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+      await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+      await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expect
         .poll(() =>
           cardElement?.evaluate(
             (element) =>
               element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              !element.isConnected,
+              element.isConnected &&
+              Reflect.get(element, "active") === false,
           ),
         )
         .toBe(true);

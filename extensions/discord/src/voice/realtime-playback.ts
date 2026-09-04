@@ -4,7 +4,9 @@ import {
   realtimeVoiceAudioDurationMs,
   resolveRealtimeVoiceBargeIn,
   type RealtimeVoiceActivationNameTranscriptResult,
+  type RealtimeVoiceAudioChunkMetadata,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoicePlaybackItem,
   type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -48,6 +50,7 @@ export type DiscordRealtimePlaybackPort = Pick<
 
 export class DiscordRealtimePlayback<TState> {
   private readonly outputs = new Set<DiscordRealtimeOutput>();
+  private readonly generatingItems = new Map<string, RealtimeVoicePlaybackItem>();
   private generatingOutput: DiscordRealtimeOutput | undefined;
   private responseAudio: "accepting" | "discarding" | "completed" = "completed";
   private readonly unregisterPlayerLane: () => void;
@@ -131,8 +134,32 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   hasInterruptibleOutputAudio(): boolean {
+    // Installed providers without playback snapshots retain the scalar clock contract.
     this.params.bridge()?.setMediaTimestamp(this.outputAudioMs());
-    return this.outputs.size > 0;
+    return this.isOutputAudioActive();
+  }
+
+  getPlaybackState(): RealtimeVoicePlaybackItem[] {
+    const items = new Set<RealtimeVoicePlaybackItem>();
+    for (const output of this.outputs) {
+      const outputItems = output.playbackItems();
+      // A starved item precedes later items in its response, even after its
+      // resource closes. Older completed responses still keep their queue position.
+      if (outputItems.some((item) => this.generatingItems.get(item.itemId) === item)) {
+        for (const item of this.generatingItems.values()) {
+          items.add(item);
+        }
+      }
+      for (const item of outputItems) {
+        items.add(item);
+      }
+    }
+    // Starvation can close a resource before its native response finishes. The
+    // response retains consumed offsets until later PCM resumes or generation ends.
+    for (const item of this.generatingItems.values()) {
+      items.add(item);
+    }
+    return Array.from(items, (item) => ({ ...item, audioEndMs: Math.floor(item.audioEndMs) }));
   }
 
   beginResponse(): void {
@@ -142,7 +169,13 @@ export class DiscordRealtimePlayback<TState> {
     }
   }
 
-  sendOutputAudio(realtimePcm24kMono: Buffer): void {
+  sendOutputMark(acknowledge: () => void): void {
+    if (!this.params.stopped() && this.responseAudio === "accepting") {
+      this.generatingOutput?.markPlayback(acknowledge);
+    }
+  }
+
+  sendOutputAudio(realtimePcm24kMono: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void {
     this.params.markProviderGenerationObserved();
     if (this.params.stopped() || this.responseAudio === "discarding") {
       return;
@@ -178,8 +211,17 @@ export class DiscordRealtimePlayback<TState> {
       sourceAudioBytes: realtimePcm24kMono.length,
       sinkAudioBytes: discordPcm.length,
     };
+    let item: RealtimeVoicePlaybackItem | undefined;
+    if (metadata) {
+      item = this.generatingItems.get(metadata.itemId);
+      if (!item) {
+        item = { itemId: metadata.itemId, audioEndMs: 0 };
+        this.generatingItems.set(metadata.itemId, item);
+      }
+    }
+    // Observers may interrupt synchronously; publish ownership before notifying them.
     this.params.harness.recordOutputAudio(realtimePcm24kMono, activity);
-    output.append(discordPcm, activity);
+    output.append(discordPcm, activity, item);
   }
 
   clearOutputAudio(reason = "clear"): void {
@@ -187,6 +229,7 @@ export class DiscordRealtimePlayback<TState> {
       this.responseAudio = "discarding";
     }
     this.generatingOutput = undefined;
+    this.generatingItems.clear();
     const outputs = Array.from(this.outputs);
     this.outputs.clear();
     // Retire all source ownership and queued requests before stopping its player.
@@ -202,6 +245,7 @@ export class DiscordRealtimePlayback<TState> {
   }): void {
     const output = this.generatingOutput;
     this.generatingOutput = undefined;
+    this.generatingItems.clear();
     this.responseAudio = "completed";
     // Generation ends before queued playback. Only this response may end its stream.
     output?.finish(outcome.status, outcome.status === "completed");
@@ -372,7 +416,7 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   isOutputAudioActive(): boolean {
-    return this.outputs.size > 0;
+    return this.outputs.size > 0 || this.generatingItems.size > 0;
   }
 
   private stopAfterPlaybackFailure(reason: string, error: Error): void {
@@ -414,7 +458,7 @@ export class DiscordRealtimePlayback<TState> {
       onBargeIn: (reason) => this.handleBargeIn(reason),
       onError: (error) =>
         this.stopAfterPlaybackFailure(
-          "player-start-error",
+          "output-playback-error",
           error instanceof Error ? error : new Error(formatErrorMessage(error)),
         ),
     });

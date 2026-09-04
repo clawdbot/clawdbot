@@ -71,6 +71,7 @@
     },
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.shell_tool": true,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
@@ -116,6 +117,7 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.shell_tool": true,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
@@ -239,8 +241,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56971,
-    "roughTokens": 14243
+    "chars": 57519,
+    "roughTokens": 14380
   },
   "openClawDeveloperInstructions": {
     "chars": 3224,
@@ -251,8 +253,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6793
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84143,
-    "roughTokens": 21036
+    "chars": 84691,
+    "roughTokens": 21173
   },
   "userInputText": {
     "chars": 863,

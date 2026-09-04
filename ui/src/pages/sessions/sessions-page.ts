@@ -79,6 +79,7 @@ import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
 import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
+const SESSION_SEARCH_DEBOUNCE_MS = 200;
 
 type SessionsPageRequestScope = {
   epoch: number;
@@ -100,6 +101,7 @@ type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
   query: ReturnType<typeof sessionsPageListQuery>;
   key: string;
+  transcriptKey: string;
 };
 
 class SessionsPage extends OpenClawLightDomElement {
@@ -149,6 +151,8 @@ class SessionsPage extends OpenClawLightDomElement {
   private sessionMenuWorkVersion = 0;
   private listBinding?: SessionsPageListBinding;
   private unsubscribeList?: () => void;
+  private listRequest?: Promise<void>;
+  private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
@@ -156,6 +160,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.page = 0;
       this.selectedKeys = new Set();
       this.routeDataEnabled = false;
+      this.clearSearchTimer();
       this.bindSessionList();
     }
     this.requestUpdate();
@@ -209,7 +214,7 @@ class SessionsPage extends OpenClawLightDomElement {
         client,
         query,
         listSessions: context.sessions.list,
-        listOptions: this.sessionListOptions(context),
+        listOptions: this.sessionListOptions(context, ""),
         resolveAgentId: (sessionKey) =>
           parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
@@ -282,6 +287,8 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private invalidatePageWork() {
     this.pageEpoch += 1;
+    this.clearSearchTimer();
+    this.listRequest = undefined;
     this.submittedTranscriptSearchQuery = "";
     this.transcriptSearch = { status: "idle" };
     void this.transcriptSearchTask.run(this.transcriptSearchArgs());
@@ -443,7 +450,7 @@ class SessionsPage extends OpenClawLightDomElement {
     return this.sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
   }
 
-  private sessionListOptions(context: ApplicationContext) {
+  private sessionListOptions(context: ApplicationContext, search = this.searchQuery) {
     return sessionsPageListQuery(context, {
       activeMinutes: parseStrictPositiveInteger(this.activeMinutes),
       // The Limit box is an explicit page size, so an unparseable entry falls
@@ -453,40 +460,54 @@ class SessionsPage extends OpenClawLightDomElement {
       includeUnknown: this.includeUnknown,
       statusFilter: this.statusFilter,
       deepLinkSessionKey: this.deepLinkSessionKey,
+      search,
     });
   }
 
   private bindSessionList(refreshMissing = true): SessionsPageListBinding | undefined {
     const context = this.context;
-    if (!context) {
+    if (!context || !this.isConnected) {
       return undefined;
     }
     const sessions = context.sessions;
     const query = this.sessionListOptions(context);
     const key = JSON.stringify(query);
     const current = this.listBinding;
-    if (current?.sessions === sessions && current.key === key) {
-      return current;
+    const transcriptKey = JSON.stringify(this.sessionListOptions(context, ""));
+    if (current?.sessions !== sessions || current.key !== key) {
+      // An event refresh can already own the old query's request.
+      if (current?.sessions === sessions && sessions.listSnapshot(current.query).loading) {
+        void this.loadSessionList(current);
+      }
+      this.unsubscribeList?.();
+      this.unsubscribeList = undefined;
+      if (current?.sessions !== sessions || current.transcriptKey !== transcriptKey) {
+        this.resetTranscriptSearchState(this.transcriptSearchQuery);
+      }
+      // Retired rows cannot be selected under replacement text, even during debounce.
+      this.result = null;
+      this.error = null;
+      this.selectedKeys = new Set();
+      this.page = 0;
+      this.listBinding = { sessions, query, key, transcriptKey };
+      this.appliedListResult = undefined;
     }
-    this.unsubscribeList?.();
-    // Search hits and pending work belong to the roster query, not just its agent.
-    this.resetTranscriptSearchState(this.transcriptSearchQuery);
-    const binding = { sessions, query, key };
-    this.listBinding = binding;
-    this.appliedListResult = undefined;
+    const binding = this.listBinding!;
+    if (this.unsubscribeList) {
+      return binding;
+    }
+    this.loading = context.gateway.snapshot.phase === "connected";
+    if (!this.captureRequestScope() || this.searchTimer !== undefined || this.listRequest) {
+      return binding;
+    }
     const apply = (snapshot: SessionListSnapshot) => {
       this.applyListSnapshot(binding, snapshot);
     };
     this.unsubscribeList = sessions.subscribeList(query, apply);
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
-    if (
-      refreshMissing &&
-      !snapshot.result &&
-      !snapshot.loading &&
-      context.gateway.snapshot.phase === "connected"
-    ) {
-      void sessions.refreshList({ ...query, force: true });
+    if (refreshMissing && (!snapshot.result || snapshot.loading)) {
+      void this.loadSessionList(binding);
     }
     return binding;
   }
@@ -516,14 +537,51 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.routeDataEnabled = false;
+    this.clearSearchTimer();
     const binding = this.bindSessionList(false);
     if (!binding || binding.sessions !== scope.sessions || !this.isRequestScopeCurrent(scope)) {
       return;
     }
-    await binding.sessions.refreshList({ ...binding.query, force: true });
+    await this.loadSessionList(binding, { force: true });
     if (this.isRequestScopeCurrent(scope) && this.listBinding === binding) {
       this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
     }
+  }
+
+  private loadSessionList(
+    binding: SessionsPageListBinding,
+    options: { force?: boolean; offset?: number; append?: boolean } = {},
+  ): Promise<void> {
+    if (this.listRequest) {
+      // Only the bound query may queue mutation invalidation in its managed owner.
+      if (options.force && this.unsubscribeList) {
+        void binding.sessions.refreshList({ ...binding.query, ...options });
+      }
+      return this.listRequest;
+    }
+    if (!this.captureRequestScope()) {
+      return Promise.resolve();
+    }
+    // Claim before refreshList publishes. Only this connection's completion may
+    // release the slot; the next query is read from page state, never queued here.
+    let start!: (request: Promise<void>) => void;
+    const pending = new Promise<void>((resolve) => {
+      start = resolve;
+    }).finally(() => {
+      if (this.listRequest !== pending) {
+        return;
+      }
+      this.listRequest = undefined;
+      this.bindSessionList();
+    });
+    this.listRequest = pending;
+    start(binding.sessions.refreshList({ ...binding.query, ...options }));
+    return pending;
+  }
+
+  private clearSearchTimer() {
+    clearTimeout(this.searchTimer);
+    this.searchTimer = undefined;
   }
 
   private adoptCurrentListSnapshot() {
@@ -637,6 +695,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     this.statusFilter = statusFilter;
+    this.clearSearchTimer();
     this.page = 0;
     this.selectedKeys = new Set();
     this.deepLinkSessionKey = null;
@@ -1623,9 +1682,19 @@ class SessionsPage extends OpenClawLightDomElement {
             void this.refreshSessionList();
           },
           onSearchChange: (query) => {
+            this.routeDataEnabled = false;
+            this.deepLinkSessionKey = null;
             this.searchQuery = query;
             this.page = 0;
             this.selectedKeys = new Set();
+            this.clearSearchTimer();
+            if (this.captureRequestScope()) {
+              this.searchTimer = setTimeout(() => {
+                this.searchTimer = undefined;
+                this.bindSessionList();
+              }, SESSION_SEARCH_DEBOUNCE_MS);
+            }
+            this.bindSessionList();
           },
           onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
           onTranscriptSearch: () => void this.runTranscriptSearch(),
@@ -1638,6 +1707,13 @@ class SessionsPage extends OpenClawLightDomElement {
           onGroupByChange: (mode) => this.setGroupBy(mode),
           onAssignCategory: (key, category) => this.assignCategory(key, category),
           onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
+          onLoadMore: () => {
+            const binding = this.listBinding;
+            const offset = this.result?.nextOffset;
+            if (binding && this.result?.hasMore && offset != null && !this.loading) {
+              void this.loadSessionList(binding, { offset, append: true });
+            }
+          },
           onPageChange: (page) => {
             this.page = page;
           },

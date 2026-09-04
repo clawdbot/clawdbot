@@ -270,3 +270,55 @@ it("preserves inactive siblings when the bounded active branch fits its limits",
     ]),
   );
 });
+
+it("preserves explicit reset retention of excluded user input in a bounded reopen", async () => {
+  const dir = tempDirs.make("openclaw-bounded-reset-excluded-");
+  const scope = {
+    agentId: "main",
+    sessionId: "reset-excluded",
+    sessionKey: "agent:main:reset-excluded",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(scope, dir);
+  manager.appendMessage({ role: "user", content: "discarded", timestamp: 1 });
+  const retained = manager.appendMessage({
+    role: "user",
+    content: "explicitly retained",
+    timestamp: 2,
+    display: false,
+    excludeFromContext: true,
+  } as Parameters<SessionManager["appendMessage"]>[0]);
+  manager.appendResetBoundary("new", retained);
+  const current = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "fresh",
+    timestamp: 3,
+  });
+  const raw = await loadTranscriptEvents(scope);
+  expect(manager.buildSessionContext().messages).toMatchObject([
+    { content: "explicitly retained" },
+    { content: "fresh" },
+  ]);
+  expect(
+    SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext(),
+  ).toEqual(manager.buildSessionContext());
+  expect(await loadTranscriptEvents(scope)).toEqual(raw);
+  manager.appendResetBoundary("new");
+  expect(
+    SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext()
+      .messages,
+  ).toEqual([]);
+  if (!current.anchor) {
+    throw new Error("Missing current-turn anchor");
+  }
+  runWithSessionTranscriptReadFence(
+    { ...current.anchor, logicalTurnId: "current", role: "user" },
+    () => {
+      expect(
+        SessionManager.openBounded(scope, { maxEvents: 8, maxBytes: 4096 }).buildSessionContext()
+          .messages,
+      ).toMatchObject([{ content: "explicitly retained" }]);
+    },
+  );
+});

@@ -163,7 +163,7 @@ describe("session accessor seam", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  describe.sequential("session database teardown boundary", () => {
+  describe("session database teardown boundary", { concurrent: false }, () => {
     it("opens cached agent and shared-state handles", async () => {
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },

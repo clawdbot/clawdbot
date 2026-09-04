@@ -14,9 +14,9 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
-import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import {
@@ -611,7 +611,6 @@ export async function invokeHeartbeatAgentRun(
     isHeartbeat: true,
     [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
     ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
-    suppressToolErrorWarnings: false,
     ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
     ...(usesHeartbeatResponseTool ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
     ...(heartbeatWakeAbortSignal ? { abortSignal: heartbeatWakeAbortSignal } : {}),

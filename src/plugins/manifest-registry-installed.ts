@@ -509,9 +509,9 @@ export function selectInstalledPluginManifestRecords(
       .filter((plugin) => includeDisabled || plugin.enabled)
       .map((plugin) => plugin.pluginId),
   );
-  return registry.plugins
-    .filter((plugin) => enabledPluginIds.has(plugin.id))
-    .filter((plugin) => !pluginIds || pluginIds.has(plugin.id));
+  return registry.plugins.filter(
+    (plugin) => enabledPluginIds.has(plugin.id) && (!pluginIds || pluginIds.has(plugin.id)),
+  );
 }
 
 export function loadPluginManifestRegistryForInstalledIndex(params: {

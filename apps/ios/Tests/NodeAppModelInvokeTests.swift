@@ -6515,7 +6515,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: response)))
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
                 }, receiveHook: { socket, index in
                     if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                     return .data(GatewayWebSocketTestSupport.connectOkData(
@@ -6655,7 +6655,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": requestID, "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in
@@ -6765,7 +6765,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                         Issue.record("Accepted recovery unexpectedly requested \(method)")
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in

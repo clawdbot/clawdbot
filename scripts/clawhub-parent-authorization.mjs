@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
@@ -130,6 +130,17 @@ export function clawHubIdentityFromEnvironment(env) {
     throw new Error("ClawHub identity does not match the executing workflow context.");
   }
   return identity;
+}
+
+// actions/download-artifact writes a lone `pattern` match straight into `path`
+// instead of `path/<artifact>`, so a one-package matrix must read the flat
+// layout; anything else keeps the per-artifact directory contract.
+export function resolvePackedClawHubArtifactDir({ directory, artifactName, matrixSize }) {
+  const nested = join(directory, artifactName);
+  if (existsSync(nested) || matrixSize !== 1) {
+    return nested;
+  }
+  return directory;
 }
 
 export function readPackedClawHubTransaction({ artifactDir, packageName, version, artifactName }) {
@@ -267,6 +278,37 @@ export function createClawHubParentAuthorization(transactions, authorizationRout
   }
   return receipt;
 }
+
+// Mirrors openclaw/clawhub convex/lib/openClawPublishAuthorization.ts RECOVERY_RECEIPT_KEYS /
+// validateRecoveryReceipt: a human actor and an exact receipt within the verifier's 8 KiB file bound.
+export function createClawHubRecoveryApproval(env) {
+  if (env.GITHUB_REPOSITORY !== REPOSITORY) {
+    throw new Error("ClawHub recovery approval repository mismatch.");
+  }
+  const actor = env.GITHUB_ACTOR;
+  if (typeof actor !== "string" || !actor.trim() || /\[bot\]$/iu.test(actor)) {
+    throw new Error("ClawHub recovery approval actor must be a human login.");
+  }
+  const receipt = {
+    version: 1,
+    kind: "openclaw-clawhub-recovery-approval",
+    repository: env.GITHUB_REPOSITORY,
+    workflow: CLAWHUB_CHILD_WORKFLOW,
+    runId: pattern(env.GITHUB_RUN_ID, ID, "Recovery run id"),
+    runAttempt: pattern(env.GITHUB_RUN_ATTEMPT, ID, "Recovery run attempt"),
+    actor,
+    environment: "clawhub-plugin-release",
+    approvalJob: "approve_plugins_clawhub_release",
+    authorizationRoute: "explicit-recovery",
+    parentRunId: pattern(env.RELEASE_PUBLISH_RUN_ID, ID, "Recovery parent run id"),
+    parentRunAttempt: pattern(env.RELEASE_PUBLISH_RUN_ATTEMPT, ID, "Recovery parent run attempt"),
+  };
+  if (Buffer.byteLength(JSON.stringify(receipt)) + 1 > 8 * 1024) {
+    throw new Error("ClawHub recovery approval exceeds 8 KiB.");
+  }
+  return receipt;
+}
+
 export function validateClawHubParentAuthorization(receipt, transactions) {
   const expected = createClawHubParentAuthorization(transactions, receipt?.authorizationRoute);
   exactKeys(receipt, Object.keys(expected), "ClawHub parent authorization");
@@ -437,10 +479,11 @@ async function main() {
     const packages = matrix
       .map((entry) =>
         readPackedClawHubTransaction({
-          artifactDir: join(
-            values.directory,
-            pattern(entry.artifactName, ARTIFACT, "Artifact name"),
-          ),
+          artifactDir: resolvePackedClawHubArtifactDir({
+            directory: values.directory,
+            artifactName: pattern(entry.artifactName, ARTIFACT, "Artifact name"),
+            matrixSize: matrix.length,
+          }),
           artifactName: entry.artifactName,
           packageName: entry.packageName,
           version: entry.version,
@@ -533,8 +576,10 @@ async function main() {
       env.WAIT_FOR_CLAWHUB === "true" ? "automated-awaited" : "automated-detached",
     );
     appendFileSync(env.GITHUB_OUTPUT, `artifact_name=${clawHubParentArtifactName(identity)}\n`);
+  } else if (positionals[0] === "recovery-approval") {
+    result = createClawHubRecoveryApproval(process.env);
   } else {
-    throw new Error("Expected seal or authorize.");
+    throw new Error("Expected seal, authorize, or recovery-approval.");
   }
   mkdirSync(dirname(values.output), { recursive: true });
   writeFileSync(values.output, `${JSON.stringify(result)}\n`, { flag: "wx" });

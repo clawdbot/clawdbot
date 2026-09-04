@@ -80,6 +80,7 @@ import {
   isChatBusy,
   isChatStopCommand,
 } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 
 export type ChatSendSubmitOptions = {
   intent?: ChatSendIntent;
@@ -327,6 +328,7 @@ export async function handleSendChat(
           recordNonTranscriptInputHistory(host, userMessage);
         }
         const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
+        scheduleChatScroll(host, true, false, { source: "manual" });
         await sendDetachedCommandMessage(host, message, {
           attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
           recovery: captureChatCommandComposerRecovery(
@@ -388,6 +390,8 @@ export async function handleSendChat(
             setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
             return;
           }
+          // Submission resumes follow; delayed command results respect later reader input.
+          scheduleChatScroll(host, true, false, { source: "manual" });
           await deliverChatQueueItem(host, queued, { routingSessionKey: host.sessionKey });
         });
         return undefined;
@@ -439,6 +443,9 @@ export async function handleSendChat(
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
+        if (parsed.command.key === "steer" || parsed.command.key === "redirect") {
+          scheduleChatScroll(host, true, false, { source: "manual" });
+        }
         const dispatchResult = await dispatchChatSlashCommand(
           host,
           parsed.command.key,
@@ -734,7 +741,7 @@ function prependReplyQuote(
   message: string,
   replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
 ): string {
-  const label = escapeMarkdownInline(replyTarget.senderLabel ?? "User");
+  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
   const text = replyTarget.text.trim();
   if (!text.includes("\n")) {
     return `> **${label}:** ${text}\n\n${message}`;
@@ -744,8 +751,4 @@ function prependReplyQuote(
     .map((line) => `> ${line}`)
     .join("\n");
   return `> **${label}:**\n${quoted}\n\n${message}`;
-}
-
-function escapeMarkdownInline(value: string): string {
-  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
 }

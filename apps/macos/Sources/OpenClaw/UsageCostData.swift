@@ -50,14 +50,3 @@ enum CostUsageFormatting {
         return String(format: "$%.4f", value)
     }
 }
-
-@MainActor
-enum CostUsageLoader {
-    static func loadSummary() async throws -> GatewayCostUsageSummary {
-        let data = try await ControlChannel.shared.request(
-            method: "usage.cost",
-            params: nil,
-            timeoutMs: 7000)
-        return try JSONDecoder().decode(GatewayCostUsageSummary.self, from: data)
-    }
-}

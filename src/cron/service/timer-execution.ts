@@ -275,13 +275,7 @@ export async function executeJobCore(
     return triggerEval ? { ...result, triggerEval } : result;
   }
 
-  const result = await executeDetachedCronJob(
-    state,
-    effectiveJob,
-    abortSignal,
-    resolveAbortError,
-    options,
-  );
+  const result = await executeDetachedCronJob(state, effectiveJob, abortSignal, options);
   return triggerEval ? { ...result, triggerEval } : result;
 }
 
@@ -412,7 +406,6 @@ async function executeDetachedCronJob(
   state: CronServiceState,
   job: CronJob,
   abortSignal: AbortSignal | undefined,
-  resolveAbortError: () => { status: "error"; error: string },
   options?: ExecuteJobCoreOptions,
 ): Promise<
   CronRunOutcome &
@@ -426,6 +419,16 @@ async function executeDetachedCronJob(
       nextCheck?: CronNextCheckProposal;
     }
 > {
+  const interrupted = () => {
+    const error = abortErrorMessage(abortSignal);
+    return {
+      status: "error" as const,
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
+  };
   if (job.payload.kind === "command") {
     if (!state.deps.runCommandJob) {
       const error = "cron command runner is not configured";
@@ -443,14 +446,7 @@ async function executeDetachedCronJob(
       abortSignal,
     });
     if (abortSignal?.aborted) {
-      const error = abortErrorMessage(abortSignal);
-      return {
-        status: "error",
-        error,
-        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
-          nowMs: state.deps.nowMs,
-        }),
-      };
+      return interrupted();
     }
     return {
       status: res.status,
@@ -480,13 +476,7 @@ async function executeDetachedCronJob(
     };
   }
   if (abortSignal?.aborted) {
-    const aborted = resolveAbortError();
-    return {
-      ...aborted,
-      diagnostics: createCronRunDiagnosticsFromError("cron-setup", aborted.error, {
-        nowMs: state.deps.nowMs,
-      }),
-    };
+    return interrupted();
   }
 
   const res = await state.deps.runIsolatedAgentJob({
@@ -500,14 +490,7 @@ async function executeDetachedCronJob(
   });
 
   if (abortSignal?.aborted) {
-    const error = abortErrorMessage(abortSignal);
-    return {
-      status: "error",
-      error,
-      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
-        nowMs: state.deps.nowMs,
-      }),
-    };
+    return interrupted();
   }
 
   return {
