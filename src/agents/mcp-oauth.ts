@@ -360,6 +360,7 @@ function buildMcpOAuthAuthorizationFetch(config: ResolvedHttpMcpTransportConfig)
     clientKey: config.clientKey,
     resourceUrl: config.url,
     timeoutMs: config.requestTimeoutMs,
+    allowCrossOriginUnsafeRedirectReplay: false,
   });
   return withSameOriginMcpHttpHeaders({
     fetchFn,

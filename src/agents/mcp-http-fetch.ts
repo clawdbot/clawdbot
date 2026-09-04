@@ -99,6 +99,7 @@ export function buildMcpHttpFetch(params: {
   clientKey?: string;
   resourceUrl?: string;
   timeoutMs?: number;
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
 }): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
@@ -127,7 +128,7 @@ export function buildMcpHttpFetch(params: {
       init: request.init,
       fetchImpl: fetchWithUndiciGuard,
       maxRedirects: MCP_HTTP_MAX_REDIRECTS,
-      allowCrossOriginUnsafeRedirectReplay: true,
+      allowCrossOriginUnsafeRedirectReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
       ...(request.signal ? { signal: request.signal } : {}),

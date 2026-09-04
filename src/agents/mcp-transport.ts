@@ -166,14 +166,17 @@ export function resolveMcpTransport(
   } else {
     oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
   }
-  // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
-  // Per-RPC deadlines belong to client calls, not this transport fetch.
-  const baseFetch = buildMcpHttpFetch({
-    sslVerify: resolved.sslVerify,
-    clientCert: resolved.clientCert,
-    clientKey: resolved.clientKey,
-    resourceUrl: resolved.url,
-  });
+  const buildHttpFetch = (allowCrossOriginUnsafeRedirectReplay: boolean) =>
+    buildMcpHttpFetch({
+      sslVerify: resolved.sslVerify,
+      clientCert: resolved.clientCert,
+      clientKey: resolved.clientKey,
+      resourceUrl: resolved.url,
+      allowCrossOriginUnsafeRedirectReplay,
+    });
+  // Long-lived SSE/streamable bodies retain MCP redirect compatibility. OAuth
+  // credential requests use a separate fail-closed fetch below.
+  const baseFetch = buildHttpFetch(true);
   const headers =
     resolved.auth === "oauth" || authProfileId
       ? withoutMcpAuthorizationHeader(resolved.headers)
@@ -198,7 +201,11 @@ export function resolveMcpTransport(
           fetchFn: resourceFetch,
           // Protected-resource discovery lives at the resource origin and may
           // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
+          authFetchFn: withSameOriginMcpHttpHeaders({
+            fetchFn: buildHttpFetch(false),
+            headers,
+            resourceUrl: resolved.url,
+          }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })

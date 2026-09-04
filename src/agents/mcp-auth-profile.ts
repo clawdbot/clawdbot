@@ -77,6 +77,7 @@ async function resolveMcpBearerToken(params: {
       // External bearer projection performs only OAuth discovery/token work,
       // so the configured deadline can own the full short-lived response.
       timeoutMs: resolved.requestTimeoutMs,
+      allowCrossOriginUnsafeRedirectReplay: false,
     }),
     headers: withoutMcpAuthorizationHeader(resolved.headers),
     resourceUrl: resolved.url,

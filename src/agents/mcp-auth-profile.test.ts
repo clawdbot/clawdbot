@@ -64,6 +64,7 @@ describe("mcp auth profile bearer projection", () => {
       expect.objectContaining({
         resourceUrl: "https://mcp.example.com/mcp",
         timeoutMs: 25,
+        allowCrossOriginUnsafeRedirectReplay: false,
       }),
     );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
