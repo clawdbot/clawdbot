@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -17,7 +17,7 @@ import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts"
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
 
-export { resolveAgentRuntimeLabel };
+export { formatAgentRuntimeLabel };
 
 type AgentRosterEntry = {
   id: string;
@@ -204,7 +204,7 @@ export function buildAgentContext(
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agent.model));
   const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
-  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
+  const runtime = formatAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||

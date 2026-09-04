@@ -28,7 +28,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
+import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
@@ -714,7 +714,7 @@ function sessionDetailItems(params: {
   add(t("sessionsView.provider"), row.modelProvider);
   // The roster dropped its Runtime column; the drawer is where agent runtime
   // and run duration live now.
-  add(t("sessionsView.runtime"), resolveAgentRuntimeLabel(row.agentRuntime));
+  add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
   add(t("sessionsView.subject"), row.subject);

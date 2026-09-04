@@ -12,7 +12,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunActive } from "../shared/session-run-state.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
@@ -254,7 +254,7 @@ export function createSessionListSearchMatcher(params: {
       model: selected.model,
       rowContext: context(),
     });
-    return matchesSessionListSearch([resolveAgentRuntimeLabel(agentRuntime)], search);
+    return matchesSessionListSearch([formatAgentRuntimeLabel(agentRuntime)], search);
   };
 }
 
