@@ -617,10 +617,7 @@ snapshots:
   });
 
   it.each([200, 503, 403])("bounds stalled HTTP %s bodies by the total budget", async (status) => {
-    const timers =
-      await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
-    // Real backoff consumes the remaining budget; the suite's instant mock does not.
-    vi.mocked(delay).mockImplementation(timers.setTimeout);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let cancelled = false;
     const fetchImpl = vi.fn(
       async () =>
@@ -635,7 +632,7 @@ snapshots:
         ),
     );
     try {
-      await expect(
+      const request = expect(
         fetchBulkAdvisories({
           payload: { axios: ["1.0.0"] },
           fetchImpl,
@@ -643,10 +640,14 @@ snapshots:
           budgetMs: 20,
         }),
       ).rejects.toThrow(status === 403 ? "failed (403" : "timeout");
+      await vi.advanceTimersByTimeAsync(19);
+      expect(cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await request;
       expect(fetchImpl).toHaveBeenCalledOnce();
       expect(cancelled).toBe(true);
     } finally {
-      vi.mocked(delay).mockImplementation(async () => {});
+      vi.useRealTimers();
     }
   });
 
