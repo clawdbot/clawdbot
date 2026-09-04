@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
@@ -20,6 +21,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
   createNestedToolActivity,
   readNestedToolActivity,
@@ -39,7 +41,10 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import {
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { hashToolCall } from "../../tool-loop-detection.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -47,6 +52,7 @@ import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
 import {
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   setActiveEmbeddedRunLifecycleGeneration,
@@ -54,6 +60,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
 import {
@@ -180,7 +187,7 @@ export function prepareEmbeddedAttemptStream(input: {
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages.slice(),
+          input.activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
@@ -346,6 +353,7 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
     compactionCountOwner: attempt.compactionCountOwner,
     onContextAccountingEvent: attempt.onContextAccountingEvent,
     sessionPersistence: attempt.sessionPersistence,
@@ -395,20 +403,23 @@ export function prepareEmbeddedAttemptStream(input: {
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
         onTerminal: async (terminal) => {
-          const activity = createNestedToolActivity({
-            runId: attempt.runId,
-            scopeId: activityScope,
-            afterEntryId,
-            startOrder,
-            parentToolCallId: toolParams.parentToolCallId,
-            toolCallId: toolParams.toolCallId,
-            toolName: toolParams.toolName,
-            input: terminal.executedArguments,
-            result: sanitizeToolResult(terminal.result),
-            isError: terminal.isError,
-            startedAt,
-            timestamp: Date.now(),
-          });
+          const message = {
+            ...createNestedToolActivity({
+              runId: attempt.runId,
+              scopeId: activityScope,
+              afterEntryId,
+              startOrder,
+              parentToolCallId: toolParams.parentToolCallId,
+              toolCallId: toolParams.toolCallId,
+              toolName: toolParams.toolName,
+              input: terminal.executedArguments,
+              result: sanitizeToolResult(terminal.result),
+              isError: terminal.isError,
+              startedAt,
+              timestamp: Date.now(),
+            }),
+            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+          };
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () => {
@@ -419,13 +430,12 @@ export function prepareEmbeddedAttemptStream(input: {
               ) {
                 return;
               }
-              const message = {
-                ...activity,
-                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-              };
+              if (isRecord(terminal.result)) {
+                copyInternalToolResultState(terminal.result, message);
+              }
               manager.appendMessage(message);
               const recorded = readNestedToolActivity(
-                redactTranscriptMessage(activity, attempt.config),
+                redactTranscriptMessage(message, attempt.config),
               );
               if (!recorded) {
                 throw new Error("Nested activity became invalid during transcript redaction");
@@ -505,12 +515,47 @@ export function prepareEmbeddedAttemptStream(input: {
           : undefined;
     input.abortRun(false, abortReason);
   };
-  const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
-    const canInject = () =>
+  const canInject = () => {
+    // The session awaits transcript/question preparation after the global queue
+    // check. Revalidate this exact publication and its live scope at the effect.
+    registration?.toolAuthority?.assertActive();
+    return (
       acceptingSteerMessages &&
       !input.getRunState().aborted &&
-      !input.runAbortController.signal.aborted;
-    if (!canInject()) {
+      !input.runAbortController.signal.aborted &&
+      registration !== undefined &&
+      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
+      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
+      ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
+    );
+  };
+  type InputAuthority = NonNullable<
+    Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
+  >;
+  const composeInjectionGuard = (assertCurrent?: () => void) => () => {
+    assertCurrent?.();
+    return canInject();
+  };
+  const questionAuthority = (
+    assertCurrent: (() => void) | undefined,
+    kind: InputAuthority["kind"],
+  ): InputAuthority => ({
+    kind,
+    assertCurrent: () => {
+      if (!composeInjectionGuard(assertCurrent)()) {
+        throw new Error("active session is finalizing");
+      }
+    },
+  });
+  // The shipped V1 entry retains backend-only authority; V2 requires the host assertion.
+  const queueMessage = async (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+  ) => {
+    const canInjectMessage = composeInjectionGuard(assertCurrent);
+    if (!canInjectMessage()) {
       throw new Error("active session is finalizing");
     }
     activeQueueAdmissions++;
@@ -523,11 +568,45 @@ export function prepareEmbeddedAttemptStream(input: {
         text,
         options,
         attempt.sessionKey,
-        canInject,
+        canInjectMessage,
+        questionAuthority(assertCurrent, authorityKind),
       );
     } finally {
       activeQueueAdmissions--;
     }
+  };
+  const claimPendingUserInputAnswer = (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+  ) =>
+    claimEmbeddedPendingUserInputAnswer(
+      text,
+      options,
+      attempt.sessionKey,
+      composeInjectionGuard(assertCurrent),
+      questionAuthority(assertCurrent, authorityKind),
+    );
+  const cancelPendingUserInput = (
+    resolvedBy: string,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+  ) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey: attempt.sessionKey,
+      resolvedBy,
+      authority: questionAuthority(assertCurrent, authorityKind),
+    });
+  const messageInjection = {
+    version: 2 as const,
+    isAvailable: () =>
+      acceptingSteerMessages &&
+      !input.getRunState().aborted &&
+      !input.runAbortController.signal.aborted,
+    queueMessage,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
   };
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
@@ -564,21 +643,14 @@ export function prepareEmbeddedAttemptStream(input: {
           }
         }
       : undefined,
-    claimPendingUserInputAnswer: (text, options) =>
-      claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
-    cancelPendingUserInput: (resolvedBy) =>
-      cancelPendingAgentQuestionForSession({ sessionKey: attempt.sessionKey, resolvedBy }),
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
     preemptByVisibleTurn: heartbeatReplyOperation
       ? () => heartbeatReplyOperation.supersede()
       : undefined,
     queueMessage,
-    messageInjection: {
-      isAvailable: () =>
-        acceptingSteerMessages &&
-        !input.getRunState().aborted &&
-        !input.runAbortController.signal.aborted,
-      queueMessage,
-    },
+    messageInjection,
+    messageInjectionV2: messageInjection,
     isStreaming: () => input.activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
     isStopped: () =>
@@ -598,7 +670,14 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  setActiveEmbeddedRun(
+    attempt.sessionId,
+    queueHandle,
+    attempt.sessionKey,
+    attempt.sessionFile,
+    input.hookAgentId,
+  );
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle);
   if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,

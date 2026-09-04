@@ -13,10 +13,16 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 - `skills.status` (gateway) returns all skills plus eligibility and missing requirements, including allowlist blocks for bundled skills.
 - Requirements come from `metadata.openclaw.requires` in each `SKILL.md`.
 
+The Skills pane and ClawHub search refresh when the selected Gateway changes.
+Skill actions and ClawHub reviews keep the Gateway that supplied their contents;
+a retained action cannot write to a replacement Gateway with the same skill key.
+A socket reconnect to the same configured Gateway preserves the action's target.
+
 ## Install actions
 
 - `metadata.openclaw.install` defines install options (brew/node/go/uv/download).
 - The app calls `skills.install` to run installers on the gateway host.
+- **Install on This Mac** explicitly selects Local mode and the Mac's local Gateway.
 - Operator-owned `security.installPolicy` (`enabled`, `targets`, `exec`) runs before installer metadata. `block` results and policy failures stop the install. A `warn` result also stops the gateway-backed request: review it with the matching direct CLI when one exists, or change the policy to allow the reviewed request, then retry.
 - If every install option is `download`, the gateway surfaces all download choices.
 - Otherwise the gateway picks one preferred installer using current install preferences (`skills.install.preferBrew`, `skills.install.nodeManager`) and host binaries: Homebrew first when `preferBrew` is enabled and `brew` is present, then `uv`, then the configured node manager, then Homebrew again if available (even without `preferBrew`), then `go`, then `download`.
@@ -42,10 +48,22 @@ sends their exact source reference without a version selector and labels unscann
 sources. After installation, it reads `skills.status` on the same Gateway route
 to confirm the reviewed version or the recorded install-only reference.
 
+If that refresh fails after the Gateway confirms installation, the app keeps the
+completed install message and any audit warning. Open **Skills > Installed** and
+choose **Refresh** to load the installed entry.
+
+A later connection or search failure appears separately from the completed install
+and its warning. **No skills found** means a successful search returned no matches.
+
 ## Env/API keys
 
 - The app stores keys in `~/.openclaw/openclaw.json` under `skills.entries.<skillKey>`.
 - `skills.update` patches `enabled`, `apiKey`, and `env`.
+
+If the Gateway changes while an editor is open, **Save** keeps the typed draft
+visible and reports the Gateway change. Reopen the skill on the intended
+Gateway to save there; **Cancel** discards the draft. A save already in flight
+may have reached the previous Gateway.
 
 ## Remote mode
 

@@ -16,7 +16,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  listSessionPendingInputConsumptions,
+  listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -32,6 +32,7 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -63,8 +64,11 @@ import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-o
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
+import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
+import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
@@ -113,6 +117,8 @@ async function handleChatMetadataRequest({
   params,
   respond,
   context,
+  client,
+  signal,
 }: GatewayRequestHandlerOptions): Promise<void> {
   if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
@@ -132,6 +138,7 @@ async function handleChatMetadataRequest({
     // The router authorizes the session selector; only the persisted entry supplies auth profiles.
     const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
       agentId: requested.agentId,
+      projection: "list",
     });
     respond(
       true,
@@ -141,7 +148,9 @@ async function handleChatMetadataRequest({
           config: session.cfg,
           agentId: requested.agentId,
         }),
+        sessionKey: session.canonicalKey,
         sessionEntry: session.entry,
+        requesterProfileId: resolveAuthenticatedProfileId(client),
       }),
     );
     return;
@@ -158,17 +167,33 @@ async function handleChatMetadataRequest({
   if (!resolvedAgent) {
     return;
   }
-  respond(
-    true,
-    await context.readChatMetadata({
+  try {
+    const draftAccountSelection = metadataParams.authProfileId
+      ? preparePersonalModelAccountSelection(
+          { client, context, signal },
+          metadataParams.authProfileId,
+          "operator.read",
+        )
+      : undefined;
+    const metadata = await context.readChatMetadata({
       agentId: resolvedAgent.agentId,
-    }),
-  );
+      requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
+      ...(draftAccountSelection ? { draftAccountSelection } : {}),
+    });
+    draftAccountSelection?.assertCurrent();
+    respond(true, metadata);
+  } catch (error) {
+    if (!(error instanceof ModelAccountConnectAuthorityError)) {
+      throw error;
+    }
+    respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+  }
 }
 
 async function handleChatHistoryRequest({
   params,
   respond,
+  client,
   context,
   method,
 }: GatewayRequestHandlerOptions & {
@@ -242,6 +267,7 @@ async function handleChatHistoryRequest({
         // Exact reads own their nested JSON; history only projects that snapshot.
         clone: false,
         includeStoreChildEntries: true,
+        projection: "list",
       }),
     {
       config: requestConfig,
@@ -299,7 +325,9 @@ async function handleChatHistoryRequest({
         try {
           return await context.readChatStartupProjection?.({
             agentId: sessionAgentId,
+            sessionKey: canonicalKey,
             sessionEntry: entry,
+            requesterProfileId: resolveAuthenticatedProfileId(client),
             readPolicy: method === "chat.history" ? "ready" : "current",
           });
         } catch (error) {
@@ -337,14 +365,19 @@ async function handleChatHistoryRequest({
         )
       : { items: [], total: 0 };
   // Receipts belong to the currently selected physical session, never archived history.
-  const inputConsumptions = inputRunIds
+  const inputReceipts = inputRunIds
     ? !messageId && sessionId && sessionId === entry?.sessionId
-      ? listSessionPendingInputConsumptions(
+      ? listSessionPendingInputReceipts(
           { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
           { runIds: inputRunIds },
         )
       : []
     : undefined;
+  const inputConsumptions = inputReceipts?.flatMap((receipt) =>
+    receipt.state === "consumed"
+      ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
+      : [],
+  );
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
   try {
     historyPage = cursor
@@ -391,13 +424,13 @@ async function handleChatHistoryRequest({
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = messageId
-    ? (capChatHistoryAroundMessage({
+    ? capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
         maxCost: maxHistoryBytes - 1,
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
-      }) ?? capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items)
+      })
     : capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items;
   const historyBudgetPreserved =
     replaced.replacedCount === 0 &&
@@ -493,11 +526,18 @@ async function handleChatHistoryRequest({
   // Cursor responses publish sessionInfo only; the default-model projection is unused.
   const defaults =
     cursor === undefined
-      ? getSessionDefaults(cfg, defaultModelCatalog, {
-          agentId: sessionAgentId,
-          allowPluginNormalization: false,
-          providerPolicySource: "active",
-        })
+      ? {
+          ...getSessionDefaults(cfg, defaultModelCatalog, {
+            agentId: sessionAgentId,
+            allowPluginNormalization: false,
+            providerPolicySource: "active",
+          }),
+          modelSelectionTarget: resolveGatewayModelSelectionPolicy({
+            agentId: sessionAgentId,
+            callerScopes: client?.connect?.scopes ?? [],
+            cfg,
+          }).target,
+        }
       : undefined;
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.
   // Omission lets clients retain richer same-identity metadata; authored defaults still apply.
@@ -591,7 +631,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       pendingInputs,
-      ...(inputConsumptions ? { inputConsumptions } : {}),
+      ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
       sessionInfo,
       ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
@@ -608,7 +648,7 @@ async function handleChatHistoryRequest({
     sessionId,
     messages: composeTranscriptDisplay(capped),
     pendingInputs,
-    ...(inputConsumptions ? { inputConsumptions } : {}),
+    ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
     ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
     ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
     ...(hasMore ? { nextOffset } : {}),

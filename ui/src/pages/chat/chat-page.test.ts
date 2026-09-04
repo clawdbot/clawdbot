@@ -32,8 +32,7 @@ import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
-import { routeDraft } from "./route-draft.ts";
-import { loadChatRoute, type SessionChatRouteData } from "./route-loader.ts";
+import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
@@ -119,14 +118,6 @@ function setNarrow(page: ChatPage, narrow: boolean) {
   page.requestUpdate();
 }
 
-function getRouteDraftForActivePane(page: ChatPage): string | undefined {
-  const state = page as unknown as {
-    data: SessionChatRouteData;
-    consumedDraftData: SessionChatRouteData | null;
-  };
-  return routeDraft(state.data, state.consumedDraftData);
-}
-
 function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {
   (
     page as unknown as {
@@ -169,7 +160,11 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
@@ -427,27 +422,6 @@ describe("chat page split layout host", () => {
     // there would silently hide the second pane it creates.
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
     expect(pane?.onOpenSplitView).toBeUndefined();
-  });
-
-  it("hands each route-provided draft to the active pane only once", async () => {
-    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
-    page.data = firstRouteData;
-    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
-
-    document.body.append(page);
-    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
-
-    expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath("main"),
-      search: "?panel=details",
-      hash: "#pane",
-    });
-    page.data = { ...firstRouteData };
-    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {
@@ -820,9 +794,12 @@ describe("chat page split layout host", () => {
   it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
     const source = createSessionTitleSource();
+    const navigation = setNavigationContext(page);
     (page as unknown as { context: unknown }).context = {
+      ...navigation.context,
       agents: { state: { agentsList: null } },
       gateway: {
+        ...navigation.context.gateway,
         snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
@@ -841,6 +818,7 @@ describe("chat page split layout host", () => {
     // "main"; hello-default resolution plus equivalence matching must find
     // the label anyway — including non-default agent ids.
     (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
+      ...navigation.context.gateway,
       snapshot: {
         assistantAgentId: "dev",
         client: null,
@@ -871,8 +849,10 @@ describe("chat page split layout host", () => {
     const second = createSessionTitleSource();
     const page = new ChatPage();
     const sharedContext = {
+      ...setNavigationContext(page).context,
       agents: { state: { agentsList: null } },
       gateway: {
+        setSessionKey: vi.fn(),
         snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },

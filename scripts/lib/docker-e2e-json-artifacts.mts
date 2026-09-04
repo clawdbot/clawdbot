@@ -9,7 +9,10 @@ export function readDockerE2eJsonArtifact(file: string): unknown {
 }
 
 function readDockerE2eJsonArtifactText(file: string): string {
-  const maxBytes = readPositiveIntEnv(JSON_ARTIFACT_MAX_BYTES_ENV, DEFAULT_JSON_ARTIFACT_MAX_BYTES);
+  const maxBytes = parsePositiveInt(
+    process.env[JSON_ARTIFACT_MAX_BYTES_ENV] || String(DEFAULT_JSON_ARTIFACT_MAX_BYTES),
+    JSON_ARTIFACT_MAX_BYTES_ENV,
+  );
   const stat = fs.statSync(file);
   if (!stat.isFile()) {
     throw new Error(`JSON artifact is not a file: ${file}`);
@@ -23,9 +26,4 @@ function readDockerE2eJsonArtifactText(file: string): string {
     throw new Error(`JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes)`);
   }
   return text;
-}
-
-function readPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  return raw === undefined || raw === "" ? fallback : parsePositiveInt(raw, name);
 }

@@ -24,7 +24,8 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw-<profile>/workspace`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
 - A non-default `OPENCLAW_STATE_DIR` keeps the default workspace at `<state-dir>/workspace`, including scheduled maintenance and the initial `main` agent entry.
-- Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
+- A sole configured agent inherits the default workspace unless its entry sets `workspace`.
+- In an explicit multi-agent roster, entries without `workspace` use `<agents.defaults.workspace>/<agentId>` when that root is configured, or `<state-dir>/workspace-<agentId>` otherwise. Naming a shared root does not assign it to an agent.
 
 Override in `~/.openclaw/openclaw.json`:
 
@@ -38,7 +39,7 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.entries.*.workspace`.
+Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries.
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
@@ -54,10 +55,10 @@ If you already manage the workspace files yourself, disable bootstrap file creat
 
 ## Extra workspace folders
 
-Older installs may have created `~/openclaw`. Keeping multiple workspace directories around can cause confusing auth or state drift, since only one workspace is active at a time.
+Older installs may have created `~/openclaw`. Each agent uses one resolved workspace; keeping extra directories does not merge their persona or memory files into the active workspace.
 
 <Note>
-**Recommendation:** keep a single active workspace. If you no longer use the extra folders, archive or move them to Trash (for example `trash ~/openclaw`). If you intentionally keep multiple workspaces, make sure `agents.defaults.workspace` (or the per-agent `workspace` key) points to the active one.
+Keep each agent's workspace path explicit when retaining older directories. Before switching back to an older workspace, stop the Gateway, configure the intended path, run [`openclaw doctor --fix`](/cli/doctor) to migrate retired setup state, and restart. Doctor also discovers legacy setup files in a still-configured `agents.defaults.workspace` root even when no agent currently uses that root directly. Archive unused folders only after verifying which files you want to retain.
 </Note>
 
 ## Workspace file map
@@ -120,7 +121,10 @@ Older OpenClaw releases wrote `openclaw-workspace-state.json`,
 `.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
 runtime uses only the shared SQLite database for that state. If Doctor reports
 one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
-state and deletes a source only after verifying the database rows.
+state and deletes a source only after verifying the database rows. Empty reserved
+hashed files under `workspace-attestations/` are discarded because they contain
+no importable state; other unreadable sources stay in place and Doctor names
+their paths.
 
 ## Git backup (recommended, private)
 
@@ -214,10 +218,10 @@ Suggested `.gitignore` starter:
     Clone the repo to the desired path (default `~/.openclaw/workspace`).
   </Step>
   <Step title="Update config">
-    Set `agents.defaults.workspace` to that path in `~/.openclaw/openclaw.json`.
+    Set `agents.entries.<agentId>.workspace` to the cloned path in `~/.openclaw/openclaw.json` for the agent that should use it. A sole agent without a per-agent override can use `agents.defaults.workspace` instead; in a multi-agent roster, that setting only changes the base directory for unpinned entries.
   </Step>
-  <Step title="Seed missing files">
-    Run `openclaw setup --workspace <path>` to seed any missing files.
+  <Step title="Verify the workspace">
+    Run `openclaw agents list` and confirm that the intended agent points to the cloned path before starting the Gateway. Moving an existing workspace does not require rerunning onboarding.
   </Step>
   <Step title="Copy sessions (optional)">
     If you need sessions, copy `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`

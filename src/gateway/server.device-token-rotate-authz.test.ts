@@ -176,7 +176,7 @@ async function issuePairingOnlyOperatorToken(name: string): Promise<IssuedOperat
 
 async function issueMixedRolePairingScopedDevice(
   name: string,
-  opts?: { platform?: string },
+  opts?: { platform?: string; nodeScopes?: string[] },
 ): Promise<{
   deviceId: string;
   identityPath: string;
@@ -190,7 +190,7 @@ async function issueMixedRolePairingScopedDevice(
     publicKey: loaded.publicKey,
     role: "operator",
     roles: ["operator", "node"],
-    scopes: ["operator.pairing"],
+    scopes: ["operator.pairing", ...(opts?.nodeScopes ?? [])],
     ...(opts?.platform ? { platform: opts.platform } : {}),
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
@@ -588,47 +588,133 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 });
 
 describe("gateway device.token.rotate/revoke caller scope guard", () => {
-  test("rejects shared-token callers rotating or revoking above their session scopes", async () => {
-    await withStartedServer(async (started) => {
-      const target = await issueTestOperatorToken({
-        name: "shared-pairing-target",
-        approvedScopes: ["operator.admin"],
+  test.each(["rotate", "revoke"] as const)(
+    "requires admin to %s an approved scoped node token",
+    async (command) => {
+      await withStartedServer(async (started) => {
+        const device = await issueMixedRolePairingScopedDevice(`scoped-node-${command}`, {
+          nodeScopes: ["node.exec"],
+        });
+        const before = await getPairedDevice(device.deviceId);
+        const nodeToken = before?.tokens?.node;
+        expect(nodeToken?.scopes).toEqual(["node.exec"]);
+        const sockets: WebSocket[] = [];
+        try {
+          const nodeWs = await openTrackedWs(started.port);
+          sockets.push(nodeWs);
+          await connectOk(nodeWs, {
+            skipDefaultAuth: true,
+            deviceToken: nodeToken?.token,
+            deviceIdentityPath: device.identityPath,
+            role: "node",
+            scopes: ["node.exec"],
+          });
+          for (const auth of [
+            {
+              skipDefaultAuth: true,
+              deviceToken: device.pairingToken,
+              deviceIdentityPath: device.identityPath,
+            },
+            {
+              token: "secret",
+              deviceIdentityPath: resolveDeviceIdentityPath(`scoped-node-caller-${command}`),
+            },
+          ]) {
+            const ws = await openTrackedWs(started.port);
+            sockets.push(ws);
+            await connectOk(ws, { ...auth, scopes: ["operator.pairing"] });
+            const denied = await rpcReq(ws, `device.token.${command}`, {
+              deviceId: device.deviceId,
+              role: " node ",
+            });
+            expect(denied.ok).toBe(false);
+            const unchanged = await getPairedDevice(device.deviceId);
+            expect(unchanged?.tokens?.node?.token === nodeToken?.token).toBe(true);
+            expect(unchanged?.tokens?.node?.revokedAtMs).toBeUndefined();
+          }
+
+          const adminWs = await openTrackedWs(started.port);
+          sockets.push(adminWs);
+          await connectOk(adminWs, { scopes: ["operator.admin"] });
+          if (command === "rotate") {
+            const outsideBaseline = await rpcReq(adminWs, "device.token.rotate", {
+              deviceId: device.deviceId,
+              role: "node",
+              scopes: ["node.other"],
+            });
+            expect(outsideBaseline.ok).toBe(false);
+            const unchanged = await getPairedDevice(device.deviceId);
+            expect(unchanged?.tokens?.node?.token === nodeToken?.token).toBe(true);
+          }
+          const allowed = await rpcReq<{ token?: string }>(adminWs, `device.token.${command}`, {
+            deviceId: device.deviceId,
+            role: " node ",
+          });
+          expect(allowed.ok).toBe(true);
+          expect(allowed.payload?.token).toBeUndefined();
+          const after = await getPairedDevice(device.deviceId);
+          expect(after?.tokens?.node?.scopes).toEqual(["node.exec"]);
+          expect(after?.approvedScopes).toEqual(before?.approvedScopes);
+          expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
+          if (command === "rotate") {
+            expect(after?.tokens?.node?.token === nodeToken?.token).toBe(false);
+            expect(after?.tokens?.node?.rotatedAtMs).toBeTypeOf("number");
+          } else {
+            expect(after?.tokens?.node?.revokedAtMs).toBeTypeOf("number");
+          }
+        } finally {
+          for (const ws of sockets) {
+            ws.close();
+          }
+        }
       });
+    },
+  );
 
-      const pairingWs = await openTrackedWs(started.port);
-      try {
-        await connectOk(pairingWs, {
-          token: "secret",
-          scopes: ["operator.pairing"],
-          deviceIdentityPath: resolveDeviceIdentityPath("shared-pairing-caller"),
+  test.each(["operator", " operator "])(
+    "rejects shared-token callers managing %s above their session scopes",
+    async (role) => {
+      await withStartedServer(async (started) => {
+        const target = await issueTestOperatorToken({
+          name: `shared-pairing-target-${role.length}`,
+          approvedScopes: ["operator.admin"],
         });
 
-        const rotate = await rpcReq(pairingWs, "device.token.rotate", {
-          deviceId: target.deviceId,
-          role: "operator",
-        });
-        expect(rotate.ok).toBe(false);
-        expect(rotate.error?.message).toBe("device token rotation denied");
+        const pairingWs = await openTrackedWs(started.port);
+        try {
+          await connectOk(pairingWs, {
+            token: "secret",
+            scopes: ["operator.pairing"],
+            deviceIdentityPath: resolveDeviceIdentityPath(`shared-pairing-caller-${role.length}`),
+          });
 
-        const afterRotate = await getPairedDevice(target.deviceId);
-        expect(afterRotate?.tokens?.operator?.token).toBe(target.token);
-        expect(afterRotate?.tokens?.operator?.revokedAtMs).toBeUndefined();
+          const rotate = await rpcReq(pairingWs, "device.token.rotate", {
+            deviceId: target.deviceId,
+            role,
+          });
+          expect(rotate.ok).toBe(false);
+          expect(rotate.error?.message).toBe("device token rotation denied");
 
-        const revoke = await rpcReq(pairingWs, "device.token.revoke", {
-          deviceId: target.deviceId,
-          role: "operator",
-        });
-        expect(revoke.ok).toBe(false);
-        expect(revoke.error?.message).toBe("device token revocation denied");
+          const afterRotate = await getPairedDevice(target.deviceId);
+          expect(afterRotate?.tokens?.operator?.token).toBe(target.token);
+          expect(afterRotate?.tokens?.operator?.revokedAtMs).toBeUndefined();
 
-        const afterRevoke = await getPairedDevice(target.deviceId);
-        expect(afterRevoke?.tokens?.operator?.token).toBe(target.token);
-        expect(afterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
-      } finally {
-        pairingWs.close();
-      }
-    });
-  });
+          const revoke = await rpcReq(pairingWs, "device.token.revoke", {
+            deviceId: target.deviceId,
+            role,
+          });
+          expect(revoke.ok).toBe(false);
+          expect(revoke.error?.message).toBe("device token revocation denied");
+
+          const afterRevoke = await getPairedDevice(target.deviceId);
+          expect(afterRevoke?.tokens?.operator?.token).toBe(target.token);
+          expect(afterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
+        } finally {
+          pairingWs.close();
+        }
+      });
+    },
+  );
 
   test("rejects rotating an admin-approved device token above the caller session scopes", async () => {
     await withStartedServer(async (started) => {

@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../api/types.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -43,6 +47,101 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("omits API-key-only auth rows without model-provider evidence", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "web-search",
+          displayName: "Web Search",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+        },
+        {
+          provider: "web-extract",
+          displayName: "Web Extract",
+          status: "static",
+          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
+        },
+      ]),
+    });
+    expect(cards).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "keeps environment-only model auth independently of API-key setup support (%s)",
+    (apiKeySupported) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus(
+          [
+            {
+              provider: "model-service",
+              displayName: "Model Service",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+            },
+            {
+              provider: "web-search",
+              displayName: "Web Search",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+            },
+          ],
+          [
+            { provider: "model-service", apiKeySupported, quickApiKeySetup: false },
+            { provider: "unconfigured-model", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        ),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "model-service",
+        modelCount: 0,
+        apiKeySupported,
+        apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+        credentialProviderIds: ["model-service"],
+      });
+    },
+  );
+
+  it.each(["oauth", "token"] as const)(
+    "keeps auth-only %s profiles, including non-expiring tokens",
+    (type) => {
+      const status = type === "token" ? "static" : "ok";
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            status,
+            profiles: [{ profileId: "primary", type, status, logoutSupported: true }],
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "static",
+            profiles: [{ profileId: "secondary", type: "api_key", status: "static" }],
+          },
+        ]),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "anthropic",
+        modelCount: 0,
+        profiles: [
+          { profileId: "primary", type, status, logoutSupported: true },
+          { profileId: "secondary", type: "api_key", status: "static" },
+        ],
+        logoutTargets: [{ provider: "anthropic", profileIds: ["primary"] }],
+      });
+    },
+  );
+
   it("keeps catalog providers, including ones whose models are all unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -72,6 +171,83 @@ describe("buildModelProviderCards", () => {
       modelCount: 0,
       availableModelCount: 0,
     });
+  });
+
+  it.each<{
+    name: string;
+    outcomes: ModelCatalogProviderOutcome[];
+    expected: ModelCatalogProviderOutcome["status"];
+  }>([
+    {
+      name: "keeps a ready profile above a rejected sibling",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "keeps a ready profile above an unavailable sibling",
+      outcomes: [
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports rejection when no profile is ready",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped rejection above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped unavailable result above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "keeps unscoped readiness above a rejected profile",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports the worst unscoped diagnostic",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", status: "unavailable" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "combines profile outcomes across canonical provider aliases",
+      outcomes: [
+        { provider: "anthropic", profileId: "ready", status: "ready" },
+        { provider: "claude-cli", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+  ])("$name in either input order", ({ outcomes, expected }) => {
+    for (const ordered of [outcomes, outcomes.toReversed()]) {
+      const cards = buildModelProviderCards({ ...EMPTY_INPUT, providerOutcomes: ordered });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards).catalogStatus).toBe(expected);
+    }
   });
 
   it("propagates explicit API-key capability onto provider cards", () => {

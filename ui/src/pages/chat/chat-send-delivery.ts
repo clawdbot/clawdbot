@@ -1,8 +1,8 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -225,7 +225,8 @@ async function sendQueuedChatMessage(
       text: prepared.localCommandArgs ? `/reset ${prepared.localCommandArgs}` : "/reset",
     };
   }
-  const message = prepared.intent ? prepared.text : prepared.text.trim();
+  const submitted = trimHumanMentions(prepared.text, prepared.mentions);
+  const message = prepared.intent ? prepared.text : submitted.text;
   const attachments = (queued.attachmentPayload ? queued.attachments : prepared.attachments) ?? [];
   if (!message && attachments.length === 0) {
     removeQueuedMessageWithoutReleasing(host, id);
@@ -300,6 +301,7 @@ async function sendQueuedChatMessage(
       : options?.expectedLeafEntryId;
     const ack = await requestChatSend(host, {
       message,
+      mentions: submitted.mentions,
       attachments: attachments.length ? attachments : undefined,
       runId,
       sessionKey,
@@ -377,6 +379,7 @@ async function sendQueuedChatMessage(
         });
         const projectedMessage = buildLocalUserMessage({
           text: message,
+          mentions: submitted.mentions,
           ...(attachments.length ? { attachments } : {}),
           createdAt: startedAt,
           runId,
@@ -581,7 +584,7 @@ export async function deliverChatQueueItem(
       candidate.queue.some((entry) => entry.id === item.id),
     );
     if (!outbox) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      // Admission succeeded; removal or another drain can retire the row while we yield.
       return "pending";
     }
     let drainResult: QueuedChatSendResult | undefined;
@@ -659,10 +662,10 @@ export async function deliverChatQueueItem(
     result = drainResult ?? "pending";
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
-    setLastActiveSessionKey(host, sessionKey);
     resetChatInputHistoryNavigation(host);
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
+      host.chatMentions = options.previousMentions ?? [];
     }
     if (options.restoreAttachments && options.previousAttachments?.length) {
       host.chatAttachments = options.previousAttachments;

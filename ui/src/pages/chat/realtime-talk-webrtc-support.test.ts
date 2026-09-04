@@ -31,7 +31,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
 
   it("resolves relative offer routes against the connected Gateway", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("fetch", fetchMock);
     const exchange = new RealtimeTalkWebRtcOfferExchange();
 
     await exchange.readAnswer({
@@ -103,16 +103,13 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            headers: new Headers(),
-            body,
-            text: vi.fn(),
-          }) as unknown as Response,
-      ),
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body,
+        text: vi.fn(),
+      })),
     );
     const exchange = new RealtimeTalkWebRtcOfferExchange();
 
@@ -132,18 +129,15 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
       });
       vi.stubGlobal(
         "fetch",
-        vi.fn(
-          async () =>
-            ({
-              ok: true,
-              status: 200,
-              headers: new Headers({
-                "content-length": contentLength,
-              }),
-              body: { cancel, getReader },
-              text: vi.fn(),
-            }) as unknown as Response,
-        ),
+        vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            "content-length": contentLength,
+          }),
+          body: { cancel, getReader },
+          text: vi.fn(),
+        })),
       );
       const exchange = new RealtimeTalkWebRtcOfferExchange();
 
@@ -159,14 +153,11 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: false,
-            status: 502,
-            body: { cancel },
-          }) as unknown as Response,
-      ),
+      vi.fn(async () => ({
+        ok: false,
+        status: 502,
+        body: { cancel },
+      })),
     );
     const exchange = new RealtimeTalkWebRtcOfferExchange();
 
@@ -178,14 +169,11 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     const cancel = vi.fn(() => Promise.resolve());
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            body: { cancel },
-          }) as unknown as Response,
-      ),
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        body: { cancel },
+      })),
     );
     const exchange = new RealtimeTalkWebRtcOfferExchange();
 

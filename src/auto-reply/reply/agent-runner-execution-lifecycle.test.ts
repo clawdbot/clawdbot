@@ -10,7 +10,10 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../../agents/run-termination.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import {
   configureChannelAdmissionDecisionSink,
@@ -43,7 +46,9 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
+const execution = await import("./agent-runner-execution.js");
+const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
   agentId: "main",
   sessionId: "session",
@@ -54,63 +59,83 @@ const compactionTarget = {
 };
 
 describe("executeAgentTurn: run lifecycle and ownership", () => {
-  it("releases a deferred owner and retains private compaction facts when restart escapes", async () => {
-    const fact: CompactionAccountingFact = {
-      kind: "durable",
-      count: 1,
-      currentContextSnapshot: { tokens: 40 },
-      target: { ...compactionTarget, sessionId: "accepted-successor" },
-    };
-    const sessionId = "session";
-    const sessionKey = "agent:main:main";
-    const handle: EmbeddedAgentQueueHandle = {
-      runId: "restart-after-adoption",
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: vi.fn(),
-    };
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onDeferredLifecycleOwner?.({
-        complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
-        discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+  it.each([
+    {
+      kind: "restart",
+      createError: createAgentRunRestartAbortError,
+      reason: "restart",
+      phase: "end",
+      stopReason: "restart",
+    },
+    {
+      kind: "direct",
+      createError: createAgentRunDirectAbortError,
+      reason: "user",
+      phase: "error",
+      stopReason: "aborted",
+    },
+  ] as const)(
+    "releases a deferred owner and retains private compaction facts when $kind abort escapes",
+    async ({ createError, reason, phase, stopReason }) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      const fact: CompactionAccountingFact = {
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 40 },
+        target: { ...compactionTarget, sessionId: "accepted-successor" },
+      };
+      const sessionId = "session";
+      const sessionKey = "agent:main:main";
+      const handle: EmbeddedAgentQueueHandle = {
+        runId: "restart-after-adoption",
+        queueMessage: async () => undefined,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: vi.fn(),
+      };
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onDeferredLifecycleOwner?.({
+          complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+          discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+        });
+        expect(params.onCompactionAccounting).toEqual(expect.any(Function));
+        params.onCompactionAccounting?.(fact);
+        throw createError();
       });
-      expect(params.onCompactionAccounting).toEqual(expect.any(Function));
-      params.onCompactionAccounting?.(fact);
-      throw createAgentRunRestartAbortError();
-    });
 
-    try {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
-
-      expect(result.outcome).toEqual({
-        kind: "aborted",
-        reason: "restart",
-        compaction: { count: 1, durable: [fact] },
-      });
-      expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
-      const { emitAgentEvent } = await import("../../infra/agent-events.js");
-      const terminals = vi
-        .mocked(emitAgentEvent)
-        .mock.calls.map(([event]) => event)
-        .filter(
-          (event) =>
-            event.runId === result.runId &&
-            event.stream === "lifecycle" &&
-            (event.data.phase === "end" || event.data.phase === "error"),
+      try {
+        const result = await execution.executeAgentTurn(
+          createMinimalRunAgentTurnParams({ opts: { onAgentRunTerminalOutcome } }),
         );
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.data).toMatchObject({
-        phase: "end",
-        aborted: true,
-        stopReason: "restart",
-      });
-    } finally {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-    }
-  });
+
+        expect(result.outcome).toEqual({
+          kind: "aborted",
+          reason,
+          compaction: { count: 1, durable: [fact] },
+        });
+        expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+        expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
+        const terminals = vi
+          .mocked(emitAgentEvent)
+          .mock.calls.map(([event]) => event)
+          .filter(
+            (event) =>
+              event.runId === result.runId &&
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error"),
+          );
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.data).toMatchObject({
+          phase,
+          aborted: true,
+          stopReason,
+        });
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      }
+    },
+  );
 
   it("attributes one admitted channel participant before its admission decision", async () => {
     const order: string[] = [];
@@ -492,10 +517,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       );
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
         const params = createMinimalRunAgentTurnParams({ replyOperation });
         params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-        const pending = executeAgentTurn(params);
+        const pending = execution.executeAgentTurn(params);
         await candidateSettled.promise;
         upstreamAbort.abort(
           reason === "restart" ? createAgentRunRestartAbortError() : new Error("caller cancelled"),
@@ -612,8 +636,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         },
       );
 
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+      const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
 
       expect(result.outcome).toMatchObject({ kind: "settled", autoCompactionCount: 8 });
       expect(result.outcome.compaction).toEqual({

@@ -16,7 +16,15 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
-export type CommandCategory = "session" | "options" | "status" | "management" | "media" | "tools";
+// v2026.8.1 SDK definitions may still use "docks"; it remains presentation-only.
+export type CommandCategory =
+  | "session"
+  | "options"
+  | "status"
+  | "management"
+  | "media"
+  | "tools"
+  | "docks";
 
 /** Primitive command argument kinds supported by native command surfaces. */
 type CommandArgType = "string" | "number" | "boolean";

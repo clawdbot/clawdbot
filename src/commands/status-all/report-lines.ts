@@ -85,20 +85,18 @@ export async function buildStatusAllReportLines(params: {
   appendStatusReportSections({
     lines,
     heading,
+    width: tableWidth,
+    renderTable,
     sections: [
       {
         kind: "table",
         title: "Overview",
-        width: tableWidth,
-        renderTable,
         columns: [...statusOverviewTableColumns],
         rows: params.overviewRows,
       },
       {
         kind: "table",
         title: "Channels",
-        width: tableWidth,
-        renderTable,
         // The status-all report has more horizontal space than compact status output.
         columns: statusChannelsTableColumns.map((column) =>
           column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
@@ -115,16 +113,12 @@ export async function buildStatusAllReportLines(params: {
       },
       ...buildStatusChannelDetailSections({
         details: params.channels.details,
-        width: tableWidth,
-        renderTable,
         ok,
         warn,
       }),
       {
         kind: "table",
         title: "Agents",
-        width: tableWidth,
-        renderTable,
         columns: [...statusAgentsTableColumns],
         rows: buildStatusAgentTableRows({
           agentStatus: params.agentStatus,

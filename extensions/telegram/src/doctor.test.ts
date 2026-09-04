@@ -120,6 +120,61 @@ describe("telegram doctor", () => {
     expect(result.changes).toContain("Removed retired Telegram tuning knobs.");
   });
 
+  it("preserves account identifiers while removing retired tuning only at config scopes", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig!;
+    const accountIds = [
+      "retry",
+      "timeoutSeconds",
+      "mediaGroupFlushMs",
+      "pollingStallThresholdMs",
+      "errorCooldownMs",
+    ];
+    const account = {
+      botToken: "123:synthetic",
+      retry: { attempts: 2 },
+      groups: {
+        "-100": {
+          errorCooldownMs: 3,
+          toolsBySender: { retry: { allow: ["read"] } },
+          topics: { "1": { errorCooldownMs: 4, requireMention: true } },
+        },
+      },
+      direct: {
+        "123": {
+          errorCooldownMs: 5,
+          topics: { "2": { errorCooldownMs: 6, enabled: true } },
+        },
+      },
+    };
+    const cfg = {
+      channels: {
+        telegram: {
+          ...account,
+          accounts: Object.fromEntries(accountIds.map((id) => [id, account])),
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const before = structuredClone(cfg);
+    const expected = {
+      botToken: "123:synthetic",
+      groups: {
+        "-100": {
+          toolsBySender: { retry: { allow: ["read"] } },
+          topics: { "1": { requireMention: true } },
+        },
+      },
+      direct: { "123": { topics: { "2": { enabled: true } } } },
+    };
+
+    const result = normalize({ cfg });
+    expect(result.config.channels?.telegram).toEqual({
+      ...expected,
+      accounts: Object.fromEntries(accountIds.map((id) => [id, expected])),
+    });
+    expect(cfg).toEqual(before);
+    expect(normalize({ cfg: result.config })).toEqual({ config: result.config, changes: [] });
+  });
+
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
     if (!normalize) {

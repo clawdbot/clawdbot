@@ -38,6 +38,7 @@ export function fullReleaseCandidateRequestInput(overrides: Record<string, unkno
     upgradeSurvivorScenarios: "reported-issues",
     allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: false,
+    packagePublished: false,
     sharedImagePolicy: "no-push-artifact",
     ...overrides,
   };

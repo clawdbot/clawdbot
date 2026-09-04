@@ -16,10 +16,7 @@ const VIEWPORTS = [
 ] as const;
 
 suite.define(() => {
-  it.each([
-    ["elevated full", "/elevated full"],
-    ["exec gateway", "/exec gateway"],
-  ])("executes inline /%s separately from the draft", async (typedCommand, sentCommand) => {
+  it("executes a typed inline /elevated argument separately from the draft", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.send"],
@@ -31,11 +28,34 @@ suite.define(() => {
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => composer.isEnabled()).toBe(true);
 
-      await composer.fill(`Keep this /${typedCommand}`);
+      await composer.fill("Keep this /elevated full");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
-      expect((request.params as { message?: unknown }).message).toBe(sentCommand);
+      expect((request.params as { message?: unknown }).message).toBe("/elevated full");
+      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+    });
+  });
+
+  it("serializes a selected inline /exec host argument canonically", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.send"],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
+
+      await composer.fill("Keep this /exec");
+      await composer.press("Tab");
+      await composer.press("ArrowDown");
+      await composer.press("Enter");
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=gateway");
       await expect.poll(() => composer.inputValue()).toBe("Keep this ");
     });
   });

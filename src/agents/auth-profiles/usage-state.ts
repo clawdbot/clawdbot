@@ -202,10 +202,10 @@ export function getSoonestCooldownExpiry(
  * Clear expired cooldowns from all profiles in the store.
  *
  * When `cooldownUntil` or `disabledUntil` has passed, the corresponding fields
- * are removed and error counters are reset so the profile gets a fresh start
- * (circuit-breaker half-open -> closed). Without this, a stale `errorCount`
- * causes the *next* transient failure to immediately escalate to a much longer
- * cooldown -- the root cause of profiles appearing "stuck" after rate limits.
+ * are removed. Most error counters reset so the profile gets a fresh start
+ * (circuit-breaker half-open -> closed). Rate-limit counters instead persist
+ * across failed half-open probes so missing provider reset times use capped
+ * exponential backoff; a successful request or manual clear resets them.
  *
  * `cooldownUntil` and `disabledUntil` are handled independently: if a profile
  * has both and only one has expired, only that field is cleared.
@@ -268,12 +268,16 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       profileMutated = true;
     }
 
-    // Reset error counters when ALL cooldowns have expired so the profile gets
-    // a fair retry window. Preserves lastFailureAt for the failureWindowMs
-    // decay check in computeNextProfileUsageStats.
+    // Reset the aggregate counter when ALL cooldowns have expired so unrelated
+    // failures get a fair retry window. Only the rate-limit-specific counter
+    // survives a half-open probe; success still clears it. Preserves
+    // lastFailureAt for other failures' decay check in computeNextProfileUsageStats.
     if (profileMutated && !resolveProfileUnusableUntil(stats)) {
       stats.errorCount = 0;
-      stats.failureCounts = undefined;
+      const rateLimitFailureCount = stats.failureCounts?.rate_limit;
+      stats.failureCounts = rateLimitFailureCount
+        ? { rate_limit: rateLimitFailureCount }
+        : undefined;
     }
 
     if (profileMutated) {

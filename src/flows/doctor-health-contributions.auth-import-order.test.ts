@@ -1,15 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  createAuthProfileMigrationSourceReceipt,
+  type AuthProfileMigrationSourceReceipt,
+} from "../commands/doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -37,6 +45,11 @@ vi.mock("../commands/doctor-auth.js", () => ({
 }));
 
 const states: OpenClawTestState[] = [];
+const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
+] as {
+  recordAuthProfileMigrationImported: (receipt: AuthProfileMigrationSourceReceipt) => void;
+};
 
 function makePrompter(shouldRepair: boolean): DoctorPrompter {
   return {
@@ -138,6 +151,7 @@ function authProfilesContribution() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -147,6 +161,68 @@ afterEach(async () => {
 });
 
 describe("interactive Doctor auth migration", () => {
+  it.each(["failed", "completed", "declined"] as const)(
+    "reports interrupted archive recovery when the remaining migration is %s",
+    async (outcome) => {
+      const state = await makeState();
+      const sourcePath = await state.writeText("credentials/oauth.json", "{}\n");
+      const sourceBytes = fs.readFileSync(sourcePath);
+      const receipt = createAuthProfileMigrationSourceReceipt({
+        sourcePath,
+        sourceBytes,
+        sourceRecordCount: 0,
+        targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        targetTable: "auth_profile_store",
+        env: state.env,
+      });
+      recordAuthProfileMigrationImported(receipt);
+      if (outcome === "failed") {
+        // A persisted receipt with an invalid target cannot be safely resumed.
+        openOpenClawStateDatabase({ env: state.env })
+          .db.prepare("UPDATE migration_sources SET target_table = ? WHERE source_key = ?")
+          .run("invalid_target", receipt.sourceKey);
+      }
+      const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
+      const prompter = makePrompter(false);
+      const ctx = createDoctorHealthFlowContext({
+        cfg: {},
+        prompter,
+        env: state.env,
+        configPath: path.join(state.stateDir, "openclaw.json"),
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+
+      await authProfilesContribution().run(ctx);
+
+      const output = stripVTControlCharacters(
+        stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
+      )
+        .replaceAll("│", "")
+        .replace(/\s+/g, " ");
+      stdout.mockRestore();
+      if (outcome === "failed") {
+        expect(output).toContain("Doctor warnings");
+        expect(
+          output.match(/Could not finalize an interrupted auth profile archive/g),
+        ).toHaveLength(1);
+        expect(output).toContain("invalid pending auth profile migration receipt");
+        expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+        expect(fs.existsSync(receipt.archivePath)).toBe(false);
+      } else {
+        expect(output).toContain("Doctor changes");
+        expect(output.match(/Finalized interrupted auth profile archive/g)).toHaveLength(1);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+        expect(fs.readFileSync(receipt.archivePath)).toEqual(sourceBytes);
+      }
+      if (remainingPath) {
+        expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
+        expect(fs.existsSync(remainingPath)).toBe(true);
+      } else {
+        expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("commits config credentials and standalone state with one mapping after acceptance", async () => {
     const state = await makeState();
     const cfg = makeLegacyConfig();

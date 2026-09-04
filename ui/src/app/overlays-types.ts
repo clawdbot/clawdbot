@@ -3,7 +3,7 @@ import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/dev
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
 import type { ApplicationStatusBanner, RecordedUpdateAttempt } from "./update-overlay-helpers.ts";
 
-export type ApplicationOverlaySnapshot = {
+export type ApplicationUpdateOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   heldUpdateCampaignId: string | null;
@@ -14,6 +14,9 @@ export type ApplicationOverlaySnapshot = {
   updateStatusBanner: ApplicationStatusBanner | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
   controlUiRefreshRequired: boolean;
+};
+
+export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
   approvalCanGrant: boolean;
@@ -27,7 +30,7 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   refreshUpdateStatus: () => Promise<void>;
-  runUpdate: () => Promise<void>;
+  runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
   holdUpdate: () => Promise<boolean>;
   decideApproval: (
     decision: ExecApprovalDecision,

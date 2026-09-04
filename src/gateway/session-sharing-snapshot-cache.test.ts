@@ -22,20 +22,23 @@ afterEach(() => {
 });
 
 describe("session sharing snapshot reverse indexes", () => {
-  it("invalidates a canonical entry and every alias targeting it", () => {
-    const first = vi.fn();
-    const second = vi.fn();
-    loadSnapshot({ alias: "alias-one", canonical: "canonical", resolve: first });
-    loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledOnce();
+  it.each(["canonical", "alias-one"])(
+    "invalidates canonical and alias entries loaded as %s",
+    (alias) => {
+      const first = vi.fn();
+      const second = vi.fn();
+      loadSnapshot({ alias, canonical: "canonical", resolve: first });
+      loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
+      expect(first).toHaveBeenCalledOnce();
+      expect(second).toHaveBeenCalledOnce();
 
-    loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
-    expect(second).toHaveBeenCalledOnce();
-    invalidateSessionSharingSnapshot("canonical");
-    loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
-    expect(second).toHaveBeenCalledTimes(2);
-  });
+      loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
+      expect(second).toHaveBeenCalledOnce();
+      invalidateSessionSharingSnapshot("canonical");
+      loadSnapshot({ alias: "alias-two", canonical: "canonical", resolve: second });
+      expect(second).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("invalidating one alias removes its canonical entry and sibling aliases", () => {
     const first = vi.fn();
@@ -53,7 +56,7 @@ describe("session sharing snapshot reverse indexes", () => {
     loadSnapshot({ alias: "reused-alias", canonical: "old-canonical", resolve: oldAlias });
     for (let index = 0; index < 2_048; index += 1) {
       loadSnapshot({
-        alias: `alias-${index}`,
+        alias: index % 2 === 0 ? `canonical-${index}` : `alias-${index}`,
         canonical: `canonical-${index}`,
         resolve: vi.fn(),
       });

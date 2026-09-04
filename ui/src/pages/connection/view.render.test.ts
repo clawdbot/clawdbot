@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { renderConnection } from "./view.ts";
 
@@ -53,7 +54,10 @@ function accessRowTitles(container: HTMLElement): string[] {
 function expectStatByLabel(container: Element, text: string): HTMLElement {
   const stat = Array.from(container.querySelectorAll<HTMLElement>(".config-host__stat")).find(
     (candidate) =>
-      candidate.querySelector(".config-host__stat-label")?.textContent?.trim() === text,
+      candidate
+        .querySelector(".config-host__stat-label")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim() === text,
   );
   if (!(stat instanceof HTMLElement)) {
     throw new Error(`Expected system stat "${text}"`);
@@ -129,34 +133,40 @@ describe("connection view rendering", () => {
 
   it("renders Gateway host identity and resources between access and snapshot", async () => {
     const container = document.createElement("div");
-    render(
-      renderConnection(
-        createConnectionProps({
-          systemInfo: {
-            machineName: "Gateway Mac",
-            hostname: "gateway.local",
-            platform: "darwin",
-            release: "25.5.0",
-            arch: "arm64",
-            osLabel: "macOS 26.5.0",
-            lanAddress: "192.168.1.20",
-            port: 18789,
-            nodeVersion: "v24.1.0",
-            pid: 1234,
-            uptimeMs: 3_600_000,
-            cpuCount: 10,
-            cpuModel: "Apple M4",
-            loadAverage: [1.2, 1.1, 0.9],
-            memoryTotalBytes: 34_359_738_368,
-            memoryFreeBytes: 17_179_869_184,
-            diskTotalBytes: 994_662_584_320,
-            diskAvailableBytes: 497_331_292_160,
-            diskPath: "/Users/operator/.openclaw",
-          },
-        }),
-      ),
-      container,
-    );
+    const systemInfo = {
+      machineName: "Gateway Mac",
+      hostname: "gateway.local",
+      platform: "darwin",
+      release: "25.5.0",
+      arch: "arm64",
+      osLabel: "macOS 26.5.0",
+      lanAddress: "192.168.1.20",
+      port: 18789,
+      nodeVersion: "v24.1.0",
+      pid: 1234,
+      uptimeMs: 3_600_000,
+      cpuCount: 10,
+      cpuModel: "Apple M4",
+      loadAverage: [1.2, 1.1, 0.9],
+      memoryTotalBytes: 34_359_738_368,
+      memoryFreeBytes: 17_179_869_184,
+      diskTotalBytes: 994_662_584_320,
+      diskAvailableBytes: 497_331_292_160,
+      diskPath: "/Users/operator/.openclaw",
+      disks: [
+        {
+          path: "/",
+          totalBytes: 994_662_584_320,
+          availableBytes: 497_331_292_160,
+        },
+        {
+          path: "/Volumes/Archive",
+          totalBytes: 2_199_023_255_552,
+          availableBytes: 549_755_813_888,
+        },
+      ],
+    } satisfies SystemInfoResult;
+    render(renderConnection(createConnectionProps({ systemInfo })), container);
     await Promise.resolve();
 
     const sections = [...container.querySelectorAll(".settings-section__heading")].map((node) =>
@@ -196,15 +206,37 @@ describe("connection view rendering", () => {
       "16 GB free of 32 GB",
     );
 
-    const disk = expectStatByLabel(container, "Disk");
+    const disk = expectStatByLabel(container, "Disk /");
     expect(
       disk.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
     ).toBe("50% used");
     expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
       "463 GB free of 926 GB",
     );
-    expect(disk.getAttribute("title")).toBe("/Users/operator/.openclaw");
+    expect(disk.getAttribute("title")).toBe("/");
+    expect(disk.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Disk / usage");
+    const archive = expectStatByLabel(container, "Disk /Volumes/Archive");
+    expect(archive.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
+      "512 GB free of 2.0 TB",
+    );
+    expect(archive.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe("75");
+    expect(archive.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe(
+      "Disk /Volumes/Archive usage",
+    );
+    expect(container.querySelectorAll(".config-host__stat")).toHaveLength(4);
     expect(container.textContent).not.toContain("Uptime");
+
+    for (const disks of [systemInfo.disks.slice(0, 1), [], undefined]) {
+      render(
+        renderConnection(createConnectionProps({ systemInfo: { ...systemInfo, disks } })),
+        container,
+      );
+      expect(container.querySelectorAll(".config-host__stat")).toHaveLength(
+        2 + (disks?.length ?? 0),
+      );
+      expect(container.textContent).not.toContain("/Volumes/Archive");
+      expect(container.textContent).not.toContain("/Users/operator/.openclaw");
+    }
   });
 
   it("escalates host meter tones and hides the section when the RPC is unavailable", async () => {
@@ -226,8 +258,13 @@ describe("connection view rendering", () => {
             loadAverage: [9.8, 9.1, 8.4],
             memoryTotalBytes: 34_359_738_368,
             memoryFreeBytes: 2_147_483_648,
-            diskTotalBytes: 994_662_584_320,
-            diskAvailableBytes: 198_932_516_864,
+            disks: [
+              {
+                path: "/",
+                totalBytes: 994_662_584_320,
+                availableBytes: 198_932_516_864,
+              },
+            ],
           },
         }),
       ),
@@ -239,7 +276,7 @@ describe("connection view rendering", () => {
       expectStatByLabel(container, label).querySelector(".config-host__meter-fill")?.classList[1];
     expect(tone("CPU")).toBe("config-host__meter-fill--critical");
     expect(tone("Memory")).toBe("config-host__meter-fill--critical");
-    expect(tone("Disk")).toBe("config-host__meter-fill--warn");
+    expect(tone("Disk /")).toBe("config-host__meter-fill--warn");
 
     render(
       renderConnection(createConnectionProps({ systemInfo: null, systemInfoUnavailable: true })),

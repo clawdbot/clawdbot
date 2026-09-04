@@ -4,13 +4,17 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
-import { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import {
+  readSessionTranscriptContextMessages,
+  readSessionTranscriptModelContext,
+} from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -56,6 +60,24 @@ export type {
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+
+function withSessionContextAdmission<T>(
+  target: SessionTranscriptRuntimeTarget,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+  read: () => T,
+): T {
+  if (
+    admission &&
+    (target.agentId !== admission.agentId ||
+      target.sessionId !== admission.sessionId ||
+      target.sessionKey !== admission.sessionKey)
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission belongs to a different transcript target",
+    );
+  }
+  return runWithSessionTranscriptReadFence(admission, read);
+}
 
 export class SessionManager extends SessionManagerBranching {
   private constructor(
@@ -134,18 +156,7 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
     } = {},
   ): SessionManager {
-    const { admission } = options;
-    if (
-      admission &&
-      (target.agentId !== admission.agentId ||
-        target.sessionId !== admission.sessionId ||
-        target.sessionKey !== admission.sessionKey)
-    ) {
-      throw new SessionTranscriptReadFenceError(
-        "Current-turn transcript admission belongs to a different transcript target",
-      );
-    }
-    const contextEntries = runWithSessionTranscriptReadFence(admission, () =>
+    const contextEntries = withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptModelContext(target),
     );
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
@@ -157,6 +168,17 @@ export class SessionManager extends SessionManagerBranching {
       );
     }
     return new SessionManager(options.cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+  }
+
+  /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */
+  static readSessionContext<T>(
+    target: SessionTranscriptRuntimeTarget,
+    read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+    options: { admission?: UserTurnTranscriptAdmissionReceipt } = {},
+  ): T {
+    return withSessionContextAdmission(target, options.admission, () =>
+      readSessionTranscriptContextMessages(target, read),
+    );
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */

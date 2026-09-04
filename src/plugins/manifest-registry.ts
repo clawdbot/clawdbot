@@ -45,17 +45,16 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
+import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside } from "./path-safety.js";
 import {
   pluginCacheExistsSync,
+  pluginCacheLstatSync,
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheFile,
@@ -168,8 +167,32 @@ function resolveManifestPluginSourcePath(params: {
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
-  recordIndex: number;
+  record: PluginManifestRecord;
 };
+
+const PORTABLE_PLUGIN_ICON_PATH = path.join("assets", "icon.png");
+
+function resolvePortablePluginIconPath(params: {
+  rootDir: string;
+  rejectHardlinks: boolean;
+}): string | undefined {
+  const iconPath = path.resolve(params.rootDir, PORTABLE_PLUGIN_ICON_PATH);
+  const iconStat = pluginCacheLstatSync(iconPath);
+  if (!iconStat?.isFile() || (params.rejectHardlinks && iconStat.nlink > 1)) {
+    return undefined;
+  }
+  const rootPath = path.resolve(params.rootDir);
+  const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
+  return isPluginRootPath({
+    rootPath,
+    targetPath: iconPath,
+    rootRealPath,
+    rejectHardlinks: params.rejectHardlinks,
+    targetMustExist: true,
+  })
+    ? iconPath
+    : undefined;
+}
 
 // Canonicalize identical physical plugin roots with the most explicit source.
 // This only applies when multiple candidates resolve to the same on-disk plugin.
@@ -434,7 +457,10 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
-    icon: normalizeOptionalString(params.manifest.icon),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -542,11 +568,16 @@ function buildBundleRecord(params: {
   };
   candidate: PluginCandidate;
   manifestPath: string;
+  rejectHardlinks: boolean;
 }): PluginManifestRecord {
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -628,16 +659,21 @@ function pushManifestCompatibilityDiagnostics(params: {
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
-function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnostic[] {
+function dedupePluginDiagnostics(
+  diagnostics: PluginDiagnostic[],
+  discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
+): PluginDiagnostic[] {
   const seen = new Set<string>();
   const deduped: PluginDiagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    // Errors belong to their failed source; equivalent compatibility warnings remain owner-deduped.
+    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
     const key = JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
-      diagnostic.level === "error" ? (diagnostic.source ?? "") : "",
+      diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
+        ? (diagnostic.source ?? "")
+        : "",
     ]);
     if (seen.has(key)) {
       continue;
@@ -713,17 +749,6 @@ function matchesInstalledPluginRecord(params: {
   );
 }
 
-function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === packageName) {
-    return true;
-  }
-  return normalized.startsWith(`${packageName}@`);
-}
-
 function isTrustedOfficialPluginInstall(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -748,42 +773,15 @@ function isTrustedOfficialPluginInstall(params: {
   if (!packageName) {
     return false;
   }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== installOwner) {
-    return false;
-  }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
   const installRecord = params.installRecords[installOwner];
-  if (!installRecord) {
-    return false;
-  }
-  const officialClawHubInstall =
-    installRecord.source === "clawhub"
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: installOwner,
-          record: installRecord,
-        })
-      : undefined;
-  // Local npm-pack archives also persist source="npm". Only registry installs
-  // may inherit catalog trust; local artifacts and source links stay untrusted.
-  if (
-    installRecord.source === "npm" &&
-    installRecord.artifactKind === undefined &&
-    installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
-  ) {
-    return true;
-  }
-  if (installRecord.source === "clawhub" && officialClawHubInstall) {
-    return true;
-  }
-  return false;
+  return Boolean(
+    installRecord &&
+    isTrustedOfficialPluginInstallRecord({
+      pluginId: installOwner,
+      packageName,
+      record: installRecord,
+    }),
+  );
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -920,9 +918,9 @@ export function loadPluginManifestRegistryCore(
         env,
         installRecords: getInstallRecords(),
       }));
-  const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
+  const discovered = new Set(discovery.diagnostics);
+  const diagnostics: PluginDiagnostic[] = [...discovered];
   const candidates: PluginCandidate[] = discovery.candidates;
-  const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
@@ -1069,6 +1067,7 @@ export function loadPluginManifestRegistryCore(
           manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
           candidate,
           manifestPath: manifestRes.manifestPath,
+          rejectHardlinks,
         })
       : buildRecord({
           manifest: manifest as PluginManifest,
@@ -1088,6 +1087,9 @@ export function loadPluginManifestRegistryCore(
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),
         });
+    if (candidate.sourcePreferred || (candidate.origin === "bundled" && candidate.configSelected)) {
+      record.sourcePreferred = true;
+    }
     recordPluginManifestInstallOwner(
       record,
       resolvePluginCandidateInstallOwner(candidate),
@@ -1108,11 +1110,14 @@ export function loadPluginManifestRegistryCore(
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
       if (samePlugin) {
+        if (record.sourcePreferred || existing.record.sourcePreferred) {
+          record.sourcePreferred = true;
+          existing.record.sourcePreferred = true;
+        }
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = record;
-          seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(effectivePluginId, { candidate, record });
           pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
@@ -1136,8 +1141,7 @@ export function loadPluginManifestRegistryCore(
       const winnerCandidate = candidateWins ? candidate : existing.candidate;
       const overriddenCandidate = candidateWins ? existing.candidate : candidate;
       if (candidateWins) {
-        records[existing.recordIndex] = record;
-        seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
+        seenIds.set(effectivePluginId, { candidate, record });
         pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
@@ -1167,13 +1171,13 @@ export function loadPluginManifestRegistryCore(
       continue;
     }
 
-    seenIds.set(effectivePluginId, { candidate, recordIndex: records.length });
-    records.push(record);
+    seenIds.set(effectivePluginId, { candidate, record });
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
+  const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
   return registry;
 }
 

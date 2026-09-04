@@ -36,7 +36,8 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).toContain("## Delegation");
     expect(guidance).toContain("delegate via `sessions_spawn`");
     expect(guidance).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(guidance).toContain("Need results before reply: `sessions_yield`; never poll.");
+    expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
+    expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
     expect(guidance).toContain("For the current source conversation, reply normally");
     expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
@@ -90,7 +91,9 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);
 
     expect(guidance).toContain("## Delegation");
-    expect(guidance).toContain("Completion is push-based; never poll.");
+    expect(guidance).toContain(
+      "Announced completion is push-based; collectors require explicit result collection.",
+    );
     expect(guidance).not.toContain("sessions_yield");
     expect(guidance).not.toContain("subagents(action=list)");
     expect(buildGuidance({}, ["sessions_yield", "subagents"])).not.toContain("## Delegation");

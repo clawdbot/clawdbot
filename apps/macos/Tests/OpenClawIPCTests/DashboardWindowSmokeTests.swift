@@ -695,6 +695,17 @@ extension DashboardWindowSmokeTests {
                 dividerThickness: controller._testLinkBrowserDividerThickness,
                 persistedWidth: resizedWidth)
             #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
+
+            for (size, width) in [
+                (DashboardWindowLayout.windowSize, CGFloat(800)),
+                (DashboardWindowLayout.windowMinSize, CGFloat(500)),
+            ] {
+                defaults.set(Double(width), forKey: key)
+                controller._testCloseLinkBrowser()
+                controller.window?.setContentSize(size)
+                controller._testOpenLinkBrowser(link)
+                #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+            }
         }
     }
 
@@ -967,11 +978,6 @@ extension DashboardWindowSmokeTests {
         #expect(DashboardWindowController.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
     }
 
-    @Test func `dashboard log string strips token fragment`() throws {
-        let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=sekret")) // pragma: allowlist secret
-        #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
-    }
-
     @Test func `dashboard native chrome clears both desktop sidebars`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -1083,9 +1089,10 @@ extension DashboardWindowSmokeTests {
         let replacementServer = try await DashboardHTTPFixture.start()
         defer { replacementServer.stop() }
         let controller = self.makeShownController(server: server)
-        defer { controller.closeDashboard() }
+        let window = try #require(controller.window)
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
+        defer { manager.close() }
 
         await manager.handleEndpointState(.ready(
             mode: .remote,
@@ -1093,8 +1100,12 @@ extension DashboardWindowSmokeTests {
             token: "device-token",
             password: nil))
 
-        #expect(controller.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
-        let authScripts = controller._testUserScripts
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(replacement.window === window)
+        #expect(window.isVisible)
+        #expect(replacement.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
+        let authScripts = replacement._testUserScripts
             .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
         #expect(authScripts.count == 1)
         // JSONSerialization escapes "/" so match on host:port, not the full origin.

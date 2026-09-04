@@ -97,7 +97,12 @@ export function installPreCommitFixture(dir: string): string {
   writeFileSync(path.join(dir, rulePath), `${literals.join("\n")}\n`, { mode: 0o600 });
   run(dir, "git", ["config", "--local", ruleSetting, path.join(dir, rulePath)]);
   mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
-  writeExecutable(path.join(dir, "node_modules/.bin"), "oxfmt", "#!/bin/sh\nexit 0\n");
+  // Stdin mode must echo the blob or the hook treats the empty output as formatter failure.
+  writeExecutable(
+    path.join(dir, "node_modules/.bin"),
+    "oxfmt",
+    '#!/bin/sh\ncase "$*" in *--stdin-filepath=*) cat ;; esac\nexit 0\n',
+  );
 
   const fakeBinDir = path.join(dir, "bin");
   mkdirSync(fakeBinDir, { recursive: true });

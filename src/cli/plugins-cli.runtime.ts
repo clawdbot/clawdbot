@@ -16,6 +16,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -96,12 +97,10 @@ function formatConfiguredRuntimePluginInstallSpec(params: {
   npmSpec?: string;
   pluginId: string;
 }): string {
-  const clawhubSpec = params.clawhubSpec?.trim();
-  const npmSpec = params.npmSpec?.trim();
-  if (clawhubSpec && params.defaultChoice !== "npm") {
-    return clawhubSpec;
-  }
-  return npmSpec ?? clawhubSpec ?? params.pluginId;
+  return (
+    resolvePluginInstallSources({ npmSpec: params.npmSpec, clawhubSpec: params.clawhubSpec })[0]
+      ?.spec ?? params.pluginId
+  );
 }
 
 function pluginIdListIncludes(list: readonly string[] | undefined, pluginId: string): boolean {
@@ -816,10 +815,12 @@ function sanitizeMarketplaceRefreshPayload(
 }
 
 function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
-  if (entry.install?.defaultChoice === "npm") {
-    return entry.install.npmSpec ?? entry.install.clawhubSpec ?? entry.install.localPath;
-  }
-  return entry.install?.clawhubSpec ?? entry.install?.npmSpec ?? entry.install?.localPath;
+  return (
+    resolvePluginInstallSources({
+      npmSpec: entry.install?.npmSpec,
+      clawhubSpec: entry.install?.clawhubSpec,
+    })[0]?.spec ?? entry.install?.localPath
+  );
 }
 
 function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {

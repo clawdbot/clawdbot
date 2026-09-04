@@ -138,6 +138,8 @@ export function projectTranscriptEntryMessage(
     return null;
   }
   const kind = record.type;
+  const compactionIdentity =
+    kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
   const parsedTimestamp =
     typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
@@ -147,6 +149,10 @@ export function projectTranscriptEntryMessage(
     __openclaw: {
       kind,
       id: typeof record.id === "string" ? record.id : undefined,
+      ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
+      ...(typeof compactionIdentity?.itemId === "string"
+        ? { itemId: compactionIdentity.itemId }
+        : {}),
       transcriptPosition,
       seq,
     },

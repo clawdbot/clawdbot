@@ -111,12 +111,6 @@ type RequestBodyLimitValues = {
   timeoutMs: number;
 };
 
-type RequestBodyChunkProgress = {
-  buffer: Buffer;
-  totalBytes: number;
-  exceeded: boolean;
-};
-
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -133,20 +127,6 @@ function resolveRequestBodyLimitValues(options: {
 
 export const testApi = { resolveRequestBodyLimitValues };
 export { testApi as __test__ };
-
-function advanceRequestBodyChunk(
-  chunk: Buffer | string,
-  totalBytes: number,
-  maxBytes: number,
-): RequestBodyChunkProgress {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  const nextTotalBytes = totalBytes + buffer.length;
-  return {
-    buffer,
-    totalBytes: nextTotalBytes,
-    exceeded: nextTotalBytes > maxBytes,
-  };
-}
 
 function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean): void {
   if (req.destroyed) {
@@ -179,19 +159,12 @@ type ReadResponsePrefixOptions = ReadResponseTextPrefixOptions & {
   stopAtLimit?: boolean;
 };
 
-function validateMaxBytes(maxBytes: number): void {
-  if (!Number.isFinite(maxBytes) || maxBytes < 0) {
-    throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
-  }
-}
-
 async function readResponsePrefixFromReader(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   maxBytes: number,
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   const chunks: Uint8Array[] = [];
-  let total = 0;
   let size = 0;
   let truncated = false;
   try {
@@ -200,28 +173,23 @@ async function readResponsePrefixFromReader(
         ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
         : await reader.read();
       if (done) {
-        size = total;
         break;
       }
       if (!value?.length) {
         continue;
       }
-      const nextTotal = total + value.length;
-      if (nextTotal > maxBytes || (options?.stopAtLimit && nextTotal === maxBytes)) {
-        const remaining = maxBytes - total;
+      const remaining = maxBytes - size;
+      size += value.length;
+      if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
-          total += remaining;
         }
-        size = nextTotal;
         truncated = true;
         // A capture tee can retain cancellation until the caller releases its request.
         void reader.cancel().catch(() => undefined);
         break;
       }
       chunks.push(value);
-      total = nextTotal;
-      size = total;
     }
   } finally {
     try {
@@ -230,10 +198,8 @@ async function readResponsePrefixFromReader(
   }
 
   return {
-    buffer: Buffer.concat(
-      chunks.map((chunk) => Buffer.from(chunk)),
-      total,
-    ),
+    // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
+    buffer: Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
     size,
     truncated,
   };
@@ -244,7 +210,9 @@ async function readResponsePrefix(
   maxBytes: number,
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
-  validateMaxBytes(maxBytes);
+  if (!Number.isFinite(maxBytes) || maxBytes < 0) {
+    throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
+  }
   let timeoutMs: number | undefined;
   try {
     timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
@@ -312,10 +280,7 @@ export async function readResponseWithLimit(
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
   },
 ): Promise<Buffer> {
-  const onOverflow =
-    options?.onOverflow ??
-    ((params: { size: number; maxBytes: number }) =>
-      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+  const onOverflow = options?.onOverflow;
   const prefix = await readResponsePrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
@@ -323,7 +288,9 @@ export async function readResponseWithLimit(
     onTimeout: options?.onTimeout,
   });
   if (prefix.truncated) {
-    throw onOverflow({ size: prefix.size, maxBytes, res: response });
+    throw onOverflow
+      ? onOverflow({ size: prefix.size, maxBytes, res: response })
+      : new Error(`Content too large: ${prefix.size} bytes (limit: ${maxBytes} bytes)`);
   }
   return prefix.buffer;
 }
@@ -413,15 +380,15 @@ export async function readRequestBodyWithLimit(
       if (done) {
         return;
       }
-      const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-      totalBytes = progress.totalBytes;
-      if (progress.exceeded) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxBytes) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         stopRequestBodyAfterLimit(req, destroyOnLimit);
         fail(error);
         return;
       }
-      chunks.push(progress.buffer);
+      chunks.push(buffer);
     };
 
     const onEnd = () => {
@@ -571,9 +538,8 @@ export function installRequestBodyLimitGuard(
     if (done) {
       return;
     }
-    const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-    totalBytes = progress.totalBytes;
-    if (progress.exceeded) {
+    totalBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    if (totalBytes > maxBytes) {
       trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
     }
   };

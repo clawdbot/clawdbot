@@ -56,6 +56,32 @@ changing config.
 | Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                         |
 | Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`. |
 
+## GPT-6 Astra
+
+Select `openai/gpt-6-astra` with an OpenAI API-key profile or a ChatGPT/Codex
+subscription that has access to Astra. Access is rolling out; a successful
+account catalog remains authoritative, so adding model support does not grant
+access to an account that has not received it.
+If ChatGPT/Codex catalog discovery is unavailable, the offline fallback list
+omits Astra until account discovery succeeds.
+
+```bash
+openclaw models set openai/gpt-6-astra
+```
+
+Astra uses the Responses API for agent tool calls. It supports text and image
+input, a 1,050,000-token context window, and up to 128,000 output tokens.
+OpenClaw retains its ordinary 272,000-token active input budget by default.
+The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
+An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
+`off` never sends the unsupported `none` effort.
+Temperature is not sent.
+
+Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
+writes, and $50 output. Requests above 272K input tokens have higher rates.
+See the [Astra model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
+and [migration guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra).
+
 ## Naming map
 
 | Name you see                            | Layer             | Meaning                                                                                  |
@@ -923,6 +949,15 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     The bundled `openai` plugin registers batch speech-to-text through
     OpenClaw's media-understanding transcription surface.
 
+    Batch transcription can use the selected OpenAI API-key or ChatGPT OAuth
+    profile on the standard transcription endpoint when the account permits it.
+    Configured models, prompts, and language hints work through the same request
+    path. Access and quota errors are reported without switching credential
+    classes; OAuth support does not imply included or unlimited transcription.
+    Custom endpoints and request overrides require an API-key profile.
+    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgptcodex-oauth)
+    for selecting a separate audio API-key profile when desired.
+
     - Default model: `gpt-4o-transcribe`
     - Endpoint: OpenAI REST `/v1/audio/transcriptions`
     - Input path: multipart audio file upload
@@ -1046,8 +1081,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     and Voice Call use the Frameless Bidi
     `wss://api.openai.com/v1/live?model=...` endpoint with Platform API-key auth.
 
-    Use `gpt-live-1-codex` (recommended) or
-    `gpt-live-1-boulder-alpha`. The values `gpt-live-1` and
+    Use `gpt-live-1-codex`. The values `gpt-live-1` and
     `gpt-live-1-mini` are not valid on this route. Opt in explicitly with
     `talk.realtime.model`; `gpt-realtime-2.1` remains the GA default.
 

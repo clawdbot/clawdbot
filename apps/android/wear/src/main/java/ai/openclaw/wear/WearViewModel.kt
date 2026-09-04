@@ -196,7 +196,7 @@ internal fun reduceWearTerminalChatEvent(
     )
   }
   return when (event.state) {
-    "final" ->
+    "final" -> {
       WearTerminalChatTransition(
         state =
           current.copy(
@@ -207,12 +207,18 @@ internal fun reduceWearTerminalChatEvent(
         reloadHistory = true,
         observedMessage = event.message,
       )
-    "aborted", "error" ->
+    }
+
+    "aborted", "error" -> {
       WearTerminalChatTransition(
         state = current.copy(streamText = null, activeRunId = null),
         reloadHistory = true,
       )
-    else -> WearTerminalChatTransition(state = current, reloadHistory = false)
+    }
+
+    else -> {
+      WearTerminalChatTransition(state = current, reloadHistory = false)
+    }
   }
 }
 
@@ -1032,16 +1038,27 @@ internal class WearViewModel(
         beginSequenceResync(event, sourceChanged = false)
         return
       }
+
       WearSequenceDecision.AwaitingSnapshot -> {
         resyncEventBuffer.append(event)
         return
       }
-      WearSequenceDecision.Accepted -> Unit
+
+      WearSequenceDecision.Accepted -> {}
     }
     when (event.event) {
-      WearEventType.Connection -> handleConnectionEvent(event.payload as? JsonObject)
-      WearEventType.Chat -> handleChatEvent(event)
-      WearEventType.Resync -> refresh()
+      WearEventType.Connection -> {
+        handleConnectionEvent(event.payload as? JsonObject)
+      }
+
+      WearEventType.Chat -> {
+        handleChatEvent(event)
+      }
+
+      WearEventType.Resync -> {
+        refresh()
+      }
+
       WearEventType.Talk -> {
         val payload = event.payload ?: return
         runCatching { WearRealtimeTalkCodec.decode(payload) }
@@ -1182,6 +1199,7 @@ internal class WearViewModel(
           )
         }
       }
+
       "final", "aborted", "error" -> {
         val transition = reduceWearTerminalChatEvent(mutableState.value, event)
         if (transition.reloadHistory) cancelLoad()
@@ -1190,12 +1208,14 @@ internal class WearViewModel(
           loadHistory(selected, observedMessage = transition.observedMessage)
         }
       }
-      else ->
+
+      else -> {
         event.message?.let { message ->
           cancelLoad()
           mutableState.update { it.copy(messages = mergeEventMessage(it.messages, message)) }
           loadHistory(selected, observedMessage = message)
         }
+      }
     }
   }
 
@@ -1648,12 +1668,19 @@ internal fun mergeEventMessage(
   val matchIndex =
     messages.indexOfFirst { existing ->
       when {
-        message.id != null -> existing.id == message.id
-        message.timestamp != null ->
+        message.id != null -> {
+          existing.id == message.id
+        }
+
+        message.timestamp != null -> {
           existing.id == null &&
             existing.timestamp == message.timestamp &&
             existing.role == message.role
-        else -> false
+        }
+
+        else -> {
+          false
+        }
       }
     }
   val merged =
@@ -1794,15 +1821,22 @@ internal fun Throwable.toWearConversationFailure(): WearConversationFailure =
 internal fun wearConversationFailureForConnection(payload: JsonObject?): WearConversationFailure? {
   if (payload.boolean("connected") == true) return null
   return when (WearConnectionFailure.fromWireValue(payload.string("failure"))) {
-    WearConnectionFailure.Incompatible -> WearConversationFailure.INCOMPATIBLE
-    WearConnectionFailure.GatewayOffline -> WearConversationFailure.GATEWAY_OFFLINE
-    null ->
+    WearConnectionFailure.Incompatible -> {
+      WearConversationFailure.INCOMPATIBLE
+    }
+
+    WearConnectionFailure.GatewayOffline -> {
+      WearConversationFailure.GATEWAY_OFFLINE
+    }
+
+    null -> {
       if (payload.string("status")?.contains("update", ignoreCase = true) == true) {
         // Older protocol-v1 phones only sent status text for incompatibility.
         WearConversationFailure.INCOMPATIBLE
       } else {
         WearConversationFailure.GATEWAY_OFFLINE
       }
+    }
   }
 }
 

@@ -1,4 +1,5 @@
 // Fast mode tests cover isolated cron run behavior in fast execution mode.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   runInitialModelFallbackAttempt,
@@ -37,14 +38,6 @@ function mockSuccessfulModelFallback() {
       attempts: [],
     };
   });
-}
-
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 async function runFastModeCase(params: {
@@ -123,7 +116,10 @@ async function runFastModeCase(params: {
 
   expect(result.status).toBe("ok");
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const [embeddedRunParams] = requireFirstMockCall(runEmbeddedAgentMock, "embedded run");
+  const [embeddedRunParams] = expectDefined(
+    runEmbeddedAgentMock.mock.calls[0],
+    "embedded run call",
+  );
   expect(embeddedRunParams.provider).toBe("openai");
   expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
   expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
@@ -135,9 +131,9 @@ async function runFastModeCase(params: {
   const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
   if (params.expectedRetiredSessionId) {
     expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [retireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "retire session mcp runtime",
+    const [retireParams] = expectDefined(
+      retireSessionMcpRuntimeMock.mock.calls[0],
+      "MCP retirement call",
     );
     expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
     expect(retireParams.reason).toBe("cron-session-rollover");
@@ -146,9 +142,9 @@ async function runFastModeCase(params: {
   if (isIsolated) {
     // disposeCronRunContext now retires MCP for isolated sessions
     expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [disposeRetireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "dispose retire session mcp runtime",
+    const [disposeRetireParams] = expectDefined(
+      retireSessionMcpRuntimeMock.mock.calls[0],
+      "MCP disposal call",
     );
     expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
   } else {

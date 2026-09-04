@@ -57,9 +57,9 @@ const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
 const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
-const resolvePlaybackTranscodeMock = vi.fn(
-  async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" }),
-);
+const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
+  kind: "passthrough",
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
@@ -1190,7 +1190,8 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const transcriptMessages = [
       {
         __openclaw: { id: "msg-1" },
-        content: [
+        content: [{ type: "text", text: "Managed image" }],
+        openclawDisplayContent: [
           {
             type: "image",
             url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
@@ -2338,6 +2339,31 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "application/pdf",
       sizeBytes: 16,
     });
+  });
+
+  it("prepares advertised PowerPoint documents as managed attachments", async () => {
+    const pptxPath = path.join(stateDir, "deck.pptx");
+    await fs.writeFile(pptxPath, Buffer.from("PK\x03\x04 pptx placeholder"));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [pptxPath],
+      stateDir,
+      localRoots: [stateDir],
+      allowLocalNonImage: true,
+      messageId: "msg-pptx",
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "document",
+          label: "deck.pptx",
+          mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }),
+      },
+    ]);
   });
 
   it("does not apply the configured image cap to managed audio", async () => {

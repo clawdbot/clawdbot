@@ -1,5 +1,6 @@
 // Browser tests cover pw tools core.last file chooser arm wins plugin behavior.
 import crypto from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -25,26 +26,17 @@ describe("pw-tools-core", () => {
     ]);
     const secondCanonicalPath = await fs.realpath(secondPath);
 
-    let resolve1: ((value: unknown) => void) | null = null;
-    let resolve2: ((value: unknown) => void) | null = null;
-
-    const fc1 = { setFiles: vi.fn(async () => {}) };
-    const fc2 = { setFiles: vi.fn(async () => {}) };
-
-    const waitForEvent = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolve1 = r;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolve2 = r;
-          }),
-      );
+    const chooserEvents = new EventEmitter();
+    const fileChooser = {
+      setFiles: vi.fn(
+        async (_paths: string[], _options: { timeout: number; signal: AbortSignal }) => {},
+      ),
+    };
+    // Native event waiters reject on abort and remove their old chooser listener.
+    const waitForEvent = vi.fn(async (_event: string, { signal }: { signal: AbortSignal }) => {
+      const [chooser] = await once(chooserEvents, "filechooser", { signal });
+      return chooser;
+    });
 
     setPwToolsCoreCurrentPage({
       waitForEvent,
@@ -61,18 +53,23 @@ describe("pw-tools-core", () => {
         paths: [secondPath],
       });
 
-      if (!resolve1 || !resolve2) {
-        throw new Error("file chooser handlers were not registered");
-      }
-      (resolve1 as (value: unknown) => void)(fc1);
-      (resolve2 as (value: unknown) => void)(fc2);
-      await Promise.resolve();
-
-      expect(fc1.setFiles).not.toHaveBeenCalled();
+      expect(waitForEvent).toHaveBeenCalledTimes(2);
+      expect(waitForEvent.mock.calls[0]![1].signal.aborted).toBe(true);
+      expect(chooserEvents.listenerCount("filechooser")).toBe(1);
+      chooserEvents.emit("filechooser", fileChooser);
       await vi.waitFor(() => {
-        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath], { timeout: 120_000 });
+        expect(fileChooser.setFiles).toHaveBeenCalledExactlyOnceWith([secondCanonicalPath], {
+          timeout: expect.any(Number),
+          signal: expect.any(AbortSignal),
+        });
       });
+      const { timeout, signal } = fileChooser.setFiles.mock.calls[0]![1];
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(120_000);
+      expect(signal.aborted).toBe(false);
+      expect(chooserEvents.listenerCount("filechooser")).toBe(0);
     } finally {
+      chooserEvents.emit("filechooser", fileChooser);
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
     }
   });
@@ -206,6 +203,6 @@ describe("pw-tools-core", () => {
       timeoutMs: 999_999,
     });
 
-    expect(click).toHaveBeenCalledWith({ timeout: 60_000 });
+    expect(click).toHaveBeenCalledWith({ timeout: 60_000, signal: expect.any(AbortSignal) });
   });
 });

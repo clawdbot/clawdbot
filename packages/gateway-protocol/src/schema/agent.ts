@@ -53,6 +53,7 @@ const AgentInternalEventSchema = closedObject({
   // placeholder wording, so it has to survive the request boundary; absent on
   // the ordinary has-output path.
   noVisibleResult: Type.Optional(Type.Boolean()),
+  modelRouteChange: Type.Optional(Type.String()),
   attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),
   mediaUrls: Type.Optional(Type.Array(Type.String())),
   statsLine: Type.Optional(Type.String()),

@@ -4,6 +4,8 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import {
+  SESSION_EXPANDED_PARTICIPANT_LIMIT,
+  SESSION_PARTICIPANT_LIMIT,
   SessionParticipantSchema,
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
@@ -23,6 +25,13 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("failed"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
+]);
+
+export const SessionEntryArchiveReasonSchema = Type.Union([
+  Type.Literal("manual"),
+  Type.Literal("active-session-cap"),
+  Type.Literal("stale-dashboard"),
+  Type.Literal("restart-recovery"),
 ]);
 
 export const SessionToolOverridesSchema = closedObject({
@@ -88,6 +97,7 @@ export const SessionRowSchema = Type.Object(
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
+    archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
@@ -140,7 +150,12 @@ export const SessionRowSchema = Type.Object(
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
-    participants: Type.Optional(Type.Array(SessionParticipantSchema, { maxItems: 4 })),
+    participants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_PARTICIPANT_LIMIT }),
+    ),
+    expandedParticipants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_EXPANDED_PARTICIPANT_LIMIT }),
+    ),
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
@@ -176,3 +191,4 @@ export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

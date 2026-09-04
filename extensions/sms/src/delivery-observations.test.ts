@@ -76,13 +76,11 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       return values.delete(key);
     },
     async entries() {
-      return [...values.entries()].map(
-        ([key, value]): PluginStateEntry<SmsDeliveryRecord> => ({
-          key,
-          value,
-          createdAt: value.lastObservedAt,
-        }),
-      );
+      return [...values.entries()].map(([key, value]): PluginStateEntry<SmsDeliveryRecord> => ({
+        key,
+        value,
+        createdAt: value.lastObservedAt,
+      }));
     },
     async clear() {
       values.clear();

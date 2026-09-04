@@ -29,7 +29,7 @@ describe("appendWorkspaceMountArgs", () => {
   it.each([
     { access: "rw" as const, expected: "/tmp/workspace:/workspace:z" },
     { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro,z" },
-    { access: "none" as const, expected: "/tmp/workspace:/workspace:ro,z" },
+    { access: "none" as const, expected: "/tmp/workspace:/workspace:z" },
   ])("sets main mount permissions for workspaceAccess=$access", ({ access, expected }) => {
     const args: string[] = [];
     appendWorkspaceMountArgs({
@@ -44,17 +44,18 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it("omits agent workspace mount when workspaceAccess is none", () => {
+    const workspaceDir = makeTempWorkspace();
+    const agentWorkspaceDir = makeTempWorkspace();
     const args: string[] = [];
     appendWorkspaceMountArgs({
       args,
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/agent-workspace",
+      workspaceDir,
+      agentWorkspaceDir,
       workdir: "/workspace",
       workspaceAccess: "none",
     });
 
-    const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro,z"]);
+    expect(args).toEqual(["-v", `${workspaceDir}:/workspace:z`]);
   });
 
   it("omits agent workspace mount when paths are identical", () => {
@@ -231,10 +232,12 @@ describe("appendWorkspaceMountArgs", () => {
     );
   });
 
-  it("does not add a separate synced skill overlay when workspaceAccess is none", () => {
+  it("keeps private workspace skills read-only without exposing the agent workspace", () => {
     const agentWorkspaceDir = makeTempWorkspace();
     const sandboxWorkspaceDir = makeTempWorkspace();
     fs.mkdirSync(path.join(sandboxWorkspaceDir, "skills", "demo"), { recursive: true });
+    fs.mkdirSync(path.join(sandboxWorkspaceDir, ".agents", "skills"), { recursive: true });
+    fs.mkdirSync(path.join(agentWorkspaceDir, "skills", "host-only"), { recursive: true });
 
     const args: string[] = [];
     appendWorkspaceMountArgs({
@@ -249,10 +252,11 @@ describe("appendWorkspaceMountArgs", () => {
       (arg) => arg.startsWith(agentWorkspaceDir) || arg.startsWith(sandboxWorkspaceDir),
     );
 
-    expect(mounts).toEqual([`${sandboxWorkspaceDir}:/workspace:ro,z`]);
-    expect(mounts).not.toContain(
+    expect(mounts).toEqual([
+      `${sandboxWorkspaceDir}:/workspace:z`,
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
-    );
+      `${path.join(sandboxWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+    ]);
   });
 });
 

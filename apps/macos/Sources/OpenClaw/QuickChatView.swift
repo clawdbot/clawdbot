@@ -75,25 +75,16 @@ struct QuickChatView: View {
         }
     }
 
-    @ViewBuilder private var placeholder: some View {
-        if let override = self.model.targetSessionOverride {
-            Text("Reply in \(override.displayName)")
-        } else {
-            Text("Message \(self.model.agentDisplay.name)")
-        }
-    }
-
     private var inputRow: some View {
-        HStack(spacing: 10) {
+        let attachTextLabel = Text(verbatim: String(
+            format: String(localized: "Attach text from %@"), self.model.frontmostAppName))
+        return HStack(spacing: 10) {
             self.agentChip
             self.modelControl
 
             ZStack(alignment: .leading) {
                 if self.model.text.isEmpty {
-                    // Interpolated string literals keep the placeholder localizable
-                    // (SwiftUI's LocalizedStringKey path). Routing through a computed
-                    // String would select the verbatim initializer and drop translation.
-                    self.placeholder
+                    Text(verbatim: self.model.messagePlaceholder)
                         .font(.system(size: 13.5))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 2)
@@ -165,9 +156,8 @@ struct QuickChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!self.model.canCaptureTextContext)
-                .help(String(localized: "Attach text from \(self.model.frontmostAppName)"))
-                .accessibilityLabel(Text(verbatim: String(
-                    localized: "Attach text from \(self.model.frontmostAppName)")))
+                .help(attachTextLabel)
+                .accessibilityLabel(attachTextLabel)
 
                 Button(action: self.onShowCaptureMenu) {
                     Image(systemName: "camera.viewfinder")
@@ -313,7 +303,11 @@ struct QuickChatView: View {
         HStack(spacing: 7) {
             Image(systemName: "doc.text")
                 .foregroundStyle(Color.accentColor)
-            Text("\(context.appName) — \(context.windowTitle) (\(context.characterCount) chars)")
+            Text(String(
+                format: String(localized: "%@ — %@ (%lld chars)"),
+                context.appName,
+                context.windowTitle,
+                context.characterCount))
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -362,7 +356,9 @@ struct QuickChatView: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Label("Paste to \(self.model.frontmostAppName)", systemImage: "doc.on.clipboard")
+                            Label(
+                                String(format: String(localized: "Paste to %@"), self.model.frontmostAppName),
+                                systemImage: "doc.on.clipboard")
                         }
                     }
                     .buttonStyle(.borderless)

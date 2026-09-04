@@ -404,7 +404,16 @@ suite.define(() => {
               query: { profile: "managed" },
               body: { targetId: "t1", type: "png" },
             });
-          const hostRequests = (await gateway.getRequests("browser.request")).slice(beforeHostOpen);
+          const afterHostOpen = (await gateway.getRequests("browser.request")).slice(
+            beforeHostOpen,
+          );
+          // The old view can resize while Playwright delivers the click. Selection
+          // starts with /tabs; validate its route and every request after it.
+          const selectionStart = afterHostOpen.findIndex(
+            (request) => asNullableRecord(request.params)?.path === "/tabs",
+          );
+          expect(selectionStart).toBeGreaterThanOrEqual(0);
+          const hostRequests = afterHostOpen.slice(selectionStart);
           expect(hostRequests.map((request) => asNullableRecord(request.params)?.path)).toEqual(
             expect.arrayContaining(["/tabs", "/tabs/focus", "/screenshot", "/act"]),
           );

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -9,16 +10,6 @@ type TestBundledView = {
   render: () => unknown;
   stop: (host: object) => void;
 };
-
-function deferred<T>() {
-  let reject!: (error: unknown) => void;
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    reject = rejectPromise;
-    resolve = resolvePromise;
-  });
-  return { promise, reject, resolve };
-}
 
 class RejectedPluginPage extends PluginPage {
   loads: Promise<TestBundledView>[] = [];
@@ -72,8 +63,8 @@ function createPage(loads: Promise<TestBundledView>[], includeExternal = false) 
 
 describe("PluginPage bundled view load failures", () => {
   it("shows the current rejection and recovers when Retry succeeds", async () => {
-    const failedLoad = deferred<TestBundledView>();
-    const retryLoad = deferred<TestBundledView>();
+    const failedLoad = createDeferred<TestBundledView>();
+    const retryLoad = createDeferred<TestBundledView>();
     const page = createPage([failedLoad.promise, retryLoad.promise]);
     document.body.append(page);
     try {
@@ -94,8 +85,8 @@ describe("PluginPage bundled view load failures", () => {
   });
 
   it("ignores a stale rejection after switching away and back", async () => {
-    const staleLoad = deferred<TestBundledView>();
-    const currentLoad = deferred<TestBundledView>();
+    const staleLoad = createDeferred<TestBundledView>();
+    const currentLoad = createDeferred<TestBundledView>();
     const page = createPage([staleLoad.promise, currentLoad.promise], true);
     document.body.append(page);
     try {

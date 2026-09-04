@@ -30,6 +30,7 @@ type AgentInternalEvent = {
   statusLabel: string;
   result: string;
   noVisibleResult?: boolean;
+  modelRouteChange?: string;
   attachments?: unknown[];
   mediaUrls?: string[];
   replyInstruction?: string;
@@ -118,6 +119,15 @@ describe("AgentParamsSchema", () => {
       ...subagentCompletionEvent,
       result: "(no output)",
       noVisibleResult: true,
+    });
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("accepts a producer model-route fact on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
     });
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);

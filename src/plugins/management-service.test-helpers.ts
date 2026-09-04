@@ -23,7 +23,9 @@ export function metadataSnapshot(params: {
   name?: string;
   origin?: "bundled" | "global";
   installRecord?: Record<string, unknown>;
-  icon?: string;
+  packageBuild?: { bundledDist?: boolean };
+  packageDependencies?: Record<string, string>;
+  iconPath?: string;
 }) {
   const id = params.id ?? "workboard";
   const origin = params.origin ?? "bundled";
@@ -35,7 +37,8 @@ export function metadataSnapshot(params: {
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",
     catalog: { featured: true, order: 10 },
-    ...(params.icon ? { icon: params.icon } : {}),
+    ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
+    ...(params.iconPath ? { iconPath: params.iconPath } : {}),
     channels: [],
     providers: [],
     cliBackends: [],
@@ -56,6 +59,7 @@ export function metadataSnapshot(params: {
           origin,
           enabled: params.enabled,
           rootDir: `/tmp/${id}`,
+          ...(params.packageBuild ? { packageBuild: params.packageBuild } : {}),
         },
       ],
       installRecords: installRecord ? { [id]: installRecord } : {},

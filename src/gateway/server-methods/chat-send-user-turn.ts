@@ -6,7 +6,6 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -15,12 +14,14 @@ import {
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -86,6 +87,7 @@ function buildChatSendPromptMedia(
 function buildChatSendMessageContext(params: {
   agentId: string;
   cfg?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   client: GatewayRequestHandlerOptions["client"];
   clientInfo?: GatewayClientInfo;
   clientRunId: string;
@@ -117,7 +119,13 @@ function buildChatSendMessageContext(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     params.originatingRoute;
-  const creation = resolveOperatorSessionCreation(params.client);
+  const creation = params.systemInputProvenance
+    ? resolveOperatorSessionCreation(params.client)
+    : prepareSkillLibrarySessionCreation(
+        params.client,
+        params.getConfig ?? params.cfg ?? {},
+        resolveOperatorSessionCreation(params.client),
+      );
   const sandbox = params.cfg ? resolveCreatorSandbox(params.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
@@ -130,14 +138,10 @@ function buildChatSendMessageContext(params: {
     InputProvenance: params.systemInputProvenance,
     SessionKey: params.sessionKey,
     AgentId: params.agentId,
-    Provider: INTERNAL_MESSAGE_CHANNEL,
-    Surface: INTERNAL_MESSAGE_CHANNEL,
-    OriginatingChannel: originatingChannel,
     OriginatingTo: originatingTo,
     ExplicitDeliverRoute: explicitDeliverRoute,
     AccountId: accountId,
     MessageThreadId: messageThreadId,
-    ChatType: "direct",
     ...(commandSource ? { CommandSource: commandSource } : {}),
     CommandAuthorized: !params.suppressCommandInterpretation,
     CommandTurn: commandSource
@@ -156,16 +160,7 @@ function buildChatSendMessageContext(params: {
     ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: params.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
-    ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-    ...(!isOperatorUiClient(params.clientInfo)
-      ? {
-          SenderId: params.clientInfo?.id,
-          SenderName: params.clientInfo?.displayName,
-          SenderUsername: params.clientInfo?.displayName,
-        }
-      : {}),
-    GatewayClientScopes: params.client?.connect?.scopes ?? [],
-    GatewayClientCaps: params.client?.connect?.caps ?? [],
+    ...resolveChatSendCallerContext(params.client, params.clientInfo, originatingChannel),
     GatewayRunToolBindings: params.toolBindings,
   };
   if (params.mediaPathOffloadPaths.length > 0) {
@@ -202,6 +197,7 @@ export function prepareChatSendUserTurn(params: {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  getConfig?: () => OpenClawConfig;
   userTurn: ChatSendUserTurnInputController;
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
@@ -241,6 +237,7 @@ export function prepareChatSendUserTurn(params: {
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
     cfg: session.cfg,
+    getConfig: params.getConfig,
     client,
     clientInfo: request.clientInfo,
     clientRunId: session.clientRunId,

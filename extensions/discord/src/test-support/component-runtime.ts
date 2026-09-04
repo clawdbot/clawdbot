@@ -26,20 +26,18 @@ type DiscordComponentRuntimeMocks = {
   upsertPairingRequestMock: AsyncUnknownMock;
 };
 
-const runtimeMocks = vi.hoisted(
-  (): DiscordComponentRuntimeMocks => ({
-    buildPluginBindingResolvedTextMock: vi.fn(),
-    dispatchPluginInteractiveHandlerMock: vi.fn(),
-    dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
-    enqueueSystemEventMock: vi.fn(),
-    readAllowFromStoreMock: vi.fn(),
-    readSessionUpdatedAtMock: vi.fn(),
-    recordInboundSessionMock: vi.fn(),
-    resolveStorePathMock: vi.fn(),
-    resolvePluginConversationBindingApprovalMock: vi.fn(),
-    upsertPairingRequestMock: vi.fn(),
-  }),
-);
+const runtimeMocks = vi.hoisted((): DiscordComponentRuntimeMocks => ({
+  buildPluginBindingResolvedTextMock: vi.fn(),
+  dispatchPluginInteractiveHandlerMock: vi.fn(),
+  dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
+  enqueueSystemEventMock: vi.fn(),
+  readAllowFromStoreMock: vi.fn(),
+  readSessionUpdatedAtMock: vi.fn(),
+  recordInboundSessionMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
+  resolvePluginConversationBindingApprovalMock: vi.fn(),
+  upsertPairingRequestMock: vi.fn(),
+}));
 
 export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
 export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =

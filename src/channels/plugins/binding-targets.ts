@@ -51,18 +51,21 @@ export async function ensureConfiguredBindingTargetReady(params: {
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   reason: "new" | "reset";
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
   let resolved = resolveStatefulBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (!resolved) {
     await ensureStatefulTargetBuiltinsRegistered();
     resolved = resolveStatefulBindingTargetBySessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   }
   if (!resolved?.driver.resetInPlace) {

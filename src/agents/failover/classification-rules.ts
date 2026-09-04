@@ -49,7 +49,6 @@ export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean 
   const message = signal.message?.trim();
   return !message || isExplicitNoBodyHttpMessage(message, status);
 }
-const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 // Provider SDKs often keep semantic error fields outside Error.message.
 // These bounded candidates feed classification only; user-facing copy still
@@ -177,17 +176,6 @@ export function failoverReasonFromClassification(
   }
   return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
-export function isTransientHttpError(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (!status) {
-    return false;
-  }
-  return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
-}
 export function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,
@@ -254,10 +242,11 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("timeout");
   }
+  // Context payloads can use 5xx; preserve the compaction decision before generic status mapping.
+  if (messageClassification?.kind === "context_overflow") {
+    return messageClassification;
+  }
   if (status === 404) {
-    if (messageClassification?.kind === "context_overflow") {
-      return messageClassification;
-    }
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -269,26 +258,13 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("model_not_found");
   }
-  if (status === 503) {
-    if (messageReason === "overloaded") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
-  if (status === 499) {
-    if (messageReason === "overloaded") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
-  if (status === 500 || status === 502 || status === 504) {
-    if (messageReason === "server_error") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
   if (status === 529) {
     return toReasonClassification("overloaded");
+  }
+  if (status === 499 || (status >= 500 && status < 600)) {
+    return messageReason === "overloaded" || messageReason === "server_error"
+      ? messageClassification
+      : toReasonClassification("timeout");
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
@@ -388,7 +364,7 @@ function hasBillingApiErrorType(raw: string): boolean {
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
-export function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
     return false;
   }

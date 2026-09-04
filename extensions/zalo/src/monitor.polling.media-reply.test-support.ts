@@ -624,7 +624,7 @@ describe("Zalo polling media replies", () => {
     },
   );
 
-  it("registers each active registry and cleans both on final release", async () => {
+  it("cleans each active registry when its own route holder stops", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
@@ -669,7 +669,7 @@ describe("Zalo polling media replies", () => {
       expect(secondRegistry.httpRoutes).toHaveLength(1);
       firstAbort.abort();
       await firstRun;
-      expect(firstRegistry.httpRoutes).toHaveLength(1);
+      expect(firstRegistry.httpRoutes).toHaveLength(0);
       expect(secondRegistry.httpRoutes).toHaveLength(1);
     } finally {
       firstAbort.abort();

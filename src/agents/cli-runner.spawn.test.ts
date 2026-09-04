@@ -39,16 +39,19 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
   buildCliExecLogLine,
   createManagedRun,
   setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { buildCliAgentSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Approval behavior is injected below; loading its gateway/tool graph here is incidental.
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
@@ -1547,12 +1550,14 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
-  it("captures a runtime artifact for a strict CLI credential", async () => {
+  it("captures a runtime artifact while preserving a strict CLI shim invocation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
+    const implementation = path.join(dir, "2.1.205");
     const executable = path.join(dir, "claude-fixture");
     try {
-      await fs.copyFile(process.execPath, executable);
-      await fs.chmod(executable, 0o755);
+      await fs.copyFile(process.execPath, implementation);
+      await fs.chmod(implementation, 0o755);
+      await fs.symlink(implementation, executable);
       mockSuccessfulCliRun(CLAUDE_OK_JSONL);
       const context = buildPreparedCliRunContext({
         backend: { command: executable },
@@ -1570,8 +1575,9 @@ describe("runCliAgent spawn path", () => {
 
       expect(context.runtimeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/u);
       expect(context.runtimeOwnerFingerprint).toBeUndefined();
-      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
-      expect(input.argv?.[0]).toBe(await fs.realpath(executable));
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[]; argv0?: string };
+      expect(input.argv?.[0]).toBe(await fs.realpath(implementation));
+      expect(input.argv0).toBe(executable);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

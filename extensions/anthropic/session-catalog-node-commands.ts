@@ -1,5 +1,6 @@
 import {
   decodeNodePtyResumeParams,
+  decodeNodePtyStartParams,
   type OpenClawPluginNodeHostCommandIo,
   runNodePtyCommand,
   validateClaudeSessionId,
@@ -80,6 +81,34 @@ export async function resumeClaudeSession(
         file: resolution.executable,
         args: ["--resume", params.threadId],
         cwd: record.cwd,
+        ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+        cols: params.cols,
+        rows: params.rows,
+      },
+      io,
+    ),
+  );
+}
+
+export async function startClaudeSession(
+  paramsJSON: string | null | undefined,
+  io: OpenClawPluginNodeHostCommandIo | undefined,
+): Promise<string> {
+  if (!io) {
+    throw new Error("Claude terminal command requires duplex transport");
+  }
+  const params = decodeNodePtyStartParams(paramsJSON);
+  const resolution = resolveClaudeTerminalExecutable();
+  if (!resolution) {
+    throw new Error("Claude CLI is unavailable; install Claude Code on this node and reconnect");
+  }
+  return JSON.stringify(
+    await runNodePtyCommand(
+      {
+        file: resolution.executable,
+        args: params.initialMessage !== undefined ? ["--", params.initialMessage] : [],
+        cwd: params.cwd,
+        requiredCwd: true,
         ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
         cols: params.cols,
         rows: params.rows,

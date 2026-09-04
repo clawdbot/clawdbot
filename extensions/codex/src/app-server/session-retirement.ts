@@ -21,8 +21,12 @@ import type {
   CodexAppServerThreadBinding,
   CodexSessionGenerationRetirementResult,
 } from "./session-binding.js";
+import { getCodexSessionInitializationRollback } from "./session-initialization.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
-import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  withCodexAppServerThreadMutation,
+} from "./thread-ownership.js";
 
 async function releaseSessionSubscription(
   client: NonNullable<ReturnType<typeof retainSharedCodexAppServerClientByInstanceId>>["client"],
@@ -65,12 +69,16 @@ export async function withCodexAppServerSessionDeletion<T>(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
   };
-  return await bindingStore.withSessionDeletion(
-    identity,
-    assertCurrent,
-    async (binding, mutation) => {
+  const remove = () =>
+    bindingStore.withSessionDeletion(identity, assertCurrent, async (binding, mutation) => {
       assertCurrent();
-      if (binding?.connectionScope === "supervision") {
+      const rollbackInitialization = getCodexSessionInitializationRollback(
+        bindingStore,
+        params,
+        identity,
+        binding,
+      );
+      if (binding?.connectionScope === "supervision" && !rollbackInitialization) {
         throw new Error("Cannot delete a session while its Codex binding is owned by supervision");
       }
       const clientLease = binding?.clientId
@@ -104,6 +112,10 @@ export async function withCodexAppServerSessionDeletion<T>(
         });
       } finally {
         try {
+          if (committed && rollbackInitialization) {
+            assertCurrent();
+            await rollbackInitialization();
+          }
           // An artifact publication failure after COMMIT still ends this subscription;
           // only the session owner's transaction rollback may restore the binding.
           if (committed && binding && clientLease) {
@@ -134,8 +146,8 @@ export async function withCodexAppServerSessionDeletion<T>(
           clientLease?.release();
         }
       }
-    },
-  );
+    });
+  return params.initialization ? await bindingStore.withThreadArchiveFence(remove) : await remove();
 }
 
 /** Retire binding and native subscription under the same generation/physical-client ownership fence. */
@@ -148,33 +160,35 @@ export async function retireCodexAppServerSessionGeneration(params: {
     params.mode === "reset"
       ? params.bindingStore.resetSessionGeneration(params.identity)
       : params.bindingStore.retireSessionGeneration(params.identity);
-  const expectedBinding = await params.bindingStore.read(params.identity);
+  const expectedBinding = params.bindingStore.read(params.identity);
   if (!expectedBinding) {
     // Leasing an absent/retired row manufactures state or rejects its fence;
     // callers need the original absent/conflict result for reset reclamation.
     return await retireGeneration();
   }
-  return await params.bindingStore.withLease(params.identity, async () => {
-    const binding = await params.bindingStore.read(params.identity);
-    if (binding?.threadId !== expectedBinding.threadId) {
-      return "conflict";
-    }
-    const result = await retireGeneration();
-    if (result !== "applied" || !binding?.clientId) {
-      return result;
-    }
+  return await withCodexAppServerThreadMutation(expectedBinding.threadId, () =>
+    params.bindingStore.withLease(params.identity, async () => {
+      const binding = params.bindingStore.read(params.identity);
+      if (!binding || !isSameCodexAppServerThreadOwner(binding, expectedBinding)) {
+        return "conflict";
+      }
+      const result = await retireGeneration();
+      if (result !== "applied" || !binding?.clientId) {
+        return result;
+      }
 
-    // Locate the original physical client only after its exact binding was
-    // retired; delayed reset events must never unsubscribe a newer generation.
-    const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
-    if (!clientLease) {
+      // Locate the original physical client only after its exact binding was
+      // retired; delayed reset events must never unsubscribe a newer generation.
+      const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+      if (!clientLease) {
+        return result;
+      }
+      try {
+        await releaseSessionSubscription(clientLease.client, binding, params.identity.sessionKey);
+      } finally {
+        clientLease.release();
+      }
       return result;
-    }
-    try {
-      await releaseSessionSubscription(clientLease.client, binding, params.identity.sessionKey);
-    } finally {
-      clientLease.release();
-    }
-    return result;
-  });
+    }),
+  );
 }

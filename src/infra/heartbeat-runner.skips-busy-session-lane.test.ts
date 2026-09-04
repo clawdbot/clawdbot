@@ -14,7 +14,12 @@ import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operati
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  markCronJobWaitingForHeartbeat,
+  resetCronActiveJobs,
+} from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { CommandLane } from "../process/lanes.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -113,6 +118,21 @@ function runHeartbeat(
       ...deps,
     } as HeartbeatDeps,
   });
+}
+
+function markHeartbeatWaitOwners(...jobIds: string[]) {
+  const markers = jobIds
+    .map((jobId) => markCronJobActive(jobId))
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== undefined);
+  const releases = markers.map((marker) => markCronJobWaitingForHeartbeat(marker));
+  return () => {
+    for (const release of releases) {
+      release();
+    }
+    for (const marker of markers) {
+      clearCronJobActive(marker.jobId, marker);
+    }
+  };
 }
 
 describe("heartbeat runner skips when target session lane is busy", () => {
@@ -282,6 +302,48 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
       expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("ignores every exact cron owner represented by a coalesced wake", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(storePath);
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const releaseOwners = markHeartbeatWaitOwners("report-a", "report-b");
+
+      try {
+        const result = await runHeartbeat(cfg, replySpy, {
+          source: "cron",
+          reason: "heartbeat-task:report-a",
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+      } finally {
+        releaseOwners();
+      }
+    });
+  });
+
+  it("keeps unrelated cron work blocking a coalesced owner set", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(storePath);
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const releaseOwners = markHeartbeatWaitOwners("report-a", "report-b");
+      markCronJobActive("unrelated-job");
+
+      try {
+        const result = await runHeartbeat(cfg, replySpy, {
+          source: "cron",
+          reason: "heartbeat-task:report-a",
+        });
+
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+        expect(replySpy).not.toHaveBeenCalled();
+      } finally {
+        releaseOwners();
+      }
     });
   });
 

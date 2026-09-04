@@ -35,6 +35,18 @@ describe("heartbeat display", () => {
     },
   );
 
+  it.each([{ textBlocks: [] }, { textBlocks: [{ type: "text", text: " " }] }])(
+    "does not mistake reasoning with $textBlocks for a heartbeat acknowledgement",
+    ({ textBlocks }) => {
+      expect(
+        isAssistantHeartbeatAckForDisplay({
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Comparing the evidence." }, ...textBlocks],
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("keeps visible media and silent-reply markers while hiding acknowledgement-only turns", () => {
     expect(
       isAssistantHeartbeatAckForDisplay({

@@ -678,6 +678,7 @@ describe("createPdfTool", () => {
       expectFields(result.details, {
         native: false,
         model: OPENAI_PDF_MODEL,
+        text: "fallback summary",
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });

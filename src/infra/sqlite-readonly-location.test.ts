@@ -771,6 +771,12 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const ready = await writer.waitFor("ready");
       expect(ready.commits).toBeGreaterThan(0);
       expect(writer.pid).not.toBe(process.pid);
+      // Hold a real half-written transaction so read admission does not race
+      // an unbounded stream of commits; the snapshot must exclude that write.
+      const held = await writer.holdTransaction();
+      expect(held.commits).toBeGreaterThanOrEqual(ready.commits);
+      expect(held.transaction).toBe(true);
+      expect(held.values).toEqual([held.commits + 1, held.commits]);
 
       const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
@@ -779,15 +785,29 @@ describe("prepareSqliteReadOnlyLocation", () => {
           .prepare("SELECT value FROM pair ORDER BY name")
           .all()
           .map((row) => (row as { value: number }).value);
-        expect(values).toHaveLength(2);
-        expect(values[0]).toBeGreaterThan(0);
-        expect(values[0]).toBe(values[1]);
+        expect(values).toEqual([held.commits, held.commits]);
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       } finally {
         snapshot.close();
         expect(prepared.cleanup()).toBe(true);
       }
-      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
+      const progress = await writer.progress();
+      expect(progress.commits).toBeGreaterThan(held.commits);
+      expect(progress.transaction).toBe(false);
+      const unfinished = await writer.holdTransaction();
+      expect(unfinished.transaction).toBe(true);
+      expect(unfinished.values).toEqual([unfinished.commits + 1, unfinished.commits]);
+      await writer.stop();
+      const source = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(source.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
+          { value: unfinished.commits },
+          { value: unfinished.commits },
+        ]);
+        expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      } finally {
+        source.close();
+      }
     } finally {
       await writer.stop();
     }
