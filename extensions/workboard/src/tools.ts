@@ -152,7 +152,7 @@ function redactedCardResult(card: WorkboardCard) {
 }
 
 function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(redactClaimToken(card));
+  return jsonResult({ card: redactClaimToken(card) });
 }
 
 function redactedProofResult(card: WorkboardCard) {
