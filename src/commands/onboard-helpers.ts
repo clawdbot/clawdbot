@@ -192,10 +192,9 @@ export function formatControlUiSshHint(params: {
   const uiPath = basePath ? `${basePath}/` : "/";
   const protocol = params.tlsEnabled ? "https" : "http";
   const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
-  const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
-    `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
+    `ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
     "Then open:",
     localUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
@@ -208,13 +207,6 @@ export function formatControlUiSshHint(params: {
     .join("\n");
 }
 
-function resolveSshTargetHint(): string {
-  const user = process.env.USER || process.env.LOGNAME || "user";
-  const conn = process.env.SSH_CONNECTION?.trim().split(/\s+/);
-  const host = conn?.[2] ?? "<host>";
-  return `${user}@${host}`;
-}
-
 /** Ensures workspace bootstrap files and session transcript directories exist. */
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
@@ -223,15 +215,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
+    beforePersistentApply?: () => void;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
+    beforePersistentApply: options.beforePersistentApply,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
+  options.beforePersistentApply?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };

@@ -17,6 +17,10 @@ import {
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -201,4 +205,86 @@ export function createSubagentRegistryTestDeps(
     })),
     ...extra,
   };
+}
+
+export function createDeliveredWake(
+  runId: string,
+  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  const endedAt = overrides.endedAt ?? Date.now();
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    endedAt,
+    outcome: { status: "ok" },
+    expectsCompletionMessage: true,
+    completion: { required: true, resultText: "done", capturedAt: endedAt },
+    delivery: { status: "delivered", deliveredAt: endedAt },
+    cleanupHandled: true,
+    cleanupCompletedAt: endedAt,
+    requesterSettleWake,
+    ...overrides,
+  });
+}
+
+export function writeChildSession(
+  stateDir: string,
+  sessionKey: string,
+  defaultSessionId: string,
+  lifecycleRevision?: string,
+) {
+  return writeSubagentSessionEntry({
+    stateDir,
+    agentId: "main",
+    sessionKey,
+    defaultSessionId,
+    lifecycleRevision,
+  });
+}
+
+export function createOrphanedRequiredDelivery(
+  status: "pending" | "suspended" | "in_progress",
+): SubagentRunRecord {
+  const now = Date.now();
+  const runId = `run-orphan-${status}-delivery`;
+  const childSessionKey = `agent:main:subagent:orphan-${status}-delivery`;
+  const terminalReply = { disposition: "visible" as const, text: "durable final reply" };
+  return createSubagentRunRecord({
+    runId,
+    childSessionKey,
+    task: "deliver after restart",
+    cleanup: "delete",
+    createdAt: now - 100,
+    expectsCompletionMessage: true,
+    cleanupHandled: false,
+    startedAt: now - 50,
+    endedAt: now,
+    outcome: { status: "ok" },
+    completion: {
+      required: true,
+      resultText: "canonical final reply",
+      capturedAt: now,
+      terminalReply,
+    },
+    delivery: {
+      status,
+      ...(status === "suspended" ? { suspendedAt: now, suspendedReason: "expiry" as const } : {}),
+      ...(status === "in_progress"
+        ? { disposition: "session_queued" as const, queueId: "queue-1" }
+        : {}),
+      payload: {
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        childSessionKey,
+        childRunId: runId,
+        task: "deliver after restart",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply,
+      },
+    },
+  });
 }

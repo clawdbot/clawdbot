@@ -60,6 +60,16 @@ export type CodexSessionCatalogPageParams = {
 };
 
 export type CodexSessionCatalogControl = {
+  /** Available only inside the exact physical client's pinned catalog lease. */
+  forkContext?: {
+    client: import("./app-server/client.js").CodexAppServerClient;
+    appServer: CodexAppServerRuntimeOptions;
+    pluginConfig: unknown;
+    agentDir: string;
+    localSessionsRoot?: string;
+  };
+  /** Retire only this pinned physical client, preserving unrelated active leases. */
+  retireConnection?: () => void;
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
@@ -67,9 +77,12 @@ export type CodexSessionCatalogControl = {
   requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    assertCurrent?: () => void,
+  ): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
 export type CodexSessionCatalogControlFactory = {
@@ -94,6 +107,7 @@ export type CodexSessionCatalogHost = {
   nodeId?: string;
   canContinueCodex?: boolean;
   canOpenTerminalCodex?: boolean;
+  canStartTerminal?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;

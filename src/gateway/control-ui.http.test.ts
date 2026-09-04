@@ -64,7 +64,7 @@ type FileHandleRead = (
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
-const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
 const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
@@ -72,8 +72,9 @@ const resolvePlaybackTranscodeMock = vi.hoisted(() =>
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
+vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/ffmpeg-exec.js")>()),
+  runFfprobe: runFfprobeMock,
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
@@ -91,7 +92,6 @@ const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
-const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createAuthRateLimiterSpy() {
@@ -117,8 +117,8 @@ function createAuthRateLimiterSpy() {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
-  probeMediaFileDescriptorMock.mockReset();
-  probeMediaFileDescriptorMock.mockResolvedValue({});
+  runFfprobeMock.mockReset();
+  runFfprobeMock.mockResolvedValue("{}");
   resolvePlaybackModeForSourceMock.mockReset();
   resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
     mimeType === "audio/x-caf" ? "transcode" : "native",
@@ -175,6 +175,7 @@ describe("handleControlUiHttpRequest", () => {
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
       automaticallyFetchFavicons: boolean;
+      communityInvite: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1157,7 +1158,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("reports assistant audio size, type, and probed duration metadata", async () => {
-    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-audio-meta-",
       fn: async (tmpRoot) => {
@@ -1179,7 +1180,9 @@ describe("handleControlUiHttpRequest", () => {
           sizeBytes: contents.byteLength,
           durationMs: 2345,
         });
-        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+        expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
+          stdinFileDescriptor: expect.any(Number),
+        });
       },
     });
   });
@@ -1761,32 +1764,36 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.automaticallyFetchFavicons).toBe(true);
+        expect(parsed.communityInvite).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
 
-  it("projects an explicit favicon opt-out into bootstrap config", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+  it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
+    "projects an explicit %s opt-out into bootstrap config",
+    async (key) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                gateway: { controlUi: { [key]: false } },
+              },
             },
-          },
-        );
+          );
 
-        expect(handled).toBe(true);
-        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
-      },
-    });
-  });
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end)[key]).toBe(false);
+        },
+      });
+    },
+  );
 
   it("omits the assistant agent id without a config snapshot", async () => {
     await withControlUiRoot({
@@ -1824,7 +1831,7 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {
+  it("routes a workspace-local assistant avatar separately from bootstrap config", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
@@ -1845,7 +1852,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(parseBootstrapPayload(end)).toMatchObject({
-          assistantAvatar: REAL_PNG_DATA_URL,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarSource: "avatar.png",
           assistantAvatarStatus: "local",
         });
@@ -1853,39 +1860,63 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("round-trips a maximum-size local avatar through bootstrap and UI normalization", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const avatar = Buffer.alloc(AVATAR_MAX_BYTES);
-        const expected = `data:image/svg+xml;base64,${avatar.toString("base64")}`;
-        expect(expected).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
-        await fs.writeFile(path.join(tmp, "avatar.svg"), avatar);
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: createAvatarConfig(tmp, "avatar.svg"),
-          },
-        );
-
-        expect(handled).toBe(true);
-        const parsed = parseBootstrapPayload(end);
-        expect(parsed.assistantAvatar).toBe(expected);
-        expect(
-          normalizeAssistantIdentity({
-            agentId: parsed.assistantAgentId,
-            name: parsed.assistantName,
-            avatar: parsed.assistantAvatar,
-            avatarSource: parsed.assistantAvatarSource,
-            avatarStatus: parsed.assistantAvatarStatus,
-            avatarReason: parsed.assistantAvatarReason,
-          }).avatar,
-        ).toBe(expected);
-      },
-    });
-  });
+  it.each(["", "/openclaw"])(
+    "keeps a maximum-size local avatar out of bootstrap at %s",
+    async (basePath) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const avatar = Buffer.concat([
+            REAL_PNG,
+            Buffer.alloc(AVATAR_MAX_BYTES - REAL_PNG.length),
+          ]);
+          await fs.writeFile(path.join(tmp, "avatar.png"), avatar);
+          const config = createAvatarConfig(tmp, "avatar.png");
+          const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+          const headers = { authorization: "Bearer test-token" };
+          const request = { rootPath: tmp, basePath, auth, headers, config };
+          const { res, end } = await runBootstrapConfigRequest(request);
+          expect(res.statusCode).toBe(200);
+          const parsed = parseBootstrapPayload(end);
+          expect(responseBody(end).length).toBeLessThan(4096);
+          expect(parsed.assistantAvatar).toMatch(
+            new RegExp(`^${basePath}/avatar/main\\?v=[a-f0-9]+$`),
+          );
+          expect(normalizeAssistantIdentity({ avatar: parsed.assistantAvatar }).avatar).toBe(
+            parsed.assistantAvatar,
+          );
+          const denied = await runAvatarRequest({
+            url: parsed.assistantAvatar,
+            method: "GET",
+            basePath,
+            config,
+            auth,
+          });
+          expect(denied.res.statusCode).toBe(401);
+          const image = await runAvatarRequest({
+            url: parsed.assistantAvatar,
+            method: "GET",
+            basePath,
+            config,
+            auth,
+            headers,
+          });
+          expect(image.res.statusCode).toBe(200);
+          expect(image.end.mock.calls[0]?.[0]).toEqual(avatar);
+          const unchanged = await runBootstrapConfigRequest(request);
+          expect(parseBootstrapPayload(unchanged.end).assistantAvatar).toBe(parsed.assistantAvatar);
+          const replacementPath = path.join(tmp, "replacement.png");
+          const previousStat = await fs.stat(path.join(tmp, "avatar.png"));
+          await fs.writeFile(replacementPath, avatar);
+          await fs.utimes(replacementPath, previousStat.atime, previousStat.mtime);
+          await fs.rename(replacementPath, path.join(tmp, "avatar.png"));
+          const replaced = await runBootstrapConfigRequest(request);
+          expect(parseBootstrapPayload(replaced.end).assistantAvatar).not.toBe(
+            parsed.assistantAvatar,
+          );
+        },
+      });
+    },
+  );
 
   it("preserves an exact-cap IDENTITY.md data URL in bootstrap", async () => {
     await withControlUiRoot({
@@ -1997,68 +2028,42 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("bounds a bootstrap avatar that grows after its descriptor is pinned", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const avatarPath = path.join(tmp, "avatar.png");
-        await fs.writeFile(avatarPath, REAL_PNG);
-        const fstatSync = growAvatarAfterPinnedOpen(avatarPath);
-        try {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: createAvatarConfig(tmp, "avatar.png"),
-            },
-          );
-
-          expect(handled).toBe(true);
-          expect(parseBootstrapPayload(end)).toMatchObject({
-            assistantAvatar: "A",
-            assistantAvatarSource: "avatar.png",
-            assistantAvatarStatus: "none",
-            assistantAvatarReason: "unreadable",
-          });
-        } finally {
-          fstatSync.mockRestore();
-        }
-      },
-    });
-  });
-
-  it("does not read assistant avatar bytes for bootstrap HEAD", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
-        const readSync = vi.spyOn(fsSync, "readSync");
-        try {
-          const { res, end } = makeMockHttpResponse();
-          const handled = await handleControlUiHttpRequest(
-            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "HEAD" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: {
-                agents: {
-                  defaults: { workspace: tmp },
-                  list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+  it.each(["GET", "HEAD"])(
+    "does not read assistant avatar bytes for bootstrap %s",
+    async (method) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          await fs.writeFile(path.join(tmp, "avatar.png"), REAL_PNG);
+          const readSync = vi.spyOn(fsSync, "readSync");
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = await handleControlUiHttpRequest(
+              { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method } as IncomingMessage,
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: {
+                  agents: {
+                    defaults: { workspace: tmp },
+                    list: [{ id: "main", workspace: tmp, identity: { avatar: "avatar.png" } }],
+                  },
                 },
               },
-            },
-          );
+            );
 
-          expect(handled).toBe(true);
-          expect(res.statusCode).toBe(200);
-          expect(end).toHaveBeenCalledWith();
-          expect(readSync).not.toHaveBeenCalled();
-        } finally {
-          readSync.mockRestore();
-        }
-      },
-    });
-  });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            if (method === "HEAD") {
+              expect(end).toHaveBeenCalledWith();
+            }
+            expect(readSync).not.toHaveBeenCalled();
+          } finally {
+            readSync.mockRestore();
+          }
+        },
+      });
+    },
+  );
   it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -2099,7 +2104,7 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed).toMatchObject({
           assistantAgentId: "main",
-          assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
+          assistantAvatar: expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/),
           assistantAvatarStatus: "local",
         });
         expect(rateLimiter.reset).toHaveBeenCalledWith(
@@ -3536,6 +3541,7 @@ describe("handleControlUiHttpRequest", () => {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
               sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
+              contentPath: filePath,
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;

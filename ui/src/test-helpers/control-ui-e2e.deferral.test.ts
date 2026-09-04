@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 import { expect } from "vitest";
-import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  type ControlUiMockGateway,
+} from "./control-ui-e2e.ts";
 import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 type ResponseFrame = {
@@ -99,3 +102,60 @@ it.for(["resolve", "reject"] as const)(
     expect(frames.at(-1)).toMatchObject({ id: "catalog-one-shot", ok: true });
   },
 );
+
+it("separates canonical roster capture and deferrals from child session queries", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const gateway = (window as typeof window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    throw new Error("Mock Gateway was not installed");
+  }
+  const socket = new window.WebSocket("ws://mock-gateway/roster");
+  const frames: ResponseFrame[] = [];
+  socket.addEventListener("message", (event: MessageEvent) => {
+    const frame = JSON.parse(String(event.data)) as ResponseFrame;
+    if (frame.type === "res") {
+      frames.push(frame);
+    }
+  });
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  const send = (id: string, method: string, params: Record<string, unknown>) =>
+    socket.send(JSON.stringify({ type: "req", id, method, params }));
+  await flush();
+
+  const rosterMatch = { includeGlobal: true };
+  const childQuery = { includeGlobal: false, spawnedBy: "agent:main:parent" };
+  gateway.deferNext("sessions.list", rosterMatch);
+  send("child-before", "sessions.list", childQuery);
+  send("roster-held", "sessions.list", rosterMatch);
+  send("child-after", "sessions.list", childQuery);
+  send("health", "health", {});
+  await flush();
+
+  expect(frames.map((frame) => frame.id)).toEqual(["child-before", "child-after", "health"]);
+  expect(gateway.findRequests("sessions.list", rosterMatch).map((request) => request.id)).toEqual([
+    "roster-held",
+  ]);
+  expect(gateway.findRequests("sessions.list").map((request) => request.id)).toEqual([
+    "child-before",
+    "roster-held",
+    "child-after",
+  ]);
+  expect(gateway.findRequests()).toHaveLength(4);
+
+  gateway.resolveDeferred("sessions.list");
+  expect(frames.at(-1)).toMatchObject({ id: "roster-held", ok: true });
+  send("roster-next", "sessions.list", rosterMatch);
+  await flush();
+  expect(frames.at(-1)).toMatchObject({ id: "roster-next", ok: true });
+  expect(gateway.findRequests("sessions.list", rosterMatch).map((request) => request.id)).toEqual([
+    "roster-held",
+    "roster-next",
+  ]);
+});

@@ -1,6 +1,6 @@
 // Formats status summaries shown in the TUI header and overlays.
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { formatTokenCount } from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 

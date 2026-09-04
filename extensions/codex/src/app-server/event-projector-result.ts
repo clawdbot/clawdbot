@@ -24,6 +24,7 @@ import type { CodexTurn } from "./protocol.js";
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -62,7 +63,6 @@ type CodexAttemptResultInput = {
     | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
-    | "createAssistantMirrorMessage"
     | "createCurrentAttemptAssistantMessage"
     | "hasAssistantItemTextForSynthesis"
   >;
@@ -161,8 +161,6 @@ export function buildCodexAttemptResult(
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
-    createAssistantMirrorMessage: (title, text) =>
-      input.assistantProjection.createAssistantMirrorMessage(title, text),
   });
   const turnFailed = input.completedTurn?.status === "failed";
   const promptError =
@@ -215,6 +213,7 @@ export function buildCodexAttemptResult(
     didSendViaMessagingTool: input.toolTelemetry.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool:
       input.toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
+    sourceReplyDelivered: input.toolTelemetry.sourceReplyDelivered,
     messagingToolSentTexts: input.toolTelemetry.messagingToolSentTexts,
     messagingToolSentMediaUrls: input.toolTelemetry.messagingToolSentMediaUrls,
     messagingToolSentTargets: input.toolTelemetry.messagingToolSentTargets,

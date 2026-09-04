@@ -216,7 +216,6 @@ export function startGatewayMaintenanceTimers(params: {
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
         ...createManagedWorktreeOwnerPolicy(cfg),
-        // Read limits per run so a config edit applies at the next hourly sweep.
         limits: resolveWorktreeCleanupLimits(),
       });
     });

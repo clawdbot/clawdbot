@@ -19,6 +19,7 @@ describe("shouldPauseGatewayReconnect", () => {
     ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
     "AUTH_IDENTITY_HEADER_REQUIRED",
+    ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
     ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
     ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ConnectErrorDetailCodes.PROTOCOL_MISMATCH,

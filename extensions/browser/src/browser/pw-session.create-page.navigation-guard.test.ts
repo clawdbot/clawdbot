@@ -249,6 +249,36 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).not.toHaveBeenCalled();
   });
 
+  it("closes a new page when cancellation wins target resolution", async () => {
+    const { pageClose, sessionSend } = installBrowserMocks();
+    let releaseTargetInfo: (() => void) | undefined;
+    let markTargetInfoStarted: (() => void) | undefined;
+    const targetInfoStarted = new Promise<void>((resolve) => {
+      markTargetInfoStarted = resolve;
+    });
+    const targetInfoReleased = new Promise<void>((resolve) => {
+      releaseTargetInfo = resolve;
+    });
+    sessionSend.mockImplementationOnce(async () => {
+      markTargetInfoStarted?.();
+      await targetInfoReleased;
+      return { targetInfo: { targetId: "TARGET_1" } };
+    });
+    const controller = new AbortController();
+
+    const creation = createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+      signal: controller.signal,
+    });
+    await targetInfoStarted;
+    controller.abort(new Error("cancelled page creation"));
+    releaseTargetInfo?.();
+
+    await expect(creation).rejects.toThrow("cancelled page creation");
+    expect(pageClose).toHaveBeenCalledOnce();
+  });
+
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     const { pageGoto } = installBrowserMocks();
     getChromeWebSocketEndpointSpy.mockResolvedValue({

@@ -1,6 +1,5 @@
 {
   "id": "lmstudio",
-  "icon": "https://cdn.simpleicons.org/lmstudio",
   "activation": {
     "onStartup": false
   },

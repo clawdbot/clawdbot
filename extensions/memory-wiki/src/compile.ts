@@ -65,6 +65,7 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
@@ -508,18 +509,6 @@ function formatListPreview(values: readonly string[], maxItems = 3): string | nu
 
 function formatMaybeDetail(label: string, value: string | null | undefined): string | null {
   return value ? `${label} ${value}` : null;
-}
-
-function isPersonLikePage(page: WikiPageSummary): boolean {
-  const entityType = normalizeLowercaseStringOrEmpty(page.entityType);
-  const pageType = normalizeLowercaseStringOrEmpty(page.pageType);
-  return (
-    Boolean(page.personCard) ||
-    entityType === "person" ||
-    entityType === "maintainer" ||
-    pageType === "person" ||
-    pageType === "maintainer"
-  );
 }
 
 function formatPersonDirectoryLine(

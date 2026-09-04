@@ -10,10 +10,8 @@ import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { readOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import {
-  assertSupportedSchemaVersion,
-  createOpenClawDatabaseVerificationError,
-} from "./openclaw-state-db-maintenance.js";
+import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 const cachedDataVersionStatements = new WeakMap<
@@ -60,22 +58,15 @@ export function registerOpenClawStateDatabaseLifecycleListener(
   return () => databaseLifecycleListeners.delete(listener);
 }
 
-type OpenClawStateDatabaseCloseResult = {
-  caught: boolean;
-  errors: unknown[];
-};
-
 /** Close both physical-handle owners while retaining every cleanup failure. */
 function closeOpenClawStateDatabaseHandle(
   database: OpenClawStateDatabase,
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
-): OpenClawStateDatabaseCloseResult {
-  let caught = false;
+): unknown[] {
   const errors: unknown[] = [];
   try {
     database.walMaintenance.close(options);
   } catch (error) {
-    caught = true;
     errors.push(error);
   }
   clearNodeSqliteKyselyCacheForDatabase(database.db);
@@ -84,10 +75,9 @@ function closeOpenClawStateDatabaseHandle(
       database.db.close();
     }
   } catch (error) {
-    caught = true;
     errors.push(error);
   }
-  return { caught, errors };
+  return errors;
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
@@ -155,7 +145,7 @@ function getOpenClawStateDatabaseRuntimeFailure(pathname: string): Error | undef
     }
     // data_version is the cheap external-commit trigger. Re-read user_version
     // only when another connection changed the file.
-    assertSupportedSchemaVersion(cached.db, resolvedPath);
+    assertSupportedStateSchemaVersion(cached.db, resolvedPath);
     cachedDataVersions.set(cached.db, dataVersion);
     return undefined;
   } catch (error) {
@@ -281,8 +271,11 @@ export function closeOpenClawStateDatabase(
   cachedDatabases.clear();
 }
 
-/** Test whether any cached shared state database handle is still open. */
-export function isOpenClawStateDatabaseOpen(): boolean {
+/** Test whether a cached shared state database handle is still open, optionally at one path. */
+export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
+  if (pathname !== undefined) {
+    return cachedDatabases.get(path.resolve(pathname))?.db.isOpen === true;
+  }
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 

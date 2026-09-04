@@ -293,6 +293,7 @@ export function buildInstalledPluginIndexRecords(params: {
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

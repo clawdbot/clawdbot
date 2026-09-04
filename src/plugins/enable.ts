@@ -75,6 +75,7 @@ export async function enablePluginWithCapabilityConsent(
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
     onCapabilityConsent?: PluginCapabilityConsentHandler;
+    beforePersistentEffect?: () => void | Promise<void>;
   } = {},
 ): Promise<PluginEnableResult> {
   const result = enableExplicitlySelectedPluginInConfig(cfg, pluginId, options);
@@ -109,6 +110,7 @@ export async function enablePluginWithCapabilityConsent(
           env: options.env,
           metadata,
           onCapabilityConsent: options.onCapabilityConsent,
+          beforePersistentEffect: options.beforePersistentEffect,
         });
       }
       return result;

@@ -1,12 +1,14 @@
 /**
  * Lifecycle callback state helpers for a single agent attempt.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 
 /** Mutable lifecycle flags observed while a single agent attempt runs. */
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;
   lifecycleError?: string;
+  lifecycleErrorObservation?: Record<string, unknown>;
   lifecycleFinishing: boolean;
   lifecycleEnded: boolean;
 };
@@ -38,12 +40,14 @@ export function createAgentAttemptLifecycleCallbacks(
         // A same-candidate retry replaces deferred terminal state from the
         // preceding attempt; retaining it would abort a recovered run.
         state.lifecycleError = undefined;
+        state.lifecycleErrorObservation = undefined;
         state.lifecycleFinishing = false;
         state.lifecycleEnded = false;
         return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;
+        state.lifecycleErrorObservation = asOptionalRecord(evt.data.errorObservation);
       }
       // Finishing means output ended but transcript/session persistence may still
       // need to run; end/error means the runtime lifecycle is complete.

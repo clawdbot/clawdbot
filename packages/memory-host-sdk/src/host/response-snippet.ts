@@ -92,8 +92,8 @@ async function readChunkWithAbort(
   let removeAbortListener: (() => void) | undefined;
   const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
     const onAbort = () => {
+      reject(toAbortError(signal, fallbackMessage)); // Cancel resolves pending reads.
       void reader.cancel().catch(() => undefined);
-      reject(toAbortError(signal, fallbackMessage));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);

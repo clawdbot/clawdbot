@@ -12,6 +12,7 @@ import { resolveParentAwareCommandPath } from "./parent-command-path.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   configGuard: "run",
+  stateStoreGuard: "skip",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   ownsProtocolStdout: false,

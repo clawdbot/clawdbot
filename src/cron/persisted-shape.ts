@@ -76,17 +76,16 @@ export function getInvalidPersistedCronJobReason(
   if (!schedule || Array.isArray(schedule)) {
     return "missing-schedule";
   }
-  if (typeof schedule === "string") {
-    // Legacy shorthand schedules are normalized later by the full cron parser;
-    // this guard only rejects shapes that cannot be persisted or quarantined.
-    return null;
-  }
-  if (typeof schedule !== "object") {
+  const legacySchedule = typeof schedule === "string";
+  if (!legacySchedule && typeof schedule !== "object") {
     return "missing-schedule";
   }
-  const scheduleRecord = schedule as Record<string, unknown>;
+  // String schedules are a shipped legacy shape. Doctor canonicalizes them;
+  // runtime validation must still check their trigger and payload fields.
+  const scheduleRecord = asRecord(schedule);
   const scheduleKind = scheduleRecord.kind;
   if (
+    !legacySchedule &&
     scheduleKind !== "at" &&
     scheduleKind !== "every" &&
     scheduleKind !== "cron" &&

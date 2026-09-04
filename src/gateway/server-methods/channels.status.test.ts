@@ -4,7 +4,10 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -26,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
+  normalizeChannelId: vi.fn<(value: string) => string | null>((value) => value),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
   buildChannelAccountSnapshotFromAccount: vi.fn(),
   getChannelActivity: vi.fn(),
@@ -48,7 +53,11 @@ vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
   getLoadedChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
-  normalizeChannelId: (value: string) => value,
+  normalizeChannelId: mocks.normalizeChannelId,
+}));
+
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
@@ -174,10 +183,13 @@ function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string
 describe("channelsHandlers channels.status", () => {
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
+    setActivePluginRegistry(createTestRegistry([]));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.normalizeChannelId.mockImplementation((value: string) => value);
+    mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() => mocks.listChannelPlugins());
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
@@ -297,6 +309,76 @@ describe("channelsHandlers channels.status", () => {
         expect(buildChannelSummary).toHaveBeenCalledOnce();
       }
       expect(JSON.stringify(payload)).not.toContain("PRIVATE_TOKEN_REFERENCE");
+    },
+  );
+
+  it.each(["load", "register", "validation"] as const)(
+    "keeps a channel visible after its plugin fails during %s",
+    async (failurePhase) => {
+      const credential = "synthetic-loader-credential-that-must-not-escape";
+      const failedProbe = vi.fn();
+      const failed = createChannelPlugin({ id: "broken-channel", probeAccount: failedProbe });
+      const healthyProbe = vi.fn(async () => ({ ok: true }));
+      const healthy = createChannelPlugin({ id: "healthy", probeAccount: healthyProbe });
+      configureAutoEnabledChannels([healthy]);
+      failed.config.listAccountIds = () => ["default", "disabled"];
+      mocks.applyPluginAutoEnable.mockReturnValue({
+        config: {
+          autoEnabled: true,
+          logging: { redactSensitive: "off", redactPatterns: ["never-match-custom"] },
+          channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
+        },
+        changes: [],
+      });
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([failed, healthy]);
+      setActivePluginRegistry({
+        ...createTestRegistry([]),
+        plugins: [
+          createPluginRecord({
+            id: "broken-owner",
+            enabled: true,
+            status: "error",
+            failurePhase,
+            channelIds: ["broken-channel"],
+            error: `missing SDK export; Authorization: Bearer ${credential}\n${"context ".repeat(300)}`,
+          }),
+        ],
+      });
+
+      const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
+
+      expect(JSON.stringify(payload)).not.toContain(credential);
+      const lastError = firstChannelAccount(payload, "broken-channel").lastError;
+      expect(String(lastError).length).toBeLessThan(1200);
+      expect(lastError).toContain("run openclaw doctor");
+      expect(firstChannelAccount(payload, "broken-channel")).toMatchObject({
+        configured: true,
+        running: false,
+        lifecycle: "blocked",
+        lastError: expect.stringContaining("missing SDK export"),
+      });
+      expect(requireGatewayRecord(payload.channels, "channels")["broken-channel"]).toMatchObject({
+        configured: true,
+        lastError: expect.stringContaining("missing SDK export"),
+      });
+      const accounts = requireGatewayRecord(payload.channelAccounts, "accounts")["broken-channel"];
+      expect(accounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountId: "disabled",
+            enabled: false,
+            lastError: expect.stringContaining("missing SDK export"),
+          }),
+        ]),
+      );
+      expect(failedProbe).not.toHaveBeenCalled();
+      expect(healthyProbe).toHaveBeenCalledOnce();
+      mocks.normalizeChannelId.mockReturnValueOnce(null);
+      const filtered = await runChannelsStatus({ channel: "broken-channel", probe: false });
+      expect(firstChannelAccount(filtered, "broken-channel").lifecycle).toBe("blocked");
+      expect(requireGatewayRecord(filtered.channelAccounts, "accounts")).not.toHaveProperty(
+        "healthy",
+      );
     },
   );
 

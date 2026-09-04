@@ -263,6 +263,11 @@ when set):
 | `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
 | `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
+`gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
+primary device identity in the Gateway's state directory. Overriding `--node-id`
+does not change it. A node with its own state directory and key is separate, even
+on the same machine. Listing or describing nodes does not create identity credentials.
+
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired
 `node.json` with `openclaw doctor --fix` likewise does not reset pairing. To

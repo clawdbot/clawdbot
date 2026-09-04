@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { BrowserContext, Locator, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -10,31 +10,18 @@ type AvatarFixture = {
   label: string;
 };
 
-async function createAvatarPng(context: BrowserContext, background: string, label: string) {
-  const avatarPage = await context.newPage();
-  try {
-    await avatarPage.setViewportSize({ width: 64, height: 64 });
-    await avatarPage.setContent(
-      `<body style="margin:0;width:64px;height:64px;display:grid;place-items:center;background:${background};color:white;font:700 26px system-ui">${label}</body>`,
-    );
-    return await avatarPage.screenshot({ animations: "disabled", type: "png" });
-  } finally {
-    await avatarPage.close().catch(() => {});
-  }
-}
-
-export async function routeAvatarFixtures(
-  context: BrowserContext,
-  page: Page,
-  fixtures: readonly AvatarFixture[],
-) {
+export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarFixture[]) {
   await Promise.all(
-    fixtures.map(async ({ id, background, label }) => {
-      const body = await createAvatarPng(context, background, label);
-      await page.route(`**/api/users/${id}/avatar*`, (route) =>
-        route.fulfill({ body, contentType: "image/png", status: 200 }),
-      );
-    }),
+    fixtures.map(({ id, background, label }) =>
+      page.route(`**/api/users/${id}/avatar*`, (route) =>
+        route.fulfill({
+          // Static input assets must not depend on browser screenshot availability.
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="${background}"/><text x="32" y="32" text-anchor="middle" dominant-baseline="central" fill="white" style="font:700 26px system-ui">${label}</text></svg>`,
+          contentType: "image/svg+xml",
+          status: 200,
+        }),
+      ),
+    ),
   );
 }
 

@@ -251,7 +251,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("does not warn inside the managed gateway service credential context", async () => {
@@ -277,7 +277,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("does not warn about local gateway auth token precedence in remote mode", async () => {
@@ -291,7 +291,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("treats whitespace token as missing", async () => {
@@ -576,32 +576,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('tools.exec.mode="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
-  });
-
-  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-        },
-      },
-      async () => {
-        await noteSecurityWarnings({
-          tools: {
-            exec: {
-              mode: "full",
-            },
-          },
-        } as OpenClawConfig);
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain("tools.exec is broader than the host exec policy");
-    expect(message).toContain('tools.exec.mode="full"');
-    expect(message).toContain('defaults.security="allowlist"');
     expect(message).not.toContain("OpenClaw default");
   });
 

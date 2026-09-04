@@ -2,6 +2,7 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandHandler,
@@ -24,11 +25,11 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
   }
   return {
     ...result,
-    reply: {
+    reply: copyReplyPayloadMetadata(result.reply, {
       ...result.reply,
       replyToId: undefined,
       replyToCurrent: false,
-    },
+    }),
   };
 }
 

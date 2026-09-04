@@ -30,7 +30,7 @@ export function renderDiffBlock(
   outcome: ToolCardOutcome = "succeeded",
   renderSkip?: (line: DiffLine) => unknown,
   file: DiffFilePaths = { path: "" },
-) {
+): ReturnType<typeof renderHighlightedDiff> {
   const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
   return renderHighlightedDiff(
     lines,
@@ -65,9 +65,11 @@ export function renderDiffBlock(
                   : "";
           const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
           return html`<div class="chat-diff__row ${kindClass}">
-            ${hasLineNumbers
-              ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
-              : nothing}
+            ${
+              hasLineNumbers
+                ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
+                : nothing
+            }
             <span class="chat-diff__sign">${sign}</span>
             <span class="chat-diff__text">${renderLine(line)}</span>
           </div>`;

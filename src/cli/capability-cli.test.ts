@@ -2825,12 +2825,7 @@ describe("capability cli", () => {
       const writeFile = fs.writeFile.bind(fs);
       const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
         const [filePath, data, options] = args;
-        if (
-          typeof filePath === "string" &&
-          Buffer.isBuffer(data) &&
-          data.byteLength === buffer.byteLength &&
-          path.dirname(filePath) === tempDir
-        ) {
+        if (typeof filePath === "string" && Buffer.isBuffer(data) && data.equals(buffer)) {
           await writeFile(filePath, data.subarray(0, 17), options);
           throw new Error("injected buffered media write failure");
         }
@@ -3702,7 +3697,7 @@ describe("capability cli", () => {
       const copyFile = fs.copyFile.bind(fs);
       const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
         const [source, destination] = args;
-        if (typeof destination === "string" && path.dirname(destination) === outputDir) {
+        if (source === sourcePath) {
           const bytes = await fs.readFile(source);
           await fs.writeFile(destination, bytes.subarray(0, 17));
           throw new Error("injected TTS copy failure");

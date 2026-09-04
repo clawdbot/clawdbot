@@ -55,6 +55,7 @@ import {
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -279,6 +280,8 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
   getCompactionReplayEnabled: () => boolean;
+  getServerToolClearingEnabled: () => boolean;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   getSystemPrompt: () => string;
   onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
@@ -357,10 +360,14 @@ export function installEmbeddedAttemptContextGuards(input: {
         lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
+        projectionState: input.toolResultPromptProjectionState,
+        // Server-side clearing owns new rounds; earlier client projections still
+        // replay so the prefix already sent for this session does not change.
+        pruneNewRounds: !input.getServerToolClearingEnabled(),
+        onPruned: () => {
+          lastCacheTouchAt = Date.now();
+        },
       });
-      if (projected !== sourceMessages) {
-        lastCacheTouchAt = Date.now();
-      }
       return projected;
     };
   }

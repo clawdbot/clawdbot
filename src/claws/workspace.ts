@@ -1,14 +1,16 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
 
@@ -62,8 +64,8 @@ function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
     status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 
@@ -81,14 +83,6 @@ function contentDigest(content: Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
-function containedRelativePath(root: string, path: string): string | undefined {
-  const child = relative(root, path);
-  if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
-    return undefined;
-  }
-  return child;
-}
-
 export async function readClawWorkspaceActionSource(params: {
   action: ClawAddPlanAction;
   packageRoot: string;
@@ -98,7 +92,7 @@ export async function readClawWorkspaceActionSource(params: {
     throw new Error("Workspace file action lacks a source.");
   }
   const sourcePath = resolve(params.action.source);
-  const sourceRelative = containedRelativePath(params.packageRoot, sourcePath);
+  const sourceRelative = clawContainedRelativePath(params.packageRoot, sourcePath);
   if (!sourceRelative) {
     throw new Error("Workspace file source must remain inside the Claw package.");
   }
@@ -197,8 +191,8 @@ function readWorkspaceFile(
       sourcePath: row.source_path,
       contentDigest: row.content_digest,
       status: row.status,
-      createdAtMs: Number(row.created_at_ms),
-      updatedAtMs: Number(row.updated_at_ms),
+      createdAtMs: sqliteNumber(row.created_at_ms),
+      updatedAtMs: sqliteNumber(row.updated_at_ms),
     };
   }, options);
 }
@@ -365,7 +359,7 @@ export async function createClawWorkspaceFiles(
         );
       }
       const targetPath = resolve(action.target);
-      const targetRelative = containedRelativePath(workspaceRoot, targetPath);
+      const targetRelative = clawContainedRelativePath(workspaceRoot, targetPath);
       if (!targetRelative) {
         throw new ClawWorkspaceWriteError(
           [

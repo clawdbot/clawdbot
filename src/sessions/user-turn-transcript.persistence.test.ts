@@ -11,10 +11,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "./user-turn-transcript.metadata.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
+import type { UserTurnOriginalInputCommit } from "./user-turn-transcript.types.js";
 
 describe("persistUserTurnTranscript", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -315,6 +316,216 @@ describe("persistUserTurnTranscript", () => {
       }),
     ]);
   });
+
+  it("reports one original committed input, never staged custody or idempotent replay", async () => {
+    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("original-input-commit-") });
+    const commits: UserTurnOriginalInputCommit[] = [];
+    const input = {
+      text: "Hello @Ada",
+      timestamp: 123,
+      idempotencyKey: "source-mention:user",
+      mentions: [{ profileId: "ada", start: 6, end: 10 }],
+    };
+    const createRecorder = () =>
+      createUserTurnTranscriptRecorder({
+        input,
+        target,
+        onOriginalInputCommitted: (commit) => commits.push(commit),
+      });
+    const first = createRecorder();
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await expect(
+      first.stageApproved?.({ runId: "source-mention", assertCurrent: () => {} }),
+    ).resolves.toBe(true);
+    expect(commits).toEqual([]);
+    const result = await first.persistApproved();
+    await first.persistFallback();
+    const replay = await createRecorder().persistApproved();
+    expect(replay?.appended).toBe(false);
+    expect(commits).toEqual([
+      {
+        anchor: expect.objectContaining({
+          entryId: result?.messageId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+        }),
+        message: expect.objectContaining({
+          content: input.text,
+          __openclaw: { humanMentions: input.mentions },
+        }),
+      },
+    ]);
+    expect(await readTranscriptMessages(target)).toHaveLength(1);
+  });
+
+  it.each([undefined, false, true])(
+    "requires explicit runtime append freshness (%s), not an admission anchor",
+    async (appended) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("runtime-input-commit-") });
+      const commits: UserTurnOriginalInputCommit[] = [];
+      const input = { text: "Hello @Ada", idempotencyKey: "runtime-mention:user" };
+      const result = await persistUserTurnTranscript({ ...target, input });
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target,
+        onOriginalInputCommitted: (commit) => commits.push(commit),
+      });
+      const persistence = appended === undefined ? undefined : { appended };
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      expect(recorder.getAdmissionReceipt()?.entryId).toBe(result?.messageId);
+      expect(commits).toHaveLength(appended === true ? 1 : 0);
+    },
+  );
+
+  it.each([
+    "hidden",
+    "internal",
+    "handoff",
+    "excluded",
+    "blocked",
+    "placeholder",
+    "late-media",
+  ] as const)("does not report %s rows as original human input", async (kind) => {
+    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("non-original-input-") });
+    const commits: UserTurnOriginalInputCommit[] = [];
+    const message = {
+      role: "user" as const,
+      content: "@Ada",
+      timestamp: 1,
+      ...(kind === "hidden" ? { display: false as const } : {}),
+      ...(kind === "excluded" ? { excludeFromContext: true as const } : {}),
+      ...(kind === "internal" ? { provenance: { kind: "internal_system" as const } } : {}),
+      ...(kind === "handoff" ? { provenance: { kind: "inter_session" as const } } : {}),
+      ...(kind === "placeholder" ? { __openclaw: { beforeAgentRunBlocked: true } } : {}),
+      ...(kind === "late-media" ? { __openclaw: { lateMedia: true } } : {}),
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message,
+      target,
+      onOriginalInputCommitted: (commit) => commits.push(commit),
+    });
+    await (kind === "blocked" ? recorder.persistBlocked(message) : recorder.persistApproved());
+    expect(await readTranscriptMessages(target)).toHaveLength(1);
+    expect(commits).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "fans committed source mentions back to their own recorders only for an annotated collection (%s)",
+    async (annotated) => {
+      const target = createSqliteTranscriptTarget({
+        dir: tempDirs.make("collected-input-commit-"),
+      });
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const commits: UserTurnOriginalInputCommit[] = [];
+      const sources = ["ada", "grace"].map((profileId) =>
+        createUserTurnTranscriptRecorder({
+          input: {
+            text: `@${profileId}`,
+            idempotencyKey: `${profileId}:user`,
+            mentions: [{ profileId, start: 0, end: profileId.length + 1 }],
+            sender: {
+              id: `sender-${profileId}`,
+              identity: { type: "profile", id: `sender-${profileId}` },
+            },
+          },
+          target,
+          onOriginalInputCommitted: (commit) => commits.push(commit),
+        }),
+      );
+      for (const [index, source] of sources.entries()) {
+        await source.stageApproved?.({ runId: `source-${index}`, assertCurrent: () => {} });
+      }
+      const aggregate = createUserTurnTranscriptRecorder({
+        input: {
+          text: annotated ? "@ada\n@grace" : "Two queued messages were summarized.",
+          idempotencyKey: "aggregate:user",
+          ...(annotated
+            ? {
+                mentions: [
+                  { profileId: "ada", start: 0, end: 4 },
+                  { profileId: "grace", start: 5, end: 11 },
+                ],
+              }
+            : {}),
+        },
+        pendingInputSources: sources,
+        target,
+      });
+      const result = await aggregate.persistApproved();
+      await aggregate.persistFallback();
+      expect(result?.appended).toBe(true);
+      expect(
+        commits.map((commit) => ({
+          text: commit.message.content,
+          sender: commit.message["__openclaw"]?.senderId,
+          entryId: commit.anchor.entryId,
+        })),
+      ).toEqual(
+        annotated
+          ? [
+              { text: "@ada", sender: "sender-ada", entryId: result?.messageId },
+              { text: "@grace", sender: "sender-grace", entryId: result?.messageId },
+            ]
+          : [],
+      );
+      expect(await readTranscriptMessages(target)).toHaveLength(1);
+    },
+  );
+
+  it("does not fail or retry a committed input when notification and diagnostic callbacks throw", async () => {
+    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("original-input-errors-") });
+    const errors: unknown[] = [];
+    let attempts = 0;
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "@Ada", idempotencyKey: "notification-error:user" },
+      target,
+      onOriginalInputCommitted: () => {
+        attempts += 1;
+        throw new Error("notification failed");
+      },
+      onPersistenceError: (error) => {
+        errors.push(error);
+        throw new Error("diagnostic failed");
+      },
+    });
+    await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+    await recorder.persistFallback();
+    expect(attempts).toBe(1);
+    expect(errors).toEqual([expect.objectContaining({ message: "notification failed" })]);
+    expect(await readTranscriptMessages(target)).toHaveLength(1);
+  });
+
+  it.each(["retain", "replace-text", "mutate-spans", "forge"] as const)(
+    "keeps human selections bound to their original bytes through hook %s",
+    async (mode) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("mention-hook-") });
+      const mentions = [{ profileId: "ada", start: 6, end: 10 }];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "Hello @Ada", ...(mode === "forge" ? {} : { mentions }) },
+        target,
+        beforeMessageWrite: ({ message }) => {
+          if (mode === "mutate-spans") {
+            message["__openclaw"]!.humanMentions![0]!.profileId = "forged";
+          }
+          return {
+            ...message,
+            content: mode === "replace-text" ? "[redacted]" : message.content,
+            __openclaw: { humanMentions: [{ profileId: "forged", start: 0, end: 6 }] },
+          };
+        },
+      });
+      await recorder.persistApproved();
+      const [message] = await readTranscriptMessages(target);
+      expect(message).toHaveProperty(
+        "content",
+        mode === "replace-text" ? "[redacted]" : "Hello @Ada",
+      );
+      expect(
+        (message?.["__openclaw"] as { humanMentions?: unknown } | undefined)?.humanMentions,
+      ).toEqual(mode === "replace-text" || mode === "forge" ? undefined : mentions);
+    },
+  );
 
   it("returns the existing user turn when the idempotency key was already persisted", async () => {
     const dir = tempDirs.make("openclaw-user-turn-append-idempotent-");

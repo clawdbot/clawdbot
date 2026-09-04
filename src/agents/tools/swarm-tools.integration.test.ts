@@ -1,7 +1,9 @@
+import assert from "node:assert/strict";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   resetSubagentRegistryForTests,
@@ -54,12 +56,14 @@ describe("swarm tools integration", () => {
     vi.unstubAllEnvs();
   });
 
-  it("spawns three mock-model collectors and drains them in first-completion order", async () => {
+  it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
     await withTestDir({ prefix: "openclaw-swarm-tools-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const publicToGateway = new Map<string, string>();
       const resultTextBySession = new Map<string, string>();
       const modelStructuredCalls: number[] = [];
+      const childGuidance: string[] = [];
+      const acceptedNotes: string[] = [];
       let launchCount = 0;
       const launchGateway = vi.fn(async (request: unknown) => {
         const method =
@@ -70,6 +74,9 @@ describe("swarm tools integration", () => {
           return {};
         }
         const params = requestParams(request);
+        assert(typeof params.extraSystemPrompt === "string", "child system prompt must be text");
+        assert(typeof params.message === "string", "child task must be text");
+        childGuidance.push(`${params.extraSystemPrompt}\n${params.message}`);
         const publicRunId = String(params.idempotencyKey);
         const childSessionKey = String(params.sessionKey);
         const outputSchema = params.swarmOutputSchema as Record<string, unknown>;
@@ -85,9 +92,13 @@ describe("swarm tools integration", () => {
           swarmCollector: true,
           swarmOutputSchema: outputSchema,
         }).find((tool) => tool.name === "structured_output");
-        expect(structuredOutput).toBeDefined();
-        await structuredOutput?.execute("mock-model-output", { result: { index } });
-        modelStructuredCalls.push(index);
+        if (outputSchema) {
+          expect(structuredOutput).toBeDefined();
+          await structuredOutput?.execute("mock-model-output", { result: { index } });
+          modelStructuredCalls.push(index);
+        } else {
+          expect(structuredOutput).toBeUndefined();
+        }
         publicToGateway.set(publicRunId, gatewayRunId);
         resultTextBySession.set(childSessionKey, `result-${index}`);
         return { runId: gatewayRunId, status: "accepted", acceptedAt: Date.now() };
@@ -147,30 +158,48 @@ describe("swarm tools integration", () => {
         requesterRunId: "parent-run",
         config,
       });
-      const runIds: string[] = [];
-      for (const index of [1, 2, 3]) {
-        const result = await spawn.execute(`spawn-${index}`, {
-          task: `collector-${index}`,
-          collect: true,
-          outputSchema: {
-            type: "object",
-            properties: { index: { type: "number" } },
-            required: ["index"],
-          },
-        });
-        const details = result.details as { status: string; runId?: string };
-        expect(details.status).toBe("accepted");
-        expect(details.runId).toBeTruthy();
-        runIds.push(details.runId ?? "");
-      }
-      await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
-      expect(modelStructuredCalls).toEqual([1, 2, 3]);
-
       const wait = createAgentsWaitTool({
         agentSessionKey: requesterSessionKey,
         agentId: "main",
         config,
       });
+      finalizeAgentToolAvailability([spawn, wait]);
+      const runIds: string[] = [];
+      const completionInputs = [
+        {},
+        { expectsCompletionMessage: true },
+        { expectsCompletionMessage: false },
+      ];
+      for (const [offset, completion] of completionInputs.entries()) {
+        const index = offset + 1;
+        const result = await spawn.execute(`spawn-${index}`, {
+          task: `worker-${index}`,
+          collect: true,
+          ...completion,
+          ...(index === 2
+            ? {}
+            : {
+                outputSchema: {
+                  type: "object",
+                  properties: { index: { type: "number" } },
+                  required: ["index"],
+                },
+              }),
+        });
+        const details = result.details as { status: string; runId?: string };
+        acceptedNotes.push(
+          result.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n"),
+        );
+        expect(details).toMatchObject({ status: "accepted", expectsCompletionMessage: false });
+        expect(details.runId).toBeTruthy();
+        runIds.push(details.runId ?? "");
+      }
+      await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
+      expect(modelStructuredCalls).toEqual([1, 3]);
+
       const pending = new Set(runIds);
       const completionOrder: string[] = [];
       for (const publicRunId of [runIds[1] ?? "", runIds[2] ?? "", runIds[0] ?? ""]) {
@@ -182,9 +211,12 @@ describe("swarm tools integration", () => {
           timeoutSeconds: 1,
         });
         const details = result.details as {
-          completed: Array<{ runId: string; structured?: unknown }>;
+          completed: Array<{ runId: string; result: string; structured?: unknown }>;
         };
         for (const completed of details.completed) {
+          const index = runIds.indexOf(completed.runId) + 1;
+          expect(completed.result).toBe(`result-${index}`);
+          expect(completed.structured).toEqual(index === 2 ? undefined : { index });
           completionOrder.push(completed.runId);
           pending.delete(completed.runId);
         }
@@ -194,6 +226,11 @@ describe("swarm tools integration", () => {
       expect(pending.size).toBe(0);
       for (const runId of runIds) {
         expect(structuredOutputTesting.readSwarmStructuredOutput(runId)).toBeUndefined();
+      }
+      // Inspect the real spawn builders, not the mock model's own response.
+      for (const guidance of [...childGuidance, ...acceptedNotes]) {
+        expect.soft(guidance).toMatch(/Collector run: no completion notification/);
+        expect.soft(guidance).not.toMatch(/auto-announce|auto-reported|push-based/);
       }
     });
   });

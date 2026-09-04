@@ -169,6 +169,104 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   };
 }
 
+it.each([
+  { query: "provider:openai" },
+  { agentId: "main" },
+  { selectedSessions: ["agent:main:matched"] },
+  { selectedSessions: ["agent:main:matched", "agent:main:earlier"] },
+  { query: "provider:openai", selectedHours: [12] },
+])("intersects selected days with the session scope %j", (scope) => {
+  const base = createUsageProps();
+  const matched = usageSession("agent:main:matched", "main", "openai", {
+    totalTokens: 800,
+    totalCost: 80,
+  });
+  const other = usageSession("agent:other:other", "other", "anthropic", {
+    totalTokens: 900,
+    totalCost: 90,
+  });
+  const selectedDay = {
+    date: "2026-05-14",
+    tokens: 99,
+    cost: 10,
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    totalTokens: 99,
+    totalCost: 10,
+    inputCost: 1,
+    outputCost: 2,
+    cacheReadCost: 3,
+    cacheWriteCost: 4,
+    missingCostEntries: 1,
+    missingCostByModel: { "openai/unpriced": 1 },
+  };
+  matched.usage!.activityDates = ["2026-05-13", "2026-05-14"];
+  matched.usage!.firstActivity = Date.UTC(2026, 4, 14, 12);
+  matched.usage!.lastActivity = matched.usage!.firstActivity;
+  matched.usage!.dailyBreakdown = [
+    { ...selectedDay, date: "2026-05-13", tokens: 701, cost: 70, totalTokens: 701, totalCost: 70 },
+    selectedDay,
+  ];
+  other.usage!.activityDates = ["2026-05-14"];
+  other.usage!.dailyBreakdown = [
+    { ...selectedDay, tokens: 900, cost: 90, totalTokens: 900, totalCost: 90 },
+  ];
+  const earlier = usageSession("agent:main:earlier", "main", "openai", { totalCost: 5 });
+  earlier.usage!.activityDates = ["2026-05-13"];
+  earlier.usage!.firstActivity = Date.UTC(2026, 4, 13, 12);
+  earlier.usage!.lastActivity = earlier.usage!.firstActivity;
+  earlier.usage!.dailyBreakdown = [
+    {
+      ...selectedDay,
+      date: "2026-05-13",
+      tokens: 50,
+      cost: 5,
+      totalTokens: 50,
+      totalCost: 5,
+    },
+  ];
+  const onExportJson = vi.fn();
+  const container = document.createElement("div");
+  render(
+    renderUsage(
+      createUsageProps({
+        data: {
+          ...base.data,
+          sessions: [matched, other, earlier],
+          totals: { ...selectedDay, totalCost: 170 },
+          costDaily: [{ ...selectedDay, totalTokens: 999, totalCost: 100 }],
+        },
+        filters: { ...base.filters, ...scope, timeZone: "utc", selectedDays: [selectedDay.date] },
+        callbacks: {
+          ...base.callbacks,
+          display: { ...base.callbacks.display, onExportJson },
+        },
+      }),
+    ),
+    container,
+  );
+  expect(
+    [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
+  ).toEqual(["99", "$10.00", "1"]);
+  container.querySelector(".usage-export-menu")!.dispatchEvent(
+    new CustomEvent("wa-select", {
+      detail: { item: { value: "json" } },
+    }),
+  );
+  const { date, tokens: _tokens, cost: _cost, ...expectedTotals } = selectedDay;
+  expect(onExportJson.mock.calls[0]?.[0].totals).toEqual(expectedTotals);
+  expect(
+    onExportJson.mock.calls[0]?.[0].daily.find(
+      (day: { date: string }) => day.date === "2026-05-13",
+    ),
+  ).toMatchObject({ totalCost: scope.selectedSessions?.length === 1 ? 70 : 75 });
+  expect(onExportJson.mock.calls[0]?.[0].daily).toEqual(
+    expect.arrayContaining([{ date, ...expectedTotals }]),
+  );
+});
+
 it("renders shared skeletons while initial usage is loading", () => {
   const container = document.createElement("div");
   const props = createUsageProps();
@@ -441,9 +539,10 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
 
     render(renderUsage(props), container);
-    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+    const option = [...container.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.textContent?.trim() === "clear",
-    );
+    )!;
+    option.checked = true;
     option
       ?.closest("wa-dropdown")
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));

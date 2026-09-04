@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -74,55 +75,6 @@ function themeConfigResponse(
   };
 }
 
-type RenderedColor = {
-  red: number;
-  green: number;
-  blue: number;
-  alpha: number;
-};
-
-function parseRenderedColor(color: string): RenderedColor {
-  const trimmed = color.trim();
-  const shortHex = /^#([a-f\d])([a-f\d])([a-f\d])$/iu.exec(trimmed);
-  const hex = shortHex ?? /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
-  if (hex) {
-    const channels = hex
-      .slice(1)
-      .map((channel) => Number.parseInt(shortHex ? channel.repeat(2) : channel, 16));
-    const [red, green, blue] = channels;
-    if (red !== undefined && green !== undefined && blue !== undefined) {
-      return { alpha: 1, blue, green, red };
-    }
-  }
-
-  const rgb =
-    /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d*\.?\d+))?\s*\)$/u.exec(
-      trimmed,
-    );
-  const srgb = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\s*\)$/u.exec(
-    trimmed,
-  );
-  const rendered = rgb ?? srgb;
-  if (rendered) {
-    const [red, green, blue] = rendered
-      .slice(1, 4)
-      .map((value) => Number(value) * (srgb ? 255 : 1));
-    const alpha = rendered[4] === undefined ? 1 : Number(rendered[4]);
-    if (
-      red !== undefined &&
-      green !== undefined &&
-      blue !== undefined &&
-      [red, green, blue].every((channel) => channel >= 0 && channel <= 255) &&
-      alpha >= 0 &&
-      alpha <= 1
-    ) {
-      return { alpha, blue, green, red };
-    }
-  }
-
-  throw new Error(`Expected a browser-rendered RGB or theme hex color, received ${color}`);
-}
-
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
   if (background.alpha !== 1) {
     throw new Error("Cannot measure rendered contrast against a transparent background");
@@ -137,8 +89,7 @@ function compositeColor(foreground: RenderedColor, background: RenderedColor): R
   };
 }
 
-function relativeLuminance(color: string | RenderedColor): number {
-  const resolved = typeof color === "string" ? parseRenderedColor(color) : color;
+function relativeLuminance(resolved: RenderedColor): number {
   if (resolved.alpha !== 1) {
     throw new Error("Composite a translucent rendered color before calculating contrast");
   }
@@ -153,7 +104,7 @@ function relativeLuminance(color: string | RenderedColor): number {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
-function contrastRatio(foreground: string | RenderedColor, background: string | RenderedColor) {
+function contrastRatio(foreground: RenderedColor, background: RenderedColor) {
   const first = relativeLuminance(foreground);
   const second = relativeLuminance(background);
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
@@ -167,6 +118,24 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("measures modern rendered colors in sRGB", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const rendered = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        document.body.append(probe);
+        // Captured from an actual theme transition; its negative Oklab channel
+        // cannot be interpreted as an RGB component.
+        probe.style.color = "oklab(0.731043 0.00229835 -0.00707035)";
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      expect(
+        (await page.evaluate(resolveRenderedColors, { transition: rendered })).transition,
+      ).toEqual({ red: 167, green: 167, blue: 173, alpha: 1 });
+    });
+  });
+
   it.each(
     themeCases.flatMap(({ family, mode, resolved }) =>
       (family === "claw" ? [undefined, "#000000", "#ffffff"] : [undefined]).map((accent) => ({
@@ -279,6 +248,15 @@ suite.define(() => {
           { foregroundNames: [...textTokens], surfaceNames: [...surfaceTokens] },
         );
 
+        const colors = await page.evaluate(resolveRenderedColors, {
+          ...rendered.foregrounds,
+          ...rendered.surfaces,
+          description: rendered.descriptionColor,
+          ...Object.fromEntries(
+            rendered.backgroundLayers.map((color, index) => [`layer-${index}`, color]),
+          ),
+        });
+
         const pairings = textTokens.flatMap((textToken) =>
           surfaceTokens.map((surfaceToken) => {
             const foreground = rendered.foregrounds[textToken];
@@ -286,7 +264,7 @@ suite.define(() => {
             if (!foreground || !background) {
               throw new Error(`Missing browser-resolved ${textToken} or ${surfaceToken}`);
             }
-            const contrast = contrastRatio(foreground, background);
+            const contrast = contrastRatio(colors[textToken]!, colors[surfaceToken]!);
             expect(
               contrast,
               `${resolved}: ${textToken} ${foreground} on ${surfaceToken} ${background}`,
@@ -301,14 +279,11 @@ suite.define(() => {
           }),
         );
 
-        let descriptionBackground = parseRenderedColor(rendered.surfaces["--bg"] ?? "");
-        for (const backgroundLayer of rendered.backgroundLayers.toReversed()) {
-          descriptionBackground = compositeColor(
-            parseRenderedColor(backgroundLayer),
-            descriptionBackground,
-          );
+        let descriptionBackground = colors["--bg"]!;
+        for (let index = rendered.backgroundLayers.length - 1; index >= 0; index--) {
+          descriptionBackground = compositeColor(colors[`layer-${index}`]!, descriptionBackground);
         }
-        const descriptionColor = parseRenderedColor(rendered.descriptionColor);
+        const descriptionColor = colors.description!;
         const descriptionForeground = compositeColor(
           {
             ...descriptionColor,
@@ -347,17 +322,21 @@ suite.define(() => {
           .evaluate((element) => getComputedStyle(element).backgroundColor);
         const assertOptionContrast = async (option: typeof selected) => {
           const paint = await optionPaint(option);
-          const background = compositeColor(
-            parseRenderedColor(paint.background),
-            parseRenderedColor(listboxBackground),
-          );
-          for (const text of [paint.label, paint.description]) {
+          const optionColors = await page.evaluate(resolveRenderedColors, {
+            background: paint.background,
+            listbox: listboxBackground,
+            label: paint.label,
+            description: paint.description,
+            outline: paint.outlineColor,
+          });
+          const background = compositeColor(optionColors.background!, optionColors.listbox!);
+          for (const text of [optionColors.label!, optionColors.description!]) {
             expect(
               contrastRatio(text, background),
               `${resolved} picker text`,
             ).toBeGreaterThanOrEqual(4.5);
           }
-          return { paint, background };
+          return { paint, background, outline: optionColors.outline! };
         };
         const selectedValue = await selected.getAttribute("value");
         const initialPaint = await optionPaint(selected);
@@ -372,9 +351,7 @@ suite.define(() => {
         const focused = await assertOptionContrast(current);
         expect(focused.paint.outline).not.toBe("none");
         expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
-        expect(
-          contrastRatio(focused.paint.outlineColor, focused.background),
-        ).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(focused.outline, focused.background)).toBeGreaterThanOrEqual(3);
         await picker.locator('wa-option[value="system"]').hover();
         await assertOptionContrast(picker.locator('wa-option[value="system"]'));
         await page.keyboard.press("Escape");

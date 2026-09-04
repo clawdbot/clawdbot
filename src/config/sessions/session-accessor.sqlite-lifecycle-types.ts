@@ -14,6 +14,7 @@ export type SessionEntryRemovalPlan = {
 };
 type SessionEntryMaintenanceCounts = {
   archived: number;
+  capArchived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
@@ -33,6 +34,7 @@ export type LifecycleArtifactCleanupPlan = {
 export type ProjectedLifecycleMutation = {
   deletePlans: SessionStateDeletePlan[];
   removals: Array<{
+    archiveTranscript: boolean;
     expectedEntry: SessionEntry;
     removal: SessionEntryLifecycleRemoval;
     sessionKey: string;

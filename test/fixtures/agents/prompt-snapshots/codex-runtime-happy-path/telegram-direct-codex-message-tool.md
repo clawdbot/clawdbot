@@ -40,7 +40,8 @@
     "defaults": {
       "heartbeat": {
         "every": "30m"
-      }
+      },
+      "userTimezone": "UTC"
     },
     "entries": {
       "main": {
@@ -70,6 +71,7 @@
     },
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.shell_tool": true,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
@@ -115,6 +117,7 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.shell_tool": true,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
@@ -143,6 +146,10 @@
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    },
+    "openclaw_temporal_context": {
+      "kind": "application",
+      "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
     }
   },
   "approvalPolicy": "never",
@@ -234,8 +241,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56195,
-    "roughTokens": 14049
+    "chars": 57519,
+    "roughTokens": 14380
   },
   "openClawDeveloperInstructions": {
     "chars": 3224,
@@ -246,8 +253,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6793
   },
   "totalWithDynamicToolsJson": {
-    "chars": 83367,
-    "roughTokens": 20842
+    "chars": 84691,
+    "roughTokens": 21173
   },
   "userInputText": {
     "chars": 863,

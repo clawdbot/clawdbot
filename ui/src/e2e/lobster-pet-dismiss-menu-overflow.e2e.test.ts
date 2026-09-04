@@ -35,6 +35,8 @@ async function loadControlUiPage(currentPage: Page) {
   await installMockGateway(currentPage);
   await currentPage.goto(suite.server.baseUrl);
   await currentPage.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
+  await currentPage.locator("openclaw-app-sidebar").waitFor();
+  await currentPage.locator(".community-invite-card").waitFor();
   const loadedAt = await currentPage.evaluate(() => Date.now());
   await currentPage.clock.pauseAt(loadedAt + 1_000);
 }
@@ -49,21 +51,18 @@ async function withDismissMenuPage(
   });
 }
 
-/** Mounts the pet inside the real sidebar footer ledge so production CSS
- *  (`openclaw-lobster-pet { height: 52px; overflow: hidden }`) applies. */
-async function mountPetInRealFooter(currentPage: Page, seed: number) {
+/** Configures the pet already mounted on the real sidebar ledge so production
+ *  positioning and hit testing remain part of the assertion. */
+async function configureRealSidebarPet(currentPage: Page, seed: number) {
   await currentPage.evaluate(async (petSeed) => {
-    const footer = document.querySelector(".sidebar-shell__footer");
-    if (!footer) {
-      throw new Error("sidebar footer ledge not found");
+    const pet = document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet | null;
+    if (!pet) {
+      throw new Error("sidebar lobster pet not found");
     }
-    footer.querySelector("openclaw-lobster-pet")?.remove();
-    const pet = document.createElement("openclaw-lobster-pet") as BrowserLobsterPet;
     pet.seed = petSeed;
     pet.mode = "offline";
     pet.runOutcome = "ok";
     pet.visitsEnabled = true;
-    footer.append(pet);
     await pet.updateComplete;
   }, seed);
 }
@@ -86,6 +85,13 @@ async function measureDismissMenu(currentPage: Page) {
     const menuRect = menu.getBoundingClientRect();
     const host = document.querySelector<HTMLElement>("openclaw-lobster-pet");
     const hostStyle = host ? getComputedStyle(host) : null;
+    const hostRect = host?.getBoundingClientRect() ?? null;
+    const invite = document.querySelector<HTMLElement>(".sidebar-shell__invite");
+    const inviteCard = invite?.querySelector(".community-invite-card") ?? null;
+    const inviteRect = invite?.getBoundingClientRect() ?? null;
+    const footerRect = document
+      .querySelector<HTMLElement>(".sidebar-shell__footer")
+      ?.getBoundingClientRect();
     const firstItem = dropdown.querySelector("wa-dropdown-item");
     const firstItemLabel = firstItem?.shadowRoot?.querySelector<HTMLElement>("#label") ?? null;
     return {
@@ -127,6 +133,12 @@ async function measureDismissMenu(currentPage: Page) {
       hasOuterMenuSurface: dropdown.closest("openclaw-menu-surface") !== null,
       hostHeight: hostStyle?.height ?? null,
       hostOverflow: hostStyle?.overflow ?? null,
+      hostParentClass: host?.parentElement?.className ?? null,
+      hostBottom: hostRect?.bottom ?? null,
+      inviteCardPresent: inviteCard !== null,
+      inviteHeight: inviteRect?.height ?? null,
+      inviteTop: inviteRect?.top ?? null,
+      footerTop: footerRect?.top ?? null,
       itemHeights: [...dropdown.querySelectorAll("wa-dropdown-item")].map(
         (item) => (item as HTMLElement).offsetHeight,
       ),
@@ -170,9 +182,9 @@ suite.define(() => {
   beforeEach(() => {
     artifactDir = createControlUiE2eArtifactDir("lobster-dismiss-menu-overflow");
   });
-  it("does not scroll its two dismissal items in the real sidebar footer", () =>
+  it("keeps the lobster clickable and its dismissal menu within the viewport on both sidebar ledges", () =>
     withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
+      await configureRealSidebarPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
 
@@ -180,27 +192,63 @@ suite.define(() => {
       await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
       await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
-      const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "real-footer-context.png") });
+      const inviteMeasurement = await measureDismissMenu(page);
+      await page.screenshot({ path: path.join(artifactDir, "real-sidebar-invite-ledge.png") });
 
       // Asserting on the whole measurement so a regression prints the anchor
       // position and resolved max-height that explain it.
-      expect(measurement).toMatchObject({
+      expect(inviteMeasurement).toMatchObject({
         overflowPx: 0,
         popupIsTopLayer: true,
         hasOuterMenuSurface: false,
+        hostParentClass: "sidebar-shell__invite",
+        inviteCardPresent: true,
       });
+      expect(inviteMeasurement.menuTop).toBeGreaterThanOrEqual(0);
+      expect(inviteMeasurement.menuBottom).toBeLessThanOrEqual(inviteMeasurement.viewportHeight);
+      expect(inviteMeasurement.inviteHeight).toBeGreaterThan(0);
+      expect(inviteMeasurement.hostBottom).not.toBeNull();
+      expect(inviteMeasurement.inviteTop).not.toBeNull();
+      expect(
+        Math.abs((inviteMeasurement.hostBottom ?? 0) - (inviteMeasurement.inviteTop ?? 0) - 3),
+      ).toBeLessThan(0.5);
+
+      await page.keyboard.press("Escape");
+      const invite = page.locator(".community-invite-card");
+      await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
+      await invite.waitFor({ state: "detached" });
+
+      await sprite.click({ button: "right" });
+      await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
+      const footerMeasurement = await measureDismissMenu(page);
+      await page.screenshot({ path: path.join(artifactDir, "real-sidebar-footer-ledge.png") });
+
+      expect(footerMeasurement).toMatchObject({
+        overflowPx: 0,
+        popupIsTopLayer: true,
+        hasOuterMenuSurface: false,
+        hostParentClass: "sidebar-shell__invite",
+        inviteCardPresent: false,
+        inviteHeight: 0,
+      });
+      expect(footerMeasurement.menuTop).toBeGreaterThanOrEqual(0);
+      expect(footerMeasurement.menuBottom).toBeLessThanOrEqual(footerMeasurement.viewportHeight);
+      expect(footerMeasurement.hostBottom).not.toBeNull();
+      expect(footerMeasurement.footerTop).not.toBeNull();
+      expect(
+        Math.abs((footerMeasurement.hostBottom ?? 0) - (footerMeasurement.footerTop ?? 0) - 3),
+      ).toBeLessThan(0.5);
     }));
 
   // Control: the identical menu content, anchored away from the bottom edge.
   // Isolates the anchor position as the cause rather than the menu's content.
   it("has room for the same two items when the ledge is not at the viewport edge", () =>
     withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
+      await configureRealSidebarPet(page, 42);
       await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".sidebar-shell__footer");
-        if (footer) {
-          footer.style.transform = "translateY(-400px)";
+        const ledge = document.querySelector<HTMLElement>(".sidebar-shell__invite");
+        if (ledge) {
+          ledge.style.transform = "translateY(-400px)";
         }
       });
       const sprite = page.locator(".lobster-pet");
@@ -217,7 +265,7 @@ suite.define(() => {
 
   it("keeps both items fully visible under long labels and an enlarged type scale", () =>
     withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
+      await configureRealSidebarPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
 
@@ -253,9 +301,9 @@ suite.define(() => {
       );
     }));
 
-  it("keeps the popup within the viewport at a compact footer-edge viewport height", async () => {
+  it("keeps the popup within the viewport at a compact sidebar height", async () => {
     await withDismissMenuPage({ viewport: { width: 1280, height: 420 } }, async (shortPage) => {
-      await mountPetInRealFooter(shortPage, 42);
+      await configureRealSidebarPet(shortPage, 42);
       const sprite = shortPage.locator(".lobster-pet");
       await sprite.waitFor();
 
@@ -276,22 +324,22 @@ suite.define(() => {
   });
 
   for (const edge of ["left", "right"] as const) {
-    it(`keeps the popup within the viewport when the footer sits near the ${edge} edge`, () =>
+    it(`keeps the popup within the viewport when the sidebar ledge sits near the ${edge} edge`, () =>
       withDismissMenuPage({}, async (page) => {
-        await mountPetInRealFooter(page, 42);
-        // Slide the footer so the sprite's click point lands 12px from the
+        await configureRealSidebarPet(page, 42);
+        // Slide the ledge so the sprite's click point lands 12px from the
         // named edge, computed from its live layout rather than a guessed
         // translate distance, so the sprite stays actionable for Playwright.
         await page.evaluate((direction) => {
-          const footer = document.querySelector<HTMLElement>(".sidebar-shell__footer");
+          const ledge = document.querySelector<HTMLElement>(".sidebar-shell__invite");
           const sprite = document.querySelector<HTMLElement>(".lobster-pet");
-          if (!footer || !sprite) {
-            throw new Error("footer or sprite not found");
+          if (!ledge || !sprite) {
+            throw new Error("sidebar ledge or sprite not found");
           }
           const rect = sprite.getBoundingClientRect();
           const targetCenterX = direction === "left" ? 12 : window.innerWidth - 12;
           const dx = targetCenterX - (rect.left + rect.width / 2);
-          footer.style.transform = `translateX(${dx}px)`;
+          ledge.style.transform = `translateX(${dx}px)`;
         }, edge);
         const sprite = page.locator(".lobster-pet");
         await sprite.waitFor();
@@ -311,7 +359,7 @@ suite.define(() => {
     await withDismissMenuPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
       async (darkPage) => {
-        await mountPetInRealFooter(darkPage, 42);
+        await configureRealSidebarPet(darkPage, 42);
         const sprite = darkPage.locator(".lobster-pet");
         await sprite.waitFor();
 

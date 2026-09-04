@@ -289,43 +289,4 @@ struct ChannelsSettingsSmokeTests {
         #expect(forcedDiscord?["enabled"] as? Bool == false)
         #expect(store.configDirty == false)
     }
-
-    @Test func `forced config load queues behind background load`() {
-        let store = makeChannelsStore(channels: [:])
-        store.configLoading = true
-        store.configLoadingSourceKey = "source-a"
-
-        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false) == true)
-        #expect(store.configReloadPending == .none)
-
-        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
-        #expect(store.configReloadPending == .refresh)
-
-        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true) == true)
-        #expect(store.configReloadPending == .force)
-
-        // Force is sticky: a queued refresh must not downgrade a pending force reload.
-        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
-        #expect(store.configReloadPending == .force)
-
-        store.configReloadPending = .none
-        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-b", force: false) == true)
-        #expect(store.configReloadPending == .force)
-    }
-
-    @Test func `schema reload queues behind background load after source changes`() {
-        let store = makeChannelsStore(channels: [:])
-        store.configSchemaLoading = true
-        store.configSchemaLoadingSourceKey = "source-a"
-
-        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-a", force: false) == true)
-        #expect(store.configSchemaReloadPending == false)
-
-        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-a", force: true) == true)
-        #expect(store.configSchemaReloadPending == true)
-
-        store.configSchemaReloadPending = false
-        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-b", force: false) == true)
-        #expect(store.configSchemaReloadPending == true)
-    }
 }

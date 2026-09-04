@@ -161,7 +161,16 @@ describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],
-      hotPrefixes: ["browser.profiles"],
+      hotPrefixes: [
+        "browser.profiles",
+        "browser.defaultProfile",
+        "browser.headless",
+        "browser.executablePath",
+        "browser.attachOnly",
+        "browser.cdpUrl",
+        "browser.noSandbox",
+        "browser.extraArgs",
+      ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
       "browser.proxy",

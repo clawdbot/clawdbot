@@ -269,7 +269,7 @@ describe("Codex supervision actions", () => {
     ).rejects.toThrow("native archive is in progress");
     releaseValidation();
     await expect(archiving).resolves.toEqual({ archived: true });
-    await expect(bindingStore.read(lateIdentity)).resolves.toBeUndefined();
+    expect(bindingStore.read(lateIdentity)).toBeUndefined();
     expect(control.readThread).toHaveBeenCalledWith("idle-descendant", false);
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
