@@ -1,6 +1,7 @@
 // Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
+  matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -135,6 +136,27 @@ export function hasRawDiscordUserMention(text: string, userId?: string): boolean
     }
   }
   return false;
+}
+
+export function matchesActiveDiscordMentionPatterns(
+  text: string,
+  mentionRegexes: RegExp[],
+): boolean {
+  if (mentionRegexes.length === 0) {
+    return false;
+  }
+  const codeRegions = findCodeRegions(text);
+  if (codeRegions.length === 0) {
+    return matchesMentionPatterns(text, mentionRegexes);
+  }
+  let offset = 0;
+  for (const region of codeRegions) {
+    if (matchesMentionPatterns(text.slice(offset, region.start), mentionRegexes)) {
+      return true;
+    }
+    offset = region.end;
+  }
+  return matchesMentionPatterns(text.slice(offset), mentionRegexes);
 }
 
 export function resolvePreflightMentionRequirement(params: {

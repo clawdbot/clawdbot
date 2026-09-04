@@ -49,6 +49,7 @@ import {
   hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
+  matchesActiveDiscordMentionPatterns,
   resolveDiscordMentionState,
   resolveInjectedBoundThreadLookupRecord,
   resolvePreflightMentionRequirement,
@@ -71,7 +72,10 @@ import type {
 } from "./message-handler.preflight.types.js";
 import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
 import { resolveForwardedMediaList, resolveMediaList } from "./message-media.js";
-import { resolveDiscordMessageText } from "./message-text.js";
+import {
+  resolveDiscordMessageMentionDocuments,
+  resolveDiscordMessageText,
+} from "./message-text.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -459,10 +463,12 @@ export async function preflightDiscordMessage(
     conversationId: messageChannelId,
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
+  const activeMentionDocuments = resolveDiscordMessageMentionDocuments(message);
   const explicitlyMentioned = Boolean(
     botId &&
     (message.mentionedUsers?.some((user: User) => user.id === botId) ||
-      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
+      (hydration.kind === "unavailable" &&
+        activeMentionDocuments.some((text) => hasRawDiscordUserMention(text, botId)))),
   );
   const hasAnyMention =
     !isDirectMessage &&
@@ -732,7 +738,24 @@ export async function preflightDiscordMessage(
   }
 
   if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
-    const botMentioned = isDirectMessage || wasMentioned || mentionDecision.implicitMention;
+    const isReplyMessage = message.type === MessageType.Reply;
+    const hasExplicitNativeBotMention = Boolean(
+      botId &&
+      explicitlyMentioned &&
+      (!isReplyMessage ||
+        activeMentionDocuments.some((text) => hasRawDiscordUserMention(text, botId))),
+    );
+    const hasNonReplyImplicitMention = mentionDecision.matchedImplicitMentionKinds.some(
+      (kind) => kind !== "reply_to_bot",
+    );
+    const botMentioned =
+      isDirectMessage ||
+      hasExplicitNativeBotMention ||
+      hasNonReplyImplicitMention ||
+      activeMentionDocuments.some((text) =>
+        matchesActiveDiscordMentionPatterns(text, mentionRegexes),
+      ) ||
+      matchesActiveDiscordMentionPatterns(preflightTranscript ?? "", mentionRegexes);
     if (!botMentioned) {
       logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
       logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
