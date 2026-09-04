@@ -1594,7 +1594,7 @@ src/acp/control-plane/manager.runtime-resume-state.ts	2
 src/acp/control-plane/manager.ts	1
 src/acp/control-plane/manager.utils.ts	1
 src/acp/control-plane/runtime-options.ts	2
-src/acp/event-ledger.ts	8
+src/acp/event-ledger.ts	5
 src/acp/event-ledger.types.ts	1
 src/acp/event-mapper.ts	1
 src/acp/permission-relay.ts	1
