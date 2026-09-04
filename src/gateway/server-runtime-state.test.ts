@@ -230,6 +230,43 @@ describe("createGatewayRuntimeState", () => {
     }
   });
 
+  it("answers a parked plugin route from the cold HTTP dispatch path", async () => {
+    const registry = createEmptyPluginRegistry();
+    // A draining generation has no live route, so this is the only state the cold preflight can
+    // see when the first webhook of a Gateway's life lands mid-reload.
+    registry.drainingHttpRoutes = {
+      expiresAt: Date.now() + 60_000,
+      routes: [{ path: "/parked", match: "exact" }],
+    };
+    const runtimeState = await createGatewayRuntimeStateForTest(registry);
+    const server = runtimeState.httpServers[0];
+    if (!server) {
+      throw new Error("expected gateway HTTP server");
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP gateway address");
+    }
+    try {
+      await expect(fetch(`http://127.0.0.1:${address.port}/unparked`)).resolves.toMatchObject({
+        status: 404,
+      });
+
+      // This runtime state has never loaded its plugin request handler, so a 503 here can only
+      // come from the cold preflight consulting the parked snapshot.
+      const parked = await fetch(`http://127.0.0.1:${address.port}/parked`, { method: "POST" });
+      expect(parked.status).toBe(503);
+      expect(parked.headers.get("retry-after")).toBe("1");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("delegates directly after lazily loading the plugin HTTP handler", async () => {
     const registry = createEmptyPluginRegistry();
     const routes = registry.httpRoutes;

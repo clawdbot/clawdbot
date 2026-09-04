@@ -24,12 +24,18 @@ function doesPluginRouteMatchPath(
   return context.candidates.some((candidate) => candidate === routeCanonicalPath);
 }
 
-/** Returns true when a retiring generation's route snapshot still claims the request path. */
+/** Returns true when a retiring generation's parked route snapshot still claims the request path. */
 export function matchesDrainingPluginHttpRoutes(
-  routes: readonly Pick<PluginHttpRouteEntry, "path" | "match">[],
+  registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): boolean {
-  return routes.some((route) => doesPluginRouteMatchPath(route, context));
+  const draining = registry.drainingHttpRoutes;
+  // An expired snapshot is indistinguishable from no successor arriving, so stop claiming the
+  // path and let it fall through to the 404 a removed route should answer.
+  if (!draining || Date.now() >= draining.expiresAt) {
+    return false;
+  }
+  return draining.routes.some((route) => doesPluginRouteMatchPath(route, context));
 }
 
 /** Finds matching plugin routes with exact matches ordered before prefix matches. */

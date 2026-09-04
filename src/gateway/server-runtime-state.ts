@@ -41,7 +41,10 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
 } from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
-import { findMatchingPluginHttpRoutes } from "./server/plugins-http/route-match.js";
+import {
+  findMatchingPluginHttpRoutes,
+  matchesDrainingPluginHttpRoutes,
+} from "./server/plugins-http/route-match.js";
 import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
@@ -95,9 +98,12 @@ function hasMatchingGatewayPluginRoute(
     return (registry.httpRoutes ?? []).length > 0;
   }
   const matchingRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+  // A draining generation has no live route, so without the parked snapshot this preflight never
+  // loads the handler that owns the 503 and the first webhook of a cold Gateway 404s inside the
+  // window. Upgrades stay live-only: a path/match snapshot cannot say which route owned one.
   return requiresUpgrade
     ? matchingRoutes.some((route) => typeof route.handleUpgrade === "function")
-    : matchingRoutes.length > 0;
+    : matchingRoutes.length > 0 || matchesDrainingPluginHttpRoutes(registry, pathContext);
 }
 
 /** Creates the HTTP/WebSocket transport for one gateway start. */

@@ -41,6 +41,11 @@ import { listPluginNodeCapabilities } from "./server/plugins-http/route-capabili
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
+// The only bound on a park no reload outcome releases: a reload that drops a plugin never
+// re-registers its path, and a 503 nothing will ever answer is worse than the 404 it replaced.
+// Channel starts are unbounded, so this caps the wait rather than predicting it.
+const PLUGIN_ROUTE_DRAIN_MAX_MS = 60_000;
+
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type GatewayEarlyRuntime = Awaited<
@@ -528,13 +533,14 @@ export async function startGatewayCoreRuntime(input: {
     const releaseChannelStarts = channelManager.pauseChannelStarts();
     let restoreChannelStarts = true;
     let recoverFromReplacementTeardown: ((error: unknown) => void) | undefined;
-    // Draining unregisters this generation's routes; the successor re-registers them only when the
-    // reload restarts its channels. Park the retiring paths so an inbound webhook in that window is
-    // answered retriably instead of dead-ending as a 404 its sender treats as final and drops.
-    const drainingHttpRoutes = pluginRuntime.registry.httpRoutes.map(({ path, match }) => ({
-      path,
-      match,
-    }));
+    // Draining unregisters this generation's routes and the successor re-registers them only from
+    // its deferred channel start task, well after startChannel hands off. Park the retiring paths
+    // so a webhook in that window answers retriably instead of dead-ending as a 404 its sender
+    // treats as final and drops.
+    const drainingHttpRoutes = {
+      expiresAt: Date.now() + PLUGIN_ROUTE_DRAIN_MAX_MS,
+      routes: pluginRuntime.registry.httpRoutes.map(({ path, match }) => ({ path, match })),
+    };
     pluginRuntime.registry.drainingHttpRoutes = drainingHttpRoutes;
     const endRouteDrain = () => {
       if (pluginRuntime.registry.drainingHttpRoutes === drainingHttpRoutes) {

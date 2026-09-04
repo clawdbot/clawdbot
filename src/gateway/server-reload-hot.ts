@@ -92,8 +92,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatTaskBlockers,
   });
 
-  // Parked plugin routes belong to one reload generation: a cancelled, failed, or superseded
-  // reload must end them too, or a retired webhook path answers 503 with no restart coming.
+  // Parked plugin routes belong to one reload generation. A failed reload has no successor
+  // coming, so its paths must stop claiming a retry immediately; a successful one keeps them
+  // parked past this call, because startChannel returns on handoff and the successor registers
+  // its routes later, from the deferred start task.
   let endPluginRouteDrain: (() => void) | undefined;
   const runHotReload = async (
     plan: GatewayReloadPlan,
@@ -627,8 +629,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const applyHotReload = async (...args: Parameters<typeof runHotReload>) => {
     try {
       return await runHotReload(...args);
-    } finally {
+    } catch (error) {
       endPluginRouteDrain?.();
+      throw error;
+    } finally {
       endPluginRouteDrain = undefined;
     }
   };

@@ -194,7 +194,7 @@ export function createGatewayPluginRequestHandler(params: {
     if (matchedRoutes.length === 0) {
       // Senders retry 5xx and treat 404 as final, so a path the draining generation still owns
       // must answer retriably until its successor registers or the reload owner ends the drain.
-      if (!matchesDrainingPluginHttpRoutes(registry.drainingHttpRoutes ?? [], pathContext)) {
+      if (!matchesDrainingPluginHttpRoutes(registry, pathContext)) {
         return false;
       }
       res.setHeader("Cache-Control", "no-store");

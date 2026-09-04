@@ -149,7 +149,8 @@ export type GatewayReloadHandlerParams = {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     /** `endRouteDrain` releases the parked routes of the retiring generation; a caller that
-     * parks none omits it. The reload owner calls it when its generation finishes. */
+     * parks none omits it. The reload owner calls it only when its generation ends with no
+     * successor coming; an applied reload leaves the park to its own deadline. */
     beforeReplace: (
       channels: ReadonlySet<ChannelKind>,
       endRouteDrain?: () => void,

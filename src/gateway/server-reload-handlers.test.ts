@@ -7175,7 +7175,7 @@ describe("gateway plugin hot reload handlers", () => {
       reloadPlugins,
     );
 
-  it("ends the parked route drain only after the reload restarts its channels", async () => {
+  it("keeps the parked route drain after a reload that only handed off its channel starts", async () => {
     const events: string[] = [];
     const endRouteDrain = vi.fn(() => events.push("drain:end"));
     const handlers = createRouteDrainHandlers(
@@ -7187,7 +7187,10 @@ describe("gateway plugin hot reload handlers", () => {
       handlers.applyHotReload(createPluginReloadPlan(), { plugins: { enabled: true } }),
     ).resolves.toBe("applied");
 
-    expect(events).toEqual(["stop:discord", "registry:replace", "start:discord", "drain:end"]);
+    // startChannel returns on handoff; the successor registers its routes from the deferred start
+    // task, so releasing here would 404 the window the park exists for.
+    expect(events).toEqual(["stop:discord", "registry:replace", "start:discord"]);
+    expect(endRouteDrain).not.toHaveBeenCalled();
   });
 
   it("ends the parked route drain when the reload fails before restarting channels", async () => {

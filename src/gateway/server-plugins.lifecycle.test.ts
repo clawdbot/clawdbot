@@ -466,13 +466,22 @@ describe("Gateway plugin replacement channel ownership", () => {
     {
       name: "hands off live and pending webhook accounts while preserving a manual stop",
       teardownFails: false,
+      holdSuccessor: false,
     },
     {
       name: "keeps channels fenced while recovery retries failed service teardown",
       teardownFails: true,
+      holdSuccessor: false,
     },
-  ])("$name", { timeout: 120_000 }, async ({ teardownFails }) => {
+    {
+      name: "answers a retired webhook path with 503 until the held successor registers it",
+      teardownFails: false,
+      holdSuccessor: true,
+    },
+  ])("$name", { timeout: 120_000 }, async ({ teardownFails, holdSuccessor }) => {
     releasePending = createDeferredCore();
+    const releaseSuccessor = createDeferredCore();
+    onTestFinished(() => releaseSuccessor.resolve());
     const starts = new Map<string, number>();
     const channel: ChannelPlugin = {
       ...createChannelTestPluginBase({
@@ -493,6 +502,9 @@ describe("Gateway plugin replacement channel ownership", () => {
           });
           if (accountId === "pending" && generation === 1) {
             await Promise.race([releasePending.promise, aborted]);
+          }
+          if (holdSuccessor && accountId === "active" && generation === 2) {
+            await Promise.race([releaseSuccessor.promise, aborted]);
           }
           if (abortSignal.aborted) {
             return;
@@ -605,16 +617,22 @@ describe("Gateway plugin replacement channel ownership", () => {
         status: response.status,
         body: await response.text(),
         registry: response.headers.get("x-webhook-registry"),
+        retryAfter: response.headers.get("retry-after"),
       };
     };
     await expect
       .poll(() => [...starts.keys()].toSorted(), { timeout: 30_000 })
       .toEqual(["active", "parked", "pending"]);
-    expect(await probe("active")).toEqual({
-      status: 200,
-      body: "active:1",
-      registry: "current",
-    });
+    if (!holdSuccessor) {
+      // The lazy HTTP dispatch loads the plugin handler on the first matching live route, so the
+      // held-successor case must never probe one: its reload has to be answered from cold.
+      expect(await probe("active")).toEqual({
+        status: 200,
+        body: "active:1",
+        registry: "current",
+        retryAfter: null,
+      });
+    }
     expect((await probe("pending")).status).toBe(404);
     socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
     const stopped = await rpcReq(socket, "channels.stop", {
@@ -647,20 +665,29 @@ describe("Gateway plugin replacement channel ownership", () => {
       expect((await probe("active")).status).toBe(404);
       return;
     }
+    if (holdSuccessor) {
+      // The retiring generation unregistered /reload-webhook/active and its successor is stuck
+      // inside startAccount, so the path lives in no registry until releaseSuccessor lands.
+      await expect
+        .poll(() => probe("active"), { timeout: 30_000 })
+        .toMatchObject({ status: 503, retryAfter: "1" });
+      releaseSuccessor.resolve();
+    }
     await expect
       .poll(() => getActivePluginRegistry() !== initialRegistry, { timeout: 180_000 })
       .toBe(true);
     await expect
       .poll(() => probe("active"), { timeout: 30_000 })
-      .toEqual({ status: 200, body: "active:2", registry: "current" });
+      .toEqual({ status: 200, body: "active:2", registry: "current", retryAfter: null });
     await expect
       .poll(() => probe("pending"), { timeout: 30_000 })
-      .toEqual({ status: 200, body: "pending:2", registry: "current" });
+      .toEqual({ status: 200, body: "pending:2", registry: "current", retryAfter: null });
     releasePending.resolve();
     expect(await probe("pending")).toEqual({
       status: 200,
       body: "pending:2",
       registry: "current",
+      retryAfter: null,
     });
     expect((await probe("parked")).status).toBe(404);
     expect(starts.get("parked")).toBe(1);

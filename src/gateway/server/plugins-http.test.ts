@@ -627,7 +627,10 @@ describe("plugin HTTP route auth checks", () => {
       return true;
     });
     const registry = createGatewayTestRegistry({
-      drainingHttpRoutes: [{ path: "/hook", match: "exact" }],
+      drainingHttpRoutes: {
+        expiresAt: Date.now() + 60_000,
+        routes: [{ path: "/hook", match: "exact" }],
+      },
     });
     const handler = createGatewayPluginRequestHandler({ registry, log: createPluginLog() });
 
@@ -652,5 +655,18 @@ describe("plugin HTTP route auth checks", () => {
     registry.drainingHttpRoutes = undefined;
     const released = makeMockHttpResponse();
     expect(await handler({ url: "/hook" } as IncomingMessage, released.res)).toBe(false);
+  });
+
+  it("stops claiming a parked plugin route once its snapshot deadline passes", async () => {
+    const registry = createGatewayTestRegistry({
+      drainingHttpRoutes: {
+        expiresAt: Date.now() - 1,
+        routes: [{ path: "/hook", match: "exact" }],
+      },
+    });
+    const handler = createGatewayPluginRequestHandler({ registry, log: createPluginLog() });
+
+    const expired = makeMockHttpResponse();
+    expect(await handler({ url: "/hook" } as IncomingMessage, expired.res)).toBe(false);
   });
 });

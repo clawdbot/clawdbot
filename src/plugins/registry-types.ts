@@ -575,9 +575,13 @@ export type PluginRegistry = {
   httpRoutes: PluginHttpRouteRegistration[];
   /**
    * Routes of a plugin generation whose channels are draining for a reload. They answer
-   * retriably until the successor re-registers; the reload owner clears them when it ends.
+   * retriably until a successor re-registers them or `expiresAt` passes; the reload owner
+   * clears the snapshot early when its generation ends without a successor coming.
    */
-  drainingHttpRoutes?: readonly Pick<PluginHttpRouteRegistration, "path" | "match">[];
+  drainingHttpRoutes?: {
+    expiresAt: number;
+    routes: readonly Pick<PluginHttpRouteRegistration, "path" | "match">[];
+  };
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
