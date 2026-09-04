@@ -167,9 +167,9 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           ),
         );
     }
-    return html`${this.actionError
-      ? html`<span role="alert">${this.actionError}</span>`
-      : nothing}${runtime
+    return html`${
+      this.actionError ? html`<span role="alert">${this.actionError}</span>` : nothing
+    }${runtime
       .registrations("actions")
       .filter((entry) => entry.value.placement === this.kind)
       .map((entry) => {
@@ -263,27 +263,31 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   override render() {
     // The loader closes its modal after the registered element has rendered.
     const showDialog = this.available && this.open && !this.dialogLoader.visibleState;
-    return html`${this.available
-      ? html`<button
-            class="btn btn--sm plugin-ui-recovery"
-            type="button"
-            @click=${() => {
-              this.open = true;
+    return html`${
+      this.available
+        ? html`<button
+              class="btn btn--sm plugin-ui-recovery"
+              type="button"
+              @click=${() => {
+                this.open = true;
+              }}
+            >
+              ${t("pluginUi.customize")}
+            </button>
+            ${renderLazyElementModal(this.dialogLoader)}`
+        : nothing
+    }
+    ${
+      isOptionalElementDefined(PLUGIN_MANAGER_DIALOG)
+        ? html`<openclaw-plugin-manager-dialog
+            .runtime=${this.context?.plugins}
+            .open=${showDialog}
+            @modal-cancel=${() => {
+              this.open = false;
             }}
-          >
-            ${t("pluginUi.customize")}
-          </button>
-          ${renderLazyElementModal(this.dialogLoader)}`
-      : nothing}
-    ${isOptionalElementDefined(PLUGIN_MANAGER_DIALOG)
-      ? html`<openclaw-plugin-manager-dialog
-          .runtime=${this.context?.plugins}
-          .open=${showDialog}
-          @modal-cancel=${() => {
-            this.open = false;
-          }}
-        ></openclaw-plugin-manager-dialog>`
-      : nothing}`;
+          ></openclaw-plugin-manager-dialog>`
+        : nothing
+    }`;
   }
 }
 

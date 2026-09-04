@@ -171,41 +171,45 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
           >
         </button>
         <div class="plugin-session-dashboard__body" ?hidden=${!this.expanded}>
-          ${this.viewError
-            ? html`<p role="alert">${this.viewError}</p>
-                <button
-                  type="button"
-                  @click=${() => {
-                    this.viewLoad = null;
-                    this.viewError = null;
-                  }}
-                >
-                  ${t("common.retry")}
-                </button>`
-            : hasBoard && provider && snapshot && session && callbacks
-              ? html`
-                  <openclaw-board-view
-                    .active=${this.expanded && this.presented}
-                    .session=${session}
-                    .snapshot=${snapshot}
-                    .activeTabId=${this.activeTabId}
-                    .widgetFrameUrl=${(name: string, revision: number) =>
-                      provider.widgetFrameUrl(name, revision)}
-                    .callbacks=${callbacks}
-                    .sessions=${[]}
-                    .canMutate=${this.canMutate}
-                    .canGrant=${this.canGrant}
-                  ></openclaw-board-view>
-                `
-              : html`<p class="plugin-session-dashboard__empty">
-                  ${t("pluginUi.dashboardEmpty")}
-                </p>`}
+          ${
+            this.viewError
+              ? html`<p role="alert">${this.viewError}</p>
+                  <button
+                    type="button"
+                    @click=${() => {
+                      this.viewLoad = null;
+                      this.viewError = null;
+                    }}
+                  >
+                    ${t("common.retry")}
+                  </button>`
+              : hasBoard && provider && snapshot && session && callbacks
+                ? html`
+                    <openclaw-board-view
+                      .active=${this.expanded && this.presented}
+                      .session=${session}
+                      .snapshot=${snapshot}
+                      .activeTabId=${this.activeTabId}
+                      .widgetFrameUrl=${(name: string, revision: number) =>
+                        provider.widgetFrameUrl(name, revision)}
+                      .callbacks=${callbacks}
+                      .sessions=${[]}
+                      .canMutate=${this.canMutate}
+                      .canGrant=${this.canGrant}
+                    ></openclaw-board-view>
+                  `
+                : html`<p class="plugin-session-dashboard__empty">
+                    ${t("pluginUi.dashboardEmpty")}
+                  </p>`
+          }
         </div>
-        ${!this.expanded && this.expansionInitialized && !hasBoard
-          ? html`<p class="plugin-session-dashboard__collapsed-empty">
-              ${t("pluginUi.dashboardEmpty")}
-            </p>`
-          : nothing}
+        ${
+          !this.expanded && this.expansionInitialized && !hasBoard
+            ? html`<p class="plugin-session-dashboard__collapsed-empty">
+                ${t("pluginUi.dashboardEmpty")}
+              </p>`
+            : nothing
+        }
       </section>
     `;
   }

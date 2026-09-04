@@ -213,19 +213,23 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
           <section class="content-header content-header--page">
             <div>
               <div class="page-title workboard-page-title">
-                ${selectedBoard
-                  ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-                  : nothing}
+                ${
+                  selectedBoard
+                    ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+                    : nothing
+                }
                 <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
-                ${selectedBoard?.automationJobId
-                  ? html`<a
-                      class="chip workboard-automation-chip"
-                      href=${`${host.basePath}/automations`}
-                      title=${t("workboard.automationAttachedTitle")}
-                      aria-label=${t("workboard.automationAttachedTitle")}
-                      >${icons.calendarClock}<span>${t("workboard.automationAttached")}</span></a
-                    >`
-                  : nothing}
+                ${
+                  selectedBoard?.automationJobId
+                    ? html`<a
+                        class="chip workboard-automation-chip"
+                        href=${`${host.basePath}/automations`}
+                        title=${t("workboard.automationAttachedTitle")}
+                        aria-label=${t("workboard.automationAttachedTitle")}
+                        >${icons.calendarClock}<span>${t("workboard.automationAttached")}</span></a
+                      >`
+                    : nothing
+                }
               </div>
               ${selectedBoard ? html`<div class="page-subtitle">Workboard</div>` : nothing}
             </div>
@@ -248,12 +252,16 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               "agent-scope-control",
             )}
           </section>
-          ${metadataError
-            ? html`<div class="callout danger" role="alert">${metadataError}</div>`
-            : nothing}
-          ${sessionError
-            ? html`<div class="callout danger" role="alert">${sessionError}</div>`
-            : nothing}
+          ${
+            metadataError
+              ? html`<div class="callout danger" role="alert">${metadataError}</div>`
+              : nothing
+          }
+          ${
+            sessionError
+              ? html`<div class="callout danger" role="alert">${sessionError}</div>`
+              : nothing
+          }
           ${renderWorkboard({
             host: workboard,
             client: connected ? client : null,

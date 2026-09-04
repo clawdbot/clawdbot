@@ -221,59 +221,71 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.compact && this.compactView !== "root"
-          ? this.managementActions.renderCompactView(this.compactView)
-          : html`
-              ${!batch && this.lastActive
-                ? html`<div class="session-menu__info">
-                    ${t("sessionsView.lastActive", { time: this.lastActive })}
-                  </div>`
-                : nothing}
-              ${this.managementActions.renderPrimaryActions()}
-              <div class="session-menu__separator" role="separator"></div>
-              ${this.managementActions.renderOrganizationActions()}
-              ${!batch
-                ? this.pluginActions.map(
-                    (action) => html`
-                      <wa-dropdown-item
-                        class="session-menu__item"
-                        value=${`plugin:${action.id}`}
-                        ?disabled=${this.actionDisabled("plugin", action.disabled)}
-                        title=${this.actionTitle("plugin")}
-                      >
-                        <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                          >${icons.puzzle}</span
+        ${
+          this.compact && this.compactView !== "root"
+            ? this.managementActions.renderCompactView(this.compactView)
+            : html`
+                ${
+                  !batch && this.lastActive
+                    ? html`<div class="session-menu__info">
+                        ${t("sessionsView.lastActive", { time: this.lastActive })}
+                      </div>`
+                    : nothing
+                }
+                ${this.managementActions.renderPrimaryActions()}
+                <div class="session-menu__separator" role="separator"></div>
+                ${this.managementActions.renderOrganizationActions()}
+                ${
+                  !batch
+                    ? this.pluginActions.map(
+                        (action) => html`
+                          <wa-dropdown-item
+                            class="session-menu__item"
+                            value=${`plugin:${action.id}`}
+                            ?disabled=${this.actionDisabled("plugin", action.disabled)}
+                            title=${this.actionTitle("plugin")}
+                          >
+                            <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                              >${icons.puzzle}</span
+                            >
+                            <span class="session-menu__text">${action.label}</span>
+                          </wa-dropdown-item>
+                        `,
+                      )
+                    : nothing
+                }
+                ${
+                  batch
+                    ? nothing
+                    : html`
+                        <div class="session-menu__separator" role="separator"></div>
+                        ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                      `
+                }
+                <div class="session-menu__separator" role="separator"></div>
+                ${
+                  !batch && this.cloudWorkerStopAllowed
+                    ? html`
+                        <wa-dropdown-item
+                          class="session-menu__item session-menu__item--destructive"
+                          value="stop-cloud-worker"
+                          variant="danger"
+                          ?disabled=${this.actionDisabled("stop-cloud-worker")}
+                          title=${this.actionTitle("stop-cloud-worker")}
                         >
-                        <span class="session-menu__text">${action.label}</span>
-                      </wa-dropdown-item>
-                    `,
-                  )
-                : nothing}
-              ${batch
-                ? nothing
-                : html`
-                    <div class="session-menu__separator" role="separator"></div>
-                    ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
-                  `}
-              <div class="session-menu__separator" role="separator"></div>
-              ${!batch && this.cloudWorkerStopAllowed
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item session-menu__item--destructive"
-                      value="stop-cloud-worker"
-                      variant="danger"
-                      ?disabled=${this.actionDisabled("stop-cloud-worker")}
-                      title=${this.actionTitle("stop-cloud-worker")}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.stop}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.stopCloudWorker")}</span>
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${this.managementActions.renderDeleteAction()}
-            `}
+                          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                            >${icons.stop}</span
+                          >
+                          <span class="session-menu__text"
+                            >${t("sessionsView.stopCloudWorker")}</span
+                          >
+                        </wa-dropdown-item>
+                      `
+                    : nothing
+                }
+                ${this.managementActions.renderDeleteAction()}
+              `
+        }
       </wa-dropdown>`,
     );
   }

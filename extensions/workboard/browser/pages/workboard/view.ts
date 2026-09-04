@@ -270,37 +270,41 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${boardOptions.length >= 3
-              ? renderWorkboardSelect({
-                  value: activeBoardFilter,
-                  options: boardOptions,
-                  label: t("workboard.boardFilter"),
-                  onChange: (value) => {
-                    state.boardFilter = value;
-                    props.onBoardFilterChange?.(value);
-                  },
-                  requestUpdate: props.onRequestUpdate,
-                  className: "workboard-select--toolbar workboard-select--toolbar-board",
-                  showLabel: false,
-                })
-              : nothing}
-            ${props.showAgentFilter !== false
-              ? renderAgentPicker(
-                  {
-                    options: agentSelectOptions,
-                    value: state.agentFilter,
-                    accessibleLabel: t("workboard.agentFilter"),
-                    onSelect: (value: string) => {
-                      const option = agentOptions.find((candidate) => candidate.id === value);
-                      if (option) {
-                        state.agentFilter = option.id;
-                        props.onRequestUpdate?.();
-                      }
+            ${
+              boardOptions.length >= 3
+                ? renderWorkboardSelect({
+                    value: activeBoardFilter,
+                    options: boardOptions,
+                    label: t("workboard.boardFilter"),
+                    onChange: (value) => {
+                      state.boardFilter = value;
+                      props.onBoardFilterChange?.(value);
                     },
-                  },
-                  "workboard-agent-select workboard-agent-select--toolbar",
-                )
-              : nothing}
+                    requestUpdate: props.onRequestUpdate,
+                    className: "workboard-select--toolbar workboard-select--toolbar-board",
+                    showLabel: false,
+                  })
+                : nothing
+            }
+            ${
+              props.showAgentFilter !== false
+                ? renderAgentPicker(
+                    {
+                      options: agentSelectOptions,
+                      value: state.agentFilter,
+                      accessibleLabel: t("workboard.agentFilter"),
+                      onSelect: (value: string) => {
+                        const option = agentOptions.find((candidate) => candidate.id === value);
+                        if (option) {
+                          state.agentFilter = option.id;
+                          props.onRequestUpdate?.();
+                        }
+                      },
+                    },
+                    "workboard-agent-select workboard-agent-select--toolbar",
+                  )
+                : nothing
+            }
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"
               type="button"
@@ -404,8 +408,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
           </div>
         </div>
         ${renderHealthStrip(state, health, props.onRequestUpdate)}
-        ${dialogOpen ? nothing : renderWorkboardError(visibleError)}
-        ${renderDispatchSummary(state)}
+        ${dialogOpen ? nothing : renderWorkboardError(visibleError)} ${renderDispatchSummary(state)}
         ${
           (filtered.length === 0 && activeFiltering) || visibleStatuses.length === 0
             ? html`

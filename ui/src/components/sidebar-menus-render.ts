@@ -282,9 +282,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .groups=${host.knownSessionGroups()}
         .currentOwner=${session.owner?.actor ?? null}
         .work=${batchRows ? null : controller.sessionMenuWork}
-        .pluginActions=${!batchRows && context?.plugins && pluginSession
-          ? pluginSessionMenuActions(context.plugins, pluginSession)
-          : []}
+        .pluginActions=${
+          !batchRows && context?.plugins && pluginSession
+            ? pluginSessionMenuActions(context.plugins, pluginSession)
+            : []
+        }
         .onClose=${() => {
           if (controller.sessionMenu === menu) {
             controller.closeSessionMenu();

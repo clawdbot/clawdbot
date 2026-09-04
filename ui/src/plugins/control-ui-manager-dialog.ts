@@ -63,25 +63,27 @@ class ControlUiPluginManagerDialog extends OpenClawLightDomContentsElement {
           (entry) => html`<p role="alert"><strong>${entry.pluginId}</strong>: ${entry.message}</p>`,
         )}
         ${this.reloadError ? html`<p role="alert">${this.reloadError}</p>` : nothing}
-        ${runtime.canReload
-          ? html`<button
-              class="btn"
-              ?disabled=${this.reloading}
-              @click=${async () => {
-                this.reloading = true;
-                this.reloadError = "";
-                try {
-                  await runtime.reload();
-                } catch (error) {
-                  this.reloadError = error instanceof Error ? error.message : String(error);
-                } finally {
-                  this.reloading = false;
-                }
-              }}
-            >
-              ${t("pluginUi.reload")}
-            </button>`
-          : nothing}
+        ${
+          runtime.canReload
+            ? html`<button
+                class="btn"
+                ?disabled=${this.reloading}
+                @click=${async () => {
+                  this.reloading = true;
+                  this.reloadError = "";
+                  try {
+                    await runtime.reload();
+                  } catch (error) {
+                    this.reloadError = error instanceof Error ? error.message : String(error);
+                  } finally {
+                    this.reloading = false;
+                  }
+                }}
+              >
+                ${t("pluginUi.reload")}
+              </button>`
+            : nothing
+        }
         <button class="btn" @click=${() => void runtime.refresh()}>${t("common.retry")}</button>
         <button
           class="btn"

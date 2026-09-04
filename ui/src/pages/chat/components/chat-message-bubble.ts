@@ -512,66 +512,76 @@ export function renderGroupedMessage(
         normalizedMessage.replyTarget?.kind === "id" &&
           opts.replyNavigationId === normalizedMessage.replyTarget.id,
       )}
-      ${onlyToolCards
-        ? renderInlineToolCards(toolCards, toolRenderOptions)
-        : isStandaloneToolMessage
-          ? renderPluginToolResult(
-              singleToolCard,
-              { ...toolRenderOptions, expanded: toolMessageExpanded },
-              html`
-                <div
-                  class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
-                    ? "is-open"
-                    : ""}"
-                >
-                  <button
-                    class="chat-inline-disclosure chat-tool-msg-summary"
-                    type="button"
-                    aria-expanded=${String(toolMessageExpanded)}
-                    @pointerenter=${syncToolDisclosureOverflow}
-                    @focus=${syncToolDisclosureOverflow}
-                    @click=${(event: MouseEvent) => {
-                      if (shouldToggleSelectableDisclosure(event)) {
-                        opts.onToggleToolMessageExpanded?.(
-                          toolMessageDisclosureId,
-                          toolMessageExpanded,
-                        );
-                      }
-                    }}
+      ${
+        onlyToolCards
+          ? renderInlineToolCards(toolCards, toolRenderOptions)
+          : isStandaloneToolMessage
+            ? renderPluginToolResult(
+                singleToolCard,
+                { ...toolRenderOptions, expanded: toolMessageExpanded },
+                html`
+                  <div
+                    class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${
+                      toolMessageExpanded ? "is-open" : ""
+                    }"
                   >
-                    <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
-                    <span class="chat-tool-disclosure__content">
-                      <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
-                      ${toolSummaryLabel
-                        ? html`<span class="chat-tool-msg-summary__names"
-                            >${toolSummaryLabel}</span
-                          >`
-                        : toolPreview
-                          ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                          : nothing}
-                    </span>
-                    <span class="chat-tool-row__chevron" aria-hidden="true"
-                      >${icons.chevronRight}</span
+                    <button
+                      class="chat-inline-disclosure chat-tool-msg-summary"
+                      type="button"
+                      aria-expanded=${String(toolMessageExpanded)}
+                      @pointerenter=${syncToolDisclosureOverflow}
+                      @focus=${syncToolDisclosureOverflow}
+                      @click=${(event: MouseEvent) => {
+                        if (shouldToggleSelectableDisclosure(event)) {
+                          opts.onToggleToolMessageExpanded?.(
+                            toolMessageDisclosureId,
+                            toolMessageExpanded,
+                          );
+                        }
+                      }}
                     >
-                  </button>
-                  ${toolMessageExpanded
-                    ? html`<div class="chat-tool-msg-body">${renderBody()}</div>`
-                    : renderOmittedMedia(omittedMedia)}
-                  ${toolCards.map((card) => renderToolApprovalReviews(card))}
-                </div>
-              `,
-            )
-          : renderBody()}
-      ${duplicateCount > 1 && (!markdown || jsonResult)
-        ? html`<div
-            class="chat-duplicate-count"
-            aria-label=${t("chat.messages.duplicatesCollapsed", {
-              count: String(duplicateCount),
-            })}
-          >
-            ×${duplicateCount}
-          </div>`
-        : nothing}
+                      <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
+                      <span class="chat-tool-disclosure__content">
+                        <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
+                        ${
+                          toolSummaryLabel
+                            ? html`<span class="chat-tool-msg-summary__names"
+                                >${toolSummaryLabel}</span
+                              >`
+                            : toolPreview
+                              ? html`<span class="chat-tool-msg-summary__preview"
+                                  >${toolPreview}</span
+                                >`
+                              : nothing
+                        }
+                      </span>
+                      <span class="chat-tool-row__chevron" aria-hidden="true"
+                        >${icons.chevronRight}</span
+                      >
+                    </button>
+                    ${
+                      toolMessageExpanded
+                        ? html`<div class="chat-tool-msg-body">${renderBody()}</div>`
+                        : renderOmittedMedia(omittedMedia)
+                    }
+                    ${toolCards.map((card) => renderToolApprovalReviews(card))}
+                  </div>
+                `,
+              )
+            : renderBody()
+      }
+      ${
+        duplicateCount > 1 && (!markdown || jsonResult)
+          ? html`<div
+              class="chat-duplicate-count"
+              aria-label=${t("chat.messages.duplicatesCollapsed", {
+                count: String(duplicateCount),
+              })}
+            >
+              ×${duplicateCount}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }

@@ -74,20 +74,22 @@ export function renderWorkboardMiniWidget(model: WorkboardWidgetModel): Template
         )}
       </div>
       <div class="workboard-widget-mini__cards">
-        ${topCards.length > 0
-          ? topCards.map(
-              (card) => html`
-                <div class="workboard-widget-mini__card">
-                  <span
-                    class=${`workboard-widget__status workboard-widget__status--${card.status}`}
-                  >
-                    ${t(`workboard.status.${card.status}`)}
-                  </span>
-                  <strong>${card.title}</strong>
-                </div>
-              `,
-            )
-          : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`}
+        ${
+          topCards.length > 0
+            ? topCards.map(
+                (card) => html`
+                  <div class="workboard-widget-mini__card">
+                    <span
+                      class=${`workboard-widget__status workboard-widget__status--${card.status}`}
+                    >
+                      ${t(`workboard.status.${card.status}`)}
+                    </span>
+                    <strong>${card.title}</strong>
+                  </div>
+                `,
+              )
+            : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`
+        }
       </div>
     </section>
   `;
@@ -130,27 +132,29 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
           <dd>${card.agentId ?? t("workboard.widget.unassigned")}</dd>
         </div>
       </dl>
-      ${statuses.length > 1
-        ? html`
-            <label class="workboard-widget-card__move">
-              <span>${t("workboard.fieldStatus")}</span>
-              <select
-                aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
-                .value=${card.status}
-                ?disabled=${!model.canMutate}
-                @change=${(event: Event) => void model.handleStatusChange(event)}
-              >
-                ${statuses.map(
-                  (status) => html`
-                    <option value=${status} ?selected=${status === card.status}>
-                      ${t(`workboard.status.${status}`)}
-                    </option>
-                  `,
-                )}
-              </select>
-            </label>
-          `
-        : nothing}
+      ${
+        statuses.length > 1
+          ? html`
+              <label class="workboard-widget-card__move">
+                <span>${t("workboard.fieldStatus")}</span>
+                <select
+                  aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
+                  .value=${card.status}
+                  ?disabled=${!model.canMutate}
+                  @change=${(event: Event) => void model.handleStatusChange(event)}
+                >
+                  ${statuses.map(
+                    (status) => html`
+                      <option value=${status} ?selected=${status === card.status}>
+                        ${t(`workboard.status.${status}`)}
+                      </option>
+                    `,
+                  )}
+                </select>
+              </label>
+            `
+          : nothing
+      }
     </article>
   `;
 }

@@ -239,18 +239,20 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
 
   override render() {
     if (!this.registration || this.error) {
-      return html`${this.error
-        ? html`<div class="card" role="alert">
-            ${this.error}<button
-              class="btn btn--sm"
-              @click=${() => {
-                this.error = "";
-              }}
-            >
-              ${t("pluginUi.retryView")}
-            </button>
-          </div>`
-        : nothing}${this.defaultView}`;
+      return html`${
+        this.error
+          ? html`<div class="card" role="alert">
+              ${this.error}<button
+                class="btn btn--sm"
+                @click=${() => {
+                  this.error = "";
+                }}
+              >
+                ${t("pluginUi.retryView")}
+              </button>
+            </div>`
+          : nothing
+      }${this.defaultView}`;
     }
     // The host owns the mount root. A new lifetime gets new DOM even when the
     // plugin has no disposer or its framework caches render state on the root.

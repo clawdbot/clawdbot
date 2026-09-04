@@ -496,8 +496,7 @@ export function renderAppSidebarZoneEntry(
         entry.type === "route"
           ? (event: DragEvent) => host.sessionOrganizer.startSidebarRouteDrag(event, entry.route)
           : entry.type === "plugin"
-            ? (event: DragEvent) =>
-                host.sessionOrganizer.startSidebarPluginDrag(event, entry.key)
+            ? (event: DragEvent) => host.sessionOrganizer.startSidebarPluginDrag(event, entry.key)
             : nothing
       }
       @dragend=${draggable ? () => host.sessionOrganizer.finishSidebarEntryDrag() : nothing}

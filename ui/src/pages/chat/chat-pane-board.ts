@@ -318,9 +318,11 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     // Keep one template boundary so hiding the panel does not remount app iframes.
     const boardSurface = !shouldRender
       ? nothing
-      : html`${boardActive
-          ? renderSurface(true)
-          : guard([sessionKey, session.agentId], () => renderSurface(false))}`;
+      : html`${
+          boardActive
+            ? renderSurface(true)
+            : guard([sessionKey, session.agentId], () => renderSurface(false))
+        }`;
     return boardSurface;
   }
 

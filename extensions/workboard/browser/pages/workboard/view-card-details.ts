@@ -324,21 +324,25 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             </div>
           </section>
 
-          ${card.notes
-            ? html`
-                <section class="workboard-detail__section">
-                  <h3>${t("workboard.fieldNotes")}</h3>
-                  <p>${card.notes}</p>
-                </section>
-              `
-            : nothing}
-          ${sessionTarget
-            ? renderDashboard({
-                session: sessionTarget,
-                canMutate: props.canWrite !== false,
-                canGrant: props.canGrant === true,
-              })
-            : nothing}
+          ${
+            card.notes
+              ? html`
+                  <section class="workboard-detail__section">
+                    <h3>${t("workboard.fieldNotes")}</h3>
+                    <p>${card.notes}</p>
+                  </section>
+                `
+              : nothing
+          }
+          ${
+            sessionTarget
+              ? renderDashboard({
+                  session: sessionTarget,
+                  canMutate: props.canWrite !== false,
+                  canGrant: props.canGrant === true,
+                })
+              : nothing
+          }
           ${renderDependencyDetailList(dependencies)}
           ${detailSections.map(([title, values]) => renderDetailList(title, values))}
 

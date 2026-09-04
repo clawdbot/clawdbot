@@ -468,44 +468,48 @@ export function renderToolCard(
       <div
         class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}"
       >
-        ${isFileRow
-          ? html`<div
-              class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
-                ? "chat-tool-row--running"
-                : ""}"
-              @pointerenter=${syncToolDisclosureOverflow}
-              @focusin=${syncToolDisclosureOverflow}
-            >
-              <button
-                class="chat-tool-row__toggle"
+        ${
+          isFileRow
+            ? html`<div
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focusin=${syncToolDisclosureOverflow}
+              >
+                <button
+                  class="chat-tool-row__toggle"
+                  type="button"
+                  aria-expanded=${String(expanded)}
+                  aria-label=${resolveToolRowText(card, opts.runActive)}
+                  @click=${() => opts.onToggleExpanded(card.id)}
+                ></button>
+                ${rowContent}
+              </div>`
+            : html`<button
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
                 type="button"
                 aria-expanded=${String(expanded)}
-                aria-label=${resolveToolRowText(card, opts.runActive)}
-                @click=${() => opts.onToggleExpanded(card.id)}
-              ></button>
-              ${rowContent}
-            </div>`
-          : html`<button
-              class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
-                ? "chat-tool-row--running"
-                : ""}"
-              type="button"
-              aria-expanded=${String(expanded)}
-              @pointerenter=${syncToolDisclosureOverflow}
-              @focus=${syncToolDisclosureOverflow}
-              @click=${(event: MouseEvent) => {
-                if (shouldToggleSelectableDisclosure(event)) {
-                  opts.onToggleExpanded(card.id);
-                }
-              }}
-            >
-              ${rowContent}
-            </button>`}
-        ${expanded
-          ? html`
-              <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
-            `
-          : nothing}
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
+                @click=${(event: MouseEvent) => {
+                  if (shouldToggleSelectableDisclosure(event)) {
+                    opts.onToggleExpanded(card.id);
+                  }
+                }}
+              >
+                ${rowContent}
+              </button>`
+        }
+        ${
+          expanded
+            ? html`
+                <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
+              `
+            : nothing
+        }
         ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
       </div>
     `,
