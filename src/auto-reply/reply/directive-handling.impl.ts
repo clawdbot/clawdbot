@@ -26,10 +26,10 @@ import {
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { maybeHandleUnexpectedDirectiveArguments } from "./directive-handling.arguments.js";
 import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
-import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
@@ -370,7 +370,7 @@ export async function handleDirectiveOnly(
     if (invalidExecMessage) {
       return acknowledgeIgnoredDirective({ text: invalidExecMessage }, "hasExecDirective");
     }
-    const unexpectedExecArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+    const unexpectedExecArguments = maybeHandleUnexpectedDirectiveArguments(directives);
     if (unexpectedExecArguments) {
       return unexpectedExecArguments;
     }
@@ -404,9 +404,9 @@ export async function handleDirectiveOnly(
     return acknowledgeIgnoredDirective(queueAck, "hasQueueDirective");
   }
 
-  const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
-  if (unexpectedNativeArguments) {
-    return unexpectedNativeArguments;
+  const unexpectedArguments = maybeHandleUnexpectedDirectiveArguments(directives);
+  if (unexpectedArguments) {
+    return unexpectedArguments;
   }
 
   if (

@@ -48,7 +48,7 @@ export function resolveReplyDirectiveCommand(
     : undefined;
 }
 
-type NativeDirectiveInvocation = {
+type DirectiveCommandInvocation = {
   name: ReplyDirectiveCommand;
   unconsumedArguments?: string;
 };
@@ -56,8 +56,8 @@ type NativeDirectiveInvocation = {
 /** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
-  /** Explicit native command ownership prevents prose-oriented inline cleanup from eating args. */
-  nativeCommand?: NativeDirectiveInvocation;
+  /** Command-owned arguments must be validated before they can become an agent task. */
+  command?: DirectiveCommandInvocation;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
@@ -120,10 +120,11 @@ export function parseInlineSessionDirectives(
     modelAliases?: string[];
     disableElevated?: boolean;
     allowStatusDirective?: boolean;
-    nativeCommand?: ReplyDirectiveCommand;
+    command?: { kind: "native" | "text"; name: ReplyDirectiveCommand };
   },
 ): InlineDirectives {
-  const nativeCommand = options?.nativeCommand;
+  const invocation = options?.command;
+  const nativeCommand = invocation?.kind === "native" ? invocation.name : undefined;
   let cleaned = body;
   let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
@@ -172,13 +173,18 @@ export function parseInlineSessionDirectives(
     }),
   );
   const queue = parseScopedDirective("queue", extractQueueDirective);
+  // Text directives may share a message with a task or each other. Only a bare
+  // /exec with unrecognized arguments needs command ownership instead of inline routing.
+  const command =
+    nativeCommand ??
+    (invocation?.name === "exec" && !exec.hasExecOptions && cleaned ? "exec" : undefined);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned,
-    ...(nativeCommand && hasAnyDirective
+    ...(command && hasAnyDirective
       ? {
-          nativeCommand: {
-            name: nativeCommand,
+          command: {
+            name: command,
             ...(cleaned ? { unconsumedArguments: cleaned } : {}),
           },
         }

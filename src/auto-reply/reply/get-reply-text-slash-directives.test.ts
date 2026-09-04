@@ -117,6 +117,50 @@ describe("text slash directive ownership", () => {
     expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
   });
 
+  it.each([
+    { separator: " ", botUsername: undefined },
+    { separator: "\n", botUsername: undefined },
+    { separator: " ", botUsername: "openclaw" },
+    { separator: "\n", botUsername: "openclaw" },
+  ])("keeps a task after exec policy: %j", async ({ separator, botUsername }) => {
+    const { result } = await resolveTextSlashDirective(
+      `/exec${botUsername ? `@${botUsername}` : ""} security=deny ask=always${separator}Explain the output.`,
+      { botUsername },
+    );
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      result: {
+        cleanedBody: "Explain the output.",
+        execOverrides: { security: "deny", ask: "always" },
+      },
+    });
+  });
+
+  it.each([" ", "\n"])("applies all text directives separated by %j", async (separator) => {
+    const { result, sessionKey, storePath } = await resolveTextSlashDirective(
+      `/verbose full${separator}/reasoning off`,
+    );
+
+    expect(result).toMatchObject({ kind: "reply" });
+    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toMatchObject({
+      verboseLevel: "full",
+      reasoningLevel: "off",
+    });
+  });
+
+  it.each(["/exec@openclaw security=deny", "/verbose@openclaw:"])(
+    "preserves task whitespace after %s",
+    async (directive) => {
+      const task = "    if ready:\n        run('a  b')  \n";
+      const { result } = await resolveTextSlashDirective(`${directive}\r\n${task}`, {
+        botUsername: "openclaw",
+      });
+
+      expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: task } });
+    },
+  );
+
   it("rejects positional exec arguments addressed to the current bot", async () => {
     const { result } = await resolveTextSlashDirective("/exec@openclaw gateway", {
       botUsername: "openclaw",
