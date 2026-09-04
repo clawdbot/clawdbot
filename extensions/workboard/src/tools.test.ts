@@ -1,5 +1,6 @@
 // Workboard tests cover tools plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
@@ -211,7 +212,7 @@ describe("workboard tools", () => {
         ?.execute("call-2", { id: "card-1", token, note: "alive" }),
     );
     expect(heartbeat).toMatchObject({
-      metadata: { comments: [expect.objectContaining({ body: "alive" })] },
+      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
     });
 
     const read = readPayload(
@@ -225,8 +226,8 @@ describe("workboard tools", () => {
         .get("workboard_release")
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
-    expect(released).toMatchObject({ status: "review" });
-    expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
+    expect(released).toMatchObject({ card: { status: "review" } });
+    expect((released.card as { metadata?: { claim?: unknown } }).metadata?.claim).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
     expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
@@ -236,6 +237,56 @@ describe("workboard tools", () => {
     expect(archivedList.cards).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "archived-1", archivedAt: 2 })]),
     );
+  });
+
+  it("keeps blocked-card mutations out of the host tool failure contract", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: { state: { openKeyedStore: vi.fn(() => keyed) } },
+    } as unknown as OpenClawPluginApi;
+    const tools = createWorkboardTools({
+      api,
+      store: new WorkboardStore(keyed),
+      context: { agentId: "main" } as never,
+    });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const token = "claim-token-1";
+    await keyed.register("card-1", {
+      version: 1,
+      card: {
+        id: "card-1",
+        title: "Blocked work",
+        status: "blocked",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { claim: { ownerId: "main", token, claimedAt: 1, lastHeartbeatAt: 1 } },
+      },
+    });
+
+    const calls = [
+      ["workboard_comment", { id: "card-1", token, body: "still waiting on review" }],
+      ["workboard_heartbeat", { id: "card-1", token, note: "still blocked" }],
+      ["workboard_release", { id: "card-1", token, status: "blocked" }],
+    ] as const;
+    const graded: Array<{ tool: string; isError: boolean; card: unknown }> = [];
+    for (const [name, params] of calls) {
+      const result = await expectDefined(byName.get(name), name).execute(name, params);
+      graded.push({
+        tool: name,
+        isError: isToolResultError(result),
+        card: readPayload(result).card,
+      });
+    }
+
+    const blockedCard = expect.objectContaining({ id: "card-1", status: "blocked" });
+    expect(graded).toEqual([
+      { tool: "workboard_comment", isError: false, card: blockedCard },
+      { tool: "workboard_heartbeat", isError: false, card: blockedCard },
+      { tool: "workboard_release", isError: false, card: blockedCard },
+    ]);
   });
 
   it("can share one store across tool instances for claim coordination", async () => {

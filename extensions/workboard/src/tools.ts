@@ -147,12 +147,11 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
   };
 }
 
+// Card payloads stay nested under `card`: the host grades a tool call from
+// reserved keys on `details` (`status`, `ok`, `error`, ...), so a flat card
+// would report every mutation of a blocked card as a failed tool call.
 function redactedCardResult(card: WorkboardCard) {
   return jsonResult({ card: redactClaimToken(card) });
-}
-
-function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(redactClaimToken(card));
 }
 
 function redactedProofResult(card: WorkboardCard) {
@@ -358,7 +357,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(
+        return redactedCardResult(
           await store.heartbeat(id, {
             ...scope,
             note: record.note,
@@ -380,7 +379,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(
+        return redactedCardResult(
           await store.releaseClaim(id, {
             ...scope,
             status: record.status,
@@ -399,7 +398,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(await store.addComment(id, { body: record.body }, scope));
+        return redactedCardResult(await store.addComment(id, { body: record.body }, scope));
       },
     },
     {
@@ -555,7 +554,7 @@ export function createWorkboardTools(params: {
       parameters: CardIdSchema,
       execute: async (_toolCallId, rawParams) => {
         const { id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedRawCardResult(await store.unblock(id, scope));
+        return redactedCardResult(await store.unblock(id, scope));
       },
     },
     createWorkboardMoveTool({ store, readScopedCardToolParams, redactedCardResult }),
