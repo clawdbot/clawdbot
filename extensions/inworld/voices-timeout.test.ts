@@ -14,9 +14,16 @@ describe("listInworldVoices timeout", () => {
 
   it("aborts a hanging voice list request within the configured timeout", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let notifyFetchStarted = () => {};
+    // listInworldVoices reaches the guard through dynamic runtime imports, so the
+    // stub is only guaranteed to be in flight once it has actually been called.
+    const fetchStarted = new Promise<void>((resolve) => {
+      notifyFetchStarted = resolve;
+    });
     const fetchMock = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
+          notifyFetchStarted();
           const signal = init?.signal;
           if (!signal) {
             reject(new Error("guarded fetch did not pass an abort signal"));
@@ -39,8 +46,7 @@ describe("listInworldVoices timeout", () => {
     });
     const rejection = expect(request).rejects.toThrow(/aborted|timeout|timed out/i);
 
-    // Flush guard preflight microtasks so the request is in flight.
-    await vi.advanceTimersByTimeAsync(0);
+    await fetchStarted;
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(249);
