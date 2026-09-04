@@ -836,3 +836,44 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.title).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveEndpoint — baseUrl SSRF + DNS failure classification (#135333)
+// ---------------------------------------------------------------------------
+describe("resolveEndpoint baseUrl resolution", () => {
+  it("surfaces a DNS resolution failure instead of a privateness policy violation", async () => {
+    // An unresolvable host fails inside the SSRF resolver. Previously the catch
+    // swallowed that and reported the host as a privateness policy violation
+    // ("must target a private or internal self-hosted endpoint"), sending users
+    // chasing HTTPS/scheme config when the real cause was DNS (#135333).
+    const lookupFn = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND unresolvable.invalid");
+    });
+    await expect(
+      firecrawlClient.resolveEndpoint(
+        "http://unresolvable.invalid",
+        "/v2/search",
+        lookupFn as never,
+      ),
+    ).rejects.toThrow(/could not be resolved: unresolvable\.invalid/i);
+  });
+
+  it("surfaces a DNS resolution failure when lookup returns no addresses", async () => {
+    // An empty DNS answer throws "Unable to resolve hostname" inside the SSRF
+    // resolver; that must also surface as a DNS failure rather than a policy
+    // violation.
+    const lookupFn = vi.fn(async () => []);
+    await expect(
+      firecrawlClient.resolveEndpoint("http://empty.invalid", "/v2/search", lookupFn as never),
+    ).rejects.toThrow(/could not be resolved: empty\.invalid/i);
+  });
+
+  it("still rejects a host resolving to a public address as a privateness policy violation", async () => {
+    // Regression guard: a host that resolves to a non-private address must keep
+    // hitting the policy error path, not the DNS-failure path.
+    const lookupFn = vi.fn(async () => [{ address: "8.8.8.8", family: 4 }]);
+    await expect(
+      firecrawlClient.resolveEndpoint("http://public.example", "/v2/search", lookupFn as never),
+    ).rejects.toThrow(/must target a private or internal self-hosted endpoint/i);
+  });
+});

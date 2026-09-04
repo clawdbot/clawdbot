@@ -139,7 +139,21 @@ async function firecrawlEndpointTargetsPrivateNetwork(
       policy: { allowPrivateNetwork: true },
     });
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
+  } catch (error) {
+    // Distinguish a host that cannot be resolved at all (DNS NXDOMAIN or a
+    // network error) from one that resolves to a blocked or non-private
+    // address. Swallowing resolution failures would report an unresolvable
+    // host as a privateness policy violation (see #135333), sending users
+    // and AI assistants chasing HTTPS/scheme config when the real cause is
+    // DNS. A blocked-IP resolution (SsrFBlockedError) is an SSRF result, not
+    // a DNS result, so it still falls through to the policy error the
+    // caller raises for non-private targets.
+    if (!(error instanceof SsrFBlockedError)) {
+      throw new Error(
+        `Firecrawl baseUrl host could not be resolved: ${url.hostname}. Verify the hostname or DNS configuration.`,
+        { cause: error },
+      );
+    }
     return false;
   }
 }
