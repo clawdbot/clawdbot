@@ -11,8 +11,9 @@ Deepgram is a speech-to-text API. OpenClaw uses it for inbound audio/voice-note
 transcription through `tools.media.audio` and for Voice Call streaming STT
 through `plugins.entries.voice-call.config.streaming`.
 
-Batch transcription uploads the complete audio file to Deepgram and injects
-the transcript into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
+Batch transcription uploads the complete audio file to Deepgram. Flux models
+use Deepgram's one-shot WebSocket instead. Both paths inject the transcript
+into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
 Voice Call streaming forwards live G.711 u-law frames over Deepgram's
 WebSocket `listen` endpoint and emits partial/final transcripts as Deepgram
 returns them.
@@ -102,6 +103,19 @@ Deepgram `/listen` request, so any Deepgram-supported param name works
   </Tab>
 </Tabs>
 
+### Flux models
+
+Use `flux-general-en` or `flux-general-multi` for Deepgram Flux. OpenClaw
+converts the voice note to 16 kHz mono linear16 audio with `ffmpeg`, then sends
+it to Deepgram's `/v2/listen` WebSocket endpoint.
+Set `tools.media.models[].model` to either Flux model in the getting-started
+configuration above.
+
+Flux supports `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`,
+`keyterm`, `language_hint`, `mip_opt_out`, `numerals`, `profanity_filter`,
+`redact`, and `tag` in `providerOptions.deepgram`. OpenClaw ignores batch-only
+options such as `detect_language`, `punctuate`, and `smart_format` on Flux.
+
 ## Voice Call streaming STT
 
 The bundled `deepgram` plugin also registers a realtime transcription provider
@@ -168,6 +182,10 @@ Twilio media frames can be forwarded directly.
   <Accordion title="Output behavior">
     Output follows the same audio rules as other providers (size caps, timeouts,
     transcript injection).
+  </Accordion>
+  <Accordion title="Flux requires ffmpeg">
+    Install `ffmpeg` with the gateway host's package manager before selecting a
+    Flux model.
   </Accordion>
 </AccordionGroup>
 
