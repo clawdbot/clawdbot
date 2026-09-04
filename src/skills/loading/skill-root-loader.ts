@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
 import {
@@ -19,7 +18,7 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "./skill-root-discovery.js";
 import { resolveSkillTelemetrySourceValue } from "./source.js";
-import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
+import { resolveAllowedSkillSymlinkTargetRealPaths } from "./symlink-targets.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
@@ -158,22 +157,15 @@ export function loadGeneratedPluginSkillRecords(params: {
   source: string;
   limits: ResolvedSkillDiscoveryLimits;
 }): LoadedSkillRecord[] {
-  const candidates = discoverPluginSkills({
-    ...params,
-    pluginSkillDirs: params.pluginSkillRoots.map((root) => root.dir),
-  });
+  const candidates = discoverPluginSkills(params);
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
   const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of candidates) {
-    const pluginRoot = params.pluginSkillRoots.find((root) => {
-      const rootRealPath = tryRealpath(root.dir);
-      return rootRealPath !== null && isPathInside(rootRealPath, candidate.skillDirRealPath);
-    });
     const loadedRecords = loadContainedSkillRecords({
       skillDir: candidate.skillDir,
       source: params.source,
       maxSkillFileBytes: params.limits.maxSkillFileBytes,
-      rejectHardlinks: pluginRoot?.rejectHardlinks ?? true,
+      rejectHardlinks: candidate.rejectHardlinks,
     });
     loadedSkills.push(
       ...loadedRecords.map((record) =>

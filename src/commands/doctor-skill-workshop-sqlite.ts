@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
@@ -14,12 +18,10 @@ import {
   readStoredProposal,
   updateProposal,
 } from "../skills/workshop/store-sqlite-record.js";
-import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
   readSkillProposal,
-  readSkillProposalRecord,
   readSkillProposalRollback,
   validateSkillProposalRecord,
   validateSkillProposalRollback,
@@ -29,6 +31,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -134,11 +137,16 @@ async function relocateLegacyWorkshopTargets(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<WorkshopRelocationResult> {
-  const { database, kysely } = openSkillWorkshopStore({ env });
-  const rows = executeSqliteQuerySync(
+  const database = openOpenClawStateDatabase({ env });
+  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
     database.db,
-    kysely.selectFrom("skill_workshop_proposals").selectAll(),
-  ).rows;
+  );
+  // Planning must not initialize optional Workshop tables or indexes on a no-op
+  // startup. Actual proposal writes retain their feature-owned schema ensure.
+  const rows = tableExists(database.db, "skill_workshop_proposals")
+    ? executeSqliteQuerySync(database.db, kysely.selectFrom("skill_workshop_proposals").selectAll())
+        .rows
+    : [];
   const initialRows = new Map(rows.map((row) => [row.proposal_id, row]));
   const records = rows.flatMap((row) => {
     const record = parseSkillProposalRow(row);
@@ -386,8 +394,10 @@ async function importLegacySkillProposalSidecars(params: {
     .toSorted((left, right) => left.localeCompare(right));
   const warnings: string[] = [];
   const changes: string[] = [];
-  const readStore = { config: params.config, env };
-  const readOptions = { config: params.config, reconcile: false };
+  const database = openOpenClawStateDatabase({ env });
+  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
+    database.db,
+  );
   let migrated = 0;
   for (const proposalId of proposalIds) {
     const proposalDir = `${PROPOSALS_DIR}/${proposalId}`;
@@ -405,7 +415,19 @@ async function importLegacySkillProposalSidecars(params: {
         warnings.push(`Failed to migrate Skill Workshop proposal ${proposalId}: ${String(error)}`);
         continue;
       }
-      if (await readSkillProposalRecord(proposalId, readStore, {}, readOptions)) {
+      // Modern bundles have no legacy sidecar. Recognize their durable record
+      // without entering the feature's schema-writing read facade.
+      const stored = tableExists(database.db, "skill_workshop_proposals")
+        ? executeSqliteQueryTakeFirstSync(
+            database.db,
+            kysely
+              .selectFrom("skill_workshop_proposals")
+              .selectAll()
+              .where("proposal_id", "=", proposalId)
+              .where("owner_agent_id", "is not", null),
+          )
+        : undefined;
+      if (stored && parseSkillProposalRow(stored)) {
         continue;
       }
       try {
