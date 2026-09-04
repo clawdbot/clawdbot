@@ -73,6 +73,7 @@ class DefaultSentMessageCache implements SentMessageCache {
   private mediaCache = new Map<string, number>();
   private mediaBackedByIdCache = new Map<string, number>();
   private messageIdCache = new Map<string, number>();
+  private guidTextCache = new Map<string, number>();
 
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
@@ -88,6 +89,7 @@ class DefaultSentMessageCache implements SentMessageCache {
       this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
       if (textKey) {
         this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
+        this.guidTextCache.set(`${scope}:${messageIdKey}:${textKey}`, Date.now());
       }
       if (mediaKey) {
         this.mediaBackedByIdCache.set(`${scope}:${mediaKey}`, Date.now());
@@ -135,16 +137,17 @@ class DefaultSentMessageCache implements SentMessageCache {
         ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
         : undefined;
       // When requireMessageIdTextMatch is set, a matching messageId is only
-      // sufficient when the text was also recorded as part of the same
-      // outbound entry (textBackedByIdCache proves the GUID and text were
-      // sent together). This prevents dropping a legitimate inline reply
-      // that references a recent outbound GUID with different body text.
+      // sufficient when the exact GUID and text were recorded together in the
+      // same outbound entry. guidTextCache is keyed by scope:guid:text so two
+      // sends with different GUIDs and different texts cannot satisfy each
+      // other's markers. This prevents dropping a legitimate inline reply that
+      // references one recent outbound GUID but has the same text as another.
       if (
         resolvedOptions.requireMessageIdTextMatch &&
         idTimestamp &&
         Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS &&
         textKey &&
-        textBackedByIdTimestamp
+        this.guidTextCache.has(`${scope}:${messageIdKey}:${textKey}`)
       ) {
         return true;
       }
@@ -203,6 +206,11 @@ class DefaultSentMessageCache implements SentMessageCache {
     for (const [key, timestamp] of this.messageIdCache.entries()) {
       if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
         this.messageIdCache.delete(key);
+      }
+    }
+    for (const [key, timestamp] of this.guidTextCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+        this.guidTextCache.delete(key);
       }
     }
   }

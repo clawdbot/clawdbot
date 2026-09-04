@@ -191,6 +191,27 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("does not drop inline reply whose text matches a different outbound GUID", async () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
+    echoCache.remember(scope, { text: "Okay", messageId: "GUID-B" });
+
+    const decision = await resolveDecision({
+      message: {
+        id: 103,
+        guid: "GUID-C",
+        reply_to_guid: "GUID-A",
+        text: "Okay",
+      },
+      messageText: "Okay",
+      bodyText: "Okay",
+      echoCache,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("drops reflected self-chat duplicates after seeing the from-me copy", async () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
