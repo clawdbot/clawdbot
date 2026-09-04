@@ -94,30 +94,45 @@ describe("doctor-contract-registry module loader", () => {
     const pluginRoot = makeTempDir();
     const distRoot = path.join(pluginRoot, "dist");
     fs.mkdirSync(distRoot);
-    const rootDoctorTypeScript = path.join(pluginRoot, "doctor-contract-api.ts");
-    const distDoctorTypeScript = path.join(distRoot, "doctor-contract-api.ts");
-    const rootDoctorJavaScript = path.join(pluginRoot, "doctor-contract-api.js");
-    const rootContractTypeScript = path.join(pluginRoot, "contract-api.ts");
-    for (const filePath of [
-      rootDoctorTypeScript,
-      distDoctorTypeScript,
-      rootDoctorJavaScript,
-      rootContractTypeScript,
-    ]) {
+    const candidates = [
+      "doctor-contract-api.ts",
+      "dist/doctor-contract-api.ts",
+      "doctor-contract-api.mts",
+      "dist/doctor-contract-api.mts",
+      "doctor-contract-api.cts",
+      "dist/doctor-contract-api.cts",
+      "doctor-contract-api.js",
+      "dist/doctor-contract-api.js",
+      "doctor-contract-api.mjs",
+      "dist/doctor-contract-api.mjs",
+      "doctor-contract-api.cjs",
+      "dist/doctor-contract-api.cjs",
+      "contract-api.ts",
+      "dist/contract-api.ts",
+      "contract-api.mts",
+      "dist/contract-api.mts",
+      "contract-api.cts",
+      "dist/contract-api.cts",
+      "contract-api.js",
+      "dist/contract-api.js",
+      "contract-api.mjs",
+      "dist/contract-api.mjs",
+      "contract-api.cjs",
+      "dist/contract-api.cjs",
+    ].map((relativePath) => path.join(pluginRoot, relativePath));
+    for (const filePath of candidates) {
       fs.writeFileSync(filePath, "export {};\n", "utf-8");
     }
 
     const originalOwner = createPluginCache();
     const resolvePath = () => resolvePluginDoctorContractArtifactPath(pluginRoot);
-    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
-    fs.rmSync(rootDoctorTypeScript);
-    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
-    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(distDoctorTypeScript);
-    fs.rmSync(distDoctorTypeScript);
-    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootDoctorJavaScript);
-    fs.rmSync(rootDoctorJavaScript);
-    expect(withPluginCache(createPluginCache(), resolvePath)).toBe(rootContractTypeScript);
-    expect(withPluginCache(originalOwner, resolvePath)).toBe(rootDoctorTypeScript);
+    expect(withPluginCache(originalOwner, resolvePath)).toBe(candidates[0]);
+    for (const candidate of candidates) {
+      expect(withPluginCache(createPluginCache(), resolvePath)).toBe(candidate);
+      fs.rmSync(candidate);
+      expect(withPluginCache(originalOwner, resolvePath)).toBe(candidates[0]);
+    }
+    expect(withPluginCache(createPluginCache(), resolvePath)).toBeNull();
   });
 
   it.each([
