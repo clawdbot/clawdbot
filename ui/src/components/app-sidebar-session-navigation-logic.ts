@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
+import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
@@ -277,7 +277,6 @@ export function buildSidebarSessionNavigationState(input: {
 export function buildReconciledSidebarZone(input: {
   sidebarEntries: readonly string[];
   rows: SidebarRecentSession[];
-  enabledRouteIds: readonly NavigationRouteId[] | undefined;
   pluginNavigationKeys: ReadonlySet<string>;
 }) {
   const pinnedRows = input.rows.filter((row) => row.pinned);

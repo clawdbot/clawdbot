@@ -8,6 +8,7 @@ import type {
 } from "../plugins/plugin-command.types.js";
 import { startPluginServices } from "../plugins/services.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { defineFeatureContract } from "./feature-contract.js";
 import { defineFeaturePlugin, type FeatureInvocationContext } from "./feature-plugin.js";
 import {
@@ -118,7 +119,8 @@ describe("typed feature plugins", () => {
       name: "Feature fixture",
       description: "Fixture operations.",
       setup: () => ({
-        inspect: execute as unknown as (input: { value: string }) => { value: string },
+        // @ts-expect-error Exercise runtime rejection of an invalid handler result.
+        inspect: execute,
       }),
     });
     const captured = createCapturedPluginRegistration({ id: contract.pluginId });
@@ -143,10 +145,7 @@ describe("typed feature plugins", () => {
   });
 
   it("propagates tool cancellation across awaited feature handlers", async () => {
-    let finish: (() => void) | undefined;
-    const pending = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: pending, resolve: finish } = createDeferredCore();
     const entry = defineFeaturePlugin({
       contract,
       name: "Feature fixture",
@@ -173,7 +172,7 @@ describe("typed feature plugins", () => {
     const controller = new AbortController();
     const result = tool.execute("cancelled-call", { value: "pending" }, controller.signal);
     controller.abort(new Error("tool cancelled"));
-    expectDefined(finish, "feature handler completion")();
+    finish();
     await expect(result).rejects.toThrow("tool cancelled");
   });
 

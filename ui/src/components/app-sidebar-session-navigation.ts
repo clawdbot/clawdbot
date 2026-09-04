@@ -385,7 +385,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return buildReconciledSidebarZone({
       sidebarEntries: this.sidebarEntries,
       rows,
-      enabledRouteIds: this.enabledRouteIds,
       pluginNavigationKeys: new Set(this.pluginNavigation().map((entry) => entry.key)),
     });
   }

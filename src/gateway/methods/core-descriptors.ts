@@ -641,7 +641,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "plugins-control-ui",
     "operator.admin",
     "2026.8",
-    { controlPlaneWrite: true },
+    CONTROL_PLANE_WRITE,
   ],
   ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
   ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],

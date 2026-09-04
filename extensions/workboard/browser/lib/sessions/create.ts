@@ -11,31 +11,28 @@ export type SessionCreateOutcome = {
     | { status: "rejected"; error: string };
 };
 
-export type SessionCreateParams = SessionsCreateParams & {
-  currentSessionKey?: string;
-};
-
 export async function requestSessionCreate(
   client: Pick<GatewayBrowserClient, "request">,
-  params: Omit<SessionCreateParams, "currentSessionKey"> = {},
+  params: SessionsCreateParams = {},
 ): Promise<SessionCreateOutcome> {
   const result = await client.request<SessionsCreateResult>("sessions.create", params);
-  const key = stringValue(result?.key) ?? "";
+  const key = stringValue(result?.key);
   if (!key) {
     throw new Error("sessions.create returned no key");
   }
   let initialRun: SessionCreateOutcome["initialRun"] = { status: "idle" };
   if (result.runStarted) {
-    const runId = stringValue(result.runId) ?? "";
+    const runId = stringValue(result.runId);
     initialRun = {
       status: "started",
       ...(runId ? { runId } : {}),
     };
   } else if (result.runError !== undefined) {
-    const message = stringValue(result.runError?.message) ?? "";
     initialRun = {
       status: "rejected",
-      error: message || "The session was created, but its first message could not be sent.",
+      error:
+        stringValue(result.runError?.message) ||
+        "The session was created, but its first message could not be sent.",
     };
   }
   return { key, entry: result.entry, initialRun };

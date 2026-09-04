@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import { createWorkboardCatalogRuntime } from "./catalog.ts";
@@ -9,14 +10,6 @@ import { moveWorkboardCard } from "./lib/workboard/mutations.ts";
 import { getWorkboardState } from "./lib/workboard/runtime.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 type WorkboardCatalogSnapshot = Parameters<Parameters<typeof createWorkboardCatalogRuntime>[0]>[0];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 const board = (id: string) => ({
   id,
@@ -80,7 +73,7 @@ describe("Workboard catalog", () => {
   });
 
   it("does not satisfy a full page load with pending catalog hydration", async () => {
-    const pending = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
     const host = createHost();
     const runtime = createWorkboardCatalogRuntime(() => {}, host);
@@ -102,7 +95,7 @@ describe("Workboard catalog", () => {
   it("does not overwrite a completed mutation with an older catalog response", async () => {
     const card = createWorkboardCard();
     const moved = { ...card, status: "review" as const, updatedAt: 2 };
-    const pending = deferred<unknown>();
+    const pending = createDeferred<unknown>();
     const request = vi
       .fn()
       .mockResolvedValueOnce({ cards: [card], boards: [board("ops")] })
@@ -147,7 +140,7 @@ describe("Workboard catalog", () => {
   });
 
   it("queues a forced refresh behind the current client load", async () => {
-    const first = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const first = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi
       .fn()
       .mockReturnValueOnce(first.promise)
@@ -170,8 +163,8 @@ describe("Workboard catalog", () => {
   });
 
   it("does not let an old client repopulate a replacement catalog", async () => {
-    const first = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
-    const second = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const first = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const second = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const firstRequest = vi.fn(() => first.promise);
     const secondRequest = vi.fn(() => second.promise);
     const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
@@ -195,7 +188,7 @@ describe("Workboard catalog", () => {
   });
 
   it("preserves the cached catalog when an in-flight refresh resolves after disconnect", async () => {
-    const pending = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi
       .fn()
       .mockResolvedValueOnce({ cards: [], boards: [board("ops")] })
@@ -228,7 +221,7 @@ describe("Workboard catalog", () => {
 
   it("does not let a pre-disconnect response overwrite a reconnected catalog", async () => {
     vi.useFakeTimers();
-    const pending = deferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+    const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi
       .fn()
       .mockResolvedValueOnce({ cards: [], boards: [board("ops")] })

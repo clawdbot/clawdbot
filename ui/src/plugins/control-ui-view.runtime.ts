@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { html, nothing, render, type LitElement, type PropertyValues } from "lit";
+import { html, nothing, render, type LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
@@ -101,7 +101,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     }
   }
 
-  override updated(_changes: PropertyValues<this>): void {
+  override updated(): void {
     const registration = this.registration;
     if (!registration || this.error || registration.signal.aborted) {
       return;
