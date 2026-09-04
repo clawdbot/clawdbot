@@ -3,7 +3,7 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
@@ -47,9 +47,7 @@ describe("gateway multi-instance e2e", () => {
   const nodeClients: GatewayClient[] = [];
 
   afterAll(async () => {
-    for (const client of nodeClients) {
-      client.stop();
-    }
+    await Promise.allSettled(nodeClients.map((client) => client.stopAndWait({ timeoutMs: 1_000 })));
     for (const inst of instances) {
       await stopGatewayInstance(inst);
     }
@@ -198,15 +196,15 @@ describe("gateway multi-instance e2e", () => {
       const preloadPath = path.join(proofRoot, "clock-shift.mjs");
       let node: GatewayClient | undefined;
       let operator: GatewayClient | undefined;
+      let instance: GatewayInstance | undefined;
       try {
         await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
-        const instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
+        instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
           NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
           OPENCLAW_CLOCK_SHIFT_PATH: shiftPath,
           OPENCLAW_CLOCK_SHIFT_READY_PATH: shiftReadyPath,
           OPENCLAW_CLOCK_SHIFT_MS: "1000",
         });
-        instances.push(instance);
         const nodeIdentity = loadOrCreateDeviceIdentity({
           path: path.join(instance.homeDir, "proof-node-device.sqlite"),
         });
@@ -222,7 +220,7 @@ describe("gateway multi-instance e2e", () => {
           role: "node",
           scopes: [],
           caps: ["system"],
-          commands: ["camera.capture"],
+          commands: ["system.notify"],
           deviceIdentity: nodeIdentity,
           onEvent: async (event) => {
             if (event.event !== "node.invoke.request") {
@@ -253,13 +251,14 @@ describe("gateway multi-instance e2e", () => {
             path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
           }),
         });
+        await approveNodePairingForProof(operator, nodeIdentity.deviceId);
         await waitForNodeStatus(instance, nodeIdentity.deviceId);
         const startedAt = performance.now();
-        const result = await operator.request<{ captured?: boolean }>(
+        const result = await operator.request<{ payload?: { captured?: boolean } }>(
           "node.invoke",
           {
             nodeId: nodeIdentity.deviceId,
-            command: "camera.capture",
+            command: "system.notify",
             params: { quality: "low" },
             timeoutMs: 500,
             idempotencyKey: "real-node-invoke-clock-proof",
@@ -267,7 +266,7 @@ describe("gateway multi-instance e2e", () => {
           { timeoutMs: 5_000 },
         );
         const elapsedMs = Math.round(performance.now() - startedAt);
-        expect(result.captured).toBe(true);
+        expect(result.payload?.captured).toBe(true);
         expect(elapsedMs).toBeGreaterThanOrEqual(50);
         expect(elapsedMs).toBeLessThan(1_000);
         expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
@@ -275,8 +274,11 @@ describe("gateway multi-instance e2e", () => {
           `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=1000 result=SUCCESS elapsedMs=${elapsedMs}`,
         );
       } finally {
-        operator?.stop();
-        node?.stop();
+        await Promise.allSettled([
+          operator?.stopAndWait({ timeoutMs: 1_000 }),
+          node?.stopAndWait({ timeoutMs: 1_000 }),
+        ]);
+        await Promise.allSettled([instance?.stopGateway()]);
         await rm(proofRoot, { recursive: true, force: true });
       }
     },
@@ -308,4 +310,19 @@ async function waitForFile(filePath: string): Promise<void> {
     }
   }
   throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function approveNodePairingForProof(operator: GatewayClient, nodeId: string): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const pairing = await operator.request<{
+        pending?: Array<{ nodeId?: string; requestId?: string; commands?: string[] }>;
+      }>("node.pair.list", {});
+      const pending = pairing.pending?.find((entry) => entry.nodeId === nodeId);
+      expect(pending?.commands).toEqual(["system.notify"]);
+      expect(pending?.requestId).toEqual(expect.any(String));
+      await operator.request("node.pair.approve", { requestId: pending?.requestId });
+    },
+    { timeout: 15_000, interval: 100 },
+  );
 }
