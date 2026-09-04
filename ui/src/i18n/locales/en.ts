@@ -3134,6 +3134,7 @@ export const en: TranslationMap & {
     },
     swarm: {
       title: "Swarm",
+      groupTitle: "Parallel tasks",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",

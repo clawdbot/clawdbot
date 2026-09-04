@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { replaceComposerPopoverAnchor } from "./chat-composer-dom.ts";
@@ -27,7 +28,6 @@ type SwarmPhase = {
 
 type SwarmGroup = {
   groupId: string;
-  label: string;
   phases: SwarmPhase[];
 };
 
@@ -50,10 +50,6 @@ function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
     return "failed";
   }
   return row.subagentRunState === "active" ? "queued" : null;
-}
-
-function groupTail(groupId: string): string {
-  return groupId.split(":").findLast(Boolean) ?? groupId;
 }
 
 function swarmPhaseRank(row: GatewaySessionRow): number {
@@ -113,7 +109,7 @@ function collectActiveSwarmGroups(
       phaseRank: swarmPhaseRank(row),
       dot: {
         key: row.key,
-        label: row.label?.trim() || row.displayName?.trim() || row.derivedTitle?.trim() || row.key,
+        label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
         status,
         duration: swarmDuration(row, status),
       },
@@ -132,7 +128,6 @@ function collectActiveSwarmGroups(
       }
       return {
         groupId,
-        label: groupTail(groupId),
         phases: [...phases.entries()]
           .toSorted((left, right) => left[1].rank - right[1].rank)
           .map(([title, bucket]) => {
@@ -179,6 +174,9 @@ export function renderChatSwarmProgress({
     >
       ${groups.map((group) => {
         const allTasks = group.phases.flatMap((phase) => phase.dots);
+        // Group IDs identify the parent run, not the work; never use them as titles.
+        const label =
+          allTasks.length === 1 && allTasks[0] ? allTasks[0].label : t("labsPage.swarm.groupTitle");
         const tasks = group.phases.flatMap((phase) =>
           phase.dots.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
         );
@@ -197,7 +195,7 @@ export function renderChatSwarmProgress({
             })}
           >
             <div class="chat-swarm__header">
-              <strong title=${group.groupId}>${group.label}</strong>
+              <strong title=${label}>${label}</strong>
               <span
                 >${t("labsPage.swarm.progress", {
                   complete: String(complete),
