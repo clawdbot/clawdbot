@@ -12,28 +12,30 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 mkdir -p "$OUTPUT_DIR"
 
-# All choices share the same mascot geometry and native macOS mask/effects.
-/usr/bin/python3 - "$ROOT_DIR/apps/macos/Icon.icon" "$WORK_DIR" <<'PY'
+# Each family has editable vector artwork; actool owns the macOS mask and padding.
+/usr/bin/python3 - "$ROOT_DIR/apps/macos" "$WORK_DIR" <<'PY'
 import json
 import shutil
 import sys
 from pathlib import Path
 
-source, work = map(Path, sys.argv[1:])
-for name, color in {
-    "paper": None,
-    "ink": "0.09804,0.09804,0.10980,1.00000",
-    "seaGlass": "0.87843,0.95686,0.93333,1.00000",
+root, work = map(Path, sys.argv[1:])
+for name, (source, dark_fill) in {
+    "paper": ("Icon.icon", {"linear-gradient": ["srgb:0.19200,0.19200,0.19200,1.00000", "srgb:0.07800,0.07800,0.07800,1.00000"]}),
+    "origami": ("AppIconDesigns/Origami.icon", {"solid": "srgb:0.07451,0.12549,0.20000,1.00000"}),
+    "arcade": ("AppIconDesigns/Arcade.icon", {"solid": "srgb:0.11765,0.08627,0.18039,1.00000"}),
+    "orbit": ("AppIconDesigns/Orbit.icon", {"solid": "srgb:0.03137,0.12549,0.15686,1.00000"}),
 }.items():
-    icon = work / name / "Icon.icon"
-    shutil.copytree(source, icon)
-    document = json.loads((icon / "icon.json").read_text())
-    if color is not None:
-        document["fill"] = {"solid": "extended-srgb:" + color}
-    (icon / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
+    for appearance in ("light", "dark"):
+        icon = work / f"{name}-{appearance}" / "Icon.icon"
+        shutil.copytree(root / source, icon)
+        if appearance == "dark":
+            document = json.loads((icon / "icon.json").read_text())
+            document["fill"] = dark_fill
+            (icon / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
 PY
 
-for style in paper ink seaGlass; do
+for style in paper-light paper-dark origami-light origami-dark arcade-light arcade-dark orbit-light orbit-dark; do
   mkdir "$WORK_DIR/$style/compiled"
   xcrun actool "$WORK_DIR/$style/Icon.icon" \
     --compile "$WORK_DIR/$style/compiled" \
@@ -52,7 +54,7 @@ for style in paper ink seaGlass; do
 done
 
 if [[ "$MODE" == "--check" ]]; then
-  cmp "$OUTPUT_DIR/paper.icns" "$OUTPUT_DIR/../OpenClaw.icns"
+  cmp "$OUTPUT_DIR/paper-light.icns" "$OUTPUT_DIR/../OpenClaw.icns"
 else
-  cp "$OUTPUT_DIR/paper.icns" "$OUTPUT_DIR/../OpenClaw.icns"
+  cp "$OUTPUT_DIR/paper-light.icns" "$OUTPUT_DIR/../OpenClaw.icns"
 fi

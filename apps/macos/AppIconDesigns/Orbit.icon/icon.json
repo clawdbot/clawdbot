@@ -1,0 +1,35 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.87843,0.96078,0.94902,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "molty.svg",
+          "name": "Orbit",
+          "position": {
+            "scale": 0.86,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.18
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

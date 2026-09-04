@@ -13,18 +13,30 @@ Scope: macOS app (`apps/macos`). Rendering: `CritterIconRenderer.makeIcon(...)`.
 
 Choose a Dock icon in **Settings → General → Dock icon**:
 
-- **Automatic** (default): Paper in light appearance, Ink in dark appearance. It
-  follows macOS appearance changes while OpenClaw is running.
-- **Paper**, **Ink**, or **Sea Glass**: keep that icon in either appearance.
+- **Paper** (default): the original Molty silhouette on a paper tile.
+- **Origami**: a folded, faceted Molty.
+- **Arcade**: a pixel-art Molty.
+- **Orbit**: a Molty surrounded by an orbital ring.
+
+Each design has light and dark artwork, shown together in the picker.
+On macOS 26 and later, Paper uses native icon styling, including the setting in
+**System Settings → Appearance → Icon & widget style**. For automatic switching,
+choose **Dark → Auto** there; the default icon style can otherwise stay light
+even when app windows are dark. On older macOS versions, Paper follows light/dark
+appearance while the app runs.
+
+The other designs follow macOS light/dark appearance while OpenClaw is running.
 
 The selection is saved separately for each OpenClaw profile and applies immediately.
-It changes the running app's Dock icon; Finder and the Dock tile after quitting
-use the bundled app icon. The menu bar critter and its animations are independent.
+Custom designs change the running app's Dock icon; Finder and the Dock tile after
+quitting use the bundled Paper icon. The menu bar critter and its animations are independent.
 
-The shared mascot source is `apps/macos/Icon.icon`. After editing it, regenerate
-the selectable artwork with `bash scripts/generate-mac-app-icons.sh` and verify
-it with `bash scripts/generate-mac-app-icons.sh --check`. Packaging compiles the
-primary app icon with Apple's asset compiler.
+Paper's source is `apps/macos/Icon.icon`; other vector designs are in
+`apps/macos/AppIconDesigns`. After editing them, regenerate the pairs with
+`bash scripts/generate-mac-app-icons.sh` and verify them with
+`bash scripts/generate-mac-app-icons.sh --check`. The generator owns custom dark
+backgrounds, and Apple's asset compiler supplies the macOS mask and padding.
+Packaging also compiles the primary Icon Composer document for native styling.
 
 ## States
 

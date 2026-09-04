@@ -7,12 +7,12 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     private var windowsObservation: NSKeyValueObservation?
     private var appearanceObservation: NSKeyValueObservation?
-    private var appliedIconStyle: AppIconStyle?
+    private var appliedIconResourceName: String?
     private let logger = Logger(subsystem: "ai.openclaw", category: "DockIconManager")
 
     override private init() {
         super.init()
-        self.setupObservers()
+        setupObservers()
         Task { @MainActor in
             self.updateDockVisibility()
         }
@@ -45,7 +45,8 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             let policy = Self.activationPolicy(
                 launchPlan: .current,
                 userWantsDockHidden: userWantsDockHidden,
-                hasVisibleWindows: hasVisibleWindows)
+                hasVisibleWindows: hasVisibleWindows
+            )
             guard NSApp.activationPolicy() != policy else { return }
             NSApp.setActivationPolicy(policy)
         }
@@ -66,8 +67,8 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     static func activationPolicy(
         launchPlan: AppLaunchRuntimePlan,
         userWantsDockHidden: Bool,
-        hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
-    {
+        hasVisibleWindows: Bool
+    ) -> NSApplication.ActivationPolicy {
         guard launchPlan.allowsDockIcon else { return .accessory }
         return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
@@ -101,22 +102,26 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.didBecomeKeyNotification,
-                object: nil)
+                object: nil
+            )
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.didResignKeyNotification,
-                object: nil)
+                object: nil
+            )
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.willCloseNotification,
-                object: nil)
+                object: nil
+            )
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.dockPreferenceChanged),
                 name: UserDefaults.didChangeNotification,
-                object: nil)
+                object: nil
+            )
         }
     }
 
@@ -142,14 +147,21 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     @MainActor
     private func updateIconImage() {
         guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
-        let selection = AppIconStyle(rawValue: AppDefaults.standard.string(forKey: appIconStyleKey) ?? "") ?? .automatic
-        let style = selection.resolved(for: NSApp.effectiveAppearance)
-        guard style != self.appliedIconStyle else { return }
-        guard let image = AppIconArtwork.image(for: style) else {
-            self.logger.error("Bundled Dock icon is missing: \(style.rawValue)")
-            return
+        let style = AppIconStyle(rawValue: AppDefaults.standard.string(forKey: appIconStyleKey) ?? "") ?? .paper
+        let appearance = AppIconAppearance(NSApp.effectiveAppearance)
+        let resourceName = style.usesSystemIcon ? nil : style.resourceName(for: appearance)
+        guard resourceName != appliedIconResourceName else { return }
+        if resourceName != nil {
+            guard let image = AppIconArtwork.image(for: style, appearance: appearance) else {
+                logger.error("Bundled Dock icon is missing: \(style.resourceName(for: appearance))")
+                return
+            }
+            NSApp.applicationIconImage = image
+        } else {
+            // Clearing our override restores Icon Composer's native dark, clear,
+            // and tinted appearances, which have their own macOS style setting.
+            NSApp.applicationIconImage = nil
         }
-        NSApp.applicationIconImage = image
-        self.appliedIconStyle = style
+        appliedIconResourceName = resourceName
     }
 }

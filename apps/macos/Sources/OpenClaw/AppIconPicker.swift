@@ -1,22 +1,24 @@
 import SwiftUI
 
 struct AppIconPicker: View {
-    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(appIconStyleKey, store: AppDefaults.standard)
-    private var selection: AppIconStyle = .automatic
+    private var selection: AppIconStyle = .paper
 
     var body: some View {
-        SettingsCardGroup("Dock icon") {
+        // Read here so the lazy grid refreshes its selection indicators.
+        let selection = self.selection
+        return SettingsCardGroup("Dock icon") {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     ForEach(AppIconStyle.allCases) { style in
-                        self.choice(style)
+                        self.choice(style, selected: selection == style)
                     }
                 }
-                Text("Automatic follows your Mac’s light or dark appearance.")
+                Text("Each design includes light and dark artwork.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Changes apply while OpenClaw is running.")
+                Text(
+                    "Paper uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -24,34 +26,43 @@ struct AppIconPicker: View {
         }
     }
 
-    private func choice(_ style: AppIconStyle) -> some View {
-        let selected = self.selection == style
-        let artwork = style == .automatic ? (self.colorScheme == .dark ? AppIconStyle.ink : .paper) : style
-        return Button {
+    private func choice(_ style: AppIconStyle, selected: Bool) -> some View {
+        Button {
             self.selection = style
         } label: {
-            VStack(spacing: 5) {
-                if let image = AppIconArtwork.image(for: artwork) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 56, height: 56)
+            VStack(spacing: 10) {
+                HStack(spacing: 14) {
+                    ForEach(AppIconAppearance.allCases, id: \.self) { appearance in
+                        VStack(spacing: 3) {
+                            if let image = AppIconArtwork.image(for: style, appearance: appearance) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 64, height: 64)
+                            }
+                            Text(appearance.title)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                Text(style.title)
-                    .font(.caption.weight(selected ? .semibold : .regular))
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(0.5))
-                    .font(.caption)
+                HStack(spacing: 6) {
+                    Text(style.title)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(0.5))
+                        .font(.caption)
+                }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .background(
                 selected ? Color.accentColor.opacity(0.1) : .clear,
                 in: RoundedRectangle(cornerRadius: 10))
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .disabled(AppIconArtwork.image(for: artwork) == nil)
+        .disabled(AppIconAppearance.allCases.contains { AppIconArtwork.image(for: style, appearance: $0) == nil })
         .accessibilityLabel(style.title)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
