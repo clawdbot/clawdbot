@@ -407,6 +407,7 @@ export async function finalizeCodexAttempt(
     hookRunner,
   });
   await runCodexAgentEndHook(params, {
+    skillExperienceReviewSource: terminalAnchor,
     event: {
       messages: result.messagesSnapshot,
       success: !finalAborted && !finalPromptError,

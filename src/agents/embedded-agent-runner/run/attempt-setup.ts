@@ -46,6 +46,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -500,7 +501,13 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
-  if (params.attempt.operation === "settled-tool-finalization") {
+  const executionAllow = params.attempt.toolExecutionAllow;
+  // Retained schemas are not execution permission. An unreadable skill catalog
+  // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  if (
+    params.attempt.operation === "settled-tool-finalization" ||
+    (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
+  ) {
     return {
       restoreSkillEnv: () => {},
       skillUsagePaths: undefined,

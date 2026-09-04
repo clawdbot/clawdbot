@@ -451,6 +451,9 @@ describe("embedded attempt phase lifecycle state", () => {
         }),
       );
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+        sessionManager.getSessionTarget(),
+      );
       expect(afterTurn).not.toHaveBeenCalled();
       expect(maintain).not.toHaveBeenCalled();
     },
@@ -467,7 +470,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
@@ -515,7 +518,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
@@ -567,7 +570,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
@@ -613,7 +616,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,

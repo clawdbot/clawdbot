@@ -22,7 +22,8 @@ import {
 } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
-import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
+import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
+import { runSkillExperienceReview } from "./experience-review.js";
 import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
@@ -34,8 +35,11 @@ const LIVE =
   Boolean(process.env.OPENAI_API_KEY?.trim());
 const describeLive = LIVE ? describe : describe.skip;
 const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
-const { positiveMessages, negativeMessages, interruptedMessages } =
-  createExperienceReviewMessages(modelId);
+const {
+  learnableMessages: positiveMessages,
+  negativeMessages,
+  interruptedMessages,
+} = createExperienceReviewMessages(modelId);
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir = "";
@@ -194,18 +198,19 @@ describeLive("skill experience review live OpenAI eval", () => {
     });
   }, 600_000);
 
-  it("completes real reviews with proposal receipts or explicit abstention", async () => {
-    for (const [name, build, turnAborted] of [
-      ["positive", positiveMessages, false],
-      ["negative", negativeMessages, false],
-      ["interrupted", interruptedMessages, true],
-    ] as const) {
+  it.each([
+    ["positive", positiveMessages, false],
+    ["negative", negativeMessages, false],
+    ["interrupted", interruptedMessages, true],
+  ] as const)(
+    "completes %s reviews with proposal receipts or explicit abstention",
+    async (name, build, turnAborted) => {
       const runId = `live-${name}`;
       const messages = build();
       const reviewCandidate = await candidate(runId, messages, { turnAborted });
       const before = await listSkillProposals({ config: reviewCandidate.config, agentId: "main" });
       const startedAt = Date.now();
-      const observation = await observeExperienceReview(() =>
+      const observation = await observeExperienceReview(reviewCandidate.sessionManager, () =>
         runSkillExperienceReview(reviewCandidate, {
           getCurrentConfig: () => reviewCandidate.config,
         }),
@@ -237,10 +242,14 @@ describeLive("skill experience review live OpenAI eval", () => {
       if (name === "negative") {
         expect(decision).toBe("abstained");
       }
+      if (name === "positive") {
+        expect(decision).toBe("proposed");
+      }
       console.log(
         "WORKSHOP_LIVE_DECISION",
         JSON.stringify({ case: name, decision, mutationCount: progress.mutationCount }),
       );
-    }
-  }, 300_000);
+    },
+    300_000,
+  );
 });

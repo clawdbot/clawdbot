@@ -34,13 +34,16 @@ function renderExistingSkillsSection(
   existingSkills: ExperienceReviewPromptCandidate["existingSkills"],
 ): string[] {
   if (!existingSkills?.length) {
-    return ["", "Writable skills: none."];
+    return [
+      "",
+      "Existing Workshop-generated skills: none. Create one only if the turn taught a durable procedure.",
+    ];
   }
   const shown = existingSkills.slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
   const omitted = existingSkills.length - shown.length;
   return [
     "",
-    "Writable skills:",
+    "Existing Workshop-generated skills:",
     ...shown.map((skill) =>
       truncateUtf16Safe(
         `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""}`,

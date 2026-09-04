@@ -1,4 +1,3 @@
-// Verifies agent-end side effects keep plugin hooks independent from experience review.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
@@ -20,6 +19,12 @@ vi.mock("./lifecycle-hook-helpers.js", () => ({
 const mockExperienceReview = vi.mocked(scheduleSkillExperienceReview);
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);
+const skillExperienceReviewSource = {
+  agentId: "main",
+  sessionId: "session-1",
+  sessionKey: "agent:main:main",
+  storePath: "/session-store",
+};
 
 describe("agent end side effects", () => {
   beforeEach(() => {
@@ -28,7 +33,7 @@ describe("agent end side effects", () => {
     mockRunAgentEndHook.mockReset();
   });
 
-  it("fires plugin agent_end hooks alongside experience review scheduling", async () => {
+  it("schedules experience review synchronously alongside plugin agent_end hooks", () => {
     recordRunSkillUsage({
       runId: "run-1",
       name: "release-runbook",
@@ -36,6 +41,7 @@ describe("agent end side effects", () => {
       activation: "read",
     });
     runAgentEndSideEffects({
+      skillExperienceReviewSource,
       event: {
         messages: [],
         success: true,
@@ -65,10 +71,14 @@ describe("agent end side effects", () => {
     });
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(mockExperienceReview).toHaveBeenCalledTimes(1));
+    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
     expect(mockExperienceReview).toHaveBeenCalledWith(
       expect.objectContaining({
         usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        source: {
+          target: skillExperienceReviewSource,
+          captureContext: expect.any(Function),
+        },
       }),
     );
   });
@@ -79,6 +89,7 @@ describe("agent end side effects", () => {
     });
 
     await awaitAgentEndSideEffects({
+      skillExperienceReviewSource,
       event: {
         messages: [],
         success: true,

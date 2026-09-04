@@ -224,10 +224,10 @@ describe("skill_workshop tool", () => {
       throw new Error("expected lazy skill_workshop description");
     }
 
-    expect(schema).toContain("create = new skill");
     expect(schema).toContain("patch = targeted");
     expect(schema).toContain("read = existing live skill");
-    expect(schema).toContain("update = full-body rewrite");
+    expect(schema).toContain("create = stage a pending proposal");
+    expect(schema).toContain("update = stage a full-body rewrite");
     expect(schema).toContain("revise = existing pending proposal");
     expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
@@ -302,8 +302,8 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("final skill body");
     expect(schema).toContain("not a plan");
     expect(schema).toContain("change description");
-    expect(schema).toContain("preserve all existing content");
-    expect(proposalOnlySchema).toContain("preserve all existing content");
+    expect(schema).toContain("preserve unrelated existing content");
+    expect(proposalOnlySchema).toContain("preserve unrelated existing content");
     expect(schema).toContain("Proposal frontmatter is added automatically");
   });
 

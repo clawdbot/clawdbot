@@ -18,5 +18,5 @@ export function buildSkillWorkshopToolDescription(params: {
       : params.autonomousMode === "propose"
         ? "A foreground patch to a skill used in this run stays pending for review."
         : "A foreground patch to a skill used in this run is scanned and applied immediately.";
-  return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Create and update reusable-procedure skills only in your agent's Workshop directory. Read, prepare an exact bounded patch, patch, revise, inspect, evaluate, and apply Workshop proposals. The operator edits all other skills directly. Restore the backup retained by the last collection cleanup when the user asks to undo it. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Stage pending proposals to create or update reusable-procedure skills in your agent's Workshop directory. Create and update do not publish or activate skills; a later apply step makes the proposal active. Read, prepare an exact bounded patch, patch, revise, inspect, evaluate, and apply Workshop proposals. The operator edits all other skills directly. Restore the backup retained by the last collection cleanup when the user asks to undo it. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }

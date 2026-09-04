@@ -6,16 +6,19 @@ import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js"
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import * as runSessionTarget from "../../agents/run-session-target.js";
+import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
+import {
+  createSessionEntryWithTranscript,
+  deleteSessionEntryLifecycle,
+} from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as agentRunRegistry from "../../infra/agent-run-registry.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
-  getGatewayRestartDrainSignal,
   isGatewaySubordinateWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -25,10 +28,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import * as autonomousApply from "./autonomous-apply.js";
 import { readSkillReviewOutcomes } from "./collection-review-state.js";
-import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
+import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
+import { runSkillExperienceReview as runCapturedExperienceReview } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
 import * as workshopService from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -36,21 +38,46 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-vi.mock("../../agents/run-session-target.js", () => ({
-  resolveAgentRunSessionTarget: vi.fn(
-    async (params: { agentId?: string; sessionId: string; sessionKey: string }) => ({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: "/tmp/session-store.json",
-    }),
-  ),
-}));
-vi.mock("../../agents/sessions/index.js", () => ({
-  SessionManager: {
-    openModelContextAsync: vi.fn(async () => ({})),
-  },
-}));
+type ExperienceReviewFixture = Omit<
+  ExperienceReviewCandidate,
+  "ctx" | "source" | "sessionManager"
+> & {
+  ctx: Omit<ExperienceReviewCandidate["ctx"], "agentId"> & { agentId?: string };
+};
+
+async function captureReviewFixture(
+  fixture: ExperienceReviewFixture,
+): Promise<ExperienceReviewCandidate> {
+  const agentId = fixture.ctx.foregroundPromptContext.agentId;
+  const source = await resolveAgentRunSessionTarget({
+    agentId,
+    config: fixture.config,
+    sessionId: fixture.ctx.sessionId,
+    sessionKey: fixture.ctx.sessionKey,
+    missingSessionKey: "create",
+  });
+  const created = await createSessionEntryWithTranscript(
+    source,
+    () => ({ ok: true, entry: { sessionId: source.sessionId, updatedAt: Date.now() } }),
+    { cwd: fixture.ctx.workspaceDir },
+  );
+  if (!created.ok) {
+    throw new Error(`Could not create review source: ${created.error}`);
+  }
+  return {
+    ...fixture,
+    ctx: { ...fixture.ctx, agentId },
+    source,
+    sessionManager: SessionManager.openModelContext(source, { cwd: fixture.ctx.workspaceDir }),
+  };
+}
+
+async function runSkillExperienceReview(
+  fixture: ExperienceReviewFixture,
+  deps: Parameters<typeof runCapturedExperienceReview>[1],
+): Promise<void> {
+  await runCapturedExperienceReview(await captureReviewFixture(fixture), deps);
+}
 
 function foregroundPromptContext(
   workspaceDir: string,
@@ -83,75 +110,6 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
-  it.each(["target resolution", "context acquisition"] as const)(
-    "rejects a review reset during %s before starting the model",
-    async (boundary) => {
-      const workspaceDir = await tempDirs.make("openclaw-experience-read-reset-");
-      const acquired = createDeferred();
-      const release = createDeferred();
-      const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
-      const restartSignal = getGatewayRestartDrainSignal();
-      const acquire = vi.spyOn(SessionManager, "openModelContextAsync");
-      if (boundary === "context acquisition") {
-        const implementation = acquire.getMockImplementation()!;
-        acquire.mockImplementationOnce(async (...args) => {
-          acquired.resolve();
-          await release.promise;
-          return implementation(...args);
-        });
-      } else {
-        const resolve = vi.mocked(runSessionTarget.resolveAgentRunSessionTarget);
-        const implementation = resolve.getMockImplementation()!;
-        resolve.mockImplementationOnce(async (...args) => {
-          acquired.resolve();
-          await release.promise;
-          return implementation(...args);
-        });
-      }
-      runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
-      const review = runSkillExperienceReview(
-        {
-          ctx: {
-            sessionId: "foreground-session",
-            sessionKey: "agent:main:read-reset",
-            workspaceDir,
-            modelProviderId: "openai",
-            modelId: "gpt-test",
-            foregroundPromptContext: foregroundPromptContext(workspaceDir),
-          },
-          config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-        },
-        { getCurrentConfig: () => ({}) },
-      );
-      const settled = review.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      try {
-        await Promise.race([acquired.promise, settled]);
-        resetGatewayWorkAdmission();
-        expect(restartSignal.aborted).toBe(true);
-        expect(getGatewayRestartDrainSignal().aborted).toBe(false);
-        if (boundary === "context acquisition") {
-          expect(acquire.mock.lastCall?.[1]?.signal).toBe(restartSignal);
-        }
-        release.resolve();
-        expect(await settled).toMatchObject({ message: "gateway runtime reset" });
-        expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
-        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
-          outcome: "failed",
-          error: expect.stringContaining("gateway runtime reset"),
-        });
-      } finally {
-        release.resolve();
-        await settled;
-        acquire.mockRestore();
-        registration.mockRestore();
-      }
-    },
-  );
-
   it.each(["model result", "configuration", "proposal inspection"] as const)(
     "leaves a proposal pending when reset during %s",
     async (boundary) => {
@@ -163,7 +121,7 @@ describe("experience review auto apply", () => {
         acquired.resolve();
         await release.promise;
       };
-      const apply = vi.spyOn(autonomousApply, "applyAutonomousSkillProposal");
+      const apply = vi.spyOn(workshopService, "applySkillProposal");
       const originalInspect = workshopService.inspectSkillProposal;
       const inspect = vi.spyOn(workshopService, "inspectSkillProposal");
       if (boundary === "proposal inspection") {
@@ -225,11 +183,11 @@ describe("experience review auto apply", () => {
         release.resolve();
         expect(await settled).toMatchObject({ message: "gateway runtime reset" });
         expect(apply).not.toHaveBeenCalled();
-        expect((await listSkillProposals({ workspaceDir })).proposals[0]).toMatchObject({
+        expect((await listSkillProposals({ config, agentId: "main" })).proposals[0]).toMatchObject({
           status: "pending",
         });
         await expect(
-          fs.stat(path.join(workspaceDir, "skills", "deployment-preflight", "SKILL.md")),
+          fs.stat(path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
           outcome: "failed",
@@ -244,35 +202,40 @@ describe("experience review auto apply", () => {
     },
   );
 
-  it("records acquisition failure and releases its registered review", async () => {
+  it("does not review a captured session after its source is deleted", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-read-failure-");
     const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
-    vi.spyOn(SessionManager, "openModelContextAsync").mockImplementationOnce(async () => {
-      throw new Error("synthetic acquisition failure");
+    const candidate = await captureReviewFixture({
+      ctx: {
+        sessionId: "foreground-session",
+        sessionKey: "agent:main:read-failure",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+        foregroundPromptContext: foregroundPromptContext(workspaceDir),
+      },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+    });
+    await deleteSessionEntryLifecycle({
+      agentId: candidate.source.agentId,
+      storePath: candidate.source.storePath,
+      archiveTranscript: true,
+      deleteTranscriptWithoutArchive: true,
+      target: {
+        canonicalKey: candidate.source.sessionKey,
+        storeKeys: [candidate.source.sessionKey],
+      },
     });
     try {
       await expect(
-        runSkillExperienceReview(
-          {
-            ctx: {
-              sessionId: "foreground-session",
-              sessionKey: "agent:main:read-failure",
-              workspaceDir,
-              modelProviderId: "openai",
-              modelId: "gpt-test",
-              foregroundPromptContext: foregroundPromptContext(workspaceDir),
-            },
-            config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-          },
-          { getCurrentConfig: () => ({}) },
-        ),
-      ).rejects.toThrow("synthetic acquisition failure");
+        runCapturedExperienceReview(candidate, { getCurrentConfig: () => ({}) }),
+      ).rejects.toThrow("source session was deleted or replaced");
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(registration).toHaveBeenCalledOnce();
       expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
       expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
-        error: "Error: synthetic acquisition failure",
+        error: "Error: Skill experience review source session was deleted or replaced.",
       });
     } finally {
       registration.mockRestore();
@@ -474,7 +437,7 @@ describe("experience review auto apply", () => {
         });
         return result;
       });
-      const candidate: ExperienceReviewCandidate = {
+      const candidate: ExperienceReviewFixture = {
         ctx: {
           agentId: "main",
           runId: "foreground-run",
@@ -641,7 +604,7 @@ describe("experience review auto apply", () => {
       });
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewCandidate = {
+    const candidate: ExperienceReviewFixture = {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
@@ -660,7 +623,7 @@ describe("experience review auto apply", () => {
 
     await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, () =>
       runSkillExperienceReview(candidate, {
-        getCurrentConfig: () => candidate.config ?? {},
+        getCurrentConfig: () => candidate.config,
       }),
     );
 
@@ -725,7 +688,7 @@ describe("experience review auto apply", () => {
       });
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewCandidate = {
+    const candidate: ExperienceReviewFixture = {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
@@ -740,7 +703,7 @@ describe("experience review auto apply", () => {
     };
 
     await runSkillExperienceReview(candidate, {
-      getCurrentConfig: () => candidate.config ?? {},
+      getCurrentConfig: () => candidate.config,
     });
 
     const manifest = await listSkillProposals({ config: candidate.config, agentId: "main" });
@@ -768,7 +731,7 @@ describe("experience review auto apply", () => {
       subordinateClosedInsideRun = isGatewaySubordinateWorkAdmissionClosed();
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewCandidate = {
+    const candidate: ExperienceReviewFixture = {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
@@ -790,7 +753,7 @@ describe("experience review auto apply", () => {
     await admission?.run(async () => {
       admission.release();
       await runSkillExperienceReview(candidate, {
-        getCurrentConfig: () => candidate.config ?? {},
+        getCurrentConfig: () => candidate.config,
       });
     });
 
@@ -818,7 +781,7 @@ describe("experience review auto apply", () => {
       });
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewCandidate = {
+    const candidate: ExperienceReviewFixture = {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
@@ -869,7 +832,7 @@ describe("experience review auto apply", () => {
       });
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewCandidate = {
+    const candidate: ExperienceReviewFixture = {
       ctx: {
         agentId: "main",
         runId: "foreground-run",
@@ -884,7 +847,7 @@ describe("experience review auto apply", () => {
     };
 
     await expect(
-      runSkillExperienceReview(candidate, { getCurrentConfig: () => candidate.config ?? {} }),
+      runSkillExperienceReview(candidate, { getCurrentConfig: () => candidate.config }),
     ).rejects.toThrow();
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);

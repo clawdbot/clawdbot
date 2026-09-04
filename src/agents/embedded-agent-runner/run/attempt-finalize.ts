@@ -371,6 +371,7 @@ export async function completeEmbeddedAttemptAfterTurn(
         ? formatErrorMessage(state.promptError)
         : undefined;
     runAgentEndSideEffects({
+      skillExperienceReviewSource: sessionManager.getSessionTarget(),
       event: {
         messages: projectNestedToolActivityForHooks(
           state.messagesSnapshot,

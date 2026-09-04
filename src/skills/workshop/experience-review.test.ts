@@ -5,6 +5,7 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   createNestedToolActivity,
   projectNestedToolActivityForHooks,
@@ -12,9 +13,10 @@ import {
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
-  prepareSkillExperienceReviewCandidate,
+  type ExperienceReviewCandidate,
   type SkillExperienceReviewParams,
-} from "./experience-review.js";
+} from "./experience-review-scheduler.js";
+import { prepareSkillExperienceReviewCandidate } from "./experience-review.js";
 
 function completedRun(
   options: {
@@ -65,6 +67,33 @@ function completedRun(
       },
     },
     config: { skills: { workshop: { autonomous: { mode: options.mode ?? "propose" } } } },
+    source: {
+      target: {
+        agentId: options.agentId ?? "main",
+        sessionId: "session-1",
+        sessionKey: options.sessionKey ?? "agent:main:main",
+        storePath: "/session-store",
+      },
+      captureContext: () => SessionManager.inMemory("/workspace"),
+    },
+  };
+}
+
+function captureCandidate(params: SkillExperienceReviewParams): ExperienceReviewCandidate {
+  const source = params.source!;
+  return {
+    ctx: {
+      ...params.ctx,
+      agentId: params.ctx.foregroundPromptContext.agentId,
+      sessionId: source.target.sessionId,
+      sessionKey: source.target.sessionKey,
+      workspaceDir: params.ctx.workspaceDir!,
+      modelProviderId: params.ctx.modelProviderId!,
+      modelId: params.ctx.modelId!,
+    },
+    config: params.config,
+    source: source.target,
+    sessionManager: source.captureContext(params.ctx.workspaceDir!),
   };
 }
 
@@ -247,26 +276,20 @@ describe("skill experience review scheduler", () => {
     groupParams.ctx.foregroundPromptContext.messageProvider = "whatsapp";
     groupParams.ctx.foregroundPromptContext.groupId = "safe-room";
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: groupParams.ctx, config: groupParams.config },
-        {
-          skills: { workshop: { autonomous: { mode: "propose" } } },
-          channels: {
-            whatsapp: { groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } } },
-          },
+      prepareSkillExperienceReviewCandidate(captureCandidate(groupParams), {
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+        channels: {
+          whatsapp: { groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } } },
         },
-      ),
+      }),
     ).resolves.toBeUndefined();
 
     const mainParams = completedRun();
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: mainParams.ctx, config: mainParams.config },
-        {
-          skills: { workshop: { autonomous: { mode: "propose" } } },
-          agents: { defaults: { sandbox: { mode: "non-main" } } },
-        },
-      ),
+      prepareSkillExperienceReviewCandidate(captureCandidate(mainParams), {
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      }),
     ).resolves.toBeDefined();
   });
 
@@ -533,7 +556,7 @@ describe("skill experience review prompt", () => {
     expect(prompt).toContain("Reading and preparing do not spend the mutation");
     expect(prompt).toContain("reads and updates only skills generated in the Workshop directory");
     expect(prompt).toContain("only when no Workshop-generated skill covers this class of work");
-    expect(prompt).toContain("Writable skills:");
+    expect(prompt).toContain("Existing Workshop-generated skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
     expect(prompt).toContain("- local-notes — Local workflow");
     expect(prompt).not.toContain("Trajectory:");
@@ -542,10 +565,12 @@ describe("skill experience review prompt", () => {
       ctx: { runId: "run-1" },
       existingSkills: [],
     });
-    expect(emptyWorkspacePrompt).toContain("Writable skills: none.");
+    expect(emptyWorkspacePrompt).toContain(
+      "Existing Workshop-generated skills: none. Create one only if the turn taught a durable procedure.",
+    );
   });
 
-  it("caps used and writable skill lists", () => {
+  it("caps used and existing skill lists", () => {
     const skills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
       source: "workspace" as const,
@@ -574,7 +599,7 @@ describe("skill experience review prompt", () => {
     expect(prompt).toBe(build(usedSkills));
     const receipt = prompt.slice(
       prompt.indexOf("Skills actually used in this trajectory"),
-      prompt.indexOf("\n\nWritable skills:"),
+      prompt.indexOf("\n\nExisting Workshop-generated skills:"),
     );
     expect(receipt).toContain(
       "Skills actually used in this trajectory (authoritative runtime receipt):",
@@ -619,19 +644,16 @@ describe("skill experience review preparation", () => {
     const params = completedRun({ sessionKey: "global" });
     params.ctx.agentId = agentId;
     params.ctx.foregroundPromptContext.agentId = agentId;
-    const result = await prepareSkillExperienceReviewCandidate(
-      { ctx: params.ctx, config: params.config },
-      {
-        session: { scope: "global" },
-        agents: {
-          entries: {
-            direct: { sandbox: { mode: "off" } },
-            isolated: { sandbox: { mode: "all" } },
-          },
+    const result = await prepareSkillExperienceReviewCandidate(captureCandidate(params), {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          direct: { sandbox: { mode: "off" } },
+          isolated: { sandbox: { mode: "all" } },
         },
-        skills: { workshop: { autonomous: { mode: "propose" } } },
       },
-    );
+      skills: { workshop: { autonomous: { mode: "propose" } } },
+    });
 
     expect(result !== undefined).toBe(eligible);
   });
@@ -639,10 +661,7 @@ describe("skill experience review preparation", () => {
   it("keeps an eligible foreground candidate", async () => {
     const params = completedRun();
     await expect(
-      prepareSkillExperienceReviewCandidate(
-        { ctx: params.ctx, config: params.config },
-        params.config ?? {},
-      ),
+      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
     ).resolves.toBeDefined();
   });
 });
