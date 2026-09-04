@@ -192,7 +192,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
             status: "processing",
             // Initialize new sessions with core's derived label; later title changes use rename.
             title: prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel,
-            route: { ...route, sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey },
             eventScope: prepared.eventScope,
           });
         }
