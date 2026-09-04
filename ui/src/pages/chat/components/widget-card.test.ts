@@ -35,9 +35,8 @@ describe("widget-card", () => {
       kind: "canvas",
       surface: "assistant_message",
       render: "url",
-      viewId: "cv_surface_lease_one",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
-      sandbox: "strict",
+      sandbox: "scripts",
     } as const;
     const host = document.createElement("div");
     document.body.append(host);
@@ -90,7 +89,6 @@ describe("widget-card", () => {
         kind: "canvas",
         surface: "assistant_message",
         render: "url",
-        viewId: "cv_initial_rotation",
         url: "/__openclaw__/canvas/documents/cv_initial_rotation/index.html",
         sandbox: "scripts",
       } as const;
@@ -131,9 +129,8 @@ describe("widget-card", () => {
           kind: "canvas",
           surface: "assistant_message",
           render: "url",
-          viewId: "cv_tall_widget",
           url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
-          sandbox: "strict",
+          sandbox: "scripts",
         } as const,
         "chat_message",
         { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
@@ -158,9 +155,8 @@ describe("widget-card", () => {
       kind: "canvas",
       surface: "assistant_message",
       render: "url",
-      viewId: "cv_surface_lease_height",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
-      sandbox: "strict",
+      sandbox: "scripts",
     } as const;
     const host = document.createElement("div");
     document.body.append(host);

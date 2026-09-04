@@ -140,6 +140,7 @@ describe("listGatewayMethods", () => {
     "transcripts.list",
     "transcripts.get",
     "models.authOrderSet",
+    "canvas.document.view",
   ];
 
   it("advertises plugin surface refresh for capability rotation", () => {

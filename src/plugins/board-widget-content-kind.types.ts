@@ -12,6 +12,7 @@ export type PluginBoardWidgetContentKind = {
      * Public static renderer bytes served without Gateway credentials.
      * Declaring this reader reserves every path globally across content kinds,
      * including registrations without a public reader.
+     * Public paths must be canonical URL pathnames and cannot use `/mcp-app-sandbox`.
      */
     readPublicResource?: (
       path: string,

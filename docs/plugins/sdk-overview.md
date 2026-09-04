@@ -461,7 +461,11 @@ secrets. Unregistered paths and registrations without this callback stay private
 Opting in reserves every declared path in one global sandbox namespace: no other
 content kind may declare the same path, even without a public reader. Registration
 rejects these collisions regardless of order; only private registrations may
-share paths.
+share paths. Public paths must already be canonical URL pathnames, without dot
+segments, backslashes, query strings, or fragments. The sandbox host endpoint
+`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
+registrations with `readPublicResource`; private paths retain their capability
+URL encoding.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway

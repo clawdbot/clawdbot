@@ -1,3 +1,4 @@
+import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import { PluginDashboardDeclarationError } from "./dashboard-capabilities.js";
 import type {
@@ -18,6 +19,15 @@ function fail(pluginId: string, message: string): never {
 
 function isGatewayLocalPath(value: string): boolean {
   return value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\");
+}
+
+function isCanonicalPublicResourcePath(value: string): boolean {
+  try {
+    // Public readers match URL pathnames, and the proxy owns its route before reader dispatch.
+    return value !== SANDBOX_HOST_PATH && new URL(value, "http://localhost").pathname === value;
+  } catch {
+    return false;
+  }
 }
 
 /** Validates and publishes one runtime board-widget content kind. */
@@ -64,6 +74,12 @@ function registerPluginBoardWidgetContentKind(params: {
   const publicReader = definition.resources.readPublicResource;
   if (publicReader !== undefined && typeof publicReader !== "function") {
     fail(record.id, "readPublicResource must be a function");
+  }
+  if (publicReader && paths.some((resourcePath) => !isCanonicalPublicResourcePath(resourcePath))) {
+    fail(
+      record.id,
+      `public resource paths must be canonical URL pathnames and cannot use ${SANDBOX_HOST_PATH}`,
+    );
   }
   for (const registered of registry.boardWidgetContentKinds.values()) {
     const existing = registered.definition.resources;

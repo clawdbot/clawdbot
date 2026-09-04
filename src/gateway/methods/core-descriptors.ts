@@ -131,7 +131,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tools.effective", "tools-effective", "operator.read", "<=2026.7", { startup: true }],
   ["tools.invoke", "tools-invoke", "operator.write", "<=2026.7"],
   ["mcp.app.view", "mcp-app", "operator.read", "<=2026.7"],
-  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
   ["mcp.app.listTools", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listResources", "mcp-app", "operator.read", "<=2026.7"],
   ["mcp.app.listResourceTemplates", "mcp-app", "operator.read", "<=2026.7"],
@@ -635,6 +634,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
