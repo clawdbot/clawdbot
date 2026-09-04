@@ -589,6 +589,38 @@ describe("secrets tool", () => {
     await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
   });
 
+  it("releases an expired subscriber reservation before a later request", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const sessionKey = "agent:main:secret-expired-reservation";
+      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+      const normalized = normalizeSecretsRequestParams(args);
+      const reservation = reserveAskUserPromptDelivery({
+        toolCallId: "call-secret-expired-reservation",
+        sessionKey,
+        questions: normalized.questions,
+        timeoutSeconds: 1,
+      });
+      if (!reservation) {
+        throw new Error("expected secret prompt reservation");
+      }
+      vi.setSystemTime(Date.now() + 1_000);
+      const gateway = gatewayStub(async () => {
+        throw new Error("expired reservations must not reach the Gateway");
+      });
+
+      const result = await createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
+        "call-secret-expired-reservation",
+        args,
+      );
+
+      expect(result).toMatchObject({ details: { status: "no_answer" } });
+      expect(gateway.mock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes its own credential prompt when no harness reserved one", async () => {
     // A harness that dispatches tools directly reserves nothing, so the credential
     // request would register and then wait behind a link the operator never sees.

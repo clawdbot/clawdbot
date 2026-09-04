@@ -291,6 +291,9 @@ export function createSecretsTool(params: {
             }
           : {}),
       });
+      if (!delivery) {
+        return noSecretAnswerResult("expired");
+      }
       const timeoutMs = request.timeoutSeconds * 1_000;
       let registered = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({

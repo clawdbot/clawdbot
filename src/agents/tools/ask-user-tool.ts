@@ -235,6 +235,12 @@ export async function waitForAskUserPromptReady(
     return undefined;
   }
   while (askUserQuestions.get(questionId) === state) {
+    if (Date.now() >= state.expiresAtMs) {
+      if (askUserQuestions.get(questionId) === state) {
+        releaseAskUserQuestion(questionId);
+      }
+      return undefined;
+    }
     if (
       state.phase.kind === "prompting" ||
       state.phase.kind === "answerable" ||
@@ -244,7 +250,32 @@ export async function waitForAskUserPromptReady(
       return state.questions;
     }
     try {
-      const status = await readAskUserQuestionStatus(questionId, gatewayCall);
+      const read = await readAskUserQuestionStatusBeforeExpiry(
+        questionId,
+        state.expiresAtMs,
+        gatewayCall,
+      );
+      if (read.kind === "expired") {
+        // A tool execution may renew this state while the bounded read is in flight.
+        // Recheck the current deadline before releasing a still-valid prompt slot.
+        if (Date.now() >= state.expiresAtMs) {
+          if (askUserQuestions.get(questionId) === state) {
+            releaseAskUserQuestion(questionId);
+          }
+          return undefined;
+        }
+        continue;
+      }
+      if (askUserQuestions.get(questionId) !== state) {
+        return undefined;
+      }
+      if (Date.now() >= state.expiresAtMs) {
+        if (askUserQuestions.get(questionId) === state) {
+          releaseAskUserQuestion(questionId);
+        }
+        return undefined;
+      }
+      const status = read.kind === "status" ? read.status : undefined;
       if (status === "pending") {
         // The executor may live in another JS realm or process. The Gateway record
         // is the cross-runtime readiness boundary when local state cannot signal.
@@ -257,8 +288,16 @@ export async function waitForAskUserPromptReady(
       // Registration and local Gateway credentials may still be coming online.
       // Local state can win on the next pass; isolated runtimes retry the record.
     }
+    const remainingMs = state.expiresAtMs - Date.now();
+    if (remainingMs <= 0) {
+      if (askUserQuestions.get(questionId) === state) {
+        releaseAskUserQuestion(questionId);
+      }
+      return undefined;
+    }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      const timer = setTimeout(resolve, Math.min(50, remainingMs));
+      timer.unref?.();
     });
   }
   return undefined;
@@ -314,6 +353,7 @@ async function readAskUserQuestionStatusBeforeExpiry(
       resolve(result);
     };
     const expiryTimer = setTimeout(() => finish({ kind: "expired" }), remainingMs);
+    expiryTimer.unref?.();
     void readAskUserQuestionStatus(questionId, gatewayCall).then(
       (status) => finish({ kind: "status", status }),
       () => finish({ kind: "error" }),
@@ -471,6 +511,10 @@ export function beginAskUserPromptDelivery(params: {
   );
   const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
   const reserved = askUserQuestions.get(questionId);
+  if (reserved && Date.now() >= reserved.expiresAtMs) {
+    releaseAskUserQuestion(questionId);
+    return undefined;
+  }
   const existing = findAskUserQuestionForSession(sessionKey);
   if ((reserved && reserved.phase.kind !== "reserved") || (existing && existing !== reserved)) {
     throw new ToolInputError(
@@ -569,6 +613,10 @@ export function createAskUserTool(params: {
           "ask_user already has a pending question for this session; wait for it to resolve before asking another",
         );
       }
+      if (reserved && Date.now() >= reserved.expiresAtMs) {
+        releaseAskUserQuestion(questionId);
+        return noAnswerResult("expired");
+      }
 
       const timeoutMs = normalized.timeoutSeconds * 1_000;
       // A harness that runs tools through the embedded tool lifecycle reserves the
@@ -666,6 +714,12 @@ export function createAskUserTool(params: {
           return answered
             ? answeredResult(normalized.questions, answered.answers)
             : noAnswerResult("cancelled");
+        }
+        if (Date.now() >= state.expiresAtMs) {
+          const answered = await cancelPendingQuestion("wait-timeout");
+          return answered
+            ? answeredResult(normalized.questions, answered.answers)
+            : noAnswerResult("expired");
         }
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
         if (signal?.aborted) {
