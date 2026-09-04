@@ -19,7 +19,7 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { recordEmbeddedToolReceipt, snapshotEmbeddedToolReceipt } from "./tool-send-receipts.js";
+import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -68,10 +68,14 @@ function buildAgentToolResultMiddlewareFactory(
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const receipt = snapshotEmbeddedToolReceipt(current.details, event.toolName === "message");
-      if (eventToolCallId && receipt) {
+      if (eventToolCallId) {
         // Delivery evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolReceipt(sessionManager, eventToolCallId, receipt);
+        recordEmbeddedToolReceipt(
+          sessionManager,
+          eventToolCallId,
+          current.details,
+          event.toolName === "message",
+        );
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId

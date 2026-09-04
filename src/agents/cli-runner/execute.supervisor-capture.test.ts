@@ -2633,9 +2633,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it.each([0, 1])(
-    "retains final source delivery without a target through CLI exit %s",
-    async (exitCode) => {
+  it.each(
+    ["send", "reply", "thread-reply", "poll"].flatMap((action) =>
+      [0, 1].map((exitCode) => ({ action, exitCode })),
+    ),
+  )(
+    "retains source $action delivery and suppresses assistant output through CLI exit $exitCode",
+    async ({ action, exitCode }) => {
       const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
       context.mcpDeliveryCapture = true;
       context.params.sourceReplyDeliveryMode = "message_tool_only";
@@ -2645,11 +2649,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
         recordMcpLoopbackToolCallResult({
           captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
           toolName: "message",
-          args: { action: "send", message: "implicit source reply" },
+          args: { action, channel: TEST_MESSAGE_CHANNEL, message: "implicit source reply" },
           result: {
             content: [{ type: "text", text: "sent" }],
             details: {
-              sourceReplyRoute: "current-source",
               messageDelivery: {
                 status: "settled",
                 partialDelivery: false,
@@ -2707,6 +2710,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       }
       expect(result.sourceReplyDelivered).toBe(true);
       expect(result.messagingToolSentTargets).toBeUndefined();
+      expect(result.payloads).toBeUndefined();
     },
   );
 
