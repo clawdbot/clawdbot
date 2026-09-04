@@ -212,6 +212,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     } = {},
   ) {
     super(store, stores);
+    // SAFETY: retention decoration is optional and identified by its unique reconciliation method.
     const retentionStore = store as Partial<WorkboardArtifactRetentionStore>;
     if (typeof retentionStore.reconcileArtifactRetention === "function") {
       this.reconcileArtifactRetentionStore =

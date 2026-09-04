@@ -269,5 +269,5 @@ export function withWorkboardArtifactRetention(
     async listBoardAggregates() {
       return await cardStore.listBoardAggregates();
     },
-  } as WorkboardArtifactRetentionStore & WorkboardCardStore;
+  } as WorkboardArtifactRetentionStore & WorkboardCardStore; // SAFETY: isWorkboardCardStore proves every spread card-store method exists.
 }
