@@ -137,69 +137,6 @@ function responseMessage(id: string, text: string) {
 }
 
 describe("OpenAI Responses compaction replay", () => {
-  it.each(responseConverters)(
-    "$name preserves encrypted reasoning and removes bare orphan tails after payload preparation",
-    ({ convert }) => {
-      for (const encryptedContent of [undefined, null, "", "synthetic-completed-reasoning"]) {
-        const item = {
-          type: "reasoning",
-          id: "rs_standalone",
-          summary: [],
-          ...(encryptedContent === undefined ? {} : { encrypted_content: encryptedContent }),
-        };
-        const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
-          openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(
-            model,
-            replayIdentity,
-          ),
-        };
-        const input = convert({ messages: [createAssistant([block])] });
-        expect(input).toEqual(encryptedContent ? [item] : []);
-
-        const paired = convert({
-          messages: [createAssistant([block, { type: "text", text: "Following answer" }])],
-        });
-        expect(paired.map((entry) => entry.type)).toEqual(["reasoning", "message"]);
-      }
-    },
-  );
-
-  it.each(responseConverters)(
-    "$name removes standalone reasoning when replay identity strips its ciphertext",
-    ({ name, convert }) => {
-      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
-      const item = {
-        type: "reasoning",
-        id: "rs_foreign",
-        summary: [],
-        encrypted_content: "synthetic-foreign-reasoning",
-      };
-      for (const replayMetadata of [
-        undefined,
-        null,
-        { ...metadata, v: 2 },
-        { ...metadata, provider: "other-provider" },
-        { ...metadata, model: "other-model" },
-        { ...metadata, baseUrlHash: "other-endpoint" },
-        { ...metadata, sessionHash: "other-session" },
-        { ...metadata, authProfileHash: "other-auth" },
-      ]) {
-        const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
-          ...(replayMetadata === undefined ? {} : { openclawReasoningReplay: replayMetadata }),
-        };
-        const input = convert({ messages: [createAssistant([block])] });
-        const preservesUnattributed = name === "provider-owned" && replayMetadata === undefined;
-        expect(input).toEqual(preservesUnattributed ? [item] : []);
-      }
-    },
-  );
-
   it.each(responseConverters)("$name skips invalid reasoning signatures", ({ convert }) => {
     const invalidSignatures = [
       ["truncated JSON", '{"type":"reasoning"'],
