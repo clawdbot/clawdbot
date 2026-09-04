@@ -1409,7 +1409,7 @@ describe("subagent registry seam flow", () => {
           endedAt,
           endedReason: SUBAGENT_ENDED_REASON_KILLED,
           outcome: { status: "error", error: "replaced after steer" },
-          completion: { required: false },
+          completion: { required: false, resultText: null, capturedAt: endedAt },
           cleanupCompletedAt: endedAt,
         });
         restored.suppressAnnounceReason = "steer-restart";
