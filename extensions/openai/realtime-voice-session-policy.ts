@@ -31,9 +31,9 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readRealtimeErrorDetail,
+  resolveOpenAIChatGptSubscriptionAuth,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
 import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];

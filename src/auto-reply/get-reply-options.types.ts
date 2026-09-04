@@ -189,8 +189,6 @@ export type GetReplyOptions = {
   fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
-  /** If true, suppress tool error warning payloads for this run. */
-  suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
@@ -199,6 +197,12 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /**
+   * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
+   * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
+   * still pass it keep compiling; removed in the first stable release after 2026.10.
+   */
+  suppressToolErrorWarnings?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.

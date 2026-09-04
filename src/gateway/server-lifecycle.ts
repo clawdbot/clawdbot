@@ -258,10 +258,10 @@ export async function prepareGatewayLifecycle(params: {
     },
     setScheduledServiceHandles: (handles: {
       heartbeatRunner: typeof runtimeState.heartbeatRunner;
-      stopOutboundDeliveryRecovery: typeof runtimeState.stopOutboundDeliveryRecovery;
+      stopDeliveryRecovery: typeof runtimeState.stopDeliveryRecovery;
     }) => {
       runtimeState.heartbeatRunner = handles.heartbeatRunner;
-      runtimeState.stopOutboundDeliveryRecovery = handles.stopOutboundDeliveryRecovery;
+      runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
     setPostAttachHandles: (
       handles: {
@@ -370,10 +370,10 @@ export async function prepareGatewayLifecycle(params: {
     clearTimeout(postReadyState.maintenanceTimer);
     postReadyState.maintenanceTimer = null;
   };
-  let outboundDeliveryRecoveryStopPromise: Promise<void> | null = null;
-  const stopOutboundDeliveryRecoveryForClose = () => {
-    outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
-    return outboundDeliveryRecoveryStopPromise;
+  let deliveryRecoveryStopPromise: Promise<void> | null = null;
+  const stopDeliveryRecoveryForClose = () => {
+    deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery();
+    return deliveryRecoveryStopPromise;
   };
   let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
   const stopMediaCleanupForClose = () => {
@@ -390,7 +390,7 @@ export async function prepareGatewayLifecycle(params: {
     gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
-    void stopOutboundDeliveryRecoveryForClose();
+    void stopDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
     void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     runtimeState.controlUiSessionPullRequests?.stop();
@@ -413,7 +413,7 @@ export async function prepareGatewayLifecycle(params: {
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
-      stopOutboundDeliveryRecoveryForClose(),
+      stopDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
       runtimeState.stopGatewayUpdateCheck(),
       stopConfigReloaderForClose().catch(() => {}),
