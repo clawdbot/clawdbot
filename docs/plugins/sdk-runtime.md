@@ -803,6 +803,18 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       startedAt: Date.now(),
     });
 
+    // To start (rather than merely register) a controller-owned ACP child,
+    // use the narrowly scoped managed-flow API. The reservation id is stable
+    // across acknowledgement recovery and is the child run idempotency key.
+    const spawned = await taskFlow.spawnAcpChild({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      reservationId: "a".repeat(64),
+      agentId: "reviewer",
+      label: "review-batch:1",
+      task: "Review the assigned change.",
+    });
+
     const waiting = taskFlow.setWaiting({
       flowId: created.flowId,
       expectedRevision: created.revision,
@@ -810,6 +822,11 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       waitJson: { kind: "reply", channel: "telegram" },
     });
     ```
+
+    `spawnAcpChild(...)` is limited to a managed flow owned by the bound
+    session. It accepts no model, provider, workspace, shell command, resume
+    session, or arbitrary Gateway request. ACP policy and configured-agent
+    allowlists remain enforced by the core runtime.
 
     Use `bindSession({ sessionKey, requesterOrigin })` when you already have a trusted OpenClaw session key from your own binding layer. Do not bind from raw user input.
 
