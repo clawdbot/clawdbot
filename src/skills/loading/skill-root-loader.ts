@@ -28,7 +28,7 @@ export type LoadedSkillRecord = LoadedLocalSkill & {
   syncDirName?: string;
 };
 
-function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
     source,
     filePath: diagnostic.path,

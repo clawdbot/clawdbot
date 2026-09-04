@@ -786,6 +786,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
+      agentId: resolved.agentId,
       skillName: p.name,
       installId: p.installId,
       timeoutMs: p.timeoutMs,
