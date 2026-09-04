@@ -251,6 +251,17 @@ function isViteDevPage(): boolean {
   return Boolean(document.querySelector('script[src*="/@vite/client"]'));
 }
 
+function isLocalViteDevPage(): boolean {
+  const hostname = location.hostname;
+  return (
+    isViteDevPage() &&
+    (hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]")
+  );
+}
+
 function formatHostWithPort(hostname: string, port: string): string {
   // location.hostname already carries brackets for IPv6 literals; wrapping
   // again would produce an undialable ws://[[::1]]:port default.
@@ -263,7 +274,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
   const pageUrl = `${proto}://${location.host}${basePath}`;
-  if (!isViteDevPage()) {
+  if (!isLocalViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;

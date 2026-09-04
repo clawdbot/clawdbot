@@ -141,6 +141,23 @@ describe("loadSettings default gateway URL derivation", () => {
     }
   });
 
+  it("keeps a remotely served dev page on its own origin", () => {
+    // A dev page reached over a tunnel must not redirect the Gateway to port
+    // 18789 on that public host: there is no Gateway there, and the rewrite
+    // would advertise a local port to a remote viewer.
+    setTestLocation({ protocol: "https:", host: "preview.example.com", pathname: "/" });
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector.includes("@vite/client") ? {} : null),
+      documentElement: { getAttribute: () => null },
+    } as unknown as Document);
+
+    try {
+      expect(loadSettings().gatewayUrl).toBe("wss://preview.example.com");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",
