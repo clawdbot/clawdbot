@@ -883,6 +883,8 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
+    /** Resolve host-owned aliases before containment so the checked path is the I/O path. */
+    resolveGuardedPath?: (filePath: string, cwd: string) => string | Promise<string>;
     resolutionCwd?: string;
     bridge?: SandboxFsBridge;
   },
@@ -899,11 +901,15 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = await normalizeFileToolPathParam(
+        const resolutionCwd = options?.resolutionCwd ?? root;
+        const normalizedFilePath = await normalizeFileToolPathParam(
           rawFilePath,
-          options?.resolutionCwd ?? root,
+          resolutionCwd,
           options?.bridge,
         );
+        const filePath = options?.resolveGuardedPath
+          ? await options.resolveGuardedPath(normalizedFilePath, resolutionCwd)
+          : normalizedFilePath;
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }

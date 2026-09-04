@@ -13,6 +13,14 @@ import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-t
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function toWindowsPosixDrivePath(nativePath: string): string {
+  const drive = nativePath[0]?.toLowerCase();
+  if (!drive || nativePath[1] !== ":") {
+    throw new Error(`Expected a Windows drive path, got ${nativePath}`);
+  }
+  return `/${drive}${nativePath.slice(2).replaceAll("\\", "/")}`;
+}
+
 describe("registered core read on Windows", () => {
   it.runIf(process.platform === "win32")(
     "reads text produced by Windows PowerShell Out-File",
@@ -57,4 +65,52 @@ describe("registered core read on Windows", () => {
 
     expect(text).toContain("home read");
   });
+
+  it.runIf(process.platform === "win32")(
+    "normalizes drive aliases before workspace-only containment",
+    async () => {
+      const workspaceDir = tempDirs.make("openclaw-core-drive-workspace-");
+      const outsideDir = tempDirs.make("openclaw-core-drive-outside-");
+      const insidePath = path.join(workspaceDir, "inside.txt");
+      const outsidePath = path.join(outsideDir, "outside.txt");
+      await fs.writeFile(insidePath, "inside before", "utf8");
+      await fs.writeFile(outsidePath, "outside before", "utf8");
+
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(
+        createOpenClawCodingTools({
+          workspaceDir,
+          config: { tools: { fs: { workspaceOnly: true } } },
+        }),
+      );
+      const insideAlias = toWindowsPosixDrivePath(insidePath);
+      const outsideAlias = toWindowsPosixDrivePath(outsidePath);
+
+      expect(
+        getTextContent(await readTool.execute("drive-inside-read", { path: insideAlias })),
+      ).toBe("inside before");
+      await writeTool.execute("drive-inside-write", {
+        path: insideAlias,
+        content: "inside written",
+      });
+      await editTool.execute("drive-inside-edit", {
+        path: insideAlias,
+        edits: [{ oldText: "inside written", newText: "inside edited" }],
+      });
+      await expect(fs.readFile(insidePath, "utf8")).resolves.toBe("inside edited");
+
+      await expect(readTool.execute("drive-outside-read", { path: outsideAlias })).rejects.toThrow(
+        /escapes sandbox root/i,
+      );
+      await expect(
+        writeTool.execute("drive-outside-write", { path: outsideAlias, content: "changed" }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+      await expect(
+        editTool.execute("drive-outside-edit", {
+          path: outsideAlias,
+          edits: [{ oldText: "outside before", newText: "changed" }],
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside before");
+    },
+  );
 });
