@@ -6,6 +6,7 @@ import type { AuthCredentialReasonCode } from "../../agents/auth-profiles/creden
 import type {
   ProviderUsageBilling,
   ProviderUsageCostHistory,
+  ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
@@ -21,6 +22,8 @@ export type ModelAuthUsage = {
   providerId: UsageProviderId;
   refreshedAt?: number;
   windows: UsageWindow[];
+  /** Endpoint-declared scope; credential binding alone does not establish it. */
+  usageScope?: ProviderUsageSnapshot["usageScope"];
   summary?: string;
   plan?: string;
   billing?: ProviderUsageBilling[];
@@ -44,7 +47,7 @@ export type ModelAuthStatusProfile = {
   displayName?: string;
   email?: string;
   lastUsedAt?: number;
-  /** Account-scoped provider quota and billing facts for this exact credential. */
+  /** Provider quota and billing facts returned for this exact credential. */
   usage?: ModelAuthUsage;
   /** This account's usage cache is refreshing in the background. */
   usageRefreshPending?: true;
@@ -69,8 +72,8 @@ export type ModelAuthStatusProvider = {
     envVar?: string;
   };
   usage?: ModelAuthUsage;
-  /** Whether provider usage is organization-wide or mirrors one saved account. */
-  usageScope?: "provider" | "account";
+  /** Endpoint-declared scope of usage; absent means unknown. */
+  usageScope?: ProviderUsageSnapshot["usageScope"];
 };
 
 export type ModelProviderCapability = {

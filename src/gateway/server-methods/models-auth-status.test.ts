@@ -1693,7 +1693,7 @@ describe("models.authStatus", () => {
 
     await waitForFast(async () => {
       const refreshed = await readAuthStatus();
-      expect(refreshed.providers[0]?.usageScope).toBe("account");
+      expect(refreshed.providers[0]?.usageScope).toBeUndefined();
       expect(refreshed.providers[0]?.profiles[0]?.usage?.windows).toEqual([
         { label: "Monthly key budget", usedPercent: 25 },
       ]);
@@ -1732,6 +1732,7 @@ describe("models.authStatus", () => {
         {
           provider: "anthropic",
           displayName: "Claude",
+          usageScope: "account",
           plan: "Max (20x)",
           accountEmail: "clawd@example.com",
           windows: [{ label: "5h", usedPercent: 22 }],
@@ -1764,6 +1765,7 @@ describe("models.authStatus", () => {
     expect(refreshed.providers[0]?.usage).toEqual({
       providerId: "anthropic",
       refreshedAt: 0,
+      usageScope: "account",
       windows: [{ label: "5h", usedPercent: 22 }],
       plan: "Max (20x)",
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
@@ -1825,17 +1827,18 @@ describe("models.authStatus", () => {
         providerUsageAuthEnvVars: { [provider]: [envVar] },
       };
       setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
-      mocks.loadProviderUsageSummary.mockResolvedValue({
+      mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
         updatedAt: 0,
         providers: [
           {
             provider,
             displayName: provider,
+            usageScope: options.providerOnly ? "provider" : "account",
             accountEmail: `admin-${provider}@example.com`,
             windows: [{ label: "week", usedPercent: 25 }],
           },
         ],
-      });
+      }));
 
       let refreshed: ModelAuthStatusResult | undefined;
       await withEnvAsync({ [envVar]: "admin-key" }, async () => {
@@ -1943,6 +1946,165 @@ describe("models.authStatus", () => {
       expect(result?.profiles[0]?.usage?.summary).toBe("Account quota");
     });
   });
+
+  it.each([false, true])("keeps login priority with pending=%s", async (pending) => {
+    const loginId = "openrouter:login";
+    const tokenId = "openrouter:token";
+    const profiles = [
+      { ...createApiKeyProfile("openrouter"), profileId: loginId },
+      {
+        profileId: tokenId,
+        provider: "openrouter",
+        type: "token",
+        status: "ok",
+        source: "store",
+        label: "Saved token",
+      },
+    ] satisfies AuthHealthSummary["profiles"];
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [loginId]: {
+          type: "api_key",
+          provider: "openrouter",
+          key: "synthetic-login-key",
+          metadata: { authFlow: "oauth-pkce" },
+        },
+        [tokenId]: { type: "token", provider: "openrouter", token: "synthetic-saved-token" },
+      },
+      order: { openrouter: [loginId, tokenId] },
+    });
+    setPreparedMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "openrouter", origin: "bundled", contracts: { usageProviders: ["openrouter"] } },
+        ],
+      }),
+    );
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+      { provider: "openrouter", displayName: "OpenRouter" },
+    ]);
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles,
+      providers: [{ provider: "openrouter", status: "ok", profiles, effectiveProfiles: profiles }],
+    });
+    const login = Promise.withResolvers<void>();
+    if (!pending) login.resolve();
+    mocks.loadProviderUsageSummary.mockImplementation(async (options) => {
+      if (options.authProfile?.profileId === loginId) await login.promise;
+      return {
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            usageScope: "account",
+            windows: [
+              {
+                label: "Monthly key budget",
+                usedPercent: options.authProfile?.profileId === loginId ? 10 : 90,
+              },
+            ],
+          },
+        ],
+      };
+    });
+    try {
+      if (pending) {
+        await waitForFast(async () => {
+          const result = (await readAuthStatus()).providers[0];
+          expect(result?.profiles[1]?.usage?.windows[0]?.usedPercent).toBe(90);
+          expect(result?.profiles[0]?.usageRefreshPending).toBe(true);
+          expect(result?.usage).toBeUndefined();
+        });
+        login.resolve();
+      }
+      await waitForFast(async () => {
+        const result = (await readAuthStatus()).providers[0];
+        expect(result?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent)).toEqual([
+          10, 90,
+        ]);
+        expect(result?.usage?.windows[0]?.usedPercent).toBe(10);
+      });
+    } finally {
+      login.resolve();
+    }
+  });
+
+  it.each(["account", "provider", undefined] as const)(
+    "keeps endpoint scope %s",
+    async (usageScope) => {
+      const oauthId = "anthropic:account";
+      const keyId = "anthropic:setup-token";
+      const profiles = [
+        {
+          profileId: oauthId,
+          provider: "anthropic",
+          type: "oauth",
+          status: "ok",
+          source: "store",
+          label: "Synthetic account",
+        },
+        { ...createApiKeyProfile("anthropic"), profileId: keyId },
+      ] satisfies AuthHealthSummary["profiles"];
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          [oauthId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: 1_000_000,
+          },
+          [keyId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-ant-oat01-synthetic-setup-token",
+          },
+        },
+      });
+      mocks.buildAuthHealthSummary.mockReturnValue({
+        now: 0,
+        warnAfterMs: 0,
+        profiles,
+        providers: [{ provider: "anthropic", status: "ok", profiles }],
+      });
+      mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            usageScope,
+            accountEmail: "synthetic@example.com",
+            plan: "Synthetic plan",
+            windows: options.providerOnly ? [] : [{ label: "5h", usedPercent: 25 }],
+            ...(options.providerOnly ? { error: "Synthetic endpoint error" } : {}),
+          },
+        ],
+      }));
+      await waitForFast(async () => {
+        const result = (await readAuthStatus()).providers[0];
+        expect(result?.usage?.error).toBe("Synthetic endpoint error");
+        expect(result?.profiles[0]?.usage?.windows[0]?.usedPercent).toBe(25);
+        expect(result?.usageScope).toBe(usageScope);
+        expect(result?.usage?.usageScope).toBe(usageScope);
+        expect(result?.profiles[0]?.usage?.usageScope).toBe(usageScope);
+      });
+      const readOnly = createOptions({}, ["operator.read"]);
+      const calls = mocks.loadProviderUsageSummary.mock.calls.length;
+      await handler(readOnly);
+      const result = (firstRespondCall(readOnly)?.[1] as ModelAuthStatusResult).providers[0];
+      expect(result?.usageScope).toBe(usageScope);
+      expect(result?.usage?.usageScope).toBe(usageScope);
+      expect(result?.usage?.accountEmail).toBeUndefined();
+      expect(result?.profiles.every((profile) => profile.usage === undefined)).toBe(true);
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(calls);
+    },
+  );
 
   it("uses effective profile order for the provider usage summary", async () => {
     const runtimeConfig = {};

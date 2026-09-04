@@ -107,6 +107,7 @@ function mapUsageStatus(usage: ProviderUsageStatus, includeAccountEmail = true):
     providerId: usage.providerId,
     refreshedAt: usage.refreshedAt,
     windows: usage.windows,
+    ...(usage.usageScope ? { usageScope: usage.usageScope } : {}),
     ...(usage.summary ? { summary: usage.summary } : {}),
     ...(usage.plan ? { plan: usage.plan } : {}),
     ...(usage.billing?.length ? { billing: usage.billing } : {}),
@@ -207,17 +208,17 @@ export function mapAuthStatusProvider(params: {
   );
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const effectiveProfiles = provider.effectiveProfiles ?? provider.profiles;
-  const usageProfile =
-    effectiveProfiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
-    effectiveProfiles.find((profile) => profile.type === "api_key");
-  const usageKey = resolveUsageProviderId(provider.provider, {
-    credentialType: usageProfile?.type,
-  });
+  // Auth health already resolved credential priority. Missing or pending quota for
+  // that account must not substitute a lower-priority account's usage.
+  const usageProfile = effectiveProfiles[0];
+  // Provider billing remains available without per-account reads (for read-only clients).
+  const usageKey =
+    effectiveProfiles
+      .map((profile) => resolveUsageProviderId(provider.provider, { credentialType: profile.type }))
+      .find((id) => id !== undefined) ?? resolveUsageProviderId(provider.provider);
   const providerUsage = usageKey ? params.usageByProvider.get(usageKey) : undefined;
-  const accountUsage =
-    usageKey && usageProfile ? params.usageByProfile.get(usageProfile.profileId) : undefined;
+  const accountUsage = usageProfile ? params.usageByProfile.get(usageProfile.profileId) : undefined;
   const usage = providerUsage ?? accountUsage;
-  const usageScope = providerUsage ? "provider" : accountUsage ? "account" : undefined;
   const rawRollup = aggregateRefreshableAuthStatus(
     provider,
     Date.now(),
@@ -272,8 +273,8 @@ export function mapAuthStatusProvider(params: {
         ? { profileOrderLocked: "auth-config" as const }
         : {}),
     ...(apiKey ? { apiKey } : {}),
-    usage: usage && usageKey ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
-    ...(usageScope ? { usageScope } : {}),
+    usage: usage ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
+    ...(usage?.usageScope ? { usageScope: usage.usageScope } : {}),
   };
 }
 
