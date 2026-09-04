@@ -1,9 +1,11 @@
 // Control UI tests cover debug behavior.
 import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./debug-overlay.ts";
 import "./debug-page.ts";
@@ -193,8 +195,14 @@ describe("renderDebug", () => {
       throw new Error("expected debug security audit command");
     }
     const status = container.querySelector(".settings-status");
+    const chinese = flattenTranslations(zh_CN);
     expect(status?.className).toContain("settings-status--warn");
-    expect(normalizedText(status)).toBe("1 个警告 · 2 条信息");
+    expect(normalizedText(status)).toBe(
+      [
+        chinese.get("debug.security.warnings")?.replace("{count}", "1"),
+        chinese.get("debug.security.info")?.replace("{count}", "2"),
+      ].join(" · "),
+    );
     expect(command.textContent).toBe("openclaw security audit --deep");
   });
 
