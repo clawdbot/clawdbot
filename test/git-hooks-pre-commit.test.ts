@@ -34,6 +34,7 @@ function installFormattingRecorder(dir: string, body = ""): string {
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'oxfmt %s\n' "$*" >> hook-tool.log
+case "$*" in *--stdin-filepath=*) cat ;; esac
 ${body}
 `,
   );
@@ -227,6 +228,73 @@ describe("git-hooks/pre-commit (integration)", () => {
     },
   );
 
+  it("formats only staged bytes of a partially staged file and preserves the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'oxfmt %s\n' "$*" >> hook-tool.log
+case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
+`,
+    );
+    const staged = "export const value = FORMAT_ME;\n";
+    const working = `${staged}export const unstagedOnly = 1;\n`;
+    stage(dir, "partial.ts", staged);
+    writeFileSync(path.join(dir, "partial.ts"), working);
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:partial.ts"])).toBe("export const value = FORMATTED;");
+    expect(readFileSync(path.join(dir, "partial.ts"), "utf8")).toBe(working);
+    expect(readFormatterLog(path.join(dir, "hook-tool.log"))).toEqual([
+      "oxfmt --stdin-filepath=partial.ts",
+    ]);
+  });
+
+  it("preserves formatted staged content when the working-tree copy is deleted", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    stage(dir, "gone.ts", "export const keep = 1;\n");
+    unlinkSync(path.join(dir, "gone.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:gone.ts"])).toBe("export const keep = 1;");
+    expect(existsSync(path.join(dir, "gone.ts"))).toBe(false);
+  });
+
+  it("leaves staged symlinks untouched even when retargeted in the working tree", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeFileSync(path.join(dir, "target-a.ts"), "const unformatted =  1\n", "utf8");
+    writeFileSync(path.join(dir, "target-b.ts"), "const other = 2;\n", "utf8");
+    symlinkSync("target-a.ts", path.join(dir, "alias.ts"));
+    run(dir, "git", ["add", "--", "alias.ts"]);
+    unlinkSync(path.join(dir, "alias.ts"));
+    symlinkSync("target-b.ts", path.join(dir, "alias.ts"));
+
+    run(dir, "git", commitArgs);
+
+    expect(run(dir, "git", ["show", "HEAD:alias.ts"])).toBe("target-a.ts");
+    expect(readFileSync(path.join(dir, "alias.ts"), "utf8")).toBe("const other = 2;\n");
+  });
+
+  it("fails instead of staging empty formatter output for a partially staged file", () => {
+    const dir = createContentGuardFixture(tempDirs);
+    writeExecutable(path.join(dir, "node_modules/.bin"), "oxfmt", "#!/bin/sh\nexit 0\n");
+    stage(dir, "partial.ts", "export const value = 1;\n");
+    writeFileSync(
+      path.join(dir, "partial.ts"),
+      "export const value = 1;\nexport const extra = 2;\n",
+    );
+
+    const result = runFailure(dir, "git", commitArgs);
+
+    expect(result.stderr).toContain("Formatter returned no output");
+    expect(run(dir, "git", ["show", ":partial.ts"])).toBe("export const value = 1;");
+    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+  });
+
   it("does not run the changed-scope check for non-doc staged changes", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
@@ -335,14 +403,14 @@ describe("staged content guard", () => {
   );
 
   it.each(["payload.txt", "payload.ts"])(
-    "blocks working-tree bytes restaged by the real formatter path: %s",
+    "keeps unstaged working-tree bytes out of the commit: %s",
     (name) => {
       const dir = fixture();
       stage(dir, name, "clean staged version\n");
       writeFileSync(path.join(dir, name), literals[0]);
-      blocked(dir, [name], true);
-      expect(run(dir, "git", ["show", `:${name}`])).toBe(literals[0]);
-      expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+      run(dir, "git", commitArgs);
+      expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe("clean staged version");
+      expect(readFileSync(path.join(dir, name), "utf8")).toBe(literals[0]);
     },
   );
 
