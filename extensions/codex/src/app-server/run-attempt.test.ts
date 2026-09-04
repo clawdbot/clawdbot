@@ -1668,10 +1668,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(withoutMessageToolInstructions).not.toContain("reacting to its current message");
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
-    expect(automaticInstructions).toContain("reply normally in your final assistant message");
+    expect(automaticInstructions).toContain("OpenClaw delivers your final response automatically.");
     expect(automaticInstructions).not.toContain("message(action=send)");
-    expect(automaticInstructions).toContain("reacting to its current message");
-    expect(automaticInstructions).toContain("Reactions are not delivered automatically.");
+    expect(automaticInstructions).toContain(
+      "You can participate in the conversation throughout your work.",
+    );
+    expect(automaticInstructions).toContain("sending a message doesn’t end your task");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
