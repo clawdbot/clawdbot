@@ -260,6 +260,7 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceSessionWithBranchedTranscript,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,

@@ -51,6 +51,7 @@ import {
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -100,6 +101,61 @@ export async function replaceTranscriptEvents(
     runOpenClawAgentWriteTransaction((database) => {
       replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     }, toDatabaseOptions(resolved));
+  });
+}
+
+/** Replaces the active session identity and its prepared branch in one commit. */
+export async function replaceSessionWithBranchedTranscript(
+  scope: SessionTranscriptWriteScope,
+  branch: { sessionId: string; events: TranscriptEvent[] },
+  onCommitted: () => void,
+): Promise<void> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const databaseOptions = toDatabaseOptions(resolved);
+  const expectedLifecycleRevision = readSessionEntryRow(
+    openOpenClawAgentDatabase(databaseOptions),
+    resolved.sessionKey,
+  )?.entry.lifecycleRevision;
+  const nextScope = withOwnedSessionTranscriptWriterFence({
+    ...scope,
+    sessionId: branch.sessionId,
+  });
+  const nextResolved = { ...resolved, sessionId: branch.sessionId };
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const identities = runOpenClawAgentWriteTransaction((database) => {
+      const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      if (
+        fresh?.sessionId !== resolved.sessionId ||
+        fresh.lifecycleRevision !== expectedLifecycleRevision
+      ) {
+        const cause = {
+          ...(fresh
+            ? { actualSessionId: fresh.sessionId, code: "session-rebound" as const }
+            : { code: "session-entry-missing" as const }),
+          expectedSessionId: resolved.sessionId,
+          sessionKey: scope.sessionKey,
+        };
+        throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
+      }
+      const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+      const previous = readSessionIdentitySnapshot(database, identityKeys);
+      // Earlier queued metadata updates belong to the branch too; copy the locked row.
+      writeSessionEntry(database, resolved.sessionKey, {
+        ...projectCanonicalSessionEntryShape({ ...fresh }),
+        sessionId: branch.sessionId,
+        updatedAt: Date.now(),
+      });
+      assertLockedTranscriptWriteAllowed(database, nextResolved, nextScope);
+      replaceSqliteTranscriptEventsInTransaction(database, nextResolved, branch.events);
+      return { previous, current: readSessionIdentitySnapshot(database, identityKeys) };
+    }, databaseOptions);
+    // Adopt the runtime tree after commit and before observers can use the new identity.
+    // A failed transcript insert must neither adopt nor announce the rolled-back branch.
+    try {
+      onCommitted();
+    } finally {
+      emitCommittedSessionIdentityDiff(identities.previous, identities.current);
+    }
   });
 }
 
