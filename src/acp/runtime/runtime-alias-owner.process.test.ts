@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
@@ -17,22 +18,23 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
-import { validateAcpResumeSessionOwnership } from "../../../src/agents/subagents/spawn/acp-spawn-requester.js";
-import { handleAcpSpawnAction } from "../../../src/auto-reply/reply/commands-acp/lifecycle.js";
-import { buildCommandTestParams } from "../../../src/auto-reply/reply/commands-spawn.test-harness.js";
+import { validateAcpResumeSessionOwnership } from "../../agents/subagents/spawn/acp-spawn-requester.js";
+import { handleAcpSpawnAction } from "../../auto-reply/reply/commands-acp/lifecycle.js";
+import { buildCommandTestParams } from "../../auto-reply/reply/commands-spawn.test-harness.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
+} from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
-} from "../../../src/test-utils/channel-plugins.js";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+} from "../../test-utils/channel-plugins.js";
 
 const harness = "owner-fixture";
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../extensions/acpx/test/fixtures/owner-agent.mjs", import.meta.url),
+);
 
 function registerInMemoryDiscordBindings(): SessionBindingRecord[] {
   const bindings: SessionBindingRecord[] = [];

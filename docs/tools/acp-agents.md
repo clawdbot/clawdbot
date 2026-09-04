@@ -817,6 +817,21 @@ An agent-qualified main alias retains its owner even when it resolves to `global
 Conflicting owner/key pairs fail visibly. A backend that cannot isolate bare
 sessions must be upgraded before those sessions can run.
 
+Legacy sessions created before owner/harness separation may still be stored
+under the external harness id. Runtime commands never read or promote those
+rows: resume, status, cancel, close, workspace, account, and binding lookup use
+the canonical configured owner only.
+
+Run `openclaw doctor` to inventory eligible legacy ACP sessions, then
+`openclaw doctor --fix` to migrate them explicitly. Doctor moves a legacy row
+only when one configured owner maps to its harness and the source identity is
+unambiguous. The migration consumes the legacy ACP metadata, rehomes the
+session-owned state under `agent:<owner>:...`, and is safe to retry. Doctor
+leaves the source unchanged and prints operator guidance when multiple aliases
+share a harness, a bare key is in a shared owner/harness store, or the canonical
+owner key already contains a different session. Resolve that ambiguity before
+rerunning Doctor; runtime does not provide a compatibility fallback.
+
 ## ACP controls
 
 | Command              | What it does                                              | Example                                                       |

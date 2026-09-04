@@ -2,27 +2,19 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMetaBatch,
-  writeAcpSessionMetaForMigration,
-} from "../../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaBatch } from "../../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
-  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  toAgentStoreSessionKey,
-} from "../../../routing/session-key.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -35,11 +27,6 @@ import {
 } from "./acp-spawn-heartbeat.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
-
-// Owner/harness separation shipped after legacy ACP sessions had already been stored under the
-// harness. Keep the compatibility reader explicitly time-bounded; matched rows are promoted into
-// the canonical owner store so subsequent resumes no longer depend on the legacy namespace.
-const LEGACY_ACP_HARNESS_STORE_MIGRATION_DEADLINE_MS = Date.parse("2027-03-01T00:00:00Z");
 
 type AcpSpawnRequesterContext = {
   agentChannel?: string;
@@ -206,77 +193,6 @@ function sessionEntryIsOwnedByRequester(params: {
   );
 }
 
-function resolveStoredSessionOwner(
-  sessionKey: string,
-  storeOwners: ReadonlySet<string>,
-): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (parsed?.agentId) {
-    return parsed.agentId;
-  }
-  if (sessionKey.trim().toLowerCase().startsWith("agent:")) {
-    return undefined;
-  }
-  if (storeOwners.size !== 1) {
-    return undefined;
-  }
-  return storeOwners.values().next().value;
-}
-
-async function promoteLegacyAcpResumeEntry(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  harnessSessionKey: string;
-  meta: SessionAcpMeta;
-  sessionOwnerAgentId: string;
-}): Promise<boolean> {
-  const parsed = parseAgentSessionKey(params.harnessSessionKey);
-  const ownerSessionKey = parsed?.rest
-    ? `agent:${params.sessionOwnerAgentId}:${parsed.rest}`
-    : toAgentStoreSessionKey({
-        agentId: params.sessionOwnerAgentId,
-        requestKey: params.harnessSessionKey,
-      });
-  const ownerStorePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.sessionOwnerAgentId,
-  });
-  if (
-    loadSessionEntryReadOnly({
-      agentId: params.sessionOwnerAgentId,
-      storePath: ownerStorePath,
-      sessionKey: ownerSessionKey,
-      clone: false,
-    })
-  ) {
-    return false;
-  }
-  try {
-    writeAcpSessionMetaForMigration({
-      sessionKey: ownerSessionKey,
-      sessionId: params.entry.sessionId,
-      lifecycleRevision: params.entry.lifecycleRevision,
-      meta: params.meta,
-    });
-  } catch (error) {
-    log.warn(
-      `ACP legacy owner promotion metadata write failed for ${ownerSessionKey}: ${formatErrorMessage(error)}`,
-    );
-    return false;
-  }
-  const promoted = await upsertSessionEntryCore(
-    {
-      agentId: params.sessionOwnerAgentId,
-      storePath: ownerStorePath,
-      sessionKey: ownerSessionKey,
-    },
-    params.entry,
-  );
-  if (!promoted) {
-    return false;
-  }
-  return true;
-}
-
 export async function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
   sessionOwnerAgentId: string;
@@ -298,88 +214,40 @@ export async function validateAcpResumeSessionOwnership(params: {
   }
 
   const configuredBackend = normalizeOptionalLowercaseString(params.backendId);
-  const storeSearchesByPath = new Map<
-    string,
-    { allowedOwners: Set<string>; possibleOwners: Set<string> }
-  >();
-  const registerStoreOwner = (storeAgentId: string, allowed: boolean) => {
-    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: storeAgentId,
-    });
-    const search = storeSearchesByPath.get(storePath) ?? {
-      allowedOwners: new Set<string>(),
-      possibleOwners: new Set<string>(),
-    };
-    search.possibleOwners.add(storeAgentId);
-    if (allowed) {
-      search.allowedOwners.add(storeAgentId);
-    }
-    storeSearchesByPath.set(storePath, search);
-  };
-  registerStoreOwner(params.sessionOwnerAgentId, true);
-  if (params.harnessAgentId !== params.sessionOwnerAgentId) {
-    registerStoreOwner(
-      params.harnessAgentId,
-      Date.now() < LEGACY_ACP_HARNESS_STORE_MIGRATION_DEADLINE_MS,
-    );
-  }
-  for (const [storePath, { allowedOwners, possibleOwners }] of storeSearchesByPath) {
-    if (allowedOwners.size === 0) {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.sessionOwnerAgentId,
+  });
+  const entries = listSessionEntriesReadOnly({ storePath, clone: false });
+  const metaByEntry = readAcpSessionMetaBatch({
+    entries: entries.map(({ sessionKey, entry }) => ({
+      sessionKey,
+      agentId: params.sessionOwnerAgentId,
+      entry,
+    })),
+    cfg: params.cfg,
+  });
+  for (const { sessionKey, entry } of entries) {
+    if (parseAgentSessionKey(sessionKey)?.agentId !== params.sessionOwnerAgentId) {
       continue;
     }
-    const entries = listSessionEntriesReadOnly({ storePath, clone: false });
-    const entryOwners = new Map(
-      entries.map(({ sessionKey, entry }) => [
+    const acp = metaByEntry.get(entry);
+    // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
+    if (
+      !acp ||
+      (configuredBackend && normalizeOptionalLowercaseString(acp.backend) !== configuredBackend) ||
+      normalizeOptionalString(acp.agent) !== params.harnessAgentId ||
+      !sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)
+    ) {
+      continue;
+    }
+    if (
+      sessionEntryIsOwnedByRequester({
+        sessionKey,
         entry,
-        resolveStoredSessionOwner(sessionKey, possibleOwners),
-      ]),
-    );
-    const metaByEntry = readAcpSessionMetaBatch({
-      entries: entries.flatMap(({ sessionKey, entry }) => {
-        const agentId = entryOwners.get(entry);
-        return agentId ? [{ sessionKey, agentId, entry }] : [];
-      }),
-      cfg: params.cfg,
-    });
-    for (const { sessionKey, entry } of entries) {
-      const entryOwnerAgentId = entryOwners.get(entry);
-      if (!entryOwnerAgentId || !allowedOwners.has(entryOwnerAgentId)) {
-        continue;
-      }
-      const acp = metaByEntry.get(entry);
-      // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
-      if (
-        !acp ||
-        (configuredBackend &&
-          normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||
-        // An owner alias is mutable and cannot prove which harness created a legacy record.
-        // Fail closed unless persisted metadata names the currently requested harness.
-        normalizeOptionalString(acp?.agent) !== params.harnessAgentId ||
-        !sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)
-      ) {
-        continue;
-      }
-      if (
-        sessionEntryIsOwnedByRequester({
-          sessionKey,
-          entry,
-          requesterSessionKey,
-        })
-      ) {
-        if (
-          entryOwnerAgentId !== params.sessionOwnerAgentId &&
-          !(await promoteLegacyAcpResumeEntry({
-            cfg: params.cfg,
-            entry,
-            harnessSessionKey: sessionKey,
-            meta: acp,
-            sessionOwnerAgentId: params.sessionOwnerAgentId,
-          }))
-        ) {
-          continue;
-        }
-        return { ok: true };
-      }
+        requesterSessionKey,
+      })
+    ) {
+      return { ok: true };
     }
   }
 

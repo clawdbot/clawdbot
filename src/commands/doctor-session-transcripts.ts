@@ -300,6 +300,11 @@ async function noteSessionSqliteMigrationHealth(params: {
     repairedGroups: 0,
     scannedStores: 0,
   };
+  let acpOwnerReport:
+    | Awaited<
+        ReturnType<typeof import("./doctor-acp-owner-sessions.js").migrateLegacyAcpOwnerSessions>
+      >
+    | undefined;
   let legacyMainSessionResult:
     | Awaited<
         ReturnType<
@@ -320,6 +325,12 @@ async function noteSessionSqliteMigrationHealth(params: {
       cfg: params.cfg ?? {},
       env: params.env,
       mode: params.shouldRepair ? "doctor-fix" : "detect",
+    });
+    const { migrateLegacyAcpOwnerSessions } = await import("./doctor-acp-owner-sessions.js");
+    acpOwnerReport = await migrateLegacyAcpOwnerSessions({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
     });
     const repairParams = {
       apply: params.shouldRepair,
@@ -377,6 +388,17 @@ async function noteSessionSqliteMigrationHealth(params: {
         ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
         : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
       "Session SQLite",
+    );
+  }
+  if (acpOwnerReport && (acpOwnerReport.eligible > 0 || acpOwnerReport.warnings.length > 0)) {
+    note(
+      [
+        params.shouldRepair
+          ? `- Migrated ${acpOwnerReport.migrated} legacy ACP session(s) to their canonical configured owner.`
+          : `- Found ${acpOwnerReport.eligible} legacy ACP session(s) eligible for explicit owner migration. Run "openclaw doctor --fix" to migrate them.`,
+        ...acpOwnerReport.warnings.map((warning) => `- ${warning}`),
+      ].join("\n"),
+      "ACP session ownership",
     );
   }
   if (deliveryReport.found > 0) {

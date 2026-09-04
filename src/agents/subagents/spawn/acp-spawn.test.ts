@@ -1325,7 +1325,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("allows requester-owned legacy resume IDs stored under the harness agent", async () => {
+  it("rejects requester-owned legacy resume IDs stored under the harness agent", async () => {
     const legacySessionKey = "agent:codex:acp:legacy";
     hoisted.resolveStorePathMock.mockImplementation(
       (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
@@ -1371,31 +1371,15 @@ describe("spawnAcpDirect", () => {
       { agentSessionKey: "agent:main:main" },
     );
 
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({
-      agentId: "main",
-      agent: "codex",
-      resumeSessionId: "codex-inner-legacy",
-    });
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
     expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "codex" });
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:acp:legacy",
-        storePath: "/tmp/main-sessions.json",
-      },
-      expect.objectContaining({ sessionId: "sess-legacy" }),
-    );
-    expect(hoisted.writeAcpSessionMetaForMigrationMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:acp:legacy",
-        sessionId: "sess-legacy",
-      }),
-    );
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("promotes requester-owned bare legacy keys from a separate harness store", async () => {
+  it("rejects requester-owned bare legacy keys from a separate harness store", async () => {
     const legacySessionKey = "global";
     hoisted.resolveStorePathMock.mockImplementation(
       (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
@@ -1440,15 +1424,9 @@ describe("spawnAcpDirect", () => {
       { agentSessionKey: "agent:main:main" },
     );
 
-    expectAcceptedSpawn(result);
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey: "agent:main:global",
-        storePath: "/tmp/main-sessions.json",
-      }),
-      expect.objectContaining({ sessionId: "sess-bare-legacy" }),
-    );
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for bare legacy keys in a shared owner and harness store", async () => {
@@ -1490,9 +1468,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("stops consulting legacy harness stores after the bounded migration window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2027-03-02T00:00:00Z"));
+  it("never consults legacy harness stores during runtime resume", async () => {
     hoisted.resolveStorePathMock.mockImplementation(
       (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
     );
@@ -1509,14 +1485,12 @@ describe("spawnAcpDirect", () => {
 
     expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
     expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps bare keys in a shared owner and harness store ambiguous after migration expires", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2027-03-02T00:00:00Z"));
+  it("keeps bare keys in a shared owner and harness store unavailable at runtime", async () => {
     hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
     hoisted.loadSessionStoreMock.mockReturnValue({
       global: {
@@ -1555,7 +1529,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("leaves a failed legacy metadata promotion retryable", async () => {
+  it("does not promote legacy metadata during runtime resume", async () => {
     const legacySessionKey = "agent:codex:acp:retryable";
     hoisted.resolveStorePathMock.mockImplementation(
       (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
@@ -1615,11 +1589,8 @@ describe("spawnAcpDirect", () => {
       { agentSessionKey: "agent:main:main" },
     );
 
-    expectAcceptedSpawn(retried);
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:acp:retryable" }),
-      expect.objectContaining({ sessionId: "sess-retryable" }),
-    );
+    expectRecordFields(retried, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("resumes the canonical row after a shared-store legacy row was already promoted", async () => {
@@ -1706,7 +1677,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("continues to the legacy store after an owner-store resume collision", async () => {
+  it("does not consult a legacy store after an owner-store resume collision", async () => {
     const ownerSessionKey = "agent:main:acp:collision";
     const legacySessionKey = "agent:codex:acp:owned-legacy";
     hoisted.resolveStorePathMock.mockImplementation(
@@ -1764,8 +1735,8 @@ describe("spawnAcpDirect", () => {
       { agentSessionKey: "agent:main:main" },
     );
 
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({ resumeSessionId: "shared-resume-id" });
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("passes model and thinking overrides into ACP session initialization", async () => {
