@@ -70,15 +70,27 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
   let result: AcpOwnerMigrationClaimResult = "missing";
   runOpenClawStateWriteTransaction(
     (database) => {
-      const targetMatch = targetDatabaseKeys
-        .map((key) => ({ key, row: selectAcpSessionRow(database.db, key) }))
-        .find((candidate) => candidate.row !== undefined);
+      const targetMatches = [...new Set(targetDatabaseKeys)].flatMap((key) => {
+        const row = selectAcpSessionRow(database.db, key);
+        return row ? [{ key, row }] : [];
+      });
+      const targetMatch = targetMatches[0];
       if (targetMatch?.row) {
         const targetRow = targetMatch.row;
         if (
           targetRow.agent !== params.expectedAgent ||
           !acpSessionRowMatchesEntry(targetRow, params.entry)
         ) {
+          result = "conflict";
+          return;
+        }
+        const divergentTarget = targetMatches.find(
+          ({ row }) =>
+            row.agent !== params.expectedAgent ||
+            !acpSessionRowMatchesEntry(row, params.entry) ||
+            !sameAcpSessionMetadata(row, targetRow),
+        );
+        if (divergentTarget) {
           result = "conflict";
           return;
         }
