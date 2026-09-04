@@ -140,19 +140,6 @@ function formatResult(result: BackupVerifyResult): string {
   ].join("\n");
 }
 
-function findDuplicateNormalizedEntryPath(
-  entries: Array<{ normalized: string }>,
-): string | undefined {
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (seen.has(entry.normalized)) {
-      return entry.normalized;
-    }
-    seen.add(entry.normalized);
-  }
-  return undefined;
-}
-
 function resolvePortableArchivePathKey(value: string): string {
   return value.normalize("NFC").toLowerCase();
 }
@@ -595,14 +582,21 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
   const symbolicLinks = rawEntries
     .filter((entry) => entry.type === "SymbolicLink")
     .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
-  const rawEntryPaths = new Map(entries.map((entry) => [entry.normalized, entry.raw]));
+  const rawEntryPaths = new Map<string, string>();
+  let duplicateEntryPath: string | undefined;
+  // Keep the first duplicate for validation below; manifest-count errors still win.
+  for (const entry of entries) {
+    if (rawEntryPaths.has(entry.normalized)) {
+      duplicateEntryPath ??= entry.normalized;
+    }
+    rawEntryPaths.set(entry.normalized, entry.raw);
+  }
   const normalizedEntrySet = new Set(rawEntryPaths.keys());
 
   const manifestMatches = entries.filter((entry) => isRootBackupManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }
-  const duplicateEntryPath = findDuplicateNormalizedEntryPath(entries);
   if (duplicateEntryPath) {
     throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
   }
