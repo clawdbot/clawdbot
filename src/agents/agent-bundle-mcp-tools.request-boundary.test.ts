@@ -520,6 +520,18 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "denies spelling every letter, underscore, and dash under an allow glob",
+      tools: {
+        allow: ["memos__a*"],
+        deny: [
+          "memos__a",
+          ..."abcdefghijklmnopqrstuvwxyz_-".split("").map((char) => `memos__a${char}*`),
+        ],
+      },
+      toolNames: ["a0"],
+      visible: true,
+    },
+    {
       label: "the same full-length inner literal in a config and a runtime allow glob",
       tools: { allow: [`memos__*${"n".repeat(57)}*`] },
       toolsAllow: [`memos__*${"n".repeat(57)}*`],

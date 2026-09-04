@@ -107,13 +107,6 @@ function realizableEntries(list: string[] | undefined): string[] {
   return expandToolGroups(list).filter((entry) => REALIZABLE_ENTRY_RE.test(entry));
 }
 
-// Distinct simulation states visited before the search gives up. Real policies
-// stay far below this; past it the namespace counts as admitted, because naming
-// an unavailable server the policy might not admit is the cheaper error than
-// hiding an outage it does admit (the silent retry loop this matcher exists to
-// stop).
-const MAX_NAMESPACE_SEARCH_STATES = 10_000;
-
 /**
  * Positions a glob can occupy after reading input, closed over `*` matching
  * nothing: a position at a `*` also stands one past it. A glob accepts when its
@@ -158,6 +151,30 @@ function stepGlobRun(run: GlobRun, char: string): GlobRun {
   };
 }
 
+/** No glob of the run can advance any further. */
+function globRunIsDead(run: GlobRun): boolean {
+  return run.positions.every((positions) => positions.length === 0);
+}
+
+/**
+ * Once one glob of an allow layer sits on its trailing `*`, the layer accepts
+ * every extension; keeping only that glob's positions lets states that differ
+ * only in how the rest of the layer got there merge.
+ */
+function settleGlobRun(run: GlobRun): GlobRun {
+  const settled = run.positions.findIndex((positions, index) => {
+    const glob = run.globs[index] ?? "";
+    return glob.endsWith("*") && positions.includes(glob.length - 1);
+  });
+  if (settled < 0) {
+    return run;
+  }
+  return {
+    globs: run.globs,
+    positions: run.positions.map((positions, index) => (index === settled ? positions : [])),
+  };
+}
+
 /** A glob sitting on its trailing `*` accepts every extension; a deny there ends the search. */
 function globRunAcceptsForever(run: GlobRun): boolean {
   return run.positions.some((positions, index) => {
@@ -177,8 +194,9 @@ function globRunAccepts(run: GlobRun): boolean {
  * of every allow layer and by no deny glob. Every glob is simulated together
  * over one candidate name at a time, breadth-first over the suffix, so the
  * decision is exact: no synthetic witness, no cap that drops a candidate.
- * Characters outside every literal behave alike, so the alphabet is the
- * literal characters plus one fresh letter, and the search revisits no state.
+ * The position sets form a finite space the search never revisits, so it
+ * always terminates with the exact answer; a policy that denies every
+ * candidate ends as soon as each branch reaches a deny's trailing `*`.
  */
 function globLayersAdmitSomeName(params: {
   namespace: string;
@@ -194,8 +212,16 @@ function globLayersAdmitSomeName(params: {
       }
     }
   }
-  const freshLetter = "abcdefghijklmnopqrstuvwxyz".split("").find((char) => !literals.has(char));
-  const alphabet = [...literals, ...(freshLetter ? [freshLetter] : [])];
+  // Characters no literal spells behave alike within their class, so one
+  // representative per class (letter, digit, `_`, `-`) completes the alphabet;
+  // a class whose every member is a literal is already fully present.
+  const alphabet = new Set(literals);
+  for (const classChars of ["abcdefghijklmnopqrstuvwxyz", "0123456789", "_", "-"]) {
+    const fresh = classChars.split("").find((char) => !literals.has(char));
+    if (fresh) {
+      alphabet.add(fresh);
+    }
+  }
   const startRun = (globs: readonly string[]): GlobRun => {
     let run: GlobRun = { globs, positions: globs.map((glob) => closeGlobPositions(glob, [0])) };
     for (const char of namespace) {
@@ -205,16 +231,13 @@ function globLayersAdmitSomeName(params: {
   };
   type SearchState = { layers: GlobRun[]; deny: GlobRun; suffix: string };
   const initial: SearchState = {
-    layers: params.layers.map(startRun),
+    layers: params.layers.map((globs) => settleGlobRun(startRun(globs))),
     deny: startRun(denies),
     suffix: "",
   };
   // A layer none of whose globs survived the namespace can never accept, and a
   // deny already on its trailing `*` covers every name under it.
-  if (
-    initial.layers.some((run) => run.positions.every((positions) => positions.length === 0)) ||
-    globRunAcceptsForever(initial.deny)
-  ) {
+  if (initial.layers.some(globRunIsDead) || globRunAcceptsForever(initial.deny)) {
     return false;
   }
   // Positions decide the future; the suffix matters only through "started yet",
@@ -249,20 +272,18 @@ function globLayersAdmitSomeName(params: {
         continue;
       }
       const next: SearchState = {
-        layers: state.layers.map((run) => stepGlobRun(run, char)),
+        layers: state.layers.map((run) => settleGlobRun(stepGlobRun(run, char))),
         deny: stepGlobRun(state.deny, char),
         suffix: state.suffix + char,
       };
-      // Once a deny sits on its trailing `*`, no extension escapes it.
-      if (globRunAcceptsForever(next.deny)) {
+      // Once a deny sits on its trailing `*` no extension escapes it, and a
+      // layer with no live glob can never accept again.
+      if (globRunAcceptsForever(next.deny) || next.layers.some(globRunIsDead)) {
         continue;
       }
       const key = keyOf(next);
       if (visited.has(key)) {
         continue;
-      }
-      if (visited.size >= MAX_NAMESPACE_SEARCH_STATES) {
-        return true;
       }
       visited.add(key);
       queue.push(next);
