@@ -1710,7 +1710,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-tree__loading {
   min-height: 30px;
   margin-inline: var(--sidebar-text-offset) 2px;
-  clip-path: inset(8px 0 round var(--radius-sm));
+  clip-path: inset(10px 0 round var(--radius-sm));
 }
 
 .sidebar-session-tree__show-more {

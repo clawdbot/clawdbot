@@ -89,24 +89,25 @@ suite.define(() => {
             .locator("a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
             .count(),
         ).toBe(0);
-        const loadingGeometry = await loading.evaluate((element) => {
-          const bounds = element.getBoundingClientRect();
-          const listBounds = element.parentElement!.getBoundingClientRect();
-          return { height: bounds.height, left: bounds.left, listHeight: listBounds.height };
+        const loadingGeometry = await children.evaluate((element) => {
+          const rowBounds = element.getBoundingClientRect();
+          const barBounds = element
+            .querySelector(".sidebar-session-tree__loading")!
+            .getBoundingClientRect();
+          return { left: barBounds.left, rowHeight: rowBounds.height };
         });
-        expect(loadingGeometry.listHeight).toBe(loadingGeometry.height);
+        expect(loadingGeometry.rowHeight).toBe(30);
 
         await gateway.resolveDeferred("sessions.list");
         await expect.poll(() => loading.count()).toBe(0);
         const child = page.locator(`[data-session-key="${childKey}"]`);
         await child.waitFor({ state: "visible" });
         const childGeometry = await child.evaluate((element) => {
-          const bounds = element.getBoundingClientRect();
           const titleBounds = element
             .querySelector(".sidebar-recent-session__name")!
             .getBoundingClientRect();
-          const listBounds = element.parentElement!.parentElement!.getBoundingClientRect();
-          return { height: bounds.height, left: titleBounds.left, listHeight: listBounds.height };
+          const rowBounds = element.parentElement!.parentElement!.getBoundingClientRect();
+          return { left: titleBounds.left, rowHeight: rowBounds.height };
         });
         expect(childGeometry).toEqual(loadingGeometry);
       } finally {
