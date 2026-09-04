@@ -48,6 +48,7 @@ function requirePluginPackageName(
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
+const fetchClawHubPackageDetailMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
@@ -123,6 +124,14 @@ vi.mock("./clawhub.js", () => ({
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
+
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/clawhub-packages.js")>();
+  return {
+    ...actual,
+    fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
+  };
+});
 
 vi.mock("../state/claw-package-adoption.js", () => ({
   markClawPackageIndependentlyOwned: (...args: unknown[]) =>
@@ -822,6 +831,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    fetchClawHubPackageDetailMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -853,6 +863,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    fetchClawHubPackageDetailMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -3335,6 +3346,64 @@ describe("updateNpmInstalledPlugins", () => {
       config: { preserved: true },
     });
   });
+
+  it.each([false, true])(
+    "reports newer ClawHub releases for exact-pinned trusted official installs (dryRun=%s)",
+    async (dryRun) => {
+      const installPath = createInstalledPackageDir({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.9.1",
+      });
+      installPluginFromClawHubMock.mockResolvedValue(
+        createSuccessfulClawHubUpdateResult({
+          pluginId: "diagnostics-otel",
+          targetDir: installPath,
+          version: "2026.9.1",
+          clawhubPackage: "@openclaw/diagnostics-otel",
+        }),
+      );
+      fetchClawHubPackageDetailMock.mockResolvedValue({
+        package: {
+          name: "@openclaw/diagnostics-otel",
+          latestVersion: "2026.9.2",
+          tags: { latest: "2026.9.2" },
+        },
+      });
+      const config = createClawHubInstallConfig({
+        pluginId: "diagnostics-otel",
+        installPath,
+        clawhubPackage: "@openclaw/diagnostics-otel",
+        spec: "clawhub:@openclaw/diagnostics-otel@2026.9.1",
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        dryRun,
+        syncOfficialPluginInstalls: true,
+      });
+
+      expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/diagnostics-otel@2026.9.1");
+      expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith({
+        name: "@openclaw/diagnostics-otel",
+        baseUrl: "https://clawhub.ai",
+        timeoutMs: undefined,
+      });
+      expectRecordFields(result.outcomes[0], {
+        pluginId: "diagnostics-otel",
+        status: "unchanged",
+        currentVersion: "2026.9.1",
+        nextVersion: "2026.9.2",
+        message:
+          "diagnostics-otel is pinned to clawhub:@openclaw/diagnostics-otel@2026.9.1 " +
+          "(installed 2026.9.1); ClawHub latest resolves to 2026.9.2. " +
+          "Pass `openclaw plugins install clawhub:@openclaw/diagnostics-otel --force` " +
+          "to replace this version pin.",
+      });
+      expect(result.config.plugins?.installs?.["diagnostics-otel"]?.spec).toBe(
+        "clawhub:@openclaw/diagnostics-otel@2026.9.1",
+      );
+    },
+  );
 
   it("updates bare trusted official ClawHub installs through the catalog spec", async () => {
     installPluginFromClawHubMock.mockResolvedValue(

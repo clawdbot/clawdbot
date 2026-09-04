@@ -469,7 +469,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
-    Exact pinned npm installs stay pinned during targeted and bulk updates, including dry runs. If OpenClaw can resolve a newer release on the package's registry default line, it reports the pin and prints an explicit package update command to replace it. Official plugins still follow the configured core-channel compatibility policy after the selector changes.
+    Exact pinned npm and trusted official ClawHub installs stay pinned during targeted and bulk updates, including dry runs. If OpenClaw can resolve a newer release on the package's registry default line, it reports the pin and prints an explicit command to replace it. The ClawHub recovery command uses `plugins install clawhub:<package> --force` because `plugins update` accepts selector overrides only for npm records. Official plugins still follow the configured core-channel compatibility policy after the selector changes.
 
     Bulk `openclaw plugins update --all` also preserves ordinary exact pins and explicit tags. Floating trusted official records follow the current registry-channel policy. Doctor separately refreshes stale official runtime plugins bound to the current OpenClaw release cohort, keeping the recorded registry and recording an exact replacement version when the previous npm record was pinned.
 

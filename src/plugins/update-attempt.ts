@@ -19,6 +19,7 @@ import {
   describeNpmChannelFallback,
   formatBetaChannelFallbackOutcomeSuffix,
   resolveExactNpmSpecVersion,
+  resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
   resolveNpmResultVersion,
   shouldFallbackBetaClawHubUpdate,
@@ -39,6 +40,20 @@ export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
     `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
     `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
     `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to replace this version pin.`
+  );
+}
+
+export function formatNewerExactPinnedClawHubDefaultLineMessage(params: {
+  pluginId: string;
+  recordedSpec: string;
+  currentVersion: string;
+  newer: { packageName: string; registryLine: "beta" | "latest"; version: string };
+}): string {
+  const selector = params.newer.registryLine === "beta" ? "@beta" : "";
+  return (
+    `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
+    `ClawHub ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
+    `Pass \`openclaw plugins install clawhub:${params.newer.packageName}${selector} --force\` to replace this version pin.`
   );
 }
 
@@ -237,7 +252,7 @@ function isPluginUpdateUnchanged(
     : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
 }
 
-export function buildPluginUpdateVersionOutcome(params: {
+export async function buildPluginUpdateVersionOutcome(params: {
   pluginId: string;
   record: UpdatablePluginInstallRecord;
   result: PluginUpdateSuccess;
@@ -245,9 +260,25 @@ export function buildPluginUpdateVersionOutcome(params: {
   nextVersion?: string;
   channelFallbackSuffix: string;
   channelFallback?: PluginUpdateChannelFallback;
-}): PluginUpdateOutcome {
+  checkNewerExactPinnedClawHubDefaultLine?: boolean;
+  updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+}): Promise<PluginUpdateOutcome> {
   const currentLabel = params.currentVersion ?? "unknown";
   const unchanged = isPluginUpdateUnchanged(params);
+  const newerExactPinnedClawHubDefaultLine =
+    unchanged &&
+    params.record.source === "clawhub" &&
+    params.checkNewerExactPinnedClawHubDefaultLine
+      ? await resolveNewerExactPinnedClawHubDefaultLine({
+          currentVersion: params.currentVersion,
+          recordedSpec: params.record.spec,
+          probeClawHubVersion: params.nextVersion,
+          baseUrl: params.record.clawhubUrl,
+          updateChannel: params.updateChannel,
+          timeoutMs: params.timeoutMs,
+        })
+      : undefined;
   const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
     ? "Downgraded"
     : "Updated";
@@ -255,9 +286,16 @@ export function buildPluginUpdateVersionOutcome(params: {
     pluginId: params.pluginId,
     status: unchanged ? "unchanged" : "updated",
     currentVersion: params.currentVersion,
-    nextVersion: params.nextVersion,
+    nextVersion: newerExactPinnedClawHubDefaultLine?.version ?? params.nextVersion,
     message: unchanged
-      ? `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
+      ? newerExactPinnedClawHubDefaultLine && params.record.spec
+        ? formatNewerExactPinnedClawHubDefaultLineMessage({
+            pluginId: params.pluginId,
+            recordedSpec: params.record.spec,
+            currentVersion: currentLabel,
+            newer: newerExactPinnedClawHubDefaultLine,
+          }) + params.channelFallbackSuffix
+        : `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
       : `${verb} ${params.pluginId}: ${currentLabel} -> ${params.nextVersion ?? "unknown"}.${params.channelFallbackSuffix}`,
     ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
   };
@@ -276,6 +314,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   timeoutMs?: number;
   channelFallbackSuffix: string;
   npmChannelFallback?: PluginUpdateChannelFallback;
+  checkNewerExactPinnedClawHubDefaultLine?: boolean;
 }): Promise<PluginUpdateOutcome> {
   const probeSpec = params.usedNpmFallback ? params.fallbackSpec : params.effectiveSpec;
   const npmProbeVersion =
@@ -297,6 +336,19 @@ export async function buildDryRunPluginUpdateOutcome(params: {
           timeoutMs: params.timeoutMs,
         })
       : undefined;
+  const newerExactPinnedClawHubDefaultLine =
+    unchanged &&
+    params.record.source === "clawhub" &&
+    params.checkNewerExactPinnedClawHubDefaultLine
+      ? await resolveNewerExactPinnedClawHubDefaultLine({
+          currentVersion: params.currentVersion,
+          recordedSpec: params.record.spec,
+          probeClawHubVersion: resolvedProbeVersion,
+          baseUrl: params.record.clawhubUrl,
+          updateChannel: params.updateChannel,
+          timeoutMs: params.timeoutMs,
+        })
+      : undefined;
 
   if (unchanged) {
     const message =
@@ -307,12 +359,22 @@ export async function buildDryRunPluginUpdateOutcome(params: {
             currentVersion: currentLabel,
             newer: newerExactPinnedDefaultLine,
           }) + params.channelFallbackSuffix
-        : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
+        : newerExactPinnedClawHubDefaultLine && params.record.spec
+          ? formatNewerExactPinnedClawHubDefaultLineMessage({
+              pluginId: params.pluginId,
+              recordedSpec: params.record.spec,
+              currentVersion: currentLabel,
+              newer: newerExactPinnedClawHubDefaultLine,
+            }) + params.channelFallbackSuffix
+          : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
     return {
       pluginId: params.pluginId,
       status: "unchanged",
       currentVersion: params.currentVersion,
-      nextVersion: newerExactPinnedDefaultLine?.version ?? resolvedProbeVersion,
+      nextVersion:
+        newerExactPinnedDefaultLine?.version ??
+        newerExactPinnedClawHubDefaultLine?.version ??
+        resolvedProbeVersion,
       message,
       ...(params.npmChannelFallback ? { channelFallback: params.npmChannelFallback } : {}),
     };

@@ -284,14 +284,20 @@ installed index. Run `openclaw plugins registry --refresh`, inspect
 `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy
 index state. If the ambiguity remains, reinstall the package before retrying.
 
-`openclaw plugins update --all` is the bulk maintenance path. It still
-respects ordinary tracked install specs, but trusted official OpenClaw
-plugin records sync to the current official catalog target instead of
-staying pinned to a stale exact official package. The canonical channel
-resolver uses both `update.channel` and the installed core version, so an
-installed beta core with no configured channel keeps official plugins on the
-beta release line. Use a targeted `update <plugin-id>` to keep an exact or
-tagged official spec untouched.
+`openclaw plugins update --all` is the bulk maintenance path. It preserves
+exact version pins and explicit tags, including trusted official OpenClaw
+plugin records, because older automatic pins cannot be distinguished from an
+operator's intentional pin. When a newer default-line release exists,
+OpenClaw reports it and prints the explicit command that replaces the pin.
+Floating official records still follow the canonical channel resolver, which
+uses both `update.channel` and the installed core version.
+
+For an exact-pinned ClawHub record, deliberately return to the default release
+line with the command printed by the updater:
+
+```bash
+openclaw plugins install clawhub:<package> --force
+```
 
 For npm installs, pass an explicit package spec to switch the tracked
 record:
