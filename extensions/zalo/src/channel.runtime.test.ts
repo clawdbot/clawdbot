@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyZaloPairingApproval } from "./channel.runtime.js";
+import { sendMessageZalo } from "./send.js";
+
+vi.mock("./send.js", () => ({
+  sendMessageZalo: vi.fn(),
+}));
 
 describe("notifyZaloPairingApproval", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.stubEnv("ZALO_BOT_TOKEN", "");
   });
 
@@ -81,5 +87,6 @@ describe("notifyZaloPairingApproval", () => {
     ).rejects.toThrow(
       "Zalo token not configured for account work (set channels.zalo.accounts.work.botToken or channels.zalo.accounts.work.tokenFile)",
     );
+    expect(sendMessageZalo).not.toHaveBeenCalled();
   });
 });
