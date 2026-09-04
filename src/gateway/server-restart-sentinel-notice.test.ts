@@ -52,7 +52,8 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.recoveryDeliver,
 }));
 
-vi.mock("../infra/outbound/channel-resolution.js", () => ({
+vi.mock("../infra/outbound/channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-resolution.js")>()),
   resolveOutboundChannelMessageAdapter: mocks.resolveOutboundChannelMessageAdapter,
 }));
 
@@ -161,7 +162,10 @@ describe("restart sentinel notice recovery", () => {
         {
           pluginId: "matrix",
           source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: { deliveryMode: "direct" } }),
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText: vi.fn(async () => ({ ok: true })) },
+          }),
         },
       ]),
     );
