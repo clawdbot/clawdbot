@@ -46,6 +46,34 @@ describe("usage cost estimation", () => {
           : {}),
       };
       expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
+      expect(
+        estimateAggregateUsageCost({
+          usage,
+          provider: "fixture",
+          model: "priced",
+          agentDir: "/missing-aggregate-cost-test-agent",
+          allowPluginNormalization: false,
+          config: {
+            models: {
+              providers: {
+                fixture: {
+                  baseUrl: "https://fixture.invalid",
+                  models: [
+                    {
+                      id: "priced",
+                      name: "Priced",
+                      reasoning: false,
+                      input: ["text"],
+                      maxTokens: 1,
+                      cost,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ).toBe(expected);
     },
   );
 

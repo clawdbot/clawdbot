@@ -43,6 +43,12 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ## Plugin entry
 
+Native feature authoring uses `plugin-sdk/feature-contract`
+(`defineFeatureContract`, `createFeatureClient`), `plugin-sdk/feature-plugin`
+(`defineFeaturePlugin`), and `plugin-sdk/control-ui` (`defineControlUiPlugin`,
+host and view types). The contract and Control UI subpaths are browser safe;
+`feature-plugin` is backend only. See [Feature plugins](/plugins/feature-plugins).
+
 | Subpath                             | Key exports                                                                                                                                                                                             |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/plugin-entry`           | `definePluginEntry`                                                                                                                                                                                     |
@@ -161,7 +167,7 @@ runtime splinters have been removed; bundled-only helpers are private-local.
     | `plugin-sdk/provider-setup` | Private-local after July 2026; Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | Private-local after July 2026; CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Private-local after July 2026; provider auth runtime helpers including `startProviderOAuthLoopbackCallbackServer`, token exchange, auth persistence, and API-key resolution |
-    | `plugin-sdk/provider-oauth-runtime` | Private-local after July 2026; Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
+    | `plugin-sdk/provider-oauth-runtime` | Private-local after July 2026; Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, canonical OpenAI JWT payload decoding, token-expiry helpers, and abort helpers |
     | `plugin-sdk/provider-auth-api-key` | Private-local after July 2026; API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Private-local after July 2026; Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Private-local after July 2026; Provider auth env-var lookup helpers |
@@ -289,7 +295,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/session-catalog` | External session catalog contracts, canonical cursor/parameter/transcript paging, explicit local-plus-node family composition, node-host bindings, adoption helpers, and history import |
     | `plugin-sdk/session-discussion` | External session discussion provider contracts, registration, and canonical Control UI session path building |
     | `plugin-sdk/session-transcript-runtime` | Private-local after July 2026; Transcript identity, bounded raw and visible cursors, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
-    | `plugin-sdk/sqlite-runtime` | Private-local after July 2026; Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
+    | `plugin-sdk/sqlite-runtime` | Private-local after July 2026; SQLite agent-schema, path, transaction, and shared-handle borrowing helpers for first-party runtime. `borrowOpenClawAgentDatabase` returns `{ db, release }`; active borrows prevent cache eviction, `release()` does not close the handle, and explicit owner disposal still revokes it. |
     | `plugin-sdk/cron-store-runtime` | Private-local after July 2026; Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Private-local after July 2026; Plugin-scoped keyed-state and BLOB contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Plugin-state leases were removed; use SQLite transactions and keyed stores instead |
@@ -345,14 +351,14 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
-    | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage, HTTP/WebSocket capture events, and capture lifecycle helpers |
+    | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage and read-only access, HTTP/WebSocket capture events, and capture lifecycle helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/blob-runtime` | Private official-plugin runtime; Exact Buffer views for synchronous Blob construction |
     | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Private-local after July 2026; Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Private-local after July 2026; Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/context-visibility-runtime` | Private-local after July 2026; Context visibility resolution and supplemental context filtering without broad config/security imports |
-    | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
+    | `plugin-sdk/string-coerce-runtime` | Browser-safe primitive coercion, string normalization, Date-valid timestamps, and UTF-16 truncation |
     | `plugin-sdk/html-entity-runtime` | Private-local after July 2026; Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
     | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including UTF-8 prefix truncation and five-entity HTML escaping |
     | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |

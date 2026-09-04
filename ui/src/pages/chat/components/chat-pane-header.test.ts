@@ -274,6 +274,7 @@ describe("chat pane header", () => {
       narrow: true,
       mergedChrome: true,
       panelActions: html`<button data-action="persistent-surface"></button>`,
+      panelLayoutActions: html`<button aria-label="Swap Chat and Dashboard"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
       backgroundTasksAction: html`<button data-action="tasks"></button>`,
@@ -284,6 +285,7 @@ describe("chat pane header", () => {
     });
 
     expect(container.querySelector('[data-action="persistent-surface"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Swap Chat and Dashboard"]')).not.toBeNull();
     expect(container.querySelector('[data-action="discussion"]')).toBeNull();
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
@@ -405,7 +407,7 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("groups visibility with the face switch inside the centered header region", () => {
+  it("places visibility in the owner slot while the face switch stays centered", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
@@ -420,20 +422,39 @@ describe("chat pane header", () => {
       "chat-pane__header-center",
     );
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
-      "chat-pane__header-center",
+      "chat-pane__header-leading",
     );
   });
 
-  it("keeps visibility with trailing actions when the session has no face switch", () => {
+  it("keeps visibility in the owner slot when the session has no face switch", () => {
     const { container } = mountHeader({
       faceControl: nothing,
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
-      "chat-pane__header-trailing",
+      "chat-pane__header-leading",
     );
     expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+  });
+
+  it("replaces the header owner avatar when visibility is available", () => {
+    const actor = {
+      type: "human" as const,
+      id: "profile-ada",
+      identity: { type: "profile" as const, id: "profile-ada" },
+      label: "Ada",
+    };
+    const { container } = mountHeader({
+      session: row({ owner: { actor } }),
+      showOwnerChip: true,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-leading",
+    );
   });
 
   it("uses the full header width when no face switch needs centering", () => {

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -8,6 +10,7 @@ import {
 } from "./codex-app-server.test-fixtures.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 
 function codexModel(model = "gpt-5.4", id = model) {
   return {
@@ -68,12 +71,16 @@ function createClientFactory(
     emptyAnswer?: boolean;
     completeTurn?: boolean;
     models?: ReturnType<typeof codexModel>[];
+    beforeRequest?: (method: string) => Promise<void>;
     modelProvider?: string;
   } = {},
 ) {
   const methods: string[] = [];
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     methods.push(method);
+    if (options.beforeRequest) {
+      await options.beforeRequest(method);
+    }
     if (method === "model/list") {
       const includeHidden = isRecord(params) && params.includeHidden === true;
       return {
@@ -196,6 +203,8 @@ function createClientFactory(
     factory,
     methods,
     request,
+    notifications: fixture.notifications,
+    requests: fixture.requests,
     handleServerRequest: (serverRequest: Parameters<typeof fixture.handleServerRequest>[0]) =>
       fixture.handleServerRequest(serverRequest),
     notify: (notification: Parameters<typeof fixture.notify>[0]) => fixture.notify(notification),
@@ -203,6 +212,114 @@ function createClientFactory(
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it.each(["model/list", "mcpServerStatus/list"])(
+    "does not dispatch a turn after its caller retires during %s",
+    async (suspendedMethod) => {
+      const suspended = createDeferred<void>();
+      const release = createDeferred<void>();
+      const fake = createClientFactory({
+        beforeRequest: async (method) => {
+          if (method === suspendedMethod) {
+            suspended.resolve();
+            await release.promise;
+          }
+        },
+      });
+      const retired = new Error("bounded turn caller retired");
+      let current = true;
+      const params = {
+        model: { mode: "required" as const, id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Name the conversation.",
+        input: [{ type: "text" as const, text: "Help me plan a garden.", text_elements: [] }],
+        requiredModalities: ["text" as const],
+        isolation: "private-stdio" as const,
+        requireNoExternalCapabilities: true,
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      };
+      const run = runBoundedCodexAppServerTurn(params);
+      const rejection = expect(run).rejects.toBe(retired);
+      await suspended.promise;
+      const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
+      current = false;
+      release.resolve();
+
+      await rejection;
+      expect(fake.methods).not.toContain("turn/start");
+      if (suspendedMethod === "model/list") {
+        expect(fake.methods).not.toContain("thread/start");
+      }
+      expect(fake.notifications).toHaveLength(0);
+      expect(fake.requests).toHaveLength(0);
+      if (!codexHome) {
+        throw new Error("expected the bounded turn's temporary Codex home");
+      }
+      await expect(fs.access(codexHome)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["thread/start", "turn/start"] as const)(
+    "rejects expired authority before the physical %s write after setup",
+    async (blockedMethod) => {
+      let current = true;
+      const expired = new Error("completion owner expired during setup");
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number; method: string };
+          const results: Record<string, unknown> = {
+            "model/list": { data: [codexModel()], nextCursor: null },
+            "config/read": { config: {}, layers: [] },
+            "configRequirements/read": { requirements: null },
+            "thread/start": threadStartResult("gpt-5.4"),
+            "mcpServerStatus/list": { data: [], nextCursor: null },
+            "turn/start": completedTurnResult(),
+          };
+          if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
+            current = false;
+          }
+          send({ id: request.id, result: results[request.method] });
+        },
+      });
+      const releaseFence = vi.fn();
+      harness.client.setThreadSessionRequestGuard(async () => {
+        if (blockedMethod === "thread/start") {
+          current = false;
+        }
+        return releaseFence;
+      });
+      try {
+        await expect(
+          runBoundedCodexAppServerTurn({
+            model: { mode: "required", id: "gpt-5.4" },
+            timeoutMs: 5_000,
+            assertCurrent: () => {
+              if (!current) {
+                throw expired;
+              }
+            },
+            options: { clientFactory: async () => harness.client },
+            taskLabel: "isolated completion",
+            developerInstructions: "Answer only.",
+            input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+            requiredModalities: ["text"],
+            isolation: "configured-transport",
+            requireNoExternalCapabilities: true,
+          }),
+        ).rejects.toBe(expired);
+        expect(harness.writes.map((line) => JSON.parse(line).method)).not.toContain(blockedMethod);
+        expect(releaseFence).toHaveBeenCalledOnce();
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
     const run = runBoundedCodexAppServerTurn({

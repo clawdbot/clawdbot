@@ -398,6 +398,39 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it("presents an older progress card as paused during a later run", () => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "running" }),
+        progressCard: { ...progressCard(), updatedAt: startedAt - 1 },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+    expect(plan?.querySelector("polyline")).not.toBeNull();
+  });
+
+  it("keeps an older progress card paused after the later run ends", () => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "done" }),
+        progressCard: { ...progressCard(), updatedAt: startedAt - 1 },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+  });
+
   it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
     const container = document.createElement("div");
     render(
@@ -495,7 +528,7 @@ describe("renderSessionHovercard", () => {
   });
 
   it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides stale plan work after the session is %s",
+    "hides plan work updated during the run after the session is %s",
     (status) => {
       const container = document.createElement("div");
       render(
@@ -548,14 +581,14 @@ describe("renderSessionHovercard", () => {
     );
 
     const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__attribution-name");
-    expect(name?.getAttribute("href")).toBe("/ui/activity?person=alice");
+    expect(name?.getAttribute("href")).toBe("/ui/activity/alice");
     expect(
       container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
     ).toBe("true");
 
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     name?.dispatchEvent(click);
-    expect(navigate).toHaveBeenCalledWith("alice");
+    expect(navigate).toHaveBeenCalledWith("alice", "Alice Baker");
     expect(click.defaultPrevented).toBe(true);
   });
 
@@ -595,10 +628,10 @@ describe("renderSessionHovercard", () => {
       ...container.querySelectorAll<HTMLAnchorElement>("openclaw-viewer-facepile a"),
     ];
     expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/activity?person=mira",
-      "/activity?person=riley",
-      "/activity?person=sam",
-      "/activity?person=lee",
+      "/activity/mira",
+      "/activity/riley",
+      "/activity/sam",
+      "/activity/lee",
     ]);
 
     const participantsTooltip = container.querySelector<
@@ -622,22 +655,17 @@ describe("renderSessionHovercard", () => {
           ".session-hovercard__participant-link",
         ) ?? []),
       ].map((link) => link.getAttribute("href")),
-    ).toEqual([
-      "/activity?person=mira",
-      "/activity?person=riley",
-      "/activity?person=sam",
-      "/activity?person=lee",
-    ]);
+    ).toEqual(["/activity/mira", "/activity/riley", "/activity/sam", "/activity/lee"]);
 
     participantLinks[1]?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
-    expect(navigate).toHaveBeenCalledWith("riley");
+    expect(navigate).toHaveBeenCalledWith("riley", "Riley");
 
     participantsTooltip
       ?.querySelector<HTMLAnchorElement>('.session-hovercard__participant-link[href$="lee"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenLastCalledWith("lee");
+    expect(navigate).toHaveBeenLastCalledWith("lee", "Lee");
   });
 
   it("uses the first participant as the attribution when the creator is unknown", () => {

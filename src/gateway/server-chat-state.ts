@@ -578,20 +578,7 @@ export function createSessionMessageSubscriberRegistry(
           connToSessionRecency.delete(normalizedConnId);
         }
       }
-      const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
-      if (approvalConnIds) {
-        approvalConnIds.delete(normalizedConnId);
-        if (approvalConnIds.size === 0) {
-          approvalSessionToConnIds.delete(normalizedSessionKey);
-        }
-      }
-      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
-      if (approvalSessionKeys) {
-        approvalSessionKeys.delete(normalizedSessionKey);
-        if (approvalSessionKeys.size === 0) {
-          connToApprovalSessionKeys.delete(normalizedConnId);
-        }
-      }
+      setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
     },
     unsubscribeAll: (connId: string) => {
       const normalizedConnId = normalize(connId);
@@ -614,13 +601,8 @@ export function createSessionMessageSubscriberRegistry(
 
       const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
       for (const sessionKey of approvalSessionKeys ?? []) {
-        const connIds = approvalSessionToConnIds.get(sessionKey);
-        connIds?.delete(normalizedConnId);
-        if (connIds?.size === 0) {
-          approvalSessionToConnIds.delete(sessionKey);
-        }
+        setApprovalSubscription(normalizedConnId, sessionKey, false);
       }
-      connToApprovalSessionKeys.delete(normalizedConnId);
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -688,12 +670,12 @@ function createToolEventRecipientRegistryForStore(
 
   const get = (runId: string) => {
     const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return undefined;
+    if (entry) {
+      entry.updatedAt = Date.now();
+      prune();
     }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
+    // Pruning may retire this finalized run; never return its former audience.
+    return store.runs.get(runId)?.toolRecipient?.connIds;
   };
 
   const markFinal = (runId: string) => {

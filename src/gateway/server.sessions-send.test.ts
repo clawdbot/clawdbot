@@ -15,6 +15,7 @@ import {
   type Mock,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -126,7 +127,12 @@ async function emitLifecycleAssistantReply(params: {
   emitAgentEvent({
     runId,
     stream: "lifecycle",
-    data: { phase: "end", startedAt, endedAt: Date.now() },
+    data: {
+      phase: "end",
+      startedAt,
+      endedAt: Date.now(),
+      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+    },
   });
 }
 
@@ -392,7 +398,7 @@ describe("sessions_send gateway loopback", () => {
   );
 
   it(
-    "does not re-announce a trailing message-tool delivery mirror after a waited A2A run",
+    "honors source delivery from agent.wait when the transcript has no tool result",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-mirror-"));
@@ -468,7 +474,7 @@ describe("sessions_send gateway loopback", () => {
               {
                 message: {
                   role: "assistant",
-                  content: [{ type: "text", text: "previous real reply" }],
+                  content: [{ type: "text", text: deliveredReply }],
                   timestamp: 1,
                 },
               },
@@ -489,24 +495,6 @@ describe("sessions_send gateway loopback", () => {
                   timestamp: 2,
                 },
               },
-              {
-                message: {
-                  role: "toolResult",
-                  toolName: "message",
-                  toolCallId: "call-message-duplicate-proof",
-                  content: { ok: true, messageId: "24271", chatId: "peer-1" },
-                  timestamp: 3,
-                },
-              },
-              {
-                message: {
-                  role: "assistant",
-                  provider: "openclaw",
-                  model: "delivery-mirror",
-                  content: [{ type: "text", text: deliveredReply }],
-                  timestamp: 4,
-                },
-              },
             ],
           },
         );
@@ -517,19 +505,11 @@ describe("sessions_send gateway loopback", () => {
           params: { sessionKey, limit: 10 },
           timeoutMs: 5_000,
         });
-        expect(history.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              role: "assistant",
-              content: expect.arrayContaining([
-                expect.objectContaining({ type: "text", text: deliveredReply }),
-              ]),
-              openclawMessageToolMirror: expect.objectContaining({
-                toolName: "message",
-                toolCallId: "call-message-duplicate-proof",
-              }),
-            }),
-          ]),
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ role: "toolResult" }),
+        );
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ openclawMessageToolMirror: expect.anything() }),
         );
 
         const startedAt = Date.now();
@@ -541,7 +521,30 @@ describe("sessions_send gateway loopback", () => {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end", startedAt, endedAt: Date.now() },
+          data: {
+            phase: "end",
+            startedAt,
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: deliveredReply },
+            terminalReceipt: {
+              runId,
+              sessionId,
+              turnId: runId,
+              requested: { provider: "test", model: "test" },
+              effective: { provider: "test", model: "test", responseModel: "test" },
+              successfulToolNames: ["message"],
+              rerouted: false,
+              terminalDisposition: "visible",
+              sourceReplyDelivered: true,
+            },
+          },
+        });
+        expect(
+          await callGateway({ method: "agent.wait", params: { runId, timeoutMs: 5_000 } }),
+        ).toMatchObject({
+          status: "ok",
+          terminalReply: { disposition: "visible", text: deliveredReply },
+          terminalReceipt: { runId, sourceReplyDelivered: true },
         });
         agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
@@ -552,6 +555,8 @@ describe("sessions_send gateway loopback", () => {
 
         await runSessionsSendA2AFlow({
           targetSessionKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          requesterChannel: "whatsapp",
           displayKey: sessionKey,
           message: "proof ping",
           announceTimeoutMs: 5_000,

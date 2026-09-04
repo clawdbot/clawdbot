@@ -1,6 +1,7 @@
 // Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
 // and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
 import type {
   ChannelsStatusSnapshot,
@@ -51,6 +52,7 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
+  // Key both lists so status updates cannot retarget an in-flight channel click.
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
@@ -64,21 +66,27 @@ export function renderChannels(props: ChannelsProps) {
 
   return html`
     ${renderSettingsPage(html`
-      ${showingStaleSnapshot
-        ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
-        : nothing}
-      ${props.snapshot?.partial
-        ? html`
-            <div class="callout warn">
-              ${t("channels.hub.partialSnapshot")}
-              ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
-            </div>
-          `
-        : nothing}
+      ${
+        showingStaleSnapshot
+          ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
+          : nothing
+      }
+      ${
+        props.snapshot?.partial
+          ? html`
+              <div class="callout warn">
+                ${t("channels.hub.partialSnapshot")}
+                ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
+              </div>
+            `
+          : nothing
+      }
       ${props.lastError ? html`<div class="callout danger">${props.lastError}</div>` : nothing}
-      ${props.setupBlockedByDirtyConfig && props.configFormDirty
-        ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
-        : nothing}
+      ${
+        props.setupBlockedByDirtyConfig && props.configFormDirty
+          ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
+          : nothing
+      }
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -97,7 +105,11 @@ export function renderChannels(props: ChannelsProps) {
                 ${renderSettingsEmpty(t("channels.hub.noneConnected"))}
               </div>
             `
-          : connected.map((key) => renderConnectedRow(key, props)),
+          : repeat(
+              connected,
+              (key) => key,
+              (key) => renderConnectedRow(key, props),
+            ),
       )}
       ${renderSettingsSection(
         {
@@ -105,49 +117,59 @@ export function renderChannels(props: ChannelsProps) {
           description: t("channels.hub.addSubtitle"),
         },
         html`
-          ${!props.canAdmin
-            ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
-            : html`${available.map((key) => renderAvailableRow(key, props))}
-              ${renderBrowseAllRow(props)}`}
+          ${
+            !props.canAdmin
+              ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
+              : html`${repeat(
+                  available,
+                  (key) => key,
+                  (key) => renderAvailableRow(key, props),
+                )}
+                ${renderBrowseAllRow(props)}`
+          }
         `,
       )}
       ${renderChannelPairingQueue(props)}
     `)}
-    ${selected
-      ? renderChannelDetail({
-          channelId: selected,
-          label: resolveChannelLabel(props, selected),
-          pluginIconUrl: props.pluginIconUrls[selected],
-          preferPluginIcon: selectedPlugin?.hasIcon === true,
-          props,
-          data,
-          onClose: () => props.onCloseDetail(),
-          onSetup: () => props.onStartSetup(selected),
-        })
-      : nothing}
-    ${props.canAdmin
-      ? renderChannelWizard({
-          wizard: props.wizard,
-          channelLabel: (channelId) => resolveChannelLabel(props, channelId),
-          channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
-          channelHasPluginIcon: (channelId) =>
-            resolveChannelPlugin(props, channelId)?.hasIcon === true,
-          multiselectValues: props.wizardMultiselect,
-          onToggleMultiselect: props.onWizardToggleMultiselect,
-          textValue: props.wizardTextValue,
-          secretVisible: props.wizardSecretVisible,
-          onTextInput: props.onWizardTextInput,
-          onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-          onAnswer: props.onWizardAnswer,
-          onClose: props.onWizardClose,
-          whatsappQrDataUrl: props.whatsappQrDataUrl,
-          whatsappMessage: props.whatsappMessage,
-          whatsappConnected: props.whatsappConnected,
-          whatsappBusy: props.whatsappBusy,
-          onWhatsAppStart: props.onWhatsAppStart,
-          onWhatsAppWait: props.onWhatsAppWait,
-        })
-      : nothing}
+    ${
+      selected
+        ? renderChannelDetail({
+            channelId: selected,
+            label: resolveChannelLabel(props, selected),
+            pluginIconUrl: props.pluginIconUrls[selected],
+            preferPluginIcon: selectedPlugin?.hasIcon === true,
+            props,
+            data,
+            onClose: () => props.onCloseDetail(),
+            onSetup: () => props.onStartSetup(selected),
+          })
+        : nothing
+    }
+    ${
+      props.canAdmin
+        ? renderChannelWizard({
+            wizard: props.wizard,
+            channelLabel: (channelId) => resolveChannelLabel(props, channelId),
+            channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
+            channelHasPluginIcon: (channelId) =>
+              resolveChannelPlugin(props, channelId)?.hasIcon === true,
+            multiselectValues: props.wizardMultiselect,
+            onToggleMultiselect: props.onWizardToggleMultiselect,
+            textValue: props.wizardTextValue,
+            secretVisible: props.wizardSecretVisible,
+            onTextInput: props.onWizardTextInput,
+            onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
+            onAnswer: props.onWizardAnswer,
+            onClose: props.onWizardClose,
+            whatsappQrDataUrl: props.whatsappQrDataUrl,
+            whatsappMessage: props.whatsappMessage,
+            whatsappConnected: props.whatsappConnected,
+            whatsappBusy: props.whatsappBusy,
+            onWhatsAppStart: props.onWhatsAppStart,
+            onWhatsAppWait: props.onWhatsAppWait,
+          })
+        : nothing
+    }
     ${renderChannelPairingPrompt(props)}
   `;
 }

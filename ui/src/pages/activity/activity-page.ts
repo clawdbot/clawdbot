@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
@@ -10,7 +11,7 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { activityPersonFromPath, pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -42,7 +43,6 @@ import {
 import { renderRunInspector } from "./run-inspector-view.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
-import { sessionActivitySearch } from "./session-activity.ts";
 import {
   parseActivityEvent,
   updateToolActivity,
@@ -76,7 +76,11 @@ class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeSearch = "";
+  @property({ attribute: false }) routeLocation: RouteLocation = {
+    pathname: "/activity",
+    search: "",
+    hash: "",
+  };
   private routeData: ActivityRouteData = {
     mode: "sessions",
     filters: { personId: null, query: "", time: "7d" },
@@ -126,15 +130,26 @@ class ActivityPage extends OpenClawLightDomElement {
   );
 
   override willUpdate(changed: PropertyValues) {
-    if (changed.has("routeSearch")) {
-      this.routeData = resolveActivityRouteData(this.routeSearch);
+    if (changed.has("routeLocation")) {
+      this.routeData = resolveActivityRouteData(
+        this.routeLocation.search,
+        activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
+      );
     }
   }
 
   override updated(changed: PropertyValues) {
-    if (changed.has("routeSearch")) {
+    if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
       this.syncSessionActivity();
+    }
+    const canonical = this.sessionActivity.canonicalLocation(
+      this.routeLocation,
+      this.context.basePath,
+      projectPresencePayload(this.presencePayload).users,
+    );
+    if (canonical) {
+      this.context.replace("activity", canonical);
     }
     const autoFollowEnabled = this.autoFollow && changed.has("autoFollow");
     if (
@@ -550,6 +565,7 @@ class ActivityPage extends OpenClawLightDomElement {
   private renderMode() {
     const route = this.routeData;
     if (route.mode === "sessions") {
+      const presenceViewers = projectPresencePayload(this.presencePayload).users;
       return renderSessionActivityView({
         context: this.context,
         expandedAutomationDays: this.expandedAutomationDays,
@@ -557,7 +573,7 @@ class ActivityPage extends OpenClawLightDomElement {
           ...route.filters,
           personId: this.sessionActivity.result?.involvingProfileId ?? route.filters.personId,
         },
-        presenceViewers: projectPresencePayload(this.presencePayload).users,
+        presenceViewers,
         result: this.sessionActivity.result,
         loading: this.sessionActivity.loading,
         error: this.sessionActivity.error,
@@ -572,7 +588,15 @@ class ActivityPage extends OpenClawLightDomElement {
           this.expandedAutomationDays = next;
         },
         onFiltersChange: (next) =>
-          this.context.navigate("activity", { search: sessionActivitySearch(next) }),
+          this.context.navigate(
+            "activity",
+            this.sessionActivity.locationForFilters(
+              next,
+              this.routeLocation,
+              this.context.basePath,
+              presenceViewers,
+            ),
+          ),
       });
     }
     if (route.mode === "run") {
@@ -632,21 +656,23 @@ class ActivityPage extends OpenClawLightDomElement {
   override render() {
     const mode = this.routeData.mode;
     const body = html`
-      ${mode === "run"
-        ? nothing
-        : renderHubTabs({
-            id: "activity-mode",
-            active: mode,
-            tabs: [
-              { value: "sessions", label: t("activityFeed.sessionsMode") },
-              { value: "live", label: t("activity.runInspector.liveMode") },
-            ],
-            ariaLabel: t("activity.runInspector.activityView"),
-            panelId: "activity-mode-panel",
-            className: "activity-mode-tabs",
-            variant: "sub",
-            onSelect: (selected) => this.selectMode(selected),
-          })}
+      ${
+        mode === "run"
+          ? nothing
+          : renderHubTabs({
+              id: "activity-mode",
+              active: mode,
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              className: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) => this.selectMode(selected),
+            })
+      }
       <div
         id="activity-mode-panel"
         role=${mode === "run" ? nothing : "tabpanel"}
@@ -659,9 +685,9 @@ class ActivityPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
-          ${mode === "live"
-            ? nothing
-            : html`<div class="page-sub">${t("subtitles.activity")}</div>`}
+          ${
+            mode === "live" ? nothing : html`<div class="page-sub">${t("subtitles.activity")}</div>`
+          }
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}
@@ -671,9 +697,8 @@ class ActivityPage extends OpenClawLightDomElement {
 
 export const activityPageComponent = {
   header: true,
-  render: (search: unknown) => html`<openclaw-activity-page
-    .routeSearch=${typeof search === "string" ? search : ""}
-  ></openclaw-activity-page>`,
+  render: (location: RouteLocation = { pathname: "/activity", search: "", hash: "" }) =>
+    html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
 };
 
 if (!customElements.get("openclaw-activity-page")) {

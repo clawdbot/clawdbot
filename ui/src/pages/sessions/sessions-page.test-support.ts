@@ -61,7 +61,7 @@ export type TestSessionsPage = HTMLElement & {
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
+  runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
 type MutableGateway = {
@@ -212,9 +212,9 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
+    plugins: {
+      registrations: vi.fn(() => []),
+      reportError: vi.fn(),
       subscribe,
     },
     navigate: vi.fn(),

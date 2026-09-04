@@ -40,8 +40,7 @@ import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
-  createCodexUsageLimitPromptError,
-  isCodexUsageLimitPromptError,
+  CodexUsageLimitPromptError,
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
@@ -220,9 +219,9 @@ export async function finalizeCodexAttempt(
       authProfileId: startupAuthProfileId,
       rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
     });
-    finalPromptError = createCodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+    finalPromptError = new CodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
   } else if (
-    isCodexUsageLimitPromptError(finalPromptError) &&
+    finalPromptError instanceof CodexUsageLimitPromptError &&
     state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
     readCodexRateLimitsRevision(resourceState.client) > state.rateLimitsRevisionBeforeLastTurnStart
   ) {
@@ -315,8 +314,15 @@ export async function finalizeCodexAttempt(
     ),
   ]) {
     if (message?.role === "assistant") {
-      message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
-      message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
+      const providerRefusal = message.diagnostics?.some(
+        (diagnostic) => diagnostic.type === "provider_refusal",
+      );
+      // The projector owns refusal classification. Preserve it unless a stronger
+      // local abort or prompt failure supersedes this turn's provider outcome.
+      if (!providerRefusal || finalAborted || finalPromptError) {
+        message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
+        message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
+      }
     }
   }
   const modelCallFailureKind =
@@ -368,6 +374,8 @@ export async function finalizeCodexAttempt(
             mirroredMessages: mirrorOutcome.mirroredMessages,
             settledMessages: result.messagesSnapshot,
             turnId: activeTurnId,
+            signal: params.abortSignal,
+            assertActive: () => params.hostCapabilities.assertActive(),
           })
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;

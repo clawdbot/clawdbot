@@ -24,6 +24,145 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
+  it("starts with a retained personal account while leaving the new-chat default cleared", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const accountHintFitsMenu = () =>
+      page.locator(".chat-model-account__hint").evaluate((hint) => {
+        const menu = hint.closest(".chat-controls__model-menu");
+        if (!menu) {
+          return false;
+        }
+        const bounds = menu.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(hint);
+        const textRects = Array.from(range.getClientRects());
+        return (
+          textRects.length > 0 &&
+          textRects.every(
+            (rect) =>
+              rect.left >= bounds.left - 1 &&
+              rect.right <= bounds.right + 1 &&
+              rect.top >= bounds.top - 1 &&
+              rect.bottom <= bounds.bottom + 1,
+          )
+        );
+      });
+    const account = {
+      authProfileId: "personal:person-a:anthropic:one",
+      provider: "anthropic",
+      label: "Test Person · Personal account",
+      authType: "token",
+      selected: false,
+    };
+    const model = {
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      provider: "anthropic",
+      available: true,
+    };
+    const preview = {
+      commands: [],
+      models: [model],
+      accountSelection: {
+        kind: "personal",
+        authProfileId: account.authProfileId,
+        label: account.label,
+        source: "user",
+      },
+    };
+    const gateway = await installMockGateway(page, {
+      agentModel: "anthropic/claude-haiku-4-5",
+      presenceUsers: [{ id: "person-a", name: "Test Person", self: true }],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+      methodResponses: {
+        "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
+        "chat.metadata": {
+          cases: [
+            { match: { authProfileId: account.authProfileId }, response: preview },
+            {
+              match: {},
+              response: {
+                commands: [],
+                models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+                accountSelection: { kind: "automatic", label: "Automatic" },
+              },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:personal-account", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.locator(".new-session-page__message").fill("Start with this saved account");
+      const start = page.getByRole("button", { name: "Start session" });
+      const startHint = start.locator("..");
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
+      const modelTrigger = page.locator('[data-chat-model-select="true"]');
+      await modelTrigger.click();
+      const picker = page.locator(".chat-model-account__picker");
+      const accountTrigger = picker.locator("[data-chat-account-trigger]");
+      await expect.poll(() => accountTrigger.isEnabled()).toBe(true);
+      await expect
+        .poll(() => page.locator(".chat-controls__model-picker").textContent())
+        .toContain("No models available");
+      await expect.poll(accountHintFitsMenu).toBe(true);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "personal-account-01-no-default.png"),
+        });
+      }
+      await accountTrigger.click();
+      await gateway.deferNext("chat.metadata", { authProfileId: account.authProfileId });
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await gateway.rejectDeferred("chat.metadata", { code: "UNAVAILABLE", message: "Try again" });
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+
+      await modelTrigger.click();
+      await modelTrigger.click();
+      await expect.poll(() => accountTrigger.textContent()).toContain(account.label);
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(accountHintFitsMenu).toBe(true);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "personal-account-02-selected.png"),
+        });
+      }
+      await accountTrigger.click();
+      await picker.getByText("Automatic (new-chat default)", { exact: true }).click();
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
+      await expect.poll(() => accountTrigger.textContent()).toContain("Automatic");
+      await accountTrigger.click();
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
+      await page.keyboard.press("Escape");
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "Start with this saved account",
+        model: `anthropic/claude-haiku-4-5@${account.authProfileId}`,
+      });
+      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
+      expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps composer actions fixed while model metadata loads", async () => {
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });

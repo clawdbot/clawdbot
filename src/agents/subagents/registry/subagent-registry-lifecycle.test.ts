@@ -11,6 +11,7 @@ import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -44,6 +45,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type LifecycleControllerParams = SubagentLifecycleOptions;
 type LifecycleController = SubagentLifecycleController;
+type RequesterSettleWakeParams = Parameters<
+  LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+>[0];
 type SubagentCompletionParams = Parameters<LifecycleController["completeSubagentRun"]>[0];
 type AnnounceFlowOutcome = Awaited<
   ReturnType<LifecycleControllerParams["runSubagentAnnounceFlow"]>
@@ -470,10 +474,10 @@ function createLifecycleController({
     runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
     maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
       async (wakeParams: {
-        settledEntry: { runId: string };
-        completeBatch(runIds: readonly string[]): void;
+        settledEntry: SubagentRunRecord;
+        completeBatch(batch: readonly SubagentRunRecord[]): void;
       }) => {
-        wakeParams.completeBatch([wakeParams.settledEntry.runId]);
+        wakeParams.completeBatch([wakeParams.settledEntry]);
         return false;
       },
     ),
@@ -4785,9 +4789,9 @@ describe("requester settle wake trigger", () => {
       }),
     );
     const completeBatch = firstCallArg(settleWake).completeBatch as (
-      runIds: readonly string[],
+      batch: readonly SubagentRunRecord[],
     ) => void;
-    completeBatch([entry.runId]);
+    completeBatch([entry]);
     expect(runs.has(entry.runId)).toBe(false);
   });
 
@@ -4883,7 +4887,7 @@ describe("requester settle wake trigger", () => {
         >[0],
       ) => {
         if (params.settledEntry.runId === first.runId) {
-          params.completeBatch([first.runId]);
+          params.completeBatch([first]);
         }
         return false;
       },
@@ -4943,7 +4947,7 @@ describe("requester settle wake trigger", () => {
           LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
         >[0],
       ) => {
-        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration);
+        params.completeBatch([entry], entry.requesterSettleWake?.rearmGeneration);
         return true;
       },
     );
@@ -4973,75 +4977,107 @@ describe("requester settle wake trigger", () => {
     expect(entry.requesterSettleWake).toBeUndefined();
   });
 
-  it("credits a yielded intentional non-delivery only after requester-settle succeeds", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
-    let settleParams:
-      | Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
-      | undefined;
-    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
-      settleParams = params;
-      return false;
-    });
-    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
-      async (announceParams) => {
-        announceParams.onDeliveryResult?.({
-          delivered: false,
-          path: "none",
-          reason: "completion_handoff_pending",
-          terminal: true,
-          disposition: "intentional_non_delivery",
+  it.each([
+    "unbound",
+    "closed-receipt",
+    "closed-in-flight",
+    "throwing-in-flight",
+    "closed-rearmed",
+  ] as const)(
+    "credits a yielded handoff only from settled delivery evidence: %s",
+    async (ownership) => {
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+        },
+      });
+      let gatewayOpen = true;
+      const gatewayContext = {};
+      if (ownership !== "unbound") {
+        bindGatewayContextResolver(entry, () => {
+          if (!gatewayOpen && ownership === "throwing-in-flight") {
+            throw new Error("Gateway owner unavailable");
+          }
+          return gatewayOpen ? (gatewayContext as never) : undefined;
         });
-        return "intentional_non_delivery" as const;
-      },
-    );
-    const controller = createLifecycleController({
-      entry,
-      maybeWakeRequesterAfterAllChildrenSettled,
-      runSubagentAnnounceFlow,
-    });
+      }
+      let settleParams:
+        | Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
+        | undefined;
+      const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
+        settleParams = params;
+        return false;
+      });
+      const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+        async (announceParams) => {
+          announceParams.onDeliveryResult?.({
+            delivered: false,
+            path: "none",
+            reason: "completion_handoff_pending",
+            terminal: true,
+            disposition: "intentional_non_delivery",
+          });
+          return "intentional_non_delivery" as const;
+        },
+      );
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled,
+        runSubagentAnnounceFlow,
+      });
 
-    await completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "empty" },
-    });
-    await waitForLifecycleState(() =>
-      expect(maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledOnce(),
-    );
-    expect(entry.delivery).toMatchObject({
-      status: "pending",
-      disposition: "intentional_non_delivery",
-      lastError: "completion_handoff_pending",
-    });
-    expect(entry.delivery?.deliveredAt).toBeUndefined();
-    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ deliveryStatus: "pending" }),
-    );
+      await completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "empty" },
+      });
+      await waitForLifecycleState(() =>
+        expect(maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledOnce(),
+      );
+      expect(entry.delivery).toMatchObject({
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastError: "completion_handoff_pending",
+      });
+      expect(entry.delivery?.deliveredAt).toBeUndefined();
+      expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryStatus: "pending" }),
+      );
 
-    settleParams?.completeBatch([entry.runId], 1, {
-      delivered: true,
-      path: "direct",
-      deliveredAt: 8_000,
-    });
+      gatewayOpen = false;
+      if (ownership === "closed-rearmed") {
+        entry.requesterSettleWake!.rearmGeneration = 2;
+      }
+      const pendingWake = structuredClone(entry.requesterSettleWake);
+      settleParams?.completeBatch([entry], 1, {
+        delivered: true,
+        path: "direct",
+        deliveredAt: 8_000,
+        ...(ownership === "closed-receipt" || ownership === "closed-rearmed"
+          ? { requesterVisibleFinalDelivered: true as const }
+          : {}),
+      });
+      if (ownership.endsWith("in-flight") || ownership === "closed-rearmed") {
+        expect(entry.delivery?.status).toBe("pending");
+        expect(entry.requesterSettleWake).toEqual(pendingWake);
+        return;
+      }
 
-    expect(entry.delivery).toMatchObject({
-      status: "delivered",
-      disposition: "delivered",
-      deliveredAt: 8_000,
-      announcedAt: 8_000,
-    });
-    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ deliveryStatus: "delivered" }),
-    );
-  });
+      expect(entry.delivery).toMatchObject({
+        status: "delivered",
+        disposition: "delivered",
+        deliveredAt: 8_000,
+        announcedAt: 8_000,
+      });
+      expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryStatus: "delivered" }),
+      );
+    },
+  );
 
   it("records suppressed completion delivery without retrying or waking the requester", async () => {
     const entry = createRunEntry({ endedAt: 4_000, expectsCompletionMessage: true });
@@ -5132,7 +5168,7 @@ describe("requester settle wake trigger", () => {
     await waitForLifecycleState(() =>
       expect(maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledOnce(),
     );
-    settleParams?.completeBatch([entry.runId], 1, {
+    settleParams?.completeBatch([entry], 1, {
       delivered: false,
       path: "none",
       error: "requester settle wake attempts exhausted",
@@ -5204,7 +5240,7 @@ describe("requester settle wake trigger", () => {
     });
 
     expect(() =>
-      settleParams?.completeBatch([entry.runId], 1, {
+      settleParams?.completeBatch([entry], 1, {
         delivered: false,
         path: "none",
         error: "requester settle wake failed",
@@ -5231,7 +5267,7 @@ describe("requester settle wake trigger", () => {
           LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
         >[0],
       ) => {
-        params.completeBatch([entry.runId]);
+        params.completeBatch([entry]);
         return false;
       },
     );
@@ -5286,8 +5322,8 @@ describe("requester settle wake trigger", () => {
       });
       const runs = new Map([[entry.runId, entry]]);
       const settleWake = vi.fn(
-        async (params: { completeBatch: (runIds: readonly string[]) => void }) => {
-          params.completeBatch([entry.runId]);
+        async (params: { completeBatch: (batch: readonly SubagentRunRecord[]) => void }) => {
+          params.completeBatch([entry]);
           return false;
         },
       );
@@ -5333,9 +5369,9 @@ describe("requester settle wake trigger", () => {
     expect(entry.requesterSettleWake?.retireAfterSettle).toBe(true);
     expect(settleWake).toHaveBeenCalledTimes(1);
     const completeBatch = firstCallArg(settleWake).completeBatch as (
-      runIds: readonly string[],
+      batch: readonly SubagentRunRecord[],
     ) => void;
-    completeBatch([entry.runId]);
+    completeBatch([entry]);
     expect(runs.has(entry.runId)).toBe(false);
   });
 
@@ -5514,14 +5550,14 @@ describe("requester settle wake trigger", () => {
       ) => {
         invocation += 1;
         if (invocation === 1) {
-          params.transitionBatch([entry.runId], {
+          params.transitionBatch([entry], {
             status: "pending",
             attemptCount: 0,
             nextAttemptAt: 30_000,
             batchRunIds: [entry.runId],
           });
         } else {
-          params.completeBatch([entry.runId]);
+          params.completeBatch([entry]);
         }
         return false;
       },
@@ -5575,7 +5611,7 @@ describe("requester settle wake trigger", () => {
           LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
         >[0],
       ) => {
-        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration);
+        params.completeBatch([entry], entry.requesterSettleWake?.rearmGeneration);
         return true;
       },
     );
@@ -5690,7 +5726,7 @@ describe("requester settle wake trigger", () => {
     const completeBatch = firstCallArg(settleWake).completeBatch as NonNullable<
       Parameters<LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
     >["completeBatch"];
-    completeBatch([entry.runId], undefined, {
+    completeBatch([entry], undefined, {
       delivered: true,
       path: "direct",
     });
@@ -5750,64 +5786,89 @@ describe("requester settle wake trigger", () => {
     expect(entry.requesterSettleWake).toBeUndefined();
   });
 
-  it("preserves a newer yielded batch when an admitted wake rejects", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      delivery: { status: "delivered" },
-    });
-    const admittedWake = createDeferredCore<boolean>();
-    let wakeCount = 0;
-    const settleWake = vi.fn(
-      async (
-        params: Parameters<
-          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
-        >[0],
-      ) => {
-        wakeCount += 1;
-        if (wakeCount === 1) {
-          return await admittedWake.promise;
-        }
-        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration, {
-          delivered: true,
-          path: "direct",
+  it.each(["yielded", "replacement"])(
+    "preserves a newer %s batch when an admitted wake rejects",
+    async (kind) => {
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+        delivery: { status: "delivered" },
+      });
+      const admittedWake = createDeferredCore<boolean>();
+      const runs = new Map([[entry.runId, entry]]);
+      const warn = vi.fn();
+      let wakeCount = 0;
+      const settleWake = vi.fn(
+        async (
+          params: Parameters<
+            LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+          >[0],
+        ) => {
+          wakeCount += 1;
+          if (wakeCount === 1) {
+            return await admittedWake.promise;
+          }
+          params.completeBatch(
+            [params.settledEntry],
+            params.settledEntry.requesterSettleWake?.rearmGeneration,
+            {
+              delivered: true,
+              path: "direct",
+            },
+          );
+          return true;
+        },
+      );
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        warn,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      });
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+
+      let current = entry;
+      if (kind === "replacement") {
+        current = structuredClone(entry);
+        runs.set(entry.runId, current);
+      } else {
+        entry.requesterTurnRunId = "run-requester";
+        entry.requesterTurnYielded = true;
+        expect(
+          controller.settleRequesterTurnAfterSessionSpawns({
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterTurnRunId: "run-requester",
+            requesterYielded: true,
+            acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+          }),
+        ).toBe(true);
+        expect(entry.requesterSettleWake).toMatchObject({
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 1,
         });
-        return true;
-      },
-    );
-    const controller = createLifecycleController({
-      entry,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-    });
+      }
 
-    controller.completeCleanupBookkeeping({
-      runId: entry.runId,
-      entry,
-      cleanup: "keep",
-      completedAt: 5_000,
-    });
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
-
-    entry.requesterTurnRunId = "run-requester";
-    entry.requesterTurnYielded = true;
-    expect(
-      controller.settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: entry.requesterSessionKey,
-        requesterTurnRunId: "run-requester",
-        requesterYielded: true,
-        acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
-      }),
-    ).toBe(true);
-    expect(entry.requesterSettleWake).toMatchObject({
-      requesterYieldBatch: true,
-      afterRequesterYield: true,
-      rearmGeneration: 1,
-    });
-
-    admittedWake.reject(new Error("wake exploded"));
-    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
-    await waitForLifecycleState(() => expect(entry.requesterSettleWake).toBeUndefined());
-  });
+      admittedWake.reject(new Error("wake exploded"));
+      await waitForLifecycleState(() =>
+        expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything()),
+      );
+      if (kind === "replacement") {
+        expect(current.requesterSettleWake).toEqual(entry.requesterSettleWake);
+        expect(current.requesterSettleWake).toBeDefined();
+        controller.resumeRequesterSettleWake(current.runId, current);
+      }
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
+      await waitForLifecycleState(() => expect(current.requesterSettleWake).toBeUndefined());
+    },
+  );
 
   it("holds the settle wake as tracked root work so restart drain waits for its turn", async () => {
     resetGatewayWorkAdmission();
@@ -5847,6 +5908,283 @@ describe("requester settle wake trigger", () => {
       releaseWake?.();
       await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it.each([false, true])(
+    "reserves Gateway roots before the limiter (queued row replaced: %s)",
+    async (replaceQueued) => {
+      resetGatewayWorkAdmission();
+      const entries = [0, 1, 2].map((index) =>
+        createRunEntry({
+          runId: `run-restored-admission-${index}`,
+          requesterSessionKey: `agent:main:requester-${index}`,
+          endedAt: 4_000,
+          requesterSettleWake: { status: "pending", attemptCount: 2 },
+        }),
+      );
+      const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
+      const releases = new Map<SubagentRunRecord, () => void>();
+      const settleWake = vi.fn(
+        (params: RequesterSettleWakeParams) =>
+          new Promise<boolean>((resolve) => {
+            releases.set(params.settledEntry, () => {
+              params.completeBatch(
+                [params.settledEntry],
+                params.settledEntry.requesterSettleWake?.rearmGeneration,
+              );
+              resolve(false);
+            });
+          }),
+      );
+      const controller = createLifecycleController({
+        entry: entries[0]!,
+        runs,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      try {
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          for (const entry of entries) {
+            controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
+          }
+        });
+        await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
+        // The third callback is queued behind the two wake executions, but its
+        // Gateway root is already reserved and therefore visible to drain.
+        expect(getActiveGatewayRootWorkCount()).toBe(3);
+        expect(getActiveGatewayRootWorkHolders()).toEqual(["subagents:lifecycle-wake (3)"]);
+        const queued = entries[2]!;
+        const current = replaceQueued ? structuredClone(queued) : queued;
+        if (replaceQueued) {
+          runs.set(current.runId, current);
+          controller.resumeRequesterSettleWake(current.runId, current, "restore");
+        }
+        markGatewayRestartDraining();
+        expect(getActiveGatewayRootWorkCount()).toBe(replaceQueued ? 4 : 3);
+        releases.get(entries[0]!)?.();
+        await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
+        expect(settleWake.mock.calls[2]![0].settledEntry).toBe(current);
+        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
+        expect(current.requesterSettleWake).toEqual({ status: "pending", attemptCount: 2 });
+        controller.resumeRequesterSettleWake(current.runId, current, "restore");
+        expect(settleWake).toHaveBeenCalledTimes(3);
+
+        releases.get(current)?.();
+        await waitForLifecycleState(() => expect(current.requesterSettleWake).toBeUndefined());
+        expect(entries[1]!.requesterSettleWake).toBeDefined();
+        releases.get(entries[1]!)?.();
+        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        if (replaceQueued) {
+          expect(queued.requesterSettleWake).toEqual({ status: "pending", attemptCount: 2 });
+        }
+      } finally {
+        while (releases.size > 0) {
+          const pending = Array.from(releases.values());
+          releases.clear();
+          pending.forEach((release) => release());
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+        controller.clearScheduledResumeTimers();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
+  it("does not throttle live requester-settle wakes", async () => {
+    resetGatewayWorkAdmission();
+    const entries = [0, 1, 2].map((index) =>
+      createRunEntry({
+        runId: `run-live-admission-${index}`,
+        requesterSessionKey: `agent:main:live-requester-${index}`,
+        endedAt: 4_000,
+      }),
+    );
+    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
+    const releases = new Map<string, () => void>();
+    const settleWake = vi.fn(
+      (params: RequesterSettleWakeParams) =>
+        new Promise<boolean>((resolve) => {
+          releases.set(params.settledEntry.runId, () => {
+            params.completeBatch(
+              [params.settledEntry],
+              params.settledEntry.requesterSettleWake?.rearmGeneration,
+            );
+            resolve(false);
+          });
+        }),
+    );
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    try {
+      for (const entry of entries) {
+        controller.resumeRequesterSettleWake(entry.runId, entry);
+      }
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
+    } finally {
+      for (const release of releases.values()) {
+        release();
+      }
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      controller.clearScheduledResumeTimers();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("retires restored classification after a rejected wake settles", async () => {
+    resetGatewayWorkAdmission();
+    const entries = [0, 1, 2].map((index) =>
+      createRunEntry({
+        runId: `run-restored-rejection-${index}`,
+        requesterSessionKey: `agent:main:rejection-requester-${index}`,
+        endedAt: 4_000,
+        requesterSettleWake: { status: "pending", attemptCount: 0 },
+      }),
+    );
+    const rejected = entries[0]!;
+    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
+    const attempts = new Map<string, number>();
+    const releases = new Map<string, () => void>();
+    const settleWake = vi.fn((params: RequesterSettleWakeParams) => {
+      const runId = params.settledEntry.runId;
+      const attempt = (attempts.get(runId) ?? 0) + 1;
+      attempts.set(runId, attempt);
+      if (runId === rejected.runId && attempt === 1) {
+        return Promise.reject(new Error("wake exploded"));
+      }
+      return new Promise<boolean>((resolve) => {
+        releases.set(runId, () => {
+          params.completeBatch(
+            [params.settledEntry],
+            params.settledEntry.requesterSettleWake?.rearmGeneration,
+          );
+          resolve(false);
+        });
+      });
+    });
+    const controller = createLifecycleController({
+      entry: rejected,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    try {
+      for (const entry of entries) {
+        controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
+      }
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(3));
+      await waitForLifecycleState(() => expect(rejected.requesterSettleWake).toBeUndefined());
+
+      rejected.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      controller.resumeRequesterSettleWake(rejected.runId, rejected);
+      await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(4));
+    } finally {
+      while (releases.size > 0) {
+        const pending = Array.from(releases.values());
+        releases.clear();
+        pending.forEach((release) => release());
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      controller.clearScheduledResumeTimers();
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("keeps restored requester-settle retries behind the recovery cap", async () => {
+    resetGatewayWorkAdmission();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const entries = [0, 1, 2].map((index) =>
+      createRunEntry({
+        runId: `run-restored-retry-${index}`,
+        requesterSessionKey: `agent:main:retry-requester-${index}`,
+        endedAt: 4_000,
+        requesterSettleWake: { status: "pending", attemptCount: 0 },
+      }),
+    );
+    const runs = new Map(entries.map((entry) => [entry.runId, entry] as const));
+    const attempts = new Map<string, number>();
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    const settleWake = vi.fn(
+      (params: RequesterSettleWakeParams) =>
+        new Promise<boolean>((resolve) => {
+          const runId = params.settledEntry.runId;
+          const attempt = (attempts.get(runId) ?? 0) + 1;
+          attempts.set(runId, attempt);
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          releases.push(() => {
+            if (attempt === 1) {
+              params.transitionBatch([params.settledEntry], {
+                status: "pending",
+                attemptCount: 1,
+                nextAttemptAt: 100,
+                batchRunIds: [runId],
+              });
+            } else {
+              params.completeBatch(
+                [params.settledEntry],
+                params.settledEntry.requesterSettleWake?.rearmGeneration,
+              );
+            }
+            active -= 1;
+            resolve(false);
+          });
+        }),
+    );
+    const controller = createLifecycleController({
+      entry: entries[0]!,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    try {
+      for (const entry of entries) {
+        controller.resumeRequesterSettleWake(entry.runId, entry, "restore");
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settleWake).toHaveBeenCalledTimes(2);
+      expect(maxActive).toBe(2);
+      releases.splice(0, 2).forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settleWake).toHaveBeenCalledTimes(3);
+      releases.shift()?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(entries.map((entry) => entry.requesterSettleWake?.nextAttemptAt)).toEqual([
+        100, 100, 100,
+      ]);
+      expect(vi.getTimerCount()).toBe(3);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settleWake).toHaveBeenCalledTimes(5);
+      expect(maxActive).toBe(2);
+      releases.splice(0, 2).forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settleWake).toHaveBeenCalledTimes(6);
+      releases.shift()?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(active).toBe(0);
+      expect(maxActive).toBe(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        releases.splice(0).forEach((release) => release());
+        await vi.runOnlyPendingTimersAsync();
+      }
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
       resetGatewayWorkAdmission();
     }
   });

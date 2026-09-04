@@ -222,6 +222,19 @@ export type AuthProfileOrderResolution = {
   hasExplicitOrder: boolean;
 };
 
+/** Session pins lead the shared order without discarding its failover candidates. */
+export function prependAuthProfilePin(
+  resolution: AuthProfileOrderResolution,
+  profileId: string | undefined,
+): AuthProfileOrderResolution {
+  return profileId
+    ? {
+        ...resolution,
+        profileIds: [profileId, ...resolution.profileIds.filter((id) => id !== profileId)],
+      }
+    : resolution;
+}
+
 /** Shares stored-over-config order precedence with CLI runtime selection. */
 export function resolveExplicitAuthOrderSelection(params: {
   storeOrder: AuthProfileStore["order"] | undefined;
@@ -257,9 +270,9 @@ export function resolveAuthProfileOrderWithMetadata(
   });
   const now = Date.now();
 
-  // Clear any cooldowns that have expired since the last check so profiles
-  // get a fresh error count and are not immediately re-penalized on the
-  // next transient failure. See #3604.
+  // Clear expired windows so profiles become eligible for a half-open probe.
+  // Rate-limit counts persist until success to back off repeated failed probes;
+  // other transient failures still receive a fresh counter. See #3604.
   clearExpiredCooldowns(store, now);
   const { order: explicitOrder, fromStore: explicitOrderFromStore } =
     resolveExplicitAuthOrderSelection({

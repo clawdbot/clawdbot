@@ -342,7 +342,7 @@ export type ChannelMessageDeferredDeliveryAdmissionContext<TConfig = OpenClawCon
 };
 
 /** Optional hooks around adapter send attempts, platform success/failure, and commit. */
-export type ChannelMessageSendLifecycleAdapter<
+type ChannelMessageSendLifecycleAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = {

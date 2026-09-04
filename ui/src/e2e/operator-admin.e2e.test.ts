@@ -263,9 +263,8 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .getByText(
-              /Commands: system\.run, system\.execApprovals\.get, system\.execApprovals\.set/,
-            )
+            .locator(".device-entry__facts dd")
+            .filter({ hasText: "system.run, system.execApprovals.get, system.execApprovals.set" })
             .isVisible(),
         )
         .toBe(true);

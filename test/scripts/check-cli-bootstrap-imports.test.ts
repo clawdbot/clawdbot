@@ -183,4 +183,33 @@ describe("check-cli-bootstrap-imports", () => {
       "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
   });
+
+  it.each(["two", "three", "default"] as const)(
+    "requires the %s-artifact worker deployment contract",
+    (contract) => {
+      const root = makeTempRoot();
+      const workerDeployEntrypoints = [
+        "dist/worker/worker.mjs",
+        "dist/worker/workspace-rsync-receiver.mjs",
+      ];
+      for (const entrypoint of workerDeployEntrypoints) {
+        writeFixture(root, entrypoint, "export {};\n");
+      }
+      if (contract === "three") {
+        workerDeployEntrypoints.push("dist/worker/github-exec-launcher.mjs");
+      }
+      expect(
+        collectWorkerDeployArtifactErrors({
+          rootDir: root,
+          workerDeployEntrypoints: contract === "default" ? undefined : workerDeployEntrypoints,
+        }),
+      ).toEqual(
+        contract === "two"
+          ? []
+          : [
+              "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing. Run pnpm build first.",
+            ],
+      );
+    },
+  );
 });

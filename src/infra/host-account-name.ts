@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { runExec } from "../process/exec.js";
 
 // Account metadata is process-stable. Cache failures too so reconnects never repeat OS lookups.
@@ -26,7 +27,9 @@ async function readHostAccountName(): Promise<string | null> {
   const normalizeName = (value: string | null | undefined) => {
     const name = value?.trim();
     // Service accounts often repeat the login in their full-name field.
-    return name && name.toLowerCase() !== username.toLowerCase() ? name.slice(0, 256) : null;
+    return name && name.toLowerCase() !== username.toLowerCase()
+      ? truncateUtf16Safe(name, 256)
+      : null;
   };
   if (process.platform === "darwin") {
     const fullName = normalizeName(await readAccountCommand("/usr/bin/id", ["-F"]));

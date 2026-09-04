@@ -327,8 +327,12 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
     try {
-      await page.goto(`${suite.server.baseUrl}settings`);
-      await page.evaluate(async (gatewayOwner) => {
+      // Seed the legacy database before app boot can open the current version.
+      await page.route("**/outbox-recovery-seed", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Mock recovery seed" }),
+      );
+      await page.goto(`${suite.server.baseUrl}outbox-recovery-seed`);
+      const seededDatabaseVersion = await page.evaluate(async (gatewayOwner) => {
         const request = indexedDB.open("openclaw-control-ui", 1);
         request.addEventListener(
           "upgradeneeded",
@@ -377,7 +381,9 @@ suite.define(() => {
           );
         });
         db.close();
+        return db.version;
       }, gatewayAddress);
+      expect(seededDatabaseVersion).toBe(1);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const notice = page.locator(".chat-outbox-recovery");
       await notice.locator("summary").click();

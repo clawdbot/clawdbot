@@ -16,6 +16,27 @@ export const deviceSystemInfo: SystemInfoResult = {
   memoryTotalBytes: 32 * 1024 ** 3,
   memoryFreeBytes: 12 * 1024 ** 3,
 };
+export function createOfflineDeviceNode(nowMs = Date.now()) {
+  return {
+    nodeId: "offline-studio",
+    displayName: "Offline Studio",
+    platform: "darwin",
+    paired: true,
+    connected: false,
+    caps: ["system", "file"],
+    commands: ["system.run"],
+    hostStats: {
+      cpuCount: 24,
+      loadAverage: [3.2, 2.8, 2.4],
+      memoryTotalBytes: 192 * 1024 ** 3,
+      memoryFreeBytes: 41 * 1024 ** 3,
+      diskTotalBytes: 2 * 1024 ** 4,
+      diskAvailableBytes: 1.2 * 1024 ** 4,
+      updatedAtMs: nowMs - 27 * 86_400_000,
+    },
+  };
+}
+
 export const deviceDesktopEnvironments: EnvironmentSummary[] = [
   { id: "gateway", type: "host", status: "available", desktop: true },
 ];

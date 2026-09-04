@@ -49,14 +49,6 @@ type WebFetchProviderCacheEntry = {
 
 let webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
 
-/** Resolves whether web_fetch is enabled for the current config/sandbox. */
-function resolveWebFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.fetch?.enabled === "boolean") {
-    return params.fetch.enabled;
-  }
-  return true;
-}
-
 function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
   return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
@@ -249,7 +241,7 @@ export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
   const fetch = resolveFetchConfig(options?.config);
-  if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
+  if (fetch?.enabled === false) {
     return null;
   }
   const runtimeWebFetch =

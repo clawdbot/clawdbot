@@ -373,6 +373,7 @@
     {
       "provider": "anthropic",
       "method": "api-key",
+      "personalAccount": true,
       "choiceId": "apiKey",
       "appGuidedSecret": true,
       "choiceLabel": "Anthropic API key",

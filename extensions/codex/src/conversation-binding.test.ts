@@ -466,11 +466,10 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "bound-thread", cwd: tempDir });
     const notificationHandlers = new Set<(notification: unknown) => unknown>();
     const requestHandlers = new Set<(request: unknown) => unknown>();
-    const siblingRequestOwner = vi.fn(
-      (request: { method: string }): JsonValue =>
-        request.method === "item/tool/call"
-          ? { contentItems: [], success: true }
-          : { decision: "accept" },
+    const siblingRequestOwner = vi.fn((request: { method: string }): JsonValue =>
+      request.method === "item/tool/call"
+        ? { contentItems: [], success: true }
+        : { decision: "accept" },
     );
     const siblingResponses: unknown[] = [];
     let releaseSiblingRoute: (() => void) | undefined;

@@ -13,6 +13,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
+import { createSessionCompanion } from "./session-companion.js";
+import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -34,6 +36,75 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it.each(
+    [false, true].flatMap((warm) =>
+      (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
+        warm,
+        cancellation,
+      })),
+    ),
+  )(
+    "cancels $cancellation before prepared context resumes (warm=$warm)",
+    async ({ warm, cancellation }) => {
+      const scope = createScope(`companion-cancel-${cancellation}-${warm}`);
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const run = vi.fn(async () => "Existing answer.");
+      const service = createSessionCompanion({
+        getConfig: () => ({}),
+        contextReader: defaultSessionCompanionContextReader,
+        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
+        run,
+        now: () => 123,
+      });
+      const request = {
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        question: "Why?",
+        connId: "conn-1",
+      };
+      try {
+        if (warm) {
+          await service.ask(request);
+        }
+        const controller = new AbortController();
+        const pending = service
+          .ask({ ...request, signal: controller.signal })
+          .catch((error: unknown) => error);
+        if (cancellation === "reset") {
+          service.reset(request);
+        } else if (cancellation === "dispose") {
+          service.dispose();
+        } else if (cancellation === "backing-reset") {
+          notifyGatewaySessionReset(scope.sessionKey, scope.agentId);
+        } else {
+          controller.abort();
+        }
+        await expect(pending).resolves.toMatchObject({
+          reason: cancellation === "backing-reset" ? "context-unavailable" : "unavailable",
+          message:
+            cancellation === "backing-reset"
+              ? "The selected session changed before Side chat could answer."
+              : cancellation === "reset"
+                ? "The Side chat request was cancelled."
+                : "Side chat could not answer right now.",
+        });
+        expect(run).toHaveBeenCalledTimes(warm ? 1 : 0);
+        expect(service.state(request)).toEqual({
+          exchanges:
+            warm && cancellation === "request-abort"
+              ? [{ question: "Why?", answer: "Existing answer.", ts: 123 }]
+              : [],
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      } finally {
+        service.dispose();
+      }
+    },
+  );
+
   it("distinguishes a missing session from an empty selected transcript", async () => {
     const missing = createScope("companion-context-missing");
     await expect(defaultSessionCompanionContextReader.read(missing)).resolves.toEqual({

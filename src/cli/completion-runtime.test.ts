@@ -473,7 +473,7 @@ describe("completion-runtime", () => {
     async ({ shell, generation }) => {
       await withBashCompletionHome(async () => {
         const previousStateDir = tempDirs.make(
-          `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's-`,
+          `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's ‘quoted’-`,
         );
         const profilePath = resolveCompletionProfilePath(shell);
         await withEnvAsync({ OPENCLAW_STATE_DIR: previousStateDir }, async () => {
@@ -708,10 +708,11 @@ describe("completion-runtime", () => {
     });
   });
 
-  it("formats PowerShell reload commands with single-quoted paths", () => {
-    expect(formatCompletionReloadCommand("powershell", "C:\\Users\\Ada\\profile.ps1")).toBe(
-      ". 'C:\\Users\\Ada\\profile.ps1'",
-    );
+  it.each([
+    { profile: "C:\\Users\\Ada\\profile.ps1", command: ". 'C:\\Users\\Ada\\profile.ps1'" },
+    { profile: "C:\\Users\\Ada’s\\profile.ps1", command: ". 'C:\\Users\\Ada’’s\\profile.ps1'" },
+  ])("formats a literal PowerShell reload command for $profile", ({ profile, command }) => {
+    expect(formatCompletionReloadCommand("powershell", profile)).toBe(command);
   });
 
   it.each(["bash", "zsh"] as const)(

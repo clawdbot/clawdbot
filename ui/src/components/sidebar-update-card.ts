@@ -33,12 +33,15 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) refreshRequired = false;
-  @property({ attribute: false }) onRefresh: () => void = () => undefined;
+  @property({ attribute: false }) onRefresh: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
   @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
+  @state() private refreshInFlight = false;
+  @state() private refreshFailed = false;
+  private refreshAttempt = 0;
   private readonly countdownPolling = new PollController(
     this,
     1_000,
@@ -65,6 +68,15 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       this.handleNativeUpdateAvailabilityChanged,
     );
     super.disconnectedCallback();
+  }
+
+  override willUpdate(changed: PropertyValues<this>) {
+    super.willUpdate(changed);
+    if (changed.has("refreshRequired") && !this.refreshRequired) {
+      this.refreshAttempt += 1;
+      this.refreshInFlight = false;
+      this.refreshFailed = false;
+    }
   }
 
   override updated(changed: PropertyValues<this>) {
@@ -114,6 +126,28 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     this.holdingCampaignId = campaignId;
     await this.onHoldUpdate();
     this.holdingCampaignId = null;
+  };
+
+  private readonly refreshControlUi = async () => {
+    if (this.refreshInFlight) {
+      return;
+    }
+    this.refreshInFlight = true;
+    this.refreshFailed = false;
+    const attempt = ++this.refreshAttempt;
+    let reloading = false;
+    try {
+      reloading = await this.onRefresh();
+    } catch {
+      // The current document remains the recovery surface when its probe fails.
+    }
+    if (attempt !== this.refreshAttempt || !this.refreshRequired) {
+      return;
+    }
+    if (!reloading) {
+      this.refreshInFlight = false;
+      this.refreshFailed = true;
+    }
   };
 
   private hasAvailableUpdate() {
@@ -179,9 +213,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     >
       <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
         <span
-          class="sidebar-issues-panel__icon ${summary.critical
-            ? "sidebar-issues-panel__icon--critical"
-            : ""}"
+          class="sidebar-issues-panel__icon ${
+            summary.critical ? "sidebar-issues-panel__icon--critical" : ""
+          }"
           aria-hidden="true"
           >${summary.icon}</span
         >
@@ -189,21 +223,23 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
           <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
         </span>
-        ${this.onDismiss
-          ? html`<button
-              type="button"
-              class="sidebar-issues-panel__dismiss"
-              aria-label=${t("attention.dismissItem", { item: summary.title })}
-              title=${t("attention.dismissItem", { item: summary.title })}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.onDismiss?.();
-              }}
-            >
-              ${icons.x}
-            </button>`
-          : nothing}
+        ${
+          this.onDismiss
+            ? html`<button
+                type="button"
+                class="sidebar-issues-panel__dismiss"
+                aria-label=${t("attention.dismissItem", { item: summary.title })}
+                title=${t("attention.dismissItem", { item: summary.title })}
+                @click=${(event: Event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  this.onDismiss?.();
+                }}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>
       <div class="sidebar-issues-panel__body sidebar-update-issue__body">
@@ -240,16 +276,18 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         >
           ${t("updates.reviewUpdate")}
         </button>
-        ${showHold && campaign
-          ? html`<button
-              class="sidebar-update-card__hold"
-              type="button"
-              ?disabled=${this.holdingCampaignId === campaign.id}
-              @click=${() => this.holdUpdate(campaign.id)}
-            >
-              ${t("updates.holdOneHour")}
-            </button>`
-          : nothing}
+        ${
+          showHold && campaign
+            ? html`<button
+                class="sidebar-update-card__hold"
+                type="button"
+                ?disabled=${this.holdingCampaignId === campaign.id}
+                @click=${() => this.holdUpdate(campaign.id)}
+              >
+                ${t("updates.holdOneHour")}
+              </button>`
+            : nothing
+        }
       </div>
     </div>`;
   }
@@ -261,14 +299,38 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       return html`
         <div class="sidebar-update-card" role="status" aria-live="polite">
           ${this.renderStatus()}
-          <button class="sidebar-update-card__action" type="button" @click=${this.onRefresh}>
+          ${
+            this.refreshFailed
+              ? html`<div
+                  class="sidebar-update-card__status sidebar-update-card__status--warn"
+                  role="alert"
+                >
+                  ${t("connection.actionsUnavailable")}
+                </div>`
+              : nothing
+          }
+          <button
+            class="sidebar-update-card__action ${
+              this.refreshInFlight ? "sidebar-update-card__action--busy" : ""
+            }"
+            type="button"
+            ?disabled=${this.refreshInFlight}
+            aria-busy=${this.refreshInFlight ? "true" : "false"}
+            @click=${this.refreshControlUi}
+          >
             <span class="sidebar-update-card__icon" aria-hidden="true">${icons.refresh}</span>
             <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
               <span class="sidebar-update-card__title"
                 >${t("chat.sidebar.serverUpdatedTitle")}</span
               >
               <span class="sidebar-update-card__subtitle"
-                >${t("chat.sidebar.serverUpdatedRefresh")}</span
+                >${
+                  this.refreshInFlight
+                    ? t("lazyView.reloading")
+                    : this.refreshFailed
+                      ? t("connection.retryNow")
+                      : t("chat.sidebar.serverUpdatedRefresh")
+                }</span
               >
             </span>
           </button>
@@ -339,36 +401,44 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         aria-live=${campaign ? nothing : "polite"}
       >
         ${this.renderStatus()}
-        ${actionable
-          ? html`<div class="sidebar-update-card__actions">
-              ${this.canUpdate
-                ? updateAction
-                : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
-                    ${updateAction}
-                  </openclaw-tooltip>`}
-              ${showHold && campaign
-                ? html`
-                    <button
-                      class="sidebar-update-card__hold"
-                      type="button"
-                      ?disabled=${this.holdingCampaignId === campaign.id}
-                      @click=${() => this.holdUpdate(campaign.id)}
-                    >
-                      ${t("updates.holdOneHour")}
-                    </button>
-                  `
-                : nothing}
-            </div>`
-          : nothing}
-        ${statusBanner
-          ? html`<button
-              class="sidebar-update-card__review"
-              type="button"
-              @click=${this.onReviewUpdate}
-            >
-              ${t("updates.reviewUpdate")}
-            </button>`
-          : nothing}
+        ${
+          actionable
+            ? html`<div class="sidebar-update-card__actions">
+                ${
+                  this.canUpdate
+                    ? updateAction
+                    : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                        ${updateAction}
+                      </openclaw-tooltip>`
+                }
+                ${
+                  showHold && campaign
+                    ? html`
+                        <button
+                          class="sidebar-update-card__hold"
+                          type="button"
+                          ?disabled=${this.holdingCampaignId === campaign.id}
+                          @click=${() => this.holdUpdate(campaign.id)}
+                        >
+                          ${t("updates.holdOneHour")}
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
+        ${
+          statusBanner
+            ? html`<button
+                class="sidebar-update-card__review"
+                type="button"
+                @click=${this.onReviewUpdate}
+              >
+                ${t("updates.reviewUpdate")}
+              </button>`
+            : nothing
+        }
       </div>
     `;
   }

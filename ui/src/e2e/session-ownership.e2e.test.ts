@@ -205,14 +205,14 @@ suite.define(() => {
       const slotBounds = slot.getBoundingClientRect();
       const textBounds = text.getBoundingClientRect();
       return {
-        backSize: [backBounds.width, backBounds.height],
+        backSize: [Math.round(backBounds.width), Math.round(backBounds.height)],
         centerDelta:
           stackBounds.left + stackBounds.width / 2 - (slotBounds.left + slotBounds.width / 2),
-        frontSize: [frontBounds.width, frontBounds.height],
+        frontSize: [Math.round(frontBounds.width), Math.round(frontBounds.height)],
         overlap: backBounds.right - frontBounds.left,
         reveal: frontBounds.left - backBounds.left,
         slotWidth: slotBounds.width,
-        stackSize: [stackBounds.width, stackBounds.height],
+        stackSize: [Math.round(stackBounds.width), Math.round(stackBounds.height)],
         textGap: textBounds.left - stackBounds.right,
       };
     });
@@ -705,7 +705,7 @@ suite.define(() => {
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
-    expect(await dropdown.locator(".chat-pane__sharing-title").count()).toBe(1);
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(2);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();

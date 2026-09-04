@@ -2,6 +2,7 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   MOVED_WORKSPACE,
   PICKED,
@@ -289,9 +290,9 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      // wa-popup updates its anchored position asynchronously. Gate the atomic
-      // baseline on that settlement. After focus, poll the same exact geometry so
-      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      // Finish the picker's opening scale before recording its baseline. The top
+      // transform origin keeps the anchor gap stable while box geometry still grows.
+      await picker.locator('wa-popup [part~="popup"]').evaluate(finishElementAnimations);
       const menuGeometry = () =>
         page.evaluate(() => {
           const anchor = document.querySelector('[data-chat-model-select="true"]');

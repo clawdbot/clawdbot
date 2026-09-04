@@ -259,6 +259,12 @@ reports dropping invalidated thinking from replay. It includes the mismatch
 reasons and up to five affected message paths, not the thinking content. No
 debug flag is required.
 
+`[anthropic] server-side context edit: cleared N tool results (M input tokens)`
+is an info-level line when Anthropic reports applying server-side tool-result
+clearing. It contains counts only, without tool arguments or result content, and
+requires no debug flag. See [Session pruning](/concepts/session-pruning#direct-anthropic-api-key-requests)
+for the routes and thresholds that enable clearing.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,

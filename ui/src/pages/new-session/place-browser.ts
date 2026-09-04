@@ -65,9 +65,11 @@ export function renderPlaceBrowser(params: {
             }
           }}
         />
-        ${params.loading
-          ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-          : nothing}
+        ${
+          params.loading
+            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
+            : nothing
+        }
         <button
           type="button"
           class="new-session-page__browser-nav"
@@ -80,16 +82,20 @@ export function renderPlaceBrowser(params: {
       </div>
       ${params.error ? html`<div class="new-session-page__error">${params.error}</div>` : nothing}
       <div class="new-session-page__browser-list" role="group" aria-label=${t("newSession.folder")}>
-        ${params.listing && entries.length === 0 && !params.loading
-          ? html`<div class="new-session-page__browser-empty">${t("newSession.browserEmpty")}</div>`
-          : nothing}
+        ${
+          params.listing && entries.length === 0 && !params.loading
+            ? html`<div class="new-session-page__browser-empty">
+                ${t("newSession.browserEmpty")}
+              </div>`
+            : nothing
+        }
         ${entries.map(
           (entry) => html`
             <button
               type="button"
-              class="new-session-page__browser-entry ${entry.hidden
-                ? "new-session-page__browser-entry--hidden"
-                : ""}"
+              class="new-session-page__browser-entry ${
+                entry.hidden ? "new-session-page__browser-entry--hidden" : ""
+              }"
               title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
               @click=${() => params.onNavigate(entry.path)}
             >
@@ -100,18 +106,20 @@ export function renderPlaceBrowser(params: {
         )}
       </div>
       <div class="new-session-page__browser-actions">
-        ${registerProjectPath
-          ? html`
-              <button
-                type="button"
-                class="new-session-page__browser-register"
-                ?disabled=${params.registeringProject}
-                @click=${() => params.onRegisterProject(registerProjectPath)}
-              >
-                ${t("newSession.registerProject")}
-              </button>
-            `
-          : nothing}
+        ${
+          registerProjectPath
+            ? html`
+                <button
+                  type="button"
+                  class="new-session-page__browser-register"
+                  ?disabled=${params.registeringProject}
+                  @click=${() => params.onRegisterProject(registerProjectPath)}
+                >
+                  ${t("newSession.registerProject")}
+                </button>
+              `
+            : nothing
+        }
         <button
           type="button"
           class="new-session-page__browser-use"

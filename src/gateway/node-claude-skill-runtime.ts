@@ -293,7 +293,7 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       expectedPairingGeneration: runtime.node.pairingGeneration,
       isDispatchAuthorized: () => {
         runtime.assertCurrent();
-        return !signal.aborted;
+        return !signal.aborted && params.invocation.isDispatchAuthorized?.() !== false;
       },
       onDispatchReady: (id) => {
         invokeId = id;

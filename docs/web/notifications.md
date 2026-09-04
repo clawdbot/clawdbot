@@ -5,6 +5,7 @@ read_when:
   - Enabling notifications from Settings
   - Troubleshooting browser or macOS notification permission
   - Comparing Control UI notifications with mobile push
+  - Enabling browser alerts when another person mentions you
 ---
 
 OpenClaw can ping you when something needs your attention — including an exec or plugin approval request — in the browser that runs the Control UI, or through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically; **Settings → Notifications** remains the place to enable or repair the current device, check its status, and send yourself a test.
@@ -15,11 +16,11 @@ This page covers those two surfaces. It does not control channel reaction notifi
 
 What the Notifications page controls depends on where you opened it:
 
-| Where Settings is open                            | Transport                                          | What you can do                                                                |
-| ------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Supported web browser or installed Control UI PWA | Browser Push API via the Control UI service worker | Receive approval requests, manage this browser's subscription, and send a test |
-| OpenClaw macOS app                                | Native macOS notifications                         | Grant app permission, jump to System Settings when blocked, send a local test  |
-| Browser without Push API support                  | None                                               | Status only; enable and test stay unavailable                                  |
+| Where Settings is open                            | Transport                                          | What you can do                                                                                         |
+| ------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Supported web browser or installed Control UI PWA | Browser Push API via the Control UI service worker | Receive approvals and enabled attention categories, manage this browser's subscription, and send a test |
+| OpenClaw macOS app                                | Native macOS notifications                         | Grant app permission, jump to System Settings when blocked, send a local test                           |
+| Browser without Push API support                  | None                                               | Status only; enable and test stay unavailable                                                           |
 
 The macOS app deliberately uses the native permission flow instead of browser push — that is the notification system your Mac already respects.
 
@@ -41,7 +42,7 @@ Approval notifications use generic lock-screen text; command, working-directory,
 
 After subscribing, **Settings → Notifications** exposes two preference layers:
 
-- **Account defaults** follow a durable authenticated user profile across devices. They control approval requests and updates, agent completion, agent questions, scheduled-task failures, background-task failures, lock-screen detail, quiet hours, timezone, and an optional agent allowlist.
+- **Account defaults** follow a durable authenticated user profile across devices. They control approval requests and updates, agent completion, agent questions, human mentions, scheduled-task failures, background-task failures, lock-screen detail, quiet hours, timezone, and an optional agent allowlist.
 - **This browser or app** can mute one browser profile or installed Home Screen app, add a source label, or override individual categories without changing the account defaults. Native OpenClaw app notifications are configured separately.
 
 Single-user Gateways use their durable owner profile for account defaults, so those preferences follow the owner across devices. Connections without a profile keep the controls but store preferences only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
@@ -51,14 +52,24 @@ The default preserves the original behavior: approval request and resolution not
 The detail levels are:
 
 - **Private** — generic attention text only.
-- **Names only** — may include a sanitized device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels; raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+- **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
+- **Detailed** — currently uses the same bounded, sanitized producer-owned labels; message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
 
 On iPhone and iPad, Web Push is available only after installing the Control UI with **Share → Add to Home Screen** and opening that installed app. A normal Safari tab remains usable for the Control UI, but the Notifications page reports the install requirement and does not attempt to dereference an unavailable `PushManager`.
 
 **Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally verify transport only; approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway only when its paired device and user profile still own the subscription, then unsubscribes locally. Reconnecting under another profile can transfer the browser subscription only with its existing subscription keys; knowing an endpoint alone cannot change its owner or remove it.
 
 The Gateway sends Web Push directly to the browser vendor's push service. This works with a self-hosted Gateway and does not use the OpenClaw-hosted iOS relay.
+
+### Receive human mention alerts
+
+After subscribing in a supported browser or installed Control UI PWA, turn on **Someone mentions me** under **Settings → Notifications**. The category is **off by default** and requires a signed-in Gateway profile. Account defaults can enable it across your devices; the current browser can override or mute it. These category controls appear for subscribed web clients, not the native macOS notification settings.
+
+Only browsers bound to the mentioned profile receive the alert. Each delivery rechecks the device, current profile and role, read scope, and session visibility, then applies the category setting, quiet hours, and agent filter. Being online is not required. With **Private** detail, the alert says only that someone mentioned you in a conversation; **Names only** and **Detailed** may include the sanitized sender and session labels, never the message excerpt. Selecting it opens the session through the normal authenticated Control UI route.
+
+Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Opening the Inbox or reconnecting does not resend its old entries as browser notifications. The service worker displays browser alerts; the live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
+
+To verify targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Send test** only checks browser push transport and can reach every registered subscription; it does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
 
 ### Use more than one Gateway on one phone
 
@@ -112,6 +123,12 @@ Run `openclaw doctor --fix` with the Gateway stopped. Web Push refuses to use th
 Reconnect or reload the Control UI once so an older subscription is bound to the current paired device. The device must still have `operator.approvals` and `operator.read`; when Gateway roles are enabled, the current user profile's role must allow those scopes too. Approval visibility and session-sharing rules can intentionally exclude a request that the same Gateway sends to another operator.
 
 For a single PWA that switches among Gateways, also verify that every Gateway uses the same VAPID keypair and has a browser-reachable `gateway.publicOrigin`. Separate PWA origins or base-path scopes do not need to share VAPID keys.
+
+### A mention is missing or produces no browser alert
+
+Confirm the sender selected your profile from the picker rather than only typing your name, and that the original message reached the transcript. Sign in with the same profile and check that you still have access to the session. Incognito, Goal, catalog, suggestion-only, and command-send modes do not support human mentions.
+
+If the entry is in **Inbox → Mentions**, check this browser's subscription, **Someone mentions me**, quiet hours, mute overrides, and agent filter. An Inbox entry does not imply permission to display a browser notification. If the entry disappeared, it may have been dismissed from another browser using your profile, expired, evicted, or cleared by a Gateway restart. The retained chat message is independent of that temporary Inbox entry.
 
 ## Related
 

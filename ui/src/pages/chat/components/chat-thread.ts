@@ -66,16 +66,22 @@ function renderTranscriptShell(
       ? html`
           <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
             ${historySentinel}
-            ${projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
-              ? historyHeader.template
-              : nothing}
-            ${projection.showLoadingSkeleton
-              ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
-              : nothing}
+            ${
+              projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+                ? historyHeader.template
+                : nothing
+            }
+            ${
+              projection.showLoadingSkeleton
+                ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+                : nothing
+            }
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
-            ${projection.isEmpty && projection.searchOpen
-              ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-              : nothing}
+            ${
+              projection.isEmpty && projection.searchOpen
+                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                : nothing
+            }
           </div>
         `
       : projection.renderRows(historySentinel, historyHeader);
@@ -114,12 +120,12 @@ function renderTranscriptShell(
         }
         props.onHistoryIntent?.(event);
       }}
-      @touchstart=${props.onHistoryIntent
-        ? { handleEvent: props.onHistoryIntent, passive: true }
-        : null}
-      @touchmove=${props.onHistoryIntent
-        ? { handleEvent: props.onHistoryIntent, passive: true }
-        : null}
+      @touchstart=${
+        props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null
+      }
+      @touchmove=${
+        props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null
+      }
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
       @click=${(event: MouseEvent) => {

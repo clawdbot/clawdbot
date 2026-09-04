@@ -216,6 +216,27 @@ function isValidatedRecoveryCandidateSessionsDir(params: {
   }
 }
 
+function createRealAgentsRootResolver(): (agentsRoot: string) => string | undefined {
+  // Freeze successes and skippable failures for one discovery pass; each caller gets a fresh cache.
+  const realAgentsRoots = new Map<string, string | undefined>();
+  return (agentsRoot) => {
+    if (realAgentsRoots.has(agentsRoot)) {
+      return realAgentsRoots.get(agentsRoot);
+    }
+    try {
+      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
+      realAgentsRoots.set(agentsRoot, realAgentsRoot);
+      return realAgentsRoot;
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        realAgentsRoots.set(agentsRoot, undefined);
+        return undefined;
+      }
+      throw err;
+    }
+  };
+}
+
 function resolveSessionStoreDiscoveryState(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -431,23 +452,7 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
   const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
-  const realAgentsRoots = new Map<string, string | undefined>();
-  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
-    if (realAgentsRoots.has(agentsRoot)) {
-      return realAgentsRoots.get(agentsRoot);
-    }
-    try {
-      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        realAgentsRoots.set(agentsRoot, undefined);
-        return undefined;
-      }
-      throw err;
-    }
-  };
+  const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
     const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
     if (!agentsRoot) {
@@ -521,23 +526,7 @@ function resolveAgentSessionStoreTargets(
     resolveSessionStorePathCore(undefined, { agentId: requested, env }),
   ]);
   const targets: SessionStoreTarget[] = [];
-  const realAgentsRoots = new Map<string, string | undefined>();
-  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
-    if (realAgentsRoots.has(agentsRoot)) {
-      return realAgentsRoots.get(agentsRoot);
-    }
-    try {
-      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        realAgentsRoots.set(agentsRoot, undefined);
-        return undefined;
-      }
-      throw err;
-    }
-  };
+  const getRealAgentsRoot = createRealAgentsRootResolver();
 
   for (const storePath of storePaths) {
     const agentsRoot = resolveAgentsDirFromSessionStorePath(storePath);

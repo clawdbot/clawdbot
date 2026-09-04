@@ -9,6 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const rosterMatch = { includeGlobal: true };
 
 function sessionRow(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -83,8 +84,8 @@ suite.define(() => {
       await captureSidebar(page, "warm-before-event.png");
 
       // Hold the single warm roster projection open and observe the existing DOM.
-      const before = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const before = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: adaRow.key,
         key: adaRow.key,
@@ -92,7 +93,7 @@ suite.define(() => {
         reason: "create",
         updatedAt: 3,
       });
-      await gateway.waitForRequest("sessions.list", { after: before });
+      await gateway.waitForRequest("sessions.list", { after: before, match: rosterMatch });
       const refreshProbe = await page.evaluateHandle(() => {
         const app = document.querySelector<
           HTMLElement & { runtime?: { context: ApplicationContext } }
@@ -144,7 +145,9 @@ suite.define(() => {
         rowRemoved: false,
       });
       expect(
-        (await gateway.getRequests("sessions.list")).slice(before).map((request) => request.params),
+        (await gateway.getRequests("sessions.list", rosterMatch))
+          .slice(before)
+          .map((request) => request.params),
       ).toEqual([
         expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
       ]);

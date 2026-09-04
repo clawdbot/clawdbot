@@ -21,6 +21,7 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
 }));
 
 vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
+  SUBAGENT_RUNS_READ_CACHE_TTL_MS: 500,
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);
@@ -152,6 +153,39 @@ describe("agents_wait", () => {
       ],
       pending: ["one"],
     });
+  });
+
+  it("wakes from a local completion without waiting for the next poll", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const entry = collectorRun("local-wake", "agent:main:main");
+    records.set(entry.runId, entry);
+    const controller = new AbortController();
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+    let result: unknown;
+    const waiting = tool
+      .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
+      .then((value) => {
+        result = value.details;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      entry.collectorCompletion = { status: "done" };
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toMatchObject({ completed: [{ runId: entry.runId }], pending: [] });
+      expect(registryEvents.listeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await waiting.catch(() => {});
+      vi.useRealTimers();
+    }
   });
 
   it("projects an authorized collector failure without failing a mixed batch", async () => {

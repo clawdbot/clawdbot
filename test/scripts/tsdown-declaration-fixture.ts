@@ -107,7 +107,29 @@ export function createFixture(
 ) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
-  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+  // Link the selected graph's real toolchain and runtime packages: each writer
+  // validates the fixture's entire dependency topology before and after emit.
+  for (const name of [
+    ".bin",
+    "@anthropic-ai/claude-agent-sdk",
+    "@openclaw/fs-safe",
+    "@typescript/native-preview",
+    "playwright-core",
+    "tsdown",
+    "tsx",
+    "typescript",
+    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+      ? ["@types/node", "apache-arrow", "pretty-ms"]
+      : []),
+  ]) {
+    const target = path.join(root, "node_modules", name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(sourceRoot, "node_modules", name)),
+      target,
+      "junction",
+    );
+  }
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {

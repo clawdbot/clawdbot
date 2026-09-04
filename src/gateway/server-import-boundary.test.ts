@@ -183,7 +183,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
@@ -320,7 +320,7 @@ describe("gateway startup import boundaries", () => {
       "cronReconciliation.invalidate();",
     );
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
+      "void stopDeliveryRecoveryForClose();",
     );
     expect(beginHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
@@ -330,7 +330,7 @@ describe("gateway startup import boundaries", () => {
       "stopConfigReloaderForClose().catch",
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
+      "stopDeliveryRecoveryForClose(),",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

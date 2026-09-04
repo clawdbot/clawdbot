@@ -1,6 +1,7 @@
 // Tests entrypoint respawn behavior for compile cache and process flags.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 
@@ -15,14 +16,6 @@ function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): Cli
     throw new Error("Expected CLI respawn plan");
   }
   return plan;
-}
-
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 describe("buildCliRespawnPlan", () => {
@@ -392,7 +385,7 @@ describe("runCliRespawnPlan", () => {
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
     const attachChildProcessBridge = vi.fn();
-    const exit = vi.fn();
+    const exit = vi.fn<(code?: number) => never>();
     const writeError = vi.fn();
 
     runCliRespawnPlan(
@@ -405,7 +398,7 @@ describe("runCliRespawnPlan", () => {
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
         attachChildProcessBridge,
-        exit: exit as unknown as (code?: number) => never,
+        exit,
         writeError,
       },
     );
@@ -419,9 +412,9 @@ describe("runCliRespawnPlan", () => {
         detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
-    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
-      attachChildProcessBridge,
-      "child process bridge attach",
+    const [bridgeChild, bridgeOptions] = expectDefined<unknown[]>(
+      attachChildProcessBridge.mock.calls[0],
+      "child process bridge attach call",
     );
     expect(bridgeChild).toBe(child);
     expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });

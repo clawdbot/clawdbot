@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
@@ -269,6 +270,33 @@ async function runGoogleFixture(
 }
 
 describe("consumeGoogleGenerateContentStream", () => {
+  it("reports every parsed Google response as request activity", async () => {
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+    const responses = [
+      googleResponse({ usageMetadata: { totalTokenCount: 1 } }),
+      googleResponse({ finishReason: FinishReason.STOP }),
+    ];
+
+    try {
+      await consumeGoogleGenerateContentStream({
+        chunks: chunks(responses),
+        model,
+        output,
+        stream,
+        signal: controller.signal,
+        nextToolCallId: (name) => `generated-${name}`,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(responses.length);
+  });
+
   it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
     const { output, events } = await consumeGoogleFixture(
       [

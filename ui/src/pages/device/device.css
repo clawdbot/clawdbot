@@ -1,0 +1,13 @@
+.device-domains {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.device-domain-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

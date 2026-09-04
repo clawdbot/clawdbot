@@ -100,13 +100,11 @@ const ChatUserSchema = z
     username: z.string().optional(),
     nickname: z.string().optional(),
   })
-  .transform(
-    (user): ChatUser => ({
-      user_id: user.user_id,
-      username: user.username ?? "",
-      nickname: user.nickname ?? "",
-    }),
-  );
+  .transform((user): ChatUser => ({
+    user_id: user.user_id,
+    username: user.username ?? "",
+    nickname: user.nickname ?? "",
+  }));
 
 const ChatUserListResponseSchema = z.object({
   success: z.boolean(),

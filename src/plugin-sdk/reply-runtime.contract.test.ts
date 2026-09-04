@@ -22,6 +22,13 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionEnd"];
 
 describe("reply runtime public progress contracts", () => {
+  it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", () => {
+    // Removal window: first stable release after 2026.10 (see GetReplyOptions).
+    expectTypeOf<GetReplyOptions["suppressToolErrorWarnings"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
+  });
+
   it("exports acceptance-aware progress callback results", () => {
     expectTypeOf<Exclude<ProgressCallback, undefined>>().returns.toEqualTypeOf<
       Promise<ProgressResult> | ProgressResult

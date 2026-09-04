@@ -23,6 +23,7 @@ export type StreamGroupPart = Extract<
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
   | "sessionKey"
+  | "presented"
   | "boardProvider"
   | "agentId"
   | "runActive"
@@ -129,16 +130,18 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
-      ${footerStartedAt !== null && !active
-        ? html`
-            <div class="chat-group-footer">
-              <div class="chat-group-footer__meta">
-                <span class="chat-sender-name">${name}</span>
-                ${renderChatTimestamp(footerStartedAt)}
+      ${
+        footerStartedAt !== null && !active
+          ? html`
+              <div class="chat-group-footer">
+                <div class="chat-group-footer__meta">
+                  <span class="chat-sender-name">${name}</span>
+                  ${renderChatTimestamp(footerStartedAt)}
+                </div>
               </div>
-            </div>
-          `
-        : nothing}
+            `
+          : nothing
+      }
     </div>
   `;
 }

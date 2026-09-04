@@ -1,9 +1,14 @@
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+const IDENTITY_AVATAR_FAILURE_TTL_MS = 60_000;
 // Agent identity files also support SVG; these blobs render only as <img>, never inline markup.
 const IDENTITY_AVATAR_MIME_TYPES = new Set([
   "image/gif",
@@ -15,7 +20,8 @@ const IDENTITY_AVATAR_MIME_TYPES = new Set([
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
-  loaded: boolean;
+  settled: boolean;
+  retryAt?: number;
   promise: Promise<string | null>;
 };
 
@@ -39,39 +45,36 @@ function trimIdentityAvatarCache(): void {
     if (identityAvatarCache.size <= IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
       break;
     }
-    // Pending consumers still need their eventual blob. Only settled images
-    // may be evicted, in the Map's LRU order.
-    if (!entry.blobUrl || !entry.loaded) {
+    // Pending consumers still need their eventual blob. Evict only settled
+    // images or misses, in the Map's LRU order.
+    if (!entry.settled) {
       continue;
     }
     identityAvatarCache.delete(key);
-    URL.revokeObjectURL(entry.blobUrl);
+    if (entry.blobUrl) {
+      URL.revokeObjectURL(entry.blobUrl);
+    }
   }
 }
 
 function loadIdentityAvatar(url: string): string | Promise<string | null> {
   const cached = identityAvatarCache.get(url);
-  if (cached) {
-    // Map order is the LRU order; concurrent roster, profile, and chat views
-    // must share both the authenticated request and its resulting blob.
-    identityAvatarCache.delete(url);
+  // Map order is the LRU order; concurrent roster, profile, and chat views
+  // share the authenticated request and its result, including a cached miss.
+  identityAvatarCache.delete(url);
+  if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
-    return cached.loaded && cached.blobUrl ? cached.blobUrl : cached.promise;
+    return cached.settled && cached.blobUrl ? cached.blobUrl : cached.promise;
   }
 
   const entry: CachedIdentityAvatar = {
     blobUrl: null,
-    loaded: false,
+    settled: false,
     promise: Promise.resolve(null),
   };
-  const { authHeader } = readAvatarGatewayContext();
   entry.promise = (async () => {
     try {
-      const response = await fetch(url, {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
-      });
+      const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
       if (!response.ok) {
         return null;
       }
@@ -97,8 +100,11 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
       return null;
     } finally {
       if (!entry.blobUrl && identityAvatarCache.get(url) === entry) {
-        // Transient failures and uncached 404s must not hide a later upload.
-        identityAvatarCache.delete(url);
+        // Incidental rerenders share misses; expiry lets unversioned uploads and
+        // transient failures recover. New revisions or credentials bypass the miss.
+        entry.settled = true;
+        entry.retryAt = Date.now() + IDENTITY_AVATAR_FAILURE_TTL_MS;
+        trimIdentityAvatarCache();
       }
     }
   })();
@@ -109,14 +115,14 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
 
 /** Fetch connected-gateway profile images once and render CSP-safe blobs. */
 export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
-  const { authHeader, origin, resourceBasePath } = readAvatarGatewayContext();
+  const { authTokens, origin, resourceBasePath } = readAvatarGatewayContext();
   const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
   if (!trusted) {
     return null;
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.
-  return origin || authHeader ? loadIdentityAvatar(trusted) : trusted;
+  return origin || authTokens.length ? loadIdentityAvatar(trusted) : trusted;
 }
 
 /** A blob stays live until its image has finished loading or definitively failed. */
@@ -126,7 +132,7 @@ export function settleAvatarImageUrl(value: string | null): void {
   }
   for (const entry of identityAvatarCache.values()) {
     if (entry.blobUrl === value) {
-      entry.loaded = true;
+      entry.settled = true;
       trimIdentityAvatarCache();
       return;
     }

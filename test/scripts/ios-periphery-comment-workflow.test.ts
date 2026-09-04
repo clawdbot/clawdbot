@@ -387,11 +387,14 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
   });
 
-  it("uses hosted macOS capacity on retried scans", () => {
-    for (const workflowPath of [PRODUCER_WORKFLOW_PATH, MACOS_PRODUCER_WORKFLOW_PATH]) {
-      const workflow = parse(readFileSync(workflowPath, "utf8")) as ProducerWorkflow;
-      expect(workflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
-    }
+  it("uses hosted macOS capacity for scans", () => {
+    const iosWorkflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
+    const macosWorkflow = parse(
+      readFileSync(MACOS_PRODUCER_WORKFLOW_PATH, "utf8"),
+    ) as ProducerWorkflow;
+
+    expect(iosWorkflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
+    expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("macos-26");
   });
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({

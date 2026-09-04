@@ -10,7 +10,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
-import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import {
   isSqliteCorruptionError,
   runSqliteImmediateTransactionSync,
@@ -55,10 +55,6 @@ export type PluginDoctorRawStateEntry = Omit<PluginStateEntry<unknown>, "value" 
   expiresAt: number | null;
 };
 
-type CountRow = {
-  count: number | bigint;
-};
-
 type PluginStateDatabase = {
   db: DatabaseSync;
   path: string;
@@ -72,8 +68,6 @@ type PluginStateSeedEntryForTests = {
   createdAt?: number;
   expiresAt?: number | null;
 };
-
-let cachedDatabase: PluginStateDatabase | null = null;
 
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
@@ -341,7 +335,7 @@ function countLivePluginStateNamespaceEntries(
       .where("namespace", "=", params.namespace)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function allocatePluginStateNamespaceCreatedAt(
@@ -376,7 +370,7 @@ function countLivePluginStateEntries(
       .where("plugin_id", "=", params.pluginId)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function deleteOldestPluginStateNamespaceEntries(
@@ -412,20 +406,8 @@ function openPluginStateDatabase(
 ): PluginStateDatabase {
   const env = options.env ?? process.env;
   const pathname = resolveOpenClawStateSqlitePath(env);
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-
   try {
-    const database = openOpenClawStateDatabase(options);
-    cachedDatabase = {
-      db: database.db,
-      path: database.path,
-    };
-    return cachedDatabase;
+    return openOpenClawStateDatabase(options);
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -493,11 +475,6 @@ function withPluginStateDatabaseReadOnly<T>(
   }
 }
 
-function countRow(row: CountRow | undefined): number {
-  const raw = row?.count ?? 0;
-  return typeof raw === "bigint" ? Number(raw) : raw;
-}
-
 function envOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return env ? { env } : {};
 }
@@ -507,11 +484,12 @@ function runWriteTransaction<T>(
   write: (store: PluginStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const store = openPluginStateDatabase(operation, options);
-  return runOpenClawStateWriteTransaction(() => {
-    const result = write(store);
-    return result;
-  }, options);
+  // Only cold acquisition failures are open errors. A held owner's ownership or
+  // transaction failure must remain a write error, with its callback supplying the handle.
+  if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
+    openPluginStateDatabase(operation, options);
+  }
+  return runOpenClawStateWriteTransaction(write, options);
 }
 
 type PluginStateRetention = {
@@ -542,8 +520,8 @@ function readPluginStateRetention(
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
   return {
-    namespaceCount: Number(row?.namespace_count ?? 0),
-    pluginCount: Number(row?.plugin_count ?? 0),
+    namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
+    pluginCount: coerceRequiredSqliteNumber(row?.plugin_count ?? 0),
     nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
     now: params.now,
     sweepPending: true,
@@ -1560,7 +1538,6 @@ function seedPluginStateDatabaseEntriesForTests(
 function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
-  const wasOpen = cachedDatabase !== null;
   const stateWasOpen = isOpenClawStateDatabaseOpen();
 
   const pushOk = (name: string) => steps.push({ name, ok: true });
@@ -1636,7 +1613,7 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
   } catch (error) {
     pushFailure("probe", error);
   } finally {
-    if (!wasOpen && !stateWasOpen) {
+    if (!stateWasOpen) {
       closePluginStateDatabase();
     }
   }
@@ -1645,7 +1622,6 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 }
 
 export function closePluginStateDatabase(): void {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
 

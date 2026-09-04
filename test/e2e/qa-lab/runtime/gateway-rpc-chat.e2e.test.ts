@@ -10,8 +10,6 @@ import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-a
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../../../../src/agents/internal-runtime-context.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
@@ -66,13 +64,8 @@ const historyTextSchema = z.union([
   z.string(),
   z.array(z.object({ type: z.literal("text"), text: z.string() })).length(1),
 ]);
-const runtimeCarrierPrefix = [
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-  "",
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  "",
-].join("\n");
+// Next-turn carriers are the delimited body only; the marker instruction lives in the system prompt.
+const runtimeCarrierPrefix = `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`;
 
 function expectWhitespaceInterior(
   texts: string[],

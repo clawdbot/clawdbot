@@ -292,8 +292,7 @@ suite.define(() => {
     const connects = await gateway.getRequests("connect");
     const reconnectParams = requireRecord(connects.at(-1)?.params);
     expect(reconnectParams.scopes).toEqual(FULL_SCOPES.toSorted());
-    expect(requireRecord(reconnectParams.auth)).toMatchObject({
-      token: "rotated-device-token",
+    expect(requireRecord(reconnectParams.auth)).toEqual({
       deviceToken: "rotated-device-token",
     });
     await expect.poll(() => page.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);

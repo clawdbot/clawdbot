@@ -12,8 +12,10 @@ import {
   resolveLaunchAgentEnvWrapperPath,
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -43,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   loaded: true,
   listenerPids: vi.fn(() => [4242]),
   ports: vi.fn<typeof import("../../infra/ports-inspect.js").inspectPortUsage>(),
-  probe: vi.fn<typeof import("../../gateway/probe.js").probeGateway>(),
+  call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
@@ -101,12 +103,18 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.ports,
 }));
 
-vi.mock("../../gateway/probe.js", () => ({ probeGateway: mocks.probe }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: mocks.call,
+}));
 
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
-  readSystemdServiceRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
+  readSystemdServiceRuntime: async () => ({
+    status: mocks.running ? "running" : "stopped",
+    ...(mocks.running ? { pid: 4242 } : {}),
+  }),
   isSystemdServiceEnabled: async () => mocks.loaded,
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,
@@ -198,7 +206,7 @@ beforeEach(async () => {
     listeners: [],
     hints: [],
   }));
-  mocks.probe.mockReset();
+  mocks.call.mockReset();
   mocks.running = true;
   mocks.loaded = true;
   mocks.inLaunchd = false;
@@ -280,6 +288,11 @@ describe("preserved update activation with real version guards", () => {
   ])(
     "handles $phase $denial denial for $channel $mode activation ($outcome)",
     async ({ mode, denial, outcome, channel, phase }) => {
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
       const late = phase === "late";
       const serviceCommand = await mocks.command(process.env);
       if (!serviceCommand) {
@@ -354,25 +367,17 @@ describe("preserved update activation with real version guards", () => {
         listeners: [{ pid: 4242, command: "openclaw-gateway" }],
         hints: [],
       }));
-      mocks.probe.mockImplementation(async ({ url }) => ({
-        ok: true,
-        url,
-        connectLatencyMs: 1,
-        error: null,
-        close: null,
-        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-        server: {
-          version: VERSION,
-          connId: "fixture",
-          ...(outcome === "missing build"
-            ? {}
-            : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
-        },
-        health: {},
-        status: {},
-        presence: [],
-        configSnapshot: null,
-      }));
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({
+          server: {
+            version: VERSION,
+            connId: "fixture",
+            ...(outcome === "missing build"
+              ? {}
+              : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
+          },
+        }),
+      );
       const { waitForGatewayHealthyRestart } = await vi.importActual<
         typeof import("../daemon-cli/restart-health.js")
       >("../daemon-cli/restart-health.js");
@@ -444,9 +449,12 @@ describe("preserved update activation with real version guards", () => {
             ([args]) => args.expectedBuildId === (channel === "dev" ? "new-build" : undefined),
           ),
         ).toBe(true);
-        expect(mocks.probe.mock.calls.every(([args]) => args.url === "ws://127.0.0.1:19305")).toBe(
-          true,
-        );
+        expect(mocks.call).toHaveBeenCalled();
+        expect(
+          mocks.call.mock.calls.every(
+            ([args]) => args.localPortOverride === 19305 && args.method === "health",
+          ),
+        ).toBe(true);
       }
       if (buildMismatch) {
         expect(

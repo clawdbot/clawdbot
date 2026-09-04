@@ -111,7 +111,7 @@ async function showSplitDashboard(page: import("playwright").Page, sessionKey: s
     { key: sessionKey, settingsKey: storageKey },
   );
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-  await page.locator('.side-panel [data-panel-slot="chat"] .chat-thread').waitFor();
+  await page.locator(".chat-pane-primary-column .chat-thread").waitFor();
 }
 
 suite.define(() => {

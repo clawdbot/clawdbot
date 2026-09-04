@@ -160,6 +160,8 @@ The script must return `{ fire, message?, state? }`. The previous JSON state is 
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
+Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
+
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
@@ -469,6 +471,8 @@ Failure notification routes resolve in this order:
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
+In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including the skipped-run setting.
+
 A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. All such alerts, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear the cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
@@ -547,6 +551,16 @@ For template files, keep the language instruction in the rendered prompt and ver
 </Tabs>
 
 ## Managing jobs
+
+### Conversational management
+
+In the authenticated Control UI, an administrator with `operator.admin` can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+
+The Gateway grants this authority from the authenticated Control UI turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel turns and Control UI turns without `operator.admin` receive no such grant; matching sender IDs, account IDs, or session routes never establish it. If access is denied or a grant expires, retry from a fresh authenticated Control UI administrator turn, or use the **Automations** page.
+
+Each admin management request records its method, run, operational instance, and success or failure in the Gateway's `cron: admin management` log, alongside the ordinary tool audit record. Management authority does not transfer creator attribution or replace the job's scheduled execution policy.
+
+### CLI management
 
 ```bash
 # List enabled jobs

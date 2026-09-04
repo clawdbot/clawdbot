@@ -48,6 +48,11 @@ Without it, discovery uses the configured System Agent or the existing sole/lega
 An explicit fleet with no such owner requires `--agent`. Selecting a workspace
 does not create account routing bindings; guided setup asks about routing separately.
 
+`add`, `login`, `logout`, and `remove` also take `--account <id>`. Omitting it selects the
+default account. A blank value is rejected instead of falling back to the default, as with
+the dead-letter commands, so an unset shell variable cannot silently select an account you
+did not name.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`

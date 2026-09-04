@@ -394,9 +394,19 @@ export function activateCodexAttemptTurn(
     },
   });
   steeringQueueRef.current = activeSteeringQueue;
+  type InputAuthority = NonNullable<
+    Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"]
+  >;
+  const injectionGuard = (assertCurrent?: () => void) => () => {
+    assertCurrent?.();
+    assertSteeringActive();
+    return true;
+  };
   const claimPendingUserInputAnswer = async (
     text: string,
     optionsLocal?: CodexSteeringQueueOptions,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
   ) => {
     if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
       return false;
@@ -405,6 +415,7 @@ export function activateCodexAttemptTurn(
     return await claimPendingAgentQuestionAnswer({
       sessionKey: params.sessionKey ?? params.sessionId,
       text,
+      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
       persist: optionsLocal.userTurnTranscriptRecorder
         ? async () => {
             await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
@@ -412,13 +423,25 @@ export function activateCodexAttemptTurn(
         : undefined,
     });
   };
-  const cancelPendingUserInput = (resolvedBy: string) =>
+  const cancelPendingUserInput = (
+    resolvedBy: string,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+  ) =>
     cancelPendingAgentQuestionForSession({
       sessionKey: params.sessionKey ?? params.sessionId,
       resolvedBy,
+      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
     });
-  const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
-    if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+  // V1 retains backend-only authority; V2 requires a host assertion.
+  const queueMessage = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+    assertCurrent?: () => void,
+    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+  ) => {
+    const canClaim = injectionGuard(assertCurrent);
+    if (await claimPendingUserInputAnswer(text, optionsLocal, assertCurrent, authorityKind)) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
@@ -427,8 +450,12 @@ export function activateCodexAttemptTurn(
     if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
-        await cancelPendingUserInput("image-reply");
+        await cancelPendingUserInput("image-reply", assertCurrent, authorityKind);
       } catch (error) {
+        canClaim();
+        if (error instanceof Error && error.name === "QuestionDispatchRefusedError") {
+          throw error;
+        }
         // Cleanup failure must not drop the user's image turn.
         embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
           error,
@@ -436,7 +463,7 @@ export function activateCodexAttemptTurn(
       }
     }
     try {
-      await activeSteeringQueue.queue(text, optionsLocal);
+      await activeSteeringQueue.queue(text, optionsLocal, injectionGuard(assertCurrent));
     } catch (error) {
       if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
         return {
@@ -447,6 +474,16 @@ export function activateCodexAttemptTurn(
       throw error;
     }
     return undefined;
+  };
+  const messageInjection = {
+    version: 2 as const,
+    isAvailable: () =>
+      !state.completed &&
+      !state.terminalTurnNotificationQueued &&
+      !runAbortController.signal.aborted,
+    queueMessage,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
   };
   const handle = {
     kind: "embedded" as const,
@@ -477,13 +514,8 @@ export function activateCodexAttemptTurn(
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
     queueMessage,
-    messageInjection: {
-      isAvailable: () =>
-        !state.completed &&
-        !state.terminalTurnNotificationQueued &&
-        !runAbortController.signal.aborted,
-      queueMessage,
-    },
+    messageInjection,
+    messageInjectionV2: messageInjection,
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isAborted: () => runAbortController.signal.aborted,
     isStopped: () => state.completed || runAbortController.signal.aborted,

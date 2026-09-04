@@ -250,7 +250,9 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -551,11 +553,11 @@ suite.define(() => {
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -571,7 +573,9 @@ suite.define(() => {
 
       await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
 
       // The sidebar header search button is the command palette entry point.
       const searchButton = page.locator(".sidebar-brand__search");

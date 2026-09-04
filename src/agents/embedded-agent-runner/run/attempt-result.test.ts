@@ -68,6 +68,7 @@ function completeResult(params?: {
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
       getMessagingToolSourceReplyPayloads: () => [],
+      getSourceReplyDelivered: () => undefined,
       getPendingToolMediaReply: () => params?.pendingToolMediaReply,
       getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
       getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),

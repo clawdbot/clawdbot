@@ -16,8 +16,10 @@ import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import {
+  SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
+  type SystemAgentApprovalRequestPayload,
+} from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
@@ -28,8 +30,8 @@ import {
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
-import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
+import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
+import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -47,472 +49,6 @@ vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
 
 afterEach(() => {
   resetAgentRunRegistryForTest();
-});
-
-async function resolveTestProposal(
-  params: Parameters<typeof prepareDelegatedSystemAgentApproval>[0] & {
-    proposal: NonNullable<
-      ReturnType<SystemAgentChatSession["engine"]["getPendingOperatorProposal"]>
-    >;
-  },
-) {
-  const resolveProposal = await prepareDelegatedSystemAgentApproval(params);
-  return await resolveProposal(params.proposal);
-}
-
-async function queueDelegatedApproval(
-  params: Parameters<typeof resolveTestProposal>[0],
-): Promise<string> {
-  const resolution = await resolveTestProposal(params);
-  if (resolution.kind !== "approval") {
-    throw new Error("expected a human approval request");
-  }
-  return resolution.id;
-}
-
-describe("prepareDelegatedSystemAgentApproval", () => {
-  const workerTurnClaim = (claimId: string): WorkerSessionTurnClaim => ({
-    sessionId: "delegate-worker",
-    claimId,
-    runId: "delegated-worker-run",
-    placementGeneration: 1,
-    owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 1 },
-  });
-
-  it("refuses to apply a delegated change after its run authority closes", async () => {
-    const proposal = {
-      operation: { kind: "gateway-restart" as const },
-      hash: "a".repeat(64),
-    };
-    const resolveOperatorApproval = vi.fn().mockResolvedValue(null);
-    const session = {
-      engine: {
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
-    const sessions = new Map([["delegate-closed", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-    });
-    const context = {
-      systemAgentApprovalManager: manager,
-      broadcast: vi.fn(),
-    } as unknown as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-closed");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-    let approvalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-      },
-      async () => {
-        approvalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-closed",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
-    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-
-    expect(approvalId).toBeTruthy();
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(false);
-    expect(manager.getSnapshot(approvalId!)?.status).toBe("cancelled");
-    await vi.waitFor(() =>
-      expect(resolveOperatorApproval).toHaveBeenCalledWith(
-        null,
-        proposal.hash,
-        expect.any(Function),
-      ),
-    );
-  });
-
-  it("rechecks authority after queued approval work before the final effect", async () => {
-    const proposal = {
-      operation: { kind: "gateway-restart" as const },
-      hash: "b".repeat(64),
-    };
-    const applyStarted = createDeferred();
-    const releaseApply = createDeferred();
-    const applyEffect = vi.fn();
-    const resolveOperatorApproval = vi.fn(
-      async (
-        _decision: "allow-once" | "allow-always" | "deny" | null,
-        _proposalHash: string,
-        beforePersistentApply?: () => void,
-      ) => {
-        if (_decision === null) {
-          return null;
-        }
-        applyStarted.resolve();
-        await releaseApply.promise;
-        beforePersistentApply?.();
-        applyEffect();
-        return null;
-      },
-    );
-    const session = {
-      engine: {
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
-    const sessions = new Map([["delegate-race", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-    });
-    const publishResolved = vi.fn();
-    const context = {
-      systemAgentApprovalManager: manager,
-      broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved },
-    } as unknown as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-race");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-    let approvalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-      },
-      async () => {
-        approvalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-race",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
-
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
-    await applyStarted.promise;
-    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
-    releaseApply.resolve();
-    const result = resolveOperatorApproval.mock.results[0]?.value;
-    await expect(result).rejects.toThrow("system-agent approval authority is no longer active");
-    expect(applyEffect).not.toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(publishResolved).toHaveBeenCalledWith(
-        "system-agent",
-        expect.objectContaining({ applicationStatus: "not-applied" }),
-      ),
-    );
-  });
-
-  it.each(["run", "tool", "gateway", "worker", "session"] as const)(
-    "fences Full Access when its %s closes during apply preparation",
-    async (owner) => {
-      const started = createDeferred();
-      const release = createDeferred();
-      const effect = vi.fn();
-      const proposal = { operation: { kind: "gateway-restart" as const }, hash: "f".repeat(64) };
-      const session = {
-        engine: {
-          resolveOperatorApproval: async (
-            decision: ExecApprovalDecision | null,
-            _hash: string,
-            assertCurrent?: () => void,
-          ) => {
-            if (decision === null) {
-              return null;
-            }
-            started.resolve();
-            await release.promise;
-            assertCurrent?.();
-            effect();
-            return { text: "Applied", action: "none" as const, applied: true };
-          },
-        },
-        ownerKey: "agent:main:main",
-        lastUsedAt: 1,
-      } as unknown as SystemAgentChatSession;
-      const sessions = new Map([["delegate-full", session]]);
-      let workerActive = true;
-      const context = {
-        systemAgentSessions: sessions,
-        validateAgentRuntimeApprovalAuthority: () => workerActive,
-      } as unknown as GatewayRequestContext;
-      let liveContext = context;
-      const operationalRunInstance = createOperationalRunInstanceRef("full-access-run");
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      const controller = new AbortController();
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          approvalAuthority: authority,
-          fullPermission: true,
-          gatewayContextResolver: () => liveContext,
-          approvalSignals: [controller.signal],
-          ...(owner === "worker" ? { workerTurnClaim: workerTurnClaim("full-turn") } : {}),
-        },
-        () =>
-          resolveTestProposal({
-            context,
-            sessions,
-            session,
-            sessionId: "delegate-full",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            proposal,
-          }),
-      );
-      await started.promise;
-      if (owner === "run") {
-        releaseAgentRunDelegatedAuthority(authority);
-      } else if (owner === "tool") {
-        controller.abort();
-      } else if (owner === "gateway") {
-        liveContext = { ...context };
-      } else if (owner === "worker") {
-        workerActive = false;
-      } else {
-        sessions.set("delegate-full", { ...session });
-      }
-      release.resolve();
-
-      await expect(pending).rejects.toThrow("system-agent approval authority is no longer active");
-      expect(effect).not.toHaveBeenCalled();
-    },
-  );
-
-  it("publishes the channel completion after the delegated change is applied", async () => {
-    const proposal = {
-      operation: { kind: "gateway-restart" as const },
-      hash: "c".repeat(64),
-    };
-    const resolveOperatorApproval = vi.fn().mockResolvedValue({
-      text: "Applied",
-      action: "none" as const,
-      applied: true,
-    });
-    const session = {
-      engine: {
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
-    const sessions = new Map([["delegate-applied", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-    });
-    const publishResolved = vi.fn();
-    const context = {
-      systemAgentApprovalManager: manager,
-      broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved },
-    } as unknown as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-applied");
-    claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-    let approvalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-      },
-      async () => {
-        approvalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-applied",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
-
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
-    await vi.waitFor(() =>
-      expect(publishResolved).toHaveBeenCalledWith(
-        "system-agent",
-        expect.objectContaining({ applicationStatus: "applied" }),
-      ),
-    );
-  });
-
-  it("fences a delegated worker turn before the persistent effect", async () => {
-    const proposal = {
-      operation: { kind: "gateway-restart" as const },
-      hash: "d".repeat(64),
-    };
-    const applyStarted = createDeferred();
-    const releaseApply = createDeferred();
-    let workerTurnActive = true;
-    const applyEffect = vi.fn();
-    const resolveOperatorApproval = vi.fn(
-      async (
-        _decision: "allow-once" | "allow-always" | "deny" | null,
-        _proposalHash: string,
-        beforePersistentApply?: () => void,
-      ) => {
-        if (_decision === null) {
-          return null;
-        }
-        applyStarted.resolve();
-        await releaseApply.promise;
-        beforePersistentApply?.();
-        applyEffect();
-        return null;
-      },
-    );
-    const session = {
-      engine: {
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval,
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
-    const sessions = new Map([["delegate-worker", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: (authority) =>
-        validateAgentRunDelegatedAuthority(authority) && workerTurnActive,
-    });
-    const context = {
-      systemAgentApprovalManager: manager,
-      broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved: vi.fn() },
-      validateAgentRuntimeApprovalAuthority: () => workerTurnActive,
-    } as unknown as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
-    claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const turnClaim = workerTurnClaim("turn-1");
-
-    let approvalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-        workerTurnClaim: turnClaim,
-      },
-      async () => {
-        approvalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-worker",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
-
-    expect(manager.resolve(approvalId!, "allow-once", "operator-ui")).toBe(true);
-    await applyStarted.promise;
-    workerTurnActive = false;
-    releaseApply.resolve();
-    const result = resolveOperatorApproval.mock.results[0]?.value;
-    await expect(result).rejects.toThrow("system-agent approval authority is no longer active");
-    expect(applyEffect).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "reuses the exact worker approval with Full Access=%s",
-    async (fullPermission) => {
-      const proposal = {
-        operation: { kind: "gateway-restart" as const },
-        hash: "e".repeat(64),
-      };
-      const session = {
-        engine: {
-          getPendingOperatorProposal: () => proposal,
-          resolveOperatorApproval: vi.fn().mockResolvedValue(null),
-        },
-        lastUsedAt: 1,
-        ownerKey: "agent:main:main",
-      } as unknown as SystemAgentChatSession;
-      const sessions = new Map([["delegate-worker", session]]);
-      const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-        approvalKind: "system-agent",
-        resolveAllowedDecisions: (request) => request.allowedDecisions,
-        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-      });
-      const context = {
-        systemAgentApprovalManager: manager,
-        broadcast: vi.fn(),
-        validateAgentRuntimeApprovalAuthority: () => true,
-      } as unknown as GatewayRequestContext;
-      const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
-      claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-      const firstClaim = workerTurnClaim("turn-2");
-      let firstApprovalId: string | undefined;
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          workerTurnClaim: firstClaim,
-        },
-        async () => {
-          firstApprovalId = await queueDelegatedApproval({
-            context,
-            sessions,
-            session,
-            sessionId: "delegate-worker",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            proposal,
-          });
-        },
-      );
-      const secondClaim = workerTurnClaim("turn-2");
-      let secondApprovalId: string | undefined;
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          workerTurnClaim: secondClaim,
-          fullPermission,
-        },
-        async () => {
-          secondApprovalId = await queueDelegatedApproval({
-            context,
-            sessions,
-            session,
-            sessionId: "delegate-worker",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            proposal,
-          });
-        },
-      );
-
-      expect(secondApprovalId).toBe(firstApprovalId);
-      expect(manager.listPendingRecords()).toHaveLength(1);
-      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe("Full Access delegated chat", () => {
@@ -540,6 +76,320 @@ describe("Full Access delegated chat", () => {
     pluginMetadataSnapshot?.rebindForCurrentEnv();
   });
 
+  async function createDelegatedChatFixture(
+    source: "typed" | "model tool" | "planner" = "typed",
+    previousRun = "live",
+  ) {
+    const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
+    pluginMetadataSnapshot?.rebindForCurrentEnv();
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+    setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
+      fixture.binding.execution,
+    );
+    const runConfigSet = vi.fn(async () => {});
+    let proposed = false;
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      surface: "gateway",
+      verifiedInference: fixture.binding,
+      deps: {
+        ...fixture.deps,
+        readConfigFileSnapshot: async () =>
+          ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            hash: "verified-config",
+            config: verifiedConfig,
+            runtimeConfig: verifiedConfig,
+            sourceConfig: verifiedConfig,
+            issues: [],
+          }) as never,
+        runConfigSet,
+      },
+      runAgentTurn: async (params) => {
+        if (source === "typed" || proposed) {
+          return { text: "Config verified." };
+        }
+        if (source === "planner") {
+          return null;
+        }
+        proposed = true;
+        const tool = createSystemAgentTool({
+          surface: params.surface,
+          approvalArmed: params.approvalArmed,
+          operatorApprovalOnly: params.operatorApprovalOnly,
+          proposalRef: params.session.proposalRef,
+        });
+        await tool.execute("propose-config", {
+          action: "config_set",
+          path: "logging.level",
+          value: "debug",
+        });
+        return { text: "Change proposed." };
+      },
+      planWithAssistant: async () => {
+        proposed = true;
+        return { reply: "Change proposed.", command: "config set logging.level debug" };
+      },
+    });
+    vi.spyOn(engine, "loadOverview").mockResolvedValue({
+      config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+      agents: [],
+      defaultAgentId: "main",
+      defaultModel: "openai/gpt-5.5",
+      tools: {
+        codex: { available: false },
+        claude: { available: false },
+        gemini: { available: false },
+        apiKeys: { openai: false, anthropic: false },
+      },
+      gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
+      references: {
+        docsUrl: "https://docs.openclaw.ai",
+        sourceUrl: "https://github.com/openclaw/openclaw",
+      },
+    } as never);
+    const delegatedSession: SystemAgentChatSession = {
+      engine,
+      welcome: "welcome text",
+      lastUsedAt: 1,
+      ownerKey: JSON.stringify(["main", "agent:main:main"]),
+    };
+    const sessions = new Map<string, SystemAgentChatSession>([["delegate-full", delegatedSession]]);
+    const approvalDatabasePath = path.join(stateDir, "approvals.sqlite");
+    if (previousRun === "registration-failure") {
+      fs.mkdirSync(approvalDatabasePath);
+    }
+    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+      ...(["registration-failure", "durable"].includes(previousRun)
+        ? {
+            persistence: {
+              runtimeEpoch: "delegated-approval-test",
+              databaseOptions: { path: approvalDatabasePath },
+            },
+          }
+        : {}),
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("delegated-full-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const requested = createDeferred();
+    const broadcast = vi.fn((event: string) => {
+      if (event === "openclaw.approval.requested") {
+        requested.resolve();
+      }
+    });
+    const context = {
+      systemAgentSessions: sessions,
+      systemAgentApprovalManager: manager,
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      hasExecApprovalClients: () => true,
+    } as unknown as GatewayRequestContext;
+    const callChat = async (params: Record<string, unknown>) => {
+      const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
+      const handler = expectDefined(systemAgentHandlers["openclaw.chat"], "chat handler");
+      await handler({
+        params,
+        respond,
+        context,
+        client: {
+          connId: "conn-test",
+          connect: { device: { id: "device-test" } },
+        } as GatewayClient,
+      } as never);
+      const [ok, payload, error] = expectDefined(respond.mock.calls[0], "chat response");
+      return { ok, payload, error };
+    };
+    return {
+      engine,
+      manager,
+      authority,
+      operationalRunInstance,
+      sessions,
+      delegatedSession,
+      context,
+      runConfigSet,
+      broadcast,
+      callChat,
+      requested,
+      approvalDatabasePath,
+    };
+  }
+
+  it.each([
+    "allow",
+    "deny",
+    "expired",
+    "run-cancelled",
+    "tool-cancelled",
+    "apply-failed",
+    "queued-cancelled",
+    "precommit-cancelled",
+    "afterDecision-failed",
+  ] as const)(
+    "keeps delegated chat pending without blocking other work until %s settles",
+    async (outcome) => {
+      const {
+        engine,
+        manager,
+        authority,
+        operationalRunInstance,
+        runConfigSet,
+        callChat,
+        requested,
+        approvalDatabasePath,
+      } = await createDelegatedChatFixture("typed", "durable");
+      const controller = new AbortController();
+      if (outcome === "expired") {
+        vi.useFakeTimers();
+      }
+      const applyStarted = createDeferred();
+      const releaseApply = createDeferred();
+      const execution = await setupInferenceMocks.resolvePersistentApplyInference();
+      if (outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
+        setupInferenceMocks.resolvePersistentApplyInference.mockImplementationOnce(async () => {
+          applyStarted.resolve();
+          await releaseApply.promise;
+          if (outcome === "afterDecision-failed") {
+            throw new Error("inference unavailable");
+          }
+          return execution;
+        });
+      }
+      if (outcome === "apply-failed") {
+        runConfigSet.mockRejectedValueOnce(new Error("write failed"));
+      }
+      let sameOwner: Promise<Awaited<ReturnType<typeof callChat>>> | undefined;
+      let settled = false;
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          approvalSignals: [controller.signal],
+        },
+        () =>
+          callChat({
+            sessionId: "delegate-full",
+            message: "config set logging.level debug",
+            delegation: { agentId: "main", sessionKey: "agent:main:main" },
+          }),
+      ).then((result) => {
+        settled = true;
+        return result;
+      });
+      try {
+        await requested.promise;
+        const record = expectDefined(manager.listPendingRecords()[0], "pending approval");
+        await runSystemAgentGatewayTask(async () => undefined);
+        expect.soft(settled).toBe(false);
+        expect(runConfigSet).not.toHaveBeenCalled();
+        if (outcome === "allow") {
+          sameOwner = withGatewayToolCallerIdentity(
+            { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
+            () =>
+              callChat({
+                sessionId: "delegate-full",
+                message: "Has it finished?",
+                delegation: { agentId: "main", sessionKey: "agent:main:main" },
+              }),
+          );
+          await runSystemAgentGatewayTask(async () => undefined);
+          expect(manager.listPendingRecords()).toHaveLength(1);
+        }
+        if (outcome === "expired") {
+          await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+        } else if (outcome === "run-cancelled") {
+          releaseAgentRunDelegatedAuthority(authority);
+          manager.forceDenyIfRuntimeAuthorityClosed(record.id);
+        } else if (outcome === "tool-cancelled") {
+          controller.abort();
+        } else {
+          const queued =
+            outcome === "queued-cancelled"
+              ? runSystemAgentGatewayTask(async () => {
+                  applyStarted.resolve();
+                  await releaseApply.promise;
+                })
+              : undefined;
+          if (queued) {
+            await applyStarted.promise;
+          }
+          expect(
+            manager.resolve(record.id, outcome === "deny" ? "deny" : "allow-once", "operator-ui"),
+          ).toBe(true);
+          if (queued || outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
+            await applyStarted.promise;
+            if (outcome !== "afterDecision-failed") {
+              controller.abort();
+            }
+            releaseApply.resolve();
+            await queued;
+          }
+        }
+        const result = await pending;
+        if (sameOwner) {
+          expect((await sameOwner).payload).toEqual(result.payload);
+        }
+        if (outcome === "queued-cancelled" || outcome === "precommit-cancelled") {
+          expect(
+            getOperatorApprovalDetailed({
+              id: record.id,
+              databaseOptions: { path: approvalDatabasePath },
+            }),
+          ).toMatchObject({
+            outcome: "found",
+            record: { decision: "allow-once", status: "allowed" },
+          });
+          expect(manager.resolve(record.id, "allow-once", "late-operator")).toBe(false);
+        }
+        const expected =
+          outcome === "allow"
+            ? "[openclaw] done: config.set"
+            : outcome === "deny"
+              ? "Denied"
+              : outcome === "expired"
+                ? "expired"
+                : outcome === "apply-failed" || outcome === "afterDecision-failed"
+                  ? "failed"
+                  : "cancelled";
+        expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
+        expect.soft(result.payload).not.toHaveProperty("needsApproval");
+        expect.soft(result.payload).not.toHaveProperty("proposalId");
+        await vi.waitFor(() => expect(engine.getPendingOperatorProposal()).toBeNull());
+        expect(runConfigSet).toHaveBeenCalledTimes(
+          outcome === "allow" || outcome === "apply-failed" ? 1 : 0,
+        );
+        if (outcome === "allow" || outcome === "afterDecision-failed") {
+          expect(
+            transcriptStoreMocks.appendTranscriptTurn.mock.calls.filter(([turn]) =>
+              turn.text.includes(
+                outcome === "allow" ? "[openclaw] done: config.set" : "failed to complete",
+              ),
+            ),
+          ).toHaveLength(1);
+        }
+      } finally {
+        releaseApply.resolve();
+        controller.abort();
+        for (const record of manager.listPendingRecords()) {
+          manager.expire(record.id);
+        }
+        await pending;
+        await sameOwner;
+        await engine.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     ...(["typed", "model tool", "planner"] as const).flatMap((source) =>
       (["closed", "live", "live-restricted"] as const).map((previousRun) => ({
@@ -553,130 +403,17 @@ describe("Full Access delegated chat", () => {
   ])(
     "applies Full Access via $source without inheriting a $previousRun proposal",
     async ({ source, previousRun }) => {
-      const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
-      pluginMetadataSnapshot?.rebindForCurrentEnv();
-      const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
-      setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
-        fixture.binding.execution,
-      );
-      const runConfigSet = vi.fn(async () => {});
-      let proposed = false;
-      const engine = new SystemAgentChatEngine({
-        operatorApprovalOnly: true,
-        surface: "gateway",
-        verifiedInference: fixture.binding,
-        deps: {
-          ...fixture.deps,
-          readConfigFileSnapshot: async () =>
-            ({
-              exists: true,
-              valid: true,
-              path: "/tmp/openclaw.json",
-              hash: "verified-config",
-              config: verifiedConfig,
-              runtimeConfig: verifiedConfig,
-              sourceConfig: verifiedConfig,
-              issues: [],
-            }) as never,
-          runConfigSet,
-        },
-        runAgentTurn: async (params) => {
-          if (source === "typed" || proposed) {
-            return { text: "Config verified." };
-          }
-          if (source === "planner") {
-            return null;
-          }
-          proposed = true;
-          const tool = createSystemAgentTool({
-            surface: params.surface,
-            approvalArmed: params.approvalArmed,
-            operatorApprovalOnly: params.operatorApprovalOnly,
-            proposalRef: params.session.proposalRef,
-          });
-          await tool.execute("propose-config", {
-            action: "config_set",
-            path: "logging.level",
-            value: "debug",
-          });
-          return { text: "Change proposed." };
-        },
-        planWithAssistant: async () => {
-          proposed = true;
-          return { reply: "Change proposed.", command: "config set logging.level debug" };
-        },
-      });
-      vi.spyOn(engine, "loadOverview").mockResolvedValue({
-        config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
-        agents: [],
-        defaultAgentId: "main",
-        defaultModel: "openai/gpt-5.5",
-        tools: {
-          codex: { available: false },
-          claude: { available: false },
-          gemini: { available: false },
-          apiKeys: { openai: false, anthropic: false },
-        },
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
-        references: {
-          docsUrl: "https://docs.openclaw.ai",
-          sourceUrl: "https://github.com/openclaw/openclaw",
-        },
-      } as never);
-      const delegatedSession: SystemAgentChatSession = {
+      const {
         engine,
-        welcome: "welcome text",
-        lastUsedAt: 1,
-        ownerKey: JSON.stringify(["main", "agent:main:main"]),
-      };
-      const sessions = new Map<string, SystemAgentChatSession>([
-        ["delegate-full", delegatedSession],
-      ]);
-      const approvalDatabasePath = path.join(stateDir, "approvals.sqlite");
-      if (previousRun === "registration-failure") {
-        fs.mkdirSync(approvalDatabasePath);
-      }
-      const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-        approvalKind: "system-agent",
-        resolveAllowedDecisions: (request) => request.allowedDecisions,
-        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-        ...(previousRun === "registration-failure"
-          ? {
-              persistence: {
-                runtimeEpoch: "registration-failure",
-                databaseOptions: { path: approvalDatabasePath },
-              },
-            }
-          : {}),
-      });
-      const operationalRunInstance = createOperationalRunInstanceRef("delegated-full-run");
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      const broadcast = vi.fn();
-      const context = {
-        systemAgentSessions: sessions,
-        systemAgentApprovalManager: manager,
+        manager,
+        authority,
+        operationalRunInstance,
+        delegatedSession,
+        runConfigSet,
         broadcast,
-        broadcastToConnIds: vi.fn(),
-        hasExecApprovalClients: () => true,
-      } as unknown as GatewayRequestContext;
-      const callChat = async (params: Record<string, unknown>) => {
-        const respond = vi.fn<(ok: boolean, payload?: unknown, error?: unknown) => void>();
-        const handler = expectDefined(systemAgentHandlers["openclaw.chat"], "chat handler");
-        await handler({
-          params,
-          respond,
-          context,
-          client: {
-            connId: "conn-test",
-            connect: { device: { id: "device-test" } },
-          } as GatewayClient,
-        } as never);
-        const [ok, payload, error] = expectDefined(respond.mock.calls[0], "chat response");
-        return { ok, payload, error };
-      };
+        callChat,
+        requested,
+      } = await createDelegatedChatFixture(source, previousRun);
 
       const call = await withGatewayToolCallerIdentity(
         {
@@ -754,7 +491,7 @@ describe("Full Access delegated chat", () => {
         expect(manager.listPendingRecords()).toEqual([]);
         expect.soft(engine.getPendingOperatorProposal()).toBeNull();
       } else {
-        expect((await proposalCall).payload).toMatchObject({ needsApproval: true });
+        await requested.promise;
         expect(manager.listPendingRecords()).toHaveLength(1);
       }
       expect(runConfigSet).toHaveBeenCalledOnce();
@@ -812,6 +549,9 @@ describe("Full Access delegated chat", () => {
       expect(manager.listPendingRecords()).toEqual([]);
       if (pending) {
         expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
+        expect((await proposalCall).payload).toMatchObject({
+          reply: expect.stringContaining("cancelled"),
+        });
       }
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousAuthorityActive);
     },

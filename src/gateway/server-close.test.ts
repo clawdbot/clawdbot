@@ -6,6 +6,10 @@ import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -13,6 +17,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
@@ -156,6 +161,7 @@ function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
 ): GatewayCloseHandlerParams {
   return {
+    resolveGatewayContext: () => undefined,
     bonjourStop: null,
     tailscaleCleanup: null,
     stopChannel: vi.fn(async () => undefined),
@@ -240,6 +246,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   afterEach(() => {
+    finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
@@ -307,6 +314,25 @@ describe("createGatewayCloseHandler", () => {
     await closing;
     expect(mocks.closePluginStateDatabase).toHaveBeenCalledTimes(1);
     expect(closed).toBe(true);
+  });
+
+  it("joins update discovery before disposing shared runtime resources", async () => {
+    const updateCheckStopped = createDeferredCore();
+    const updateCheckStop = vi.fn(() => updateCheckStopped.promise);
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ updateCheckStop }));
+    const closing = close({ reason: "test" });
+
+    try {
+      await vi.waitFor(() => expect(updateCheckStop).toHaveBeenCalledOnce());
+      expect(mocks.disposeAllCodeModeRuns).not.toHaveBeenCalled();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    } finally {
+      updateCheckStopped.resolve();
+      await closing;
+    }
+
+    expect(mocks.disposeAllCodeModeRuns).toHaveBeenCalledOnce();
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
   });
 
   it("retains shared state when media cleanup times out", async () => {
@@ -439,7 +465,8 @@ describe("createGatewayCloseHandler", () => {
     });
     releaseEmbeddingDrain();
 
-    await expect(failedStart).rejects.toThrow();
+    const started = await failedStart;
+    await started.wait();
     await closing;
     const nextSupervisor = getProcessSupervisor();
     const run = await nextSupervisor.spawn({
@@ -454,58 +481,78 @@ describe("createGatewayCloseHandler", () => {
     expect(nextSupervisor).not.toBe(supervisor);
   });
 
-  it("joins an in-flight config reload before mutable runtime teardown", async () => {
-    const events: string[] = [];
-    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
-      events.push("session-suspension-timers");
-      return 1;
-    });
-    let releaseReload!: () => void;
-    const reloadStopped = new Promise<void>((resolve) => {
-      releaseReload = resolve;
-    });
-    const configReloader = {
-      stop: vi.fn(async () => {
-        events.push("reload:stopping");
-        await reloadStopped;
-        events.push("reload:stopped");
-      }),
-    };
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugins:stopped");
-      }),
-    };
-    const stopChannel = vi.fn(async () => {
-      events.push("channel:stopped");
-    });
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        configReloader,
-        pluginServices: pluginServices as never,
-        stopChannel,
-      }),
-    );
+  it.each([false, true])(
+    "reports and joins an in-flight config reload before teardown (trace=%s)",
+    async (trace) => {
+      process.env.OPENCLAW_GATEWAY_RESTART_TRACE = trace ? "1" : "0";
+      startGatewayRestartTrace("stop.signal.received");
+      const events: string[] = [];
+      mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
+        events.push("session-suspension-timers");
+        return 1;
+      });
+      let releaseReload!: () => void;
+      const reloadStopped = new Promise<void>((resolve) => {
+        releaseReload = resolve;
+      });
+      const configReloader = {
+        stop: vi.fn(async () => {
+          events.push("reload:stopping");
+          await reloadStopped;
+          events.push("reload:stopped");
+        }),
+      };
+      const pluginServices = {
+        stop: vi.fn(async () => {
+          events.push("plugins:stopped");
+        }),
+      };
+      const stopChannel = vi.fn(async () => {
+        events.push("channel:stopped");
+      });
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          channelIds: ["discord"],
+          configReloader,
+          pluginServices: pluginServices as never,
+          stopChannel,
+        }),
+      );
 
-    const closePromise = close({ reason: "test" });
-    await vi.waitFor(() => {
-      expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
-    });
-    expect(pluginServices.stop).not.toHaveBeenCalled();
-    expect(stopChannel).not.toHaveBeenCalled();
+      const closePromise = close({ reason: "test" });
+      await vi.waitFor(() => {
+        expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
+      });
+      try {
+        expect(pluginServices.stop).not.toHaveBeenCalled();
+        expect(stopChannel).not.toHaveBeenCalled();
+        const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
+        expect(messages.some((line) => line.includes("restart.close.config-reloader.begin "))).toBe(
+          trace,
+        );
+        expect(messages.some((line) => line.includes("restart.close.config-reloader "))).toBe(
+          false,
+        );
+        expect(messages.some((line) => line.includes("restart.close.channels"))).toBe(false);
+      } finally {
+        releaseReload();
+        await closePromise;
+      }
+      expect(
+        mocks.logInfo.mock.calls.some(([message]) =>
+          String(message).includes("restart.close.config-reloader "),
+        ),
+      ).toBe(trace);
 
-    releaseReload();
-    await closePromise;
-
-    expect(events).toEqual([
-      "session-suspension-timers",
-      "reload:stopping",
-      "reload:stopped",
-      "plugins:stopped",
-      "channel:stopped",
-    ]);
-  });
+      expect(events).toEqual([
+        "session-suspension-timers",
+        "reload:stopping",
+        "reload:stopped",
+        "plugins:stopped",
+        "channel:stopped",
+      ]);
+    },
+  );
 
   it("disposes ACP sessions before plugin services and channel runtimes", async () => {
     const events: string[] = [];
@@ -1047,6 +1094,86 @@ describe("createGatewayCloseHandler", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "cancels only captured Gateway replies before disposal (marker fails: %s)",
+    async (markerFails) => {
+      const resolveGatewayContext = () => undefined;
+      const otherGatewayContext = () => undefined;
+      const operations: ReplyOperation[] = [];
+      const begin = (key: string, resolver = resolveGatewayContext) => {
+        const operation = createReplyOperation({
+          sessionKey: key,
+          sessionId: key,
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        bindGatewayContextResolver(operation, resolver);
+        operations.push(operation);
+        return operation;
+      };
+      const owned = begin("agent:main:closing");
+      const reboundDuringAbort = begin("agent:main:rebound");
+      owned.abortSignal.addEventListener(
+        "abort",
+        () => bindGatewayContextResolver(reboundDuringAbort, otherGatewayContext),
+        { once: true },
+      );
+      const replaced = begin("agent:main:replaced");
+      const other = begin("agent:main:other", otherGatewayContext);
+      const finalizing = begin("agent:main:finalizing");
+      finalizing.freezeAbort();
+      const markerEntered = createDeferredCore();
+      const markerCommitted = createDeferredCore();
+      const observed: boolean[] = [];
+      const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
+        async () => {
+          markerEntered.resolve(undefined);
+          await markerCommitted.promise;
+          if (markerFails) {
+            throw new Error("marker write failed");
+          }
+        },
+      );
+      const close = createGatewayCloseHandler({
+        ...createGatewayCloseTestDeps({
+          getPendingReplyCount: () => Number(!owned.abortSignal.aborted),
+          markMainSessionsAbortedForRestart,
+          channelIds: ["telegram"],
+          stopChannel: async () => {
+            observed.push(owned.abortSignal.aborted);
+          },
+          disposeAllCodeModeRuns: () => {
+            observed.push(owned.abortSignal.aborted);
+          },
+        }),
+        resolveGatewayContext,
+      });
+      try {
+        const closing = close({ restartExpectedMs: 123, drainTimeoutMs: 0 });
+        await markerEntered.promise;
+        expect(owned.abortSignal.aborted).toBe(false);
+        replaced.complete();
+        const replacement = begin(replaced.key);
+        markerCommitted.resolve(undefined);
+        const result = await closing;
+
+        expect(observed).toEqual([true, true]);
+        expect(isAgentRunRestartAbortReason(owned.abortSignal.reason)).toBe(true);
+        expect(other.abortSignal.aborted).toBe(false);
+        expect(reboundDuringAbort.abortSignal.aborted).toBe(false);
+        expect(replacement.abortSignal.aborted).toBe(false);
+        expect(finalizing.abortSignal.aborted).toBe(false);
+        expect(finalizing.result).toBeNull();
+        expect(result.warnings.includes("restart-main-session-marker")).toBe(markerFails);
+      } finally {
+        markerCommitted.resolve(undefined);
+        for (const operation of operations) {
+          operation.complete();
+        }
+      }
+    },
+  );
 
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();

@@ -687,6 +687,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       expectedVersion: params.recovery.version,
       expectedBuildId: params.recovery.buildId,
       requireRunningService: true,
+      settle: { probes: 12 },
     });
     if (!health.healthy || health.runtime.status !== "running") {
       throw new Error(renderRestartDiagnostics(health).join("\n"));

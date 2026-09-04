@@ -389,25 +389,29 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
     expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
-    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        details: expect.objectContaining({ missingScope: "operator.write" }),
-      }),
-    );
-    for (const method of [
-      "tools.github.authorize.start",
-      "tools.github.configure",
-      "secrets.store.set",
-      "sessions.github.publish",
-    ]) {
+    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
+    for (const [method, missingScope] of [
+      ["tools.github.authorize.start", "operator.admin"],
+      ["tools.github.configure", "operator.admin"],
+      ["secrets.store.set", "operator.admin"],
+      ["sessions.github.publish", "operator.write"],
+    ] as const) {
       const denied = await rpc(alice, method, {
         sessionKey: "agent:main:main",
         idempotencyKey: "reader",
       });
-      expect(denied.mock.calls[0]?.[0], method).toBe(false);
+      expect(denied, method).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope,
+            requiredScopes: [missingScope],
+          },
+        }),
+      );
     }
     const restarted = await start();
     expect(readUserGitHubConnection(owner())?.generation).toBe(connection.generation);

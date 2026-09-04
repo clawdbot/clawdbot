@@ -7,7 +7,7 @@ import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/s
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import { readCodexRolloutSelection } from "../session-rollout-selection.js";
+import { readCodexRolloutSnapshot } from "../session-rollout-snapshot.js";
 import { codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { prepareCanonicalCodexFork } from "./canonical-fork-preparation.js";
 import {
@@ -54,6 +54,13 @@ export async function forkCanonicalCodexSession(params: {
   if (!context?.localSessionsRoot || !resolved.canonical.thread.path) {
     throw new Error(
       "Canonical Codex forks require the verified local rollout on its selected connection. Fork an original imported message instead.",
+    );
+  }
+  const model = normalizeOptionalString(resolved.canonical.thread.model);
+  const modelProvider = normalizeOptionalString(resolved.canonical.thread.modelProvider);
+  if (!model || !modelProvider) {
+    throw new Error(
+      "Codex did not report the canonical thread's model selection. Use Codex 0.153.0 or newer, or fork an original imported message instead.",
     );
   }
   const sourceIdentity = sessionBindingIdentity({ ...fork.source, config });
@@ -135,7 +142,7 @@ export async function forkCanonicalCodexSession(params: {
               ownership.assertCurrent();
             }
           };
-          const selection = await readCodexRolloutSelection({
+          const snapshot = await readCodexRolloutSnapshot({
             sessionsRoot: context.localSessionsRoot!,
             rolloutPath: resolved.canonical.thread.path!,
             threadId: sourceBinding.threadId,
@@ -146,7 +153,7 @@ export async function forkCanonicalCodexSession(params: {
             throw new Error("The canonical source has no verified native catalog binding");
           }
           const sourceCatalog = parseCodexNativeToolCatalog(
-            selection.metadata,
+            snapshot.metadata,
             sourceBinding.threadId,
             sourceBinding.dynamicToolsFingerprint,
           );
@@ -155,13 +162,13 @@ export async function forkCanonicalCodexSession(params: {
             initialization: host,
             config,
             context,
-            model: selection.model,
-            modelProvider: selection.modelProvider,
+            model,
+            modelProvider,
             sandbox: fork.sandbox,
             dynamicTools: sourceCatalog,
           });
           assertCurrent();
-          await selection.assertUnchanged();
+          await snapshot.assertUnchanged();
           assertCurrent();
           await resolved.canonical.assertUnchanged();
           assertCurrent();
@@ -176,8 +183,8 @@ export async function forkCanonicalCodexSession(params: {
                 ...prepared.request,
                 threadId: sourceBinding.threadId,
                 beforeTurnId: resolved.boundary.beforeTurnId,
-                model: selection.model,
-                modelProvider: selection.modelProvider,
+                model,
+                modelProvider,
                 threadSource: "appServer",
                 excludeTurns: true,
               },
@@ -214,10 +221,12 @@ export async function forkCanonicalCodexSession(params: {
             throw new Error("Codex fork subscription ownership could not be acquired");
           }
           assertCurrent();
+          // The initial selection and the child's current live settings must both match.
           if (
-            response.model !== selection.model ||
-            response.modelProvider !== selection.modelProvider ||
-            response.thread.modelProvider !== selection.modelProvider
+            response.model !== model ||
+            response.thread.model !== model ||
+            response.modelProvider !== modelProvider ||
+            response.thread.modelProvider !== modelProvider
           ) {
             throw new Error(
               "Codex fork did not preserve the exact canonical source and selected native model",
@@ -241,14 +250,14 @@ export async function forkCanonicalCodexSession(params: {
               )
             : undefined;
           assertCurrent();
-          if (!metadata || metadata.model_provider !== selection.modelProvider) {
+          if (!metadata || metadata.model_provider !== modelProvider) {
             throw new Error("The fresh Codex fork metadata could not be verified");
           }
           const childCatalog = parseCodexNativeToolCatalog(metadata, freshThreadId);
           if (!isDeepStrictEqual(sourceCatalog, childCatalog)) {
             throw new Error("Codex fork did not preserve the actual native tool catalog");
           }
-          await selection.assertUnchanged();
+          await snapshot.assertUnchanged();
           assertCurrent();
           await attestCodexPluginThreadApps({
             client: context.client,
@@ -314,8 +323,8 @@ export async function forkCanonicalCodexSession(params: {
             conversationSourceTransferComplete: true,
             cwd: prepared.request.cwd ?? "",
             rolloutPath: response.thread.path ?? undefined,
-            model: selection.model,
-            modelProvider: selection.modelProvider,
+            model,
+            modelProvider,
             appServerRuntimeFingerprint: control.connectionFingerprint,
             dynamicToolsFingerprint: codexDynamicToolsFingerprint(childCatalog),
             dynamicToolsContainDeferred: flattenCodexDynamicToolFunctions(childCatalog).some(

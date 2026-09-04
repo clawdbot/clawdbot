@@ -536,6 +536,99 @@ describe("publish model catalog", () => {
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
 
+  it.each(["flat", "openRouter", "liteLLM"])(
+    "preserves declared context pricing unless an external source supplies tiers: %s",
+    async (tierSource) => {
+      const manifests = [
+        {
+          pluginId: "fixture",
+          manifestPath: "fixture.json",
+          manifest: {
+            modelCatalog: {
+              providers: {
+                anthropic: fixtureProvider("claude", 100),
+                openai: fixtureProvider("gpt", 100),
+              },
+            },
+          },
+        },
+      ];
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture",
+      });
+      const model = bundle.providers.openai!.models[0]!;
+      const declared: NonNullable<typeof model.cost> = {
+        input: 10,
+        output: 50,
+        tieredPricing: [
+          { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, range: [0, 272_001] },
+          { input: 20, output: 75, cacheRead: 0, cacheWrite: 0, range: [272_001] },
+        ],
+      };
+      model.cost = declared;
+      await enrichModelCatalogPricing({
+        bundle,
+        manifests,
+        fetchImpl: async (input) => {
+          if (requestUrl(input) === OPENROUTER_MODELS_URL) {
+            return Response.json({
+              data: [
+                {
+                  id: "openai/gpt-0",
+                  pricing: {
+                    prompt: "0.000002",
+                    completion: "0.000003",
+                    ...(tierSource === "openRouter"
+                      ? { overrides: [{ min_prompt_tokens: 272_000, prompt: "0.000004" }] }
+                      : {}),
+                  },
+                },
+              ],
+            });
+          }
+          return Response.json({
+            "gpt-0": {
+              litellm_provider: "openai",
+              input_cost_per_token: 0.000002,
+              output_cost_per_token: 0.000003,
+              ...(tierSource === "liteLLM"
+                ? {
+                    tiered_pricing: [
+                      {
+                        input_cost_per_token: 0.000002,
+                        output_cost_per_token: 0.000003,
+                        range: [0, 272_001],
+                      },
+                      {
+                        input_cost_per_token: 0.000004,
+                        output_cost_per_token: 0.000003,
+                        range: [272_001],
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          });
+        },
+      });
+      const published = bundle.providers.openai!.models[0]!.cost;
+      if (tierSource === "flat") {
+        expect(published).toEqual(declared);
+      } else {
+        expect(published).toMatchObject({ input: 2, output: 3 });
+        expect(published?.tieredPricing?.at(-1)).toMatchObject({
+          input: 4,
+          output: 3,
+          range: [272_001],
+        });
+      }
+      expect(bundle.pricing).not.toHaveProperty("openai/gpt-0");
+      expect(bundle.pricing).not.toHaveProperty("gpt-0");
+    },
+  );
+
   it.each([
     {
       source: "Chutes" as const,
@@ -691,6 +784,14 @@ describe("publish model catalog", () => {
         generatedAt: Date.now(),
         sourceCommit: "fixture",
       });
+      bundle.providers[provider]!.models[0]!.cost = {
+        input: 99,
+        output: 99,
+        tieredPricing: [
+          { input: 99, output: 99, cacheRead: 0, cacheWrite: 0, range: [0, 272_001] },
+          { input: 199, output: 199, cacheRead: 0, cacheWrite: 0, range: [272_001] },
+        ],
+      };
       const fetchImpl: typeof fetch = async (input) => {
         if (requestUrl(input) === url) {
           return Response.json(

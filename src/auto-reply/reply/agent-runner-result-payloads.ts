@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   getReplyPayloadMetadata,
@@ -303,6 +303,7 @@ export async function prepareReplyAgentPayloads(state: {
       hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
       silentExpected: followupRun.run.silentExpected,
+      hasExplicitSilentReply: deliberateSilentTerminalReply,
     });
     if (!silentFallbackFailurePayload) {
       return undefined;
@@ -523,7 +524,6 @@ export async function prepareReplyAgentPayloads(state: {
       throw new Error("accepted continuation status could not be prepared for delivery");
     }
     const settlement: PendingContinuationSettlement = {
-      statusPayload,
       settle: async (statusDelivered) => {
         const { settleRequesterAfterSessionSpawns } =
           await import("../../agents/subagents/registry/subagent-registry.js");
@@ -558,13 +558,13 @@ export async function prepareReplyAgentPayloads(state: {
       promptTokens,
       usage,
     });
-    const costConfig = resolveModelCostConfig({
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
       agentDir: followupRun.run.agentDir,
     });
-    const costUsd = estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
       ...(runResult.diagnosticTrace

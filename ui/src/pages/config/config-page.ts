@@ -431,6 +431,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
+      () => this.context?.nativeDeviceSettings ?? undefined,
+      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
+    )
+    .watch(
       () => this.context?.nativeNotifications ?? undefined,
       (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
     )
@@ -807,7 +811,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
+      this.context.agentSelection.state.selectedId === agentId &&
+      // Agent selection can cycle A -> B -> A while the first A load is still pending.
+      this.sessionObserverModelsRequest?.promise === promise;
     const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
       .then(({ models }) => {
         if (isCurrent()) {
@@ -1081,6 +1087,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
+        nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
           this.context.config.current.serverVersion ??
@@ -1449,14 +1456,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body = this.renderAdvancedConfig(configObject);
     return html`
-      ${this.pageId === "memory"
-        ? nothing
-        : html`
-            ${renderSettingsPageHeader({
-              title: configPageTitle(this.pageId),
-              subtitle: renderConfigPageSubtitle(this.pageId),
-            })}
-          `}
+      ${
+        this.pageId === "memory"
+          ? nothing
+          : html`
+              ${renderSettingsPageHeader({
+                title: configPageTitle(this.pageId),
+                subtitle: renderConfigPageSubtitle(this.pageId),
+              })}
+            `
+      }
       ${renderSettingsWorkspace(body)}
     `;
   }

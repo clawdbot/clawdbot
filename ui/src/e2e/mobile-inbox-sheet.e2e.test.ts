@@ -45,8 +45,15 @@ suite.define(() => {
       startTop: number;
       finalTop: number;
       duration: number;
-      tabTrackWidth: number;
-      tabWidths: number[];
+      tabTrackLeft: number;
+      tabTrackRight: number;
+      tabs: Array<{
+        panel: string | null;
+        left: number;
+        right: number;
+        labelLeft: number;
+        labelRight: number;
+      }>;
     }> = [];
 
     for (const theme of ["light", "dark"] as const) {
@@ -104,6 +111,7 @@ suite.define(() => {
         const tabTrack = element
           .querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!
           .shadowRoot!.querySelector<HTMLElement>(".tabs")!;
+        const tabTrackBounds = tabTrack.getBoundingClientRect();
         const tabs = Array.from(element.querySelectorAll<HTMLElement>("wa-tab.hub-tab"));
         return {
           closeBackground: getComputedStyle(close).backgroundColor,
@@ -118,8 +126,24 @@ suite.define(() => {
           headerBackground: getComputedStyle(header).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
-          tabTrackWidth: tabTrack.getBoundingClientRect().width,
-          tabWidths: tabs.map((tab) => tab.getBoundingClientRect().width),
+          tabTrackLeft: tabTrackBounds.left,
+          tabTrackRight: tabTrackBounds.right,
+          tabs: tabs.map((tab) => {
+            const label = Array.from(tab.childNodes).find(
+              (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+            )!;
+            const range = document.createRange();
+            range.selectNodeContents(label);
+            const labelBounds = range.getBoundingClientRect();
+            const bounds = tab.getBoundingClientRect();
+            return {
+              panel: tab.getAttribute("panel"),
+              left: bounds.left,
+              right: bounds.right,
+              labelLeft: labelBounds.left,
+              labelRight: labelBounds.right,
+            };
+          }),
         };
       });
       results.push(result);
@@ -176,6 +200,16 @@ suite.define(() => {
           }));
         expect(dismissShownAfter).toEqual(dismissShownBefore);
       }
+      for (const name of ["approvals", "mentions", "automations", "system", "all"]) {
+        const tab = panel.locator(`wa-tab[panel="${name}"]`);
+        await tab.click();
+        await expect.poll(() => tab.getAttribute("aria-selected")).toBe("true");
+        await expect
+          .poll(() => panel.getByRole("tabpanel").getAttribute("aria-labelledby"))
+          .toBe(`sidebar-issues-tab-${name}`);
+      }
+      await panel.getByRole("button", { name: "Close", exact: true }).click();
+      await panel.waitFor({ state: "hidden" });
       await suite.closeBrowserContext(context);
     }
 
@@ -191,9 +225,26 @@ suite.define(() => {
       expect(result.closeBorderWidth).toBe("1px");
       expect(result.closeBorderRadius).toBe("9999px");
       expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
-      expect(result.tabWidths).toHaveLength(4);
-      for (const tabWidth of result.tabWidths) {
-        expect(tabWidth).toBeCloseTo(result.tabTrackWidth / 4, 1);
+      expect(result.tabs.map((tab) => tab.panel)).toEqual([
+        "all",
+        "approvals",
+        "mentions",
+        "automations",
+        "system",
+      ]);
+      expect(result.tabs[0]!.left).toBeCloseTo(result.tabTrackLeft, 1);
+      expect(result.tabs.at(-1)!.right).toBeCloseTo(result.tabTrackRight, 1);
+      for (const [index, tab] of result.tabs.entries()) {
+        expect(tab.labelRight).toBeGreaterThan(tab.labelLeft);
+        expect(tab.labelLeft, `${tab.panel} label starts inside its tab`).toBeGreaterThanOrEqual(
+          tab.left - 1,
+        );
+        expect(tab.labelRight, `${tab.panel} label fits inside its tab`).toBeLessThanOrEqual(
+          tab.right + 1,
+        );
+        if (index > 0) {
+          expect(tab.left).toBeGreaterThanOrEqual(result.tabs[index - 1]!.right - 1);
+        }
       }
     }
   });

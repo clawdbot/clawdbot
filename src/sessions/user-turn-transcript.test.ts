@@ -455,10 +455,12 @@ describe("user turn transcript persistence", () => {
       const dir = tempDirs.make("openclaw-user-turn-recorder-late-media-");
       const target = createSqliteTranscriptTarget({ dir });
       const admittedInput = {
-        text: "describe this",
+        text: "describe @Ada",
         timestamp: 123,
         idempotencyKey: "chat-run-late:user",
+        mentions: [{ profileId: "ada", start: 9, end: 13 }],
       };
+      const committedEntries: string[] = [];
       let resolveMedia!: (input: UserTurnInput) => void;
       let markResolverStarted!: () => void;
       const resolverStarted = new Promise<void>((resolve) => {
@@ -469,6 +471,7 @@ describe("user turn transcript persistence", () => {
       });
       const recorder = createUserTurnTranscriptRecorder({
         input: admittedInput,
+        onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
         resolveInput: async () => {
           markResolverStarted();
           return await mediaInput;
@@ -489,7 +492,9 @@ describe("user turn transcript persistence", () => {
         input: admittedInput,
       });
       expect(admitted).toBeDefined();
-      recorder.markRuntimePersisted(recorder.message, admitted?.admission);
+      recorder.markRuntimePersisted(recorder.message, admitted?.admission, {
+        appended: admitted?.appended === true,
+      });
       const admissionReceipt = recorder.getAdmissionReceipt();
       recorder.markSentToProvider?.();
       resolveMedia({
@@ -501,14 +506,16 @@ describe("user turn transcript persistence", () => {
 
       expect(recorder.getAdmissionReceipt()).toEqual(admissionReceipt);
       expect(recorder.getPersistedMessage?.()).toMatchObject({
-        content: "describe this",
+        content: "describe @Ada",
         idempotencyKey: "chat-run-late:user",
       });
+      expect(committedEntries).toEqual([admitted?.messageId]);
       const messages = await readTranscriptMessages(target);
       expect(messages).toEqual([
         expect.objectContaining({
-          content: "describe this",
+          content: "describe @Ada",
           idempotencyKey: "chat-run-late:user",
+          __openclaw: { humanMentions: admittedInput.mentions },
         }),
         expect.objectContaining({
           content: "",
@@ -615,6 +622,7 @@ describe("user turn transcript persistence", () => {
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
       const dir = tempDirs.make("openclaw-user-turn-recorder-projection-");
       const target = createSqliteTranscriptTarget({ dir });
+      const committedEntries: string[] = [];
       await replaceSessionEntry(
         { storePath: target.storePath, sessionKey: target.sessionKey },
         {
@@ -642,11 +650,13 @@ describe("user turn transcript persistence", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "admit after rebuild", idempotencyKey: "projection:user" },
         target,
+        onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
       });
 
       const persisted = await recorder.persistApproved({ expectedSessionId: target.sessionId });
 
       expect(persisted).toBeDefined();
+      expect(committedEntries).toEqual([persisted?.messageId]);
       expect(persisted?.admission).toMatchObject({
         entryId: persisted?.messageId,
         sessionId: target.sessionId,

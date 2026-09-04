@@ -51,11 +51,13 @@ export function renderRunInspectorMissingEvidence(
         headingId,
         options.headingLevel ?? 3,
       )}
-      ${values.length === 0
-        ? html`<p>${t("activity.runInspector.noMissingEvidence")}</p>`
-        : html`<ul class="run-inspector__code-list">
-            ${values.map((value) => html`<li>${renderRunInspectorSafeRef(value, true)}</li>`)}
-          </ul>`}
+      ${
+        values.length === 0
+          ? html`<p>${t("activity.runInspector.noMissingEvidence")}</p>`
+          : html`<ul class="run-inspector__code-list">
+              ${values.map((value) => html`<li>${renderRunInspectorSafeRef(value, true)}</li>`)}
+            </ul>`
+      }
     </section>
   `;
 }
@@ -141,8 +143,9 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         </h5>
         <div class="run-inspector__receipt-badges">
           <span
-            class="run-inspector__receipt-badge run-inspector__receipt-badge--${receipt.decision
-              .outcome}"
+            class="run-inspector__receipt-badge run-inspector__receipt-badge--${
+              receipt.decision.outcome
+            }"
             aria-label=${`${t("activity.runInspector.decisions.outcomeLabel")}: ${decisionOutcomeLabel(
               receipt.decision.outcome,
             )}`}
@@ -176,19 +179,21 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
         <h5 id="run-inspector-receipt-owner">
           ${t("activity.runInspector.decisions.ownerHeading")}
         </h5>
-        ${receipt.provenance.state === "verified"
-          ? html`<dl class="run-inspector__values">
-                <div>
-                  <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
-                  <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
-                </div>
-              </dl>
-              <p class="run-inspector__reason">
+        ${
+          receipt.provenance.state === "verified"
+            ? html`<dl class="run-inspector__values">
+                  <div>
+                    <dt>${t("activity.runInspector.decisions.durableOwnerLabel")}</dt>
+                    <dd>${renderRunInspectorSafeRef(receipt.provenance.producer)}</dd>
+                  </div>
+                </dl>
+                <p class="run-inspector__reason">
+                  ${t("activity.runInspector.decisions.ownerNote")}
+                </p>`
+            : html`<p class="run-inspector__reason">
                 ${t("activity.runInspector.decisions.ownerNote")}
               </p>`
-          : html`<p class="run-inspector__reason">
-              ${t("activity.runInspector.decisions.ownerNote")}
-            </p>`}
+        }
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">
@@ -236,96 +241,114 @@ export function renderRunInspectorDecisions(
   return html`
     <section class="run-inspector__section" aria-labelledby="run-inspector-decisions-heading">
       <h3 id="run-inspector-decisions-heading">${t("activity.runInspector.decisions.heading")}</h3>
-      ${result.decisionDisplays.length === 0
-        ? html`<p>${t("activity.runInspector.decisions.none")}</p>`
-        : html`<p>
-            ${t("activity.runInspector.decisions.returned", {
-              count: String(result.decisionDisplays.length),
-            })}
-          </p>`}
+      ${
+        result.decisionDisplays.length === 0
+          ? html`<p>${t("activity.runInspector.decisions.none")}</p>`
+          : html`<p>
+              ${t("activity.runInspector.decisions.returned", {
+                count: String(result.decisionDisplays.length),
+              })}
+            </p>`
+      }
       <div class="run-inspector__warning" role="note">
         ${t("activity.runInspector.decisions.readOnly")}
       </div>
-      ${result.decisionDisplays.length > 0 && selector
-        ? html`<ol
-            class="run-inspector__receipt-list"
-            aria-label=${t("activity.runInspector.decisions.listLabel")}
-          >
-            ${result.decisionDisplays.map((receipt) => {
-              const selected = selectedReceipt?.selectorId === receipt.selectorId;
-              return html`<li>
-                <a
-                  href=${receiptInspectorHref(
-                    selector,
-                    receipt.selectorId,
-                    state.receiptPageCursors.get(receipt.selectorId),
-                    basePath,
-                  )}
-                  aria-current=${selected ? "true" : nothing}
-                  aria-label=${t("activity.runInspector.decisions.inspectLabel", {
-                    summary:
-                      receipt.action.summary ??
-                      `${receipt.action.family} · ${receipt.action.operation}`,
-                    outcome: decisionOutcomeLabel(receipt.decision.outcome),
-                    classification: runInspectorCoverageLabel(receipt.enforcement.coverageState),
-                  })}
-                >
-                  <span
-                    >${receipt.action.summary ??
-                    `${receipt.action.family} · ${receipt.action.operation}`}</span
-                  >
-                  <span class="run-inspector__receipt-badges" aria-hidden="true">
-                    <span
-                      class="run-inspector__receipt-badge run-inspector__receipt-badge--${receipt
-                        .decision.outcome}"
-                      >${decisionOutcomeLabel(receipt.decision.outcome)}</span
-                    >
-                    <span
-                      class="run-inspector__receipt-badge run-inspector__receipt-badge--${receipt
-                        .enforcement.coverageState}"
-                      >${runInspectorCoverageLabel(receipt.enforcement.coverageState)}</span
-                    >
-                  </span>
-                </a>
-              </li>`;
-            })}
-          </ol>`
-        : nothing}
-      ${result.nextDecisionCursor
-        ? html`<div class="run-inspector__pagination">
-            <span>${t("activity.runInspector.decisions.more")}</span>
-            <button
-              type="button"
-              class="btn"
-              ?disabled=${state.decisionPageStatus === "loading"}
-              @click=${onLoadMoreDecisions}
+      ${
+        result.decisionDisplays.length > 0 && selector
+          ? html`<ol
+              class="run-inspector__receipt-list"
+              aria-label=${t("activity.runInspector.decisions.listLabel")}
             >
-              ${state.decisionPageStatus === "loading"
-                ? t("activity.runInspector.decisions.loadingMore")
-                : t("activity.runInspector.decisions.loadMore")}
-            </button>
-            ${state.decisionPageStatus === "error"
-              ? html`<span role="alert">
-                  ${t("activity.runInspector.decisions.loadMoreError")}
-                </span>`
-              : nothing}
-          </div>`
-        : html`<div class="run-inspector__pagination" role="note">
-            ${t("activity.runInspector.decisions.bounded")}
-          </div>`}
-      ${selectorId && !selectedReceipt
-        ? html`<div class="run-inspector__result-state" role="status">
-            <h4>${t("activity.runInspector.decisions.notFoundTitle")}</h4>
-            <p>${t("activity.runInspector.decisions.notFoundDescription")}</p>
-            ${selector
-              ? html`<a href=${activityRunInspectorSelectorHref(selector, basePath)}>
-                  ${t("activity.runInspector.decisions.heading")}
-                </a>`
-              : nothing}
-          </div>`
-        : selectedReceipt
-          ? renderReceiptDetail(selectedReceipt)
-          : nothing}
+              ${result.decisionDisplays.map((receipt) => {
+                const selected = selectedReceipt?.selectorId === receipt.selectorId;
+                return html`<li>
+                  <a
+                    href=${receiptInspectorHref(
+                      selector,
+                      receipt.selectorId,
+                      state.receiptPageCursors.get(receipt.selectorId),
+                      basePath,
+                    )}
+                    aria-current=${selected ? "true" : nothing}
+                    aria-label=${t("activity.runInspector.decisions.inspectLabel", {
+                      summary:
+                        receipt.action.summary ??
+                        `${receipt.action.family} · ${receipt.action.operation}`,
+                      outcome: decisionOutcomeLabel(receipt.decision.outcome),
+                      classification: runInspectorCoverageLabel(receipt.enforcement.coverageState),
+                    })}
+                  >
+                    <span
+                      >${
+                        receipt.action.summary ??
+                        `${receipt.action.family} · ${receipt.action.operation}`
+                      }</span
+                    >
+                    <span class="run-inspector__receipt-badges" aria-hidden="true">
+                      <span
+                        class="run-inspector__receipt-badge run-inspector__receipt-badge--${
+                          receipt.decision.outcome
+                        }"
+                        >${decisionOutcomeLabel(receipt.decision.outcome)}</span
+                      >
+                      <span
+                        class="run-inspector__receipt-badge run-inspector__receipt-badge--${
+                          receipt.enforcement.coverageState
+                        }"
+                        >${runInspectorCoverageLabel(receipt.enforcement.coverageState)}</span
+                      >
+                    </span>
+                  </a>
+                </li>`;
+              })}
+            </ol>`
+          : nothing
+      }
+      ${
+        result.nextDecisionCursor
+          ? html`<div class="run-inspector__pagination">
+              <span>${t("activity.runInspector.decisions.more")}</span>
+              <button
+                type="button"
+                class="btn"
+                ?disabled=${state.decisionPageStatus === "loading"}
+                @click=${onLoadMoreDecisions}
+              >
+                ${
+                  state.decisionPageStatus === "loading"
+                    ? t("activity.runInspector.decisions.loadingMore")
+                    : t("activity.runInspector.decisions.loadMore")
+                }
+              </button>
+              ${
+                state.decisionPageStatus === "error"
+                  ? html`<span role="alert">
+                      ${t("activity.runInspector.decisions.loadMoreError")}
+                    </span>`
+                  : nothing
+              }
+            </div>`
+          : html`<div class="run-inspector__pagination" role="note">
+              ${t("activity.runInspector.decisions.bounded")}
+            </div>`
+      }
+      ${
+        selectorId && !selectedReceipt
+          ? html`<div class="run-inspector__result-state" role="status">
+              <h4>${t("activity.runInspector.decisions.notFoundTitle")}</h4>
+              <p>${t("activity.runInspector.decisions.notFoundDescription")}</p>
+              ${
+                selector
+                  ? html`<a href=${activityRunInspectorSelectorHref(selector, basePath)}>
+                      ${t("activity.runInspector.decisions.heading")}
+                    </a>`
+                  : nothing
+              }
+            </div>`
+          : selectedReceipt
+            ? renderReceiptDetail(selectedReceipt)
+            : nothing
+      }
     </section>
   `;
 }

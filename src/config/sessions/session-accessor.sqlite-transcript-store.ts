@@ -548,7 +548,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
 }
 
 function readIdempotencyKeyOwner(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   idempotencyKey: string,
 ): { eventId: string; seq: number } | undefined {
@@ -567,7 +567,7 @@ function readIdempotencyKeyOwner(
 }
 
 function readTranscriptMessageByIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
@@ -576,7 +576,7 @@ function readTranscriptMessageByIdempotencyKey(
 }
 
 export function readTranscriptMessageByScopedIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
   lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
@@ -607,7 +607,7 @@ export function readTranscriptMessageByEventId(
 }
 
 function readTranscriptMessageByIdentity(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   identity: { eventId: string; seq: number },
 ): { messageId: string; message: unknown } | undefined {

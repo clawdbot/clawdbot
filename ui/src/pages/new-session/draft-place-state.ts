@@ -117,7 +117,7 @@ export class DraftPlaceState {
     return buildDraftSessionCreateParams({
       ...params,
       agentId: this.agentId,
-      model: this.modelControl.selected,
+      model: this.modelControl.modelForSubmission(),
       contextWindow: this.modelControl.contextWindow,
       thinkingLevel: this.modelControl.thinkingLevel,
       fastMode: this.modelControl.fastMode,
@@ -482,7 +482,7 @@ export class DraftPlaceState {
     this.folderSelectedByUser = true;
     this.projectSelectedByUser = true;
     this.preferredProjectRestore = "";
-    if (snapshot.data?.startTerminal && this.terminalOnNode) {
+    if (catalog.isTarget(snapshot.data) && this.terminalOnNode) {
       this.callbacks.requestUpdate();
       return;
     }

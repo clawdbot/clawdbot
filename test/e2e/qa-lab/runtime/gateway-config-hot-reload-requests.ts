@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
 import { TINY_PNG_BASE64, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   waitForHotReloadFact,
+  connectHotReloadClient,
   type HotReloadConnection,
   type startHotReloadUpstreams,
 } from "./gateway-config-hot-reload-fixtures.js";
@@ -32,6 +34,84 @@ export async function proveHotReloadRequests({
   proveGroup: (prefix: string, run: () => Promise<void>) => Promise<void>;
 }) {
   const SESSION_KEY = "agent:qa:main";
+  const terminalIds: string[] = [];
+  const terminalMarker = async (terminal: Terminal, marker: string) => {
+    const cursor = primary.events.length;
+    // Split the marker in shell input so an echoed command cannot satisfy the output proof.
+    await rpc("terminal.input", {
+      sessionId: terminal.sessionId,
+      data: `printf '%s%s=%s\\n' '${marker.slice(0, 4)}' '${marker.slice(4)}' "$0"\n`,
+    });
+    await waitForHotReloadFact("PTY command output", () => {
+      const output = primary.events
+        .slice(cursor)
+        .flatMap((event) => {
+          const payload = event.payload as { sessionId?: string; data?: string } | undefined;
+          return event.event === "terminal.data" && payload?.sessionId === terminal.sessionId
+            ? [payload.data ?? ""]
+            : [];
+        })
+        .join("");
+      return output.includes(`${marker}=${terminal.shell}`) ? true : undefined;
+    });
+  };
+  // Exercise expiry before the shared writer reaches its per-minute config budget.
+  await proveGroup("gateway.terminal.detachedSessionTimeoutSeconds", async () => {
+    const sessions = async () =>
+      (await rpc<{ sessions: Array<{ sessionId: string; attached: boolean }> }>("terminal.list"))
+        .sessions;
+    const openDetached = async () => {
+      const connection = await connectHotReloadClient(gateway);
+      try {
+        const terminal = await connection.client.request<Terminal>("terminal.open", {
+          agentId: "qa",
+          cols: 80,
+          rows: 24,
+        });
+        terminalIds.push(terminal.sessionId);
+        return terminal;
+      } finally {
+        await connection.client.stopAndWait({ timeoutMs: 2_000 });
+      }
+    };
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 30 } } });
+    const expired = await openDetached();
+    await waitForHotReloadFact("terminal detached", async () =>
+      (await sessions()).some((item) => item.sessionId === expired.sessionId && !item.attached)
+        ? true
+        : undefined,
+    );
+    await delay(2_100);
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 1 } } });
+    assert(
+      !(await sessions()).some((item) => item.sessionId === expired.sessionId),
+      "Shortened timeout must use the original detach time and reap before acknowledging reload",
+    );
+    await assert.rejects(
+      rpc("terminal.attach", { sessionId: expired.sessionId }),
+      /unknown terminal/,
+    );
+
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 5 } } });
+    const extended = await openDetached();
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 15 } } });
+    await delay(5_100);
+    await rpc("terminal.attach", { sessionId: extended.sessionId });
+    await terminalMarker(extended, "EXTENDED_TERMINAL_ALIVE");
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 0 } } });
+    await terminalMarker(extended, "ATTACHED_TERMINAL_ALIVE");
+    const immediate = await openDetached();
+    await waitForHotReloadFact("zero-timeout terminal closed", async () =>
+      !(await sessions()).some((item) => item.sessionId === immediate.sessionId) ? true : undefined,
+    );
+    await rpc("terminal.close", { sessionId: extended.sessionId });
+    await patch({ gateway: { terminal: { detachedSessionTimeoutSeconds: 300 } } });
+    await verifyContinuity(
+      "gateway.terminal.detachedSessionTimeoutSeconds",
+      "A real detached PTY expired from its original disconnect time; extending retained its shell past the old deadline; attached PTYs survived zero timeout and new disconnects closed immediately",
+    );
+  });
+
   await proveGroup("gateway.http.endpoints", async () => {
     await patch({
       gateway: {
@@ -126,27 +206,6 @@ export async function proveHotReloadRequests({
     );
   });
 
-  const terminalIds: string[] = [];
-  const terminalMarker = async (terminal: Terminal, marker: string) => {
-    const cursor = primary.events.length;
-    // Split the marker in shell input so an echoed command cannot satisfy the output proof.
-    await rpc("terminal.input", {
-      sessionId: terminal.sessionId,
-      data: `printf '%s%s=%s\\n' '${marker.slice(0, 4)}' '${marker.slice(4)}' "$0"\n`,
-    });
-    await waitForHotReloadFact("PTY command output", () => {
-      const output = primary.events
-        .slice(cursor)
-        .flatMap((event) => {
-          const payload = event.payload as { sessionId?: string; data?: string } | undefined;
-          return event.event === "terminal.data" && payload?.sessionId === terminal.sessionId
-            ? [payload.data ?? ""]
-            : [];
-        })
-        .join("");
-      return output.includes(`${marker}=${terminal.shell}`) ? true : undefined;
-    });
-  };
   await proveGroup("gateway.cliAgents", async () => {
     const catalog = await rpc<{
       catalogs: Array<{ id: string; capabilities: { startTerminal?: boolean } }>;

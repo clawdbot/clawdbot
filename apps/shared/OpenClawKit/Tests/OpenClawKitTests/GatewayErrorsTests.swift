@@ -178,6 +178,27 @@ struct GatewayErrorsTests {
             technicalDetails: "connection refused"))
     }
 
+    @Test(arguments: [
+        ("INVALID_REQUEST", 3, 4...4, true),
+        ("INVALID_REQUEST", 3, 3...4, false),
+        ("INVALID_REQUEST", 5, 3...4, true),
+        ("PROTOCOL_MISMATCH", 4, 4...4, true),
+        ("AUTH_TOKEN_MISSING", 5, 4...4, false),
+    ])
+    func `protocol mismatch respects the advertised role range`(
+        detailCode: String,
+        expected: Int,
+        supported: ClosedRange<Int>,
+        mismatch: Bool)
+    {
+        let error = GatewayConnectAuthError(
+            message: "rejected",
+            detailCode: detailCode,
+            canRetryWithDeviceToken: false,
+            expectedProtocol: expected)
+        #expect(error.isProtocolMismatch(supportedProtocols: supported) == mismatch)
+    }
+
     @Test func `protocol mismatch maps older app to update problem`() {
         let error = GatewayConnectAuthError(
             message: "protocol mismatch",

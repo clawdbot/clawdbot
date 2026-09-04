@@ -73,6 +73,8 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
@@ -138,6 +140,7 @@ export async function projectSessionsPatchEntry(params: {
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
+  personalModelSelection?: UserModelAccountSelection;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch, creation } = params;
   if ("execSecurity" in patch || "execAsk" in patch) {
@@ -214,6 +217,8 @@ export async function projectSessionsPatchEntry(params: {
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
+    // Reset retains sessionId, so rollback also needs the original lifecycle revision.
+    ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
@@ -516,6 +521,18 @@ export async function projectSessionsPatchEntry(params: {
       selection = resolved;
     }
     if (selection) {
+      if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
+        if (params.personalModelSelection?.authProfileId !== selection.profile) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.FORBIDDEN,
+              "Choose your personal account from an identified Gateway connection.",
+            ),
+          };
+        }
+        params.personalModelSelection.assertCurrent();
+      }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
       const harnessSelection = {

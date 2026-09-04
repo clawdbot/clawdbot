@@ -1,6 +1,8 @@
 // Daemon shared tests cover shared daemon CLI helpers and validation.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { applyCliProfileEnv } from "../profile.js";
 import {
   filterContainerGenericHints,
   renderRuntimeHints,
@@ -22,22 +24,48 @@ describe("resolveRuntimeStatusColor", () => {
 });
 
 describe("renderGatewayServiceStartHints", () => {
+  beforeEach(() => {
+    mockSystemAccountHome();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("replaces only installation advice in Nix mode", () => {
+    const env: NodeJS.ProcessEnv = {};
+    applyCliProfileEnv({ profile: "work", env });
+    const existingHints = renderGatewayServiceStartHints(env);
+    const hints = renderGatewayServiceStartHints({ ...env, OPENCLAW_NIX_MODE: "1" });
+
+    expect(hints[0]).toContain("Nix mode detected; service install is disabled.");
+    expect(hints.slice(1)).toEqual(existingHints.slice(1));
+    expect(hints).toContain("openclaw --profile work gateway start");
+  });
+
   it.each([
     {
       name: "the default profile",
-      env: {},
+      profile: "default",
       installCommand: "openclaw gateway install",
       startCommand: "openclaw gateway start",
     },
     {
       name: "a named profile",
-      env: { OPENCLAW_PROFILE: "work" },
+      profile: "work",
       installCommand: "openclaw --profile work gateway install",
       startCommand: "openclaw --profile work gateway start",
     },
-  ])("recommends managed service commands for $name", ({ env, installCommand, startCommand }) => {
-    expect(renderGatewayServiceStartHints(env).slice(0, 2)).toEqual([installCommand, startCommand]);
-  });
+  ])(
+    "recommends managed service commands for $name",
+    ({ profile, installCommand, startCommand }) => {
+      const env: NodeJS.ProcessEnv = {};
+      applyCliProfileEnv({ profile, env });
+      expect(renderGatewayServiceStartHints(env).slice(0, 2)).toEqual([
+        installCommand,
+        startCommand,
+      ]);
+    },
+  );
 
   it("uses GUI session wording for installed LaunchAgents that cannot access gui/$UID", () => {
     expect(

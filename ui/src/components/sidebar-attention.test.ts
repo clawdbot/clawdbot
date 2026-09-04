@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
@@ -25,14 +26,9 @@ import {
   loadDismissals,
   reconcileSidebarAttentionDismissals,
   resolveUpdateAttentionDismissal,
-} from "./sidebar-attention-dismissals.ts";
-import {
-  buildScopeUpgradeInboxEntry,
-  buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
-  sidebarInboxTabCounts,
   type SidebarAttentionKind,
-} from "./sidebar-attention-entries.ts";
+} from "./sidebar-attention-dismissals.ts";
+import { buildScopeUpgradeInboxEntry, buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -72,6 +68,20 @@ function cronListResponse(jobs: CronJob[]): CronJobsListResult {
     limit: 50,
     hasMore: false,
     nextOffset: null,
+  };
+}
+
+function mentionItem(id: string, createdAt = 1_000): MentionInboxItem {
+  return {
+    id,
+    senderProfileId: "alice",
+    senderLabel: "Alice",
+    sessionKey: "agent:writer:review",
+    agentId: "writer",
+    sessionTitle: "Review",
+    messageId: `message-${id}`,
+    createdAt,
+    expiresAt: 10_000,
   };
 }
 
@@ -227,6 +237,52 @@ describe("sidebar attention refresh ownership", () => {
     await element.updateComplete;
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("updates the closed Inbox badge for mentions outside the selected agent", async () => {
+    let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
+    const responses: Record<string, unknown> = {
+      "cron.list": cronListResponse([]),
+      "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
+      "models.authStatus": { ts: 1, providers: [] },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "mentions.list") {
+        return result;
+      }
+      if (method in responses) {
+        return responses[method];
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    harness.update({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        server: { bootId: "boot-a", connId: "connection-a" },
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["mentions.list", "mentions.dismiss"] },
+      },
+      selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
+    });
+    const { element } = await mountAttention({
+      gateway: harness.gateway,
+      agentSelection: {
+        state: { selectedId: "main", scopeId: "main" },
+        subscribe: () => () => undefined,
+      } as unknown as ApplicationContext["agentSelection"],
+    });
+
+    await waitForFast(() =>
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("1"),
+    );
+    result = { ...result, revision: 2, items: [mentionItem("first"), mentionItem("second")] };
+    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+    await waitForFast(() =>
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
+    );
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
   it("keeps a reconnected attention panel closed until a new open", async () => {
@@ -441,7 +497,6 @@ describe("sidebar attention refresh ownership", () => {
           Promise.resolve(authStatus(1)),
           staleAuth.promise,
           switchedAuth.promise,
-          Promise.resolve(authStatus(2)),
         ],
       };
       const request = vi.fn((method: keyof typeof responses) => {
@@ -541,7 +596,8 @@ describe("sidebar attention refresh ownership", () => {
 
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(9));
       eventListener?.({ type: "event", event: "cron", payload: {} });
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(11));
+      switchedAuth.resolve(authStatus(2));
       await waitForFast(() =>
         expect(
           element
@@ -560,7 +616,6 @@ describe("sidebar attention refresh ownership", () => {
       } else {
         staleAuth.reject(new Error("stale Main auth"));
       }
-      switchedAuth.resolve(authStatus(4, "ok"));
       await Promise.allSettled([staleCron.promise, staleAuth.promise, switchedAuth.promise]);
       await new Promise<void>((resolve) => {
         globalThis.setTimeout(resolve, 0);
@@ -902,79 +957,6 @@ describe("scope upgrade dismissal fact", () => {
     const available = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "available" } });
 
     expect(guidance?.dismissal).not.toEqual(available?.dismissal);
-  });
-});
-
-describe("sidebar Inbox projection", () => {
-  it("derives every tab count and dismiss control from one entry list", () => {
-    const attention = buildSidebarAttentionEntries({
-      cronJobs: [cronJob("failed-job")],
-      cronSchedulerEnabled: true,
-      modelAuthStatus: null,
-      now: 0,
-    });
-    const scopeUpgrade = buildScopeUpgradeInboxEntry({
-      scopes: ["operator.read"],
-      state: { phase: "available" },
-    });
-    const update = buildUpdateInboxEntry({
-      canDismiss: true,
-      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
-      forced: true,
-      requiresAction: true,
-      severity: "warning",
-      visible: true,
-    });
-    const entries = buildSidebarInboxEntries({
-      approvals: [
-        {
-          id: "approval-1",
-          kind: "exec",
-          request: { command: "pwd" },
-          createdAtMs: 1,
-          expiresAtMs: 60_000,
-        },
-      ],
-      attention,
-      scopeUpgrade,
-      update,
-    });
-
-    expect(sidebarInboxTabCounts(entries)).toEqual({
-      all: 4,
-      approvals: 1,
-      automations: 1,
-      system: 2,
-    });
-    expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
-      "scopeUpgrade",
-      "attention",
-    ]);
-  });
-
-  it("keeps informational updates visible without adding them to attention counts", () => {
-    const update = buildUpdateInboxEntry({
-      canDismiss: false,
-      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
-      forced: false,
-      requiresAction: false,
-      severity: "warning",
-      visible: true,
-    });
-    const entries = buildSidebarInboxEntries({
-      approvals: [],
-      attention: [],
-      scopeUpgrade: null,
-      update,
-    });
-
-    expect(entries).toHaveLength(1);
-    expect(sidebarInboxTabCounts(entries)).toEqual({
-      all: 0,
-      approvals: 0,
-      automations: 0,
-      system: 0,
-    });
   });
 });
 

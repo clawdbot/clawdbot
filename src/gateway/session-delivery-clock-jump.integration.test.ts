@@ -152,7 +152,7 @@ describe("session delivery clock-jump integration", () => {
             route: { channel: "webchat", to: sessionKey, chatType: "direct" },
             inputProvenance: {
               kind: "inter_session",
-              sourceChannel: "webchat",
+              sourceChannel: "internal",
               sourceTool: "image_generate",
             },
             sourceReplyDeliveryMode: "automatic",

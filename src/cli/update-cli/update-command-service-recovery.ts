@@ -66,6 +66,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
     supervisorKeepsAlive: true,
+    settle: { probes: 12 },
   });
   return { health, launchAgentRecovery };
 }

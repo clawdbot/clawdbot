@@ -75,6 +75,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
   "users.prefs.changed": [READ_SCOPE],
+  "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
@@ -91,6 +92,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
+  "plugins.controlUi.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],

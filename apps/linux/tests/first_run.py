@@ -20,8 +20,17 @@ import tempfile
 import time
 
 
-def exercise(app, Atspi, GLib):
+def exercise(app, Atspi, GLib, *, remote_only):
     last_headings = set()
+
+    def text_content(node):
+        text = node.get_text_iface()
+        if text is None:
+            return None
+        # Ubuntu 24's GI bindings dispatch text.get_text(...) back through
+        # Accessible.get_text(). Calling the interface method is stable on both
+        # the Ubuntu 22 and 24 AT-SPI API shapes.
+        return Atspi.Text.get_text(text, 0, -1)
 
     def nodes():
         desktop = Atspi.get_desktop(0)
@@ -61,8 +70,7 @@ def exercise(app, Atspi, GLib):
                     if actual_role == "heading":
                         last_headings.add(name)
                     if role is None:
-                        text = node.get_text_iface()
-                        matches = text is not None and text.get_text(0, -1) == label
+                        matches = text_content(node) == label
                     else:
                         matches = actual_role == role and (
                             name.startswith(label) if prefix else name == label
@@ -94,7 +102,7 @@ def exercise(app, Atspi, GLib):
 
     def empty_entry(label):
         node = wait(label, "entry")
-        if node.get_text_iface().get_text(0, -1):
+        if text_content(node):
             raise RuntimeError(f"Expected an empty {label!r}; refusing a remote connection")
 
     wait("Welcome to OpenClaw", "heading")
@@ -111,6 +119,9 @@ def exercise(app, Atspi, GLib):
     wait("Gateway port", "entry")
     click("Connect to Gateway")
     wait("Enter an SSH target to continue.")
+    if remote_only:
+        print("PASS: native first-run remote choices", flush=True)
+        return
     click("Back")
     wait("Welcome to OpenClaw", "heading")
     click("Get started")
@@ -132,7 +143,7 @@ def interrupted(signum, _frame):
     raise RuntimeError(f"Native first-run smoke interrupted by signal {signum}")
 
 
-def drive(binary):
+def drive(binary, *, remote_only):
     try:
         import gi
 
@@ -153,7 +164,7 @@ def drive(binary):
             stderr=subprocess.STDOUT,
         )
         try:
-            exercise(app, Atspi, GLib)
+            exercise(app, Atspi, GLib, remote_only=remote_only)
         finally:
             if app.poll() is None:
                 app.terminate()
@@ -169,6 +180,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
     parser.add_argument("--driver", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--remote-only",
+        action="store_true",
+        help="Stop after validating release-safe remote setup choices",
+    )
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() == 0:
         parser.error("Run on Linux as a non-root user; do not disable the WebKit sandbox")
@@ -182,7 +198,7 @@ def main():
         parser.error("The minimal system PATH must not contain an OpenClaw CLI")
 
     if args.driver:
-        drive(binary)
+        drive(binary, remote_only=args.remote_only)
         return
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -218,8 +234,12 @@ def main():
             env[variable] = str(path)
         # Native AT-SPI calls can block Python signal handlers. Keep the deadline
         # and cleanup outside that process, with its app in the same owned group.
+        command = [sys.executable, str(Path(__file__).resolve()), "--driver"]
+        if args.remote_only:
+            command.append("--remote-only")
+        command.append(str(binary))
         worker = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--driver", str(binary)],
+            command,
             cwd=root,
             env=env,
             stdin=subprocess.DEVNULL,

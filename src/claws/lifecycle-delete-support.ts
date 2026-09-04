@@ -24,6 +24,7 @@ import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
@@ -75,8 +76,8 @@ function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
     status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 

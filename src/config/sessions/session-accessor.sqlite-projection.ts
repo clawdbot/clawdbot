@@ -100,8 +100,10 @@ function loadSessionArchiveRuntime() {
 }
 
 export async function applySessionEntryReplacements<T>(params: {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
   statuses?: readonly SessionEntryStatus[];
@@ -383,7 +385,6 @@ export async function applySessionEntryLifecycleMutation(params: {
         expectedEntry,
         routeContext,
         resetBoundary,
-        resetBoundaryCwd,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
           (removal) => removal.sessionKey === sessionKey,
@@ -408,14 +409,12 @@ export async function applySessionEntryLifecycleMutation(params: {
         }
         if (resetBoundary && expectedEntry?.sessionId) {
           const boundaryScope = { ...resolved, sessionId: expectedEntry.sessionId, sessionKey };
-          // Same empty-window hazard as the single-target reset path: the
-          // boundary must not become seq 0, or the window stays permanently
-          // headerless and is rejected as a legacy transcript on every load.
-          // The header belongs to the prior row, so that row's workspace wins.
+          // The batched reset must initialize an empty transcript before its
+          // boundary, just like the single-target lifecycle writer.
           ensureTranscriptHeader(
             transactionDb,
             boundaryScope,
-            resolveResetBoundaryHeaderCwd(expectedEntry, resetBoundaryCwd),
+            resolveResetBoundaryHeaderCwd(expectedEntry, resetBoundary.cwd),
           );
           const event = buildSessionResetBoundaryEvent({
             events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {

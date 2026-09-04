@@ -1095,7 +1095,7 @@ for provider examples and precedence.
 ```
 
 - The `agents.entries` object key is the stable agent id.
-- `cwd`: optional working directory for reply runs, separate from `workspace`. Overrides `agents.defaults.cwd`; see [Working directory](/gateway/config-agents#agentsdefaultscwd) for precedence and sandbox restrictions.
+- `cwd`: optional working directory for reply runs, separate from `workspace`. Overrides `agents.defaults.cwd`; see [Working directory](/gateway/config-agents#agents.defaults.cwd) for precedence and sandbox restrictions.
 - `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
@@ -1446,7 +1446,6 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.
-- `messages.suppressToolErrors`: when `true`, suppresses `⚠️` tool-error warnings shown to the user (the agent still sees errors in context and can retry). Default: `false`.
 
 ### TTS (text-to-speech)
 

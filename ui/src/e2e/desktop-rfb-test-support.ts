@@ -1,4 +1,33 @@
+import { deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
+
+export function createRfbClipboardProvide(format: 1 | 2): number[] {
+  const text = Buffer.from("Clipboard continuity: Café Ω\0");
+  const payload = Buffer.alloc(4 + text.length);
+  payload.writeUInt32BE(text.length);
+  text.copy(payload, 4);
+  const compressed = deflateSync(payload);
+  const message = Buffer.alloc(12 + compressed.length);
+  message[0] = 3; // ServerCutText, extended Provide with a zlib-compressed format payload.
+  message.writeInt32BE(-(4 + compressed.length), 4);
+  message.writeUInt32BE(0x10000000 | format, 8);
+  compressed.copy(message, 12);
+  return [...message];
+}
+
+export function createRfbRawFrame(): number[] {
+  const width = 96;
+  const height = 64;
+  const message = Buffer.alloc(16 + width * height * 4);
+  message.writeUInt16BE(1, 2); // FramebufferUpdate with one Raw rectangle at (0, 0).
+  message.writeUInt16BE(width, 8);
+  message.writeUInt16BE(height, 10);
+  for (let offset = 16; offset < message.length; offset += 4) {
+    // noVNC requests little-endian RGBX32, independent of ServerInit's pixel format.
+    message.set([24, 180, 160, 0], offset);
+  }
+  return [...message];
+}
 
 /** Count Desktop transport lifecycle calls without opening a real RFB socket. */
 export async function installDesktopClientFake(panel: Locator): Promise<void> {
@@ -47,7 +76,20 @@ export async function installScriptedRfbServer(
       onerror: ((event: Event) => void) | null = null;
       onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null = null;
       onopen: ((event: Event) => void) | null = null;
-      onclose: ((event: CloseEvent) => void) | null = null;
+      private closeHandler: ((event: CloseEvent) => void) | null = null;
+      private readonly dispatchClose = (event: Event) => this.closeHandler?.(event as CloseEvent);
+      get onclose() {
+        return this.closeHandler;
+      }
+      set onclose(handler: ((event: CloseEvent) => void) | null) {
+        // Native event-handler properties occupy their original registration position.
+        if (!this.closeHandler && handler) {
+          this.addEventListener("close", this.dispatchClose);
+        } else if (this.closeHandler && !handler) {
+          this.removeEventListener("close", this.dispatchClose);
+        }
+        this.closeHandler = handler;
+      }
       private handshake = 0;
       private readonly id: number;
       authenticated = false;
@@ -65,7 +107,7 @@ export async function installScriptedRfbServer(
           this.deliver(new TextEncoder().encode("RFB 003.008\n"));
         }, 0);
       }
-      private deliver(bytes: Uint8Array<ArrayBuffer>): void {
+      deliver(bytes: Uint8Array<ArrayBuffer>): void {
         setTimeout(() => {
           if (this.readyState === 1) {
             this.onmessage?.(new MessageEvent("message", { data: bytes.buffer }));
@@ -103,23 +145,25 @@ export async function installScriptedRfbServer(
         }
       }
       close(code = 1000, reason = ""): void {
-        if (this.readyState === 3) {
+        if (this.readyState >= 2) {
           return;
         }
-        this.readyState = 3;
-        sockets.delete(this);
-        events.push(`closed:${this.id}`);
-        if (
-          disconnectAfterLastPeer &&
-          this.authenticated &&
-          ![...sockets].some((socket) => socket.authenticated)
-        ) {
-          // Model an old native desktop teardown crossing the replacement handshake.
-          desktopTeardown = true;
-        }
-        const event = new CloseEvent("close", { code, reason });
-        this.onclose?.(event);
-        this.dispatchEvent(new CloseEvent("close", { code, reason }));
+        this.readyState = 2;
+        // close() starts a handshake; native sockets deliver its event in a later task.
+        setTimeout(() => {
+          this.readyState = 3;
+          sockets.delete(this);
+          events.push(`closed:${this.id}`);
+          if (
+            disconnectAfterLastPeer &&
+            this.authenticated &&
+            ![...sockets].some((socket) => socket.authenticated)
+          ) {
+            // Model an old native desktop teardown crossing the replacement handshake.
+            desktopTeardown = true;
+          }
+          this.dispatchEvent(new CloseEvent("close", { code, reason }));
+        }, 0);
       }
     }
     const RoutedSocket = function (url: string, protocols?: string | string[]) {
@@ -145,8 +189,35 @@ export async function installScriptedRfbServer(
     (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents = () => [
       ...events,
     ];
+    (window as typeof window & { desktopRfbSend?: (chunks: number[][]) => void }).desktopRfbSend = (
+      chunks,
+    ) => {
+      for (const socket of sockets) {
+        if (socket.authenticated && socket.readyState === 1) {
+          for (const chunk of chunks) {
+            socket.deliver(new Uint8Array(chunk));
+          }
+        }
+      }
+    };
   }, options);
   return {
+    send: (chunks: number[][]) =>
+      page.evaluate(
+        (messages) =>
+          (
+            window as typeof window & { desktopRfbSend?: (chunks: number[][]) => void }
+          ).desktopRfbSend?.(messages),
+        chunks,
+      ),
+    disconnect: (reason: string) =>
+      page.evaluate(
+        (message) =>
+          (
+            window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
+          ).triggerDesktopRfbDisconnect?.(message),
+        reason,
+      ),
     events: () =>
       page.evaluate(
         () =>

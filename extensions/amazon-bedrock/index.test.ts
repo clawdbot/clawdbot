@@ -495,26 +495,33 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
-  it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+  it.each([
+    [ANTHROPIC_MODEL, false],
+    ["us.anthropic.claude-fable-5-1-v1:0", true],
+    ["global.anthropic.claude-mythos-5-1-v1:0", false],
+  ])(
+    "owns Anthropic-style replay policy for Bedrock %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "amazon-bedrock",
-        modelApi: "bedrock-converse-stream",
-        modelId: ANTHROPIC_MODEL,
-      } as never),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      appendOnlyRuntimeContext: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(
+        provider.buildReplayPolicy?.({
+          provider: "amazon-bedrock",
+          modelApi: "bedrock-converse-stream",
+          modelId,
+        }),
+      ).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it("disables prompt caching for non-Anthropic Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);

@@ -304,7 +304,7 @@ describe("minimax provider hooks", () => {
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext: false,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,

@@ -11,6 +11,7 @@ export default defineConfig({
   plugins: [controlUiLocaleModulesPlugin()],
   test: {
     reporters: sharedVitestConfig.test.reporters,
+    clearMocks: false,
     isolate: false,
     pool: resolveDefaultVitestPool(),
     testTimeout: 120_000,

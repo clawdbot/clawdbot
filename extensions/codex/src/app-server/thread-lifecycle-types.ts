@@ -127,6 +127,12 @@ export type CodexThreadRequestContext = {
   throwIfAborted: () => void;
 };
 
+export type CodexThreadResumePreparation = {
+  assertConfigured: () => void;
+  assertCurrent: () => void;
+  dispose: () => void;
+};
+
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
@@ -135,8 +141,8 @@ export type CodexResumeThreadContext = CodexThreadRequestContext & {
     binding: CodexAppServerThreadBinding,
   ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
-  assertResumeConfiguration: () => void;
-  assertResumeOwnership: () => void;
+  prepareResume: () => Promise<CodexThreadResumePreparation>;
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
 };
 
 export type CodexStartThreadContext = CodexThreadRequestContext & {

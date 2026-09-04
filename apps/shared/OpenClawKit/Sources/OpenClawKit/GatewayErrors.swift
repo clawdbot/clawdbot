@@ -180,6 +180,14 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         self.message
     }
 
+    public func isProtocolMismatch(supportedProtocols: ClosedRange<Int>) -> Bool {
+        // Published protocol-3 gateways only send INVALID_REQUEST + expectedProtocol.
+        // Compare the advertised role range: node clients still accept protocol 3.
+        self.detail == .protocolMismatch ||
+            (self.detailCode == "INVALID_REQUEST" &&
+                self.expectedProtocol.map { !supportedProtocols.contains($0) } == true)
+    }
+
     public var isNonRecoverable: Bool {
         switch self.detail {
         case .authTokenMissing,

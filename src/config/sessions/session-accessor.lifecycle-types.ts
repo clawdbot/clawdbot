@@ -4,6 +4,9 @@ import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delet
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+/** Reset is an append: an empty transcript needs the caller's workspace for its header. */
+export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & { cwd: string };
+
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
   storePath: string;
@@ -48,6 +51,8 @@ export type ResetSessionEntryLifecycleMutation = Omit<
 >;
 
 export type ResetSessionEntryLifecycleParams = {
+  /** Revalidate caller authority before preparation and synchronous reset commit. */
+  commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
   /** Runs after the persisted entry changes and any requested archival completes. */
@@ -60,13 +65,7 @@ export type ResetSessionEntryLifecycleParams = {
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
   /** Atomically append this boundary with the reset entry mutation. */
-  resetBoundary?: SessionResetBoundaryRequest;
-  /**
-   * Session workspace recorded in a header created for an empty window at reset
-   * time. Optional: absent, the header falls back to the process cwd, which is
-   * the pre-existing behavior for windows that never carried a workspace.
-   */
-  resetBoundaryCwd?: string;
+  resetBoundary?: SessionResetBoundaryWrite;
   /** Explicit store target for SQLite session ownership. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -82,7 +81,10 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
-  /** Revalidate caller and external lifecycle owners at each synchronous deletion boundary. */
+  /**
+   * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
+   * Must not write the deleting agent database: its Worker may hold the transaction lock.
+   */
   commitGuard?: () => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
@@ -152,9 +154,7 @@ export type SessionEntryLifecycleUpsert = {
   requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
   routeContext?: ConversationRouteContext | null;
-  resetBoundary?: SessionResetBoundaryRequest;
-  /** Session workspace for a header created at reset time; see ResetSessionEntryLifecycleParams. */
-  resetBoundaryCwd?: string;
+  resetBoundary?: SessionResetBoundaryWrite;
 } & (
   | {
       entry: SessionEntry;

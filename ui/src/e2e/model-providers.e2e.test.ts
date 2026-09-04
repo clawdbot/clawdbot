@@ -1,7 +1,9 @@
 // Control UI tests cover the Models settings page against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -531,22 +533,20 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       },
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
+    const configuredModels = [
+      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+      { id: "gpt-5.5-mini", name: "GPT-5.5 Mini", provider: "openai", available: true },
+      {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        available: true,
+      },
+    ];
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-        {
-          id: "gpt-5.5-mini",
-          name: "GPT-5.5 Mini",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "claude-sonnet-4-5",
-          name: "Claude Sonnet 4.5",
-          provider: "anthropic",
-          available: true,
-        },
+        ...configuredModels,
         { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: true },
       ],
       methodResponses: {
@@ -563,28 +563,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           cases: [
             {
               match: { view: "configured" },
-              response: {
-                models: [
-                  {
-                    id: "gpt-5.5",
-                    name: "GPT-5.5",
-                    provider: "openai",
-                    available: true,
-                  },
-                  {
-                    id: "gpt-5.5-mini",
-                    name: "GPT-5.5 Mini",
-                    provider: "openai",
-                    available: true,
-                  },
-                  {
-                    id: "claude-sonnet-4-5",
-                    name: "Claude Sonnet 4.5",
-                    provider: "anthropic",
-                    available: true,
-                  },
-                ],
-              },
+              response: { models: configuredModels },
             },
             {
               match: { view: "all", agentId: "main", refresh: true },
@@ -796,6 +775,113 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
     } finally {
       await context.close();
+    }
+  });
+
+  it("autosaves utility choices without a primary model and retains them after reload", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    let config: unknown = { agents: { defaults: {} } };
+    let hash = "utility-defaults";
+    const snapshot = () => ({
+      config,
+      sourceConfig: config,
+      hash,
+      raw: JSON.stringify(config),
+      valid: true,
+      issues: [],
+    });
+    const gateway = await installMockGateway(page, {
+      models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai", available: true }],
+      methodResponses: {
+        "config.get": snapshot(),
+        "models.authStatus": { ts: NOW, providers: [] },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+    const observations: unknown[] = [];
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      const defaults = page.locator(".model-providers__defaults");
+      const utility = page.locator("#model-providers-utility-model");
+      await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
+      if (recordVisuals) {
+        await page.screenshot({
+          path: path.join(artifactDir, "utility-before.png"),
+          fullPage: true,
+        });
+      }
+      for (const choice of [
+        { label: "GPT-5 Mini", value: "openai/gpt-5-mini", setting: "openai/gpt-5-mini" },
+        { label: "Disabled", value: "", setting: "" },
+        { label: "Auto", value: "__openclaw_automatic_utility__", setting: null },
+      ]) {
+        const before = (await gateway.getRequests("config.patch")).length;
+        await gateway.deferNext("config.patch");
+        await utility.click();
+        await utility.getByRole("option", { name: choice.label, exact: true }).click();
+        const request = await gateway.waitForRequest("config.patch", { after: before });
+        const patch = requestRaw(request);
+        // The fixture commits the actual wire patch, not the expected selection.
+        const next = applyMergePatch(config, patch);
+        const noop = JSON.stringify(next) === JSON.stringify(config);
+        hash = noop ? hash : `${hash}-updated`;
+        config = next;
+        await gateway.setMethodResponse("config.get", snapshot());
+        await gateway.resolveDeferred("config.patch", { ok: true, config, hash, noop });
+        await expect
+          .poll(async () => (await defaults.getByRole("status").textContent())?.trim())
+          .toBe("Defaults saved.");
+        observations.push({ choice, request, config, selected: await modelPickerValue(utility) });
+        if (recordVisuals) {
+          await page.screenshot({
+            path: path.join(artifactDir, `utility-${choice.label}-saved.png`),
+            fullPage: true,
+          });
+        }
+        expect(patch).toEqual({
+          agents: {
+            defaults: {
+              utilityModel: choice.setting,
+              thinkingDefault: null,
+              fastModeDefault: null,
+            },
+          },
+        });
+        await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
+        await page.reload();
+        await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
+        await expect.poll(() => modelPickerValue(defaults.locator("wa-select").first())).toBe("");
+        if (recordVisuals) {
+          await page.screenshot({
+            path: path.join(artifactDir, `utility-${choice.label}-reloaded.png`),
+            fullPage: true,
+          });
+        }
+      }
+    } finally {
+      try {
+        if (recordVisuals) {
+          await writeFile(
+            path.join(artifactDir, "utility-observations.json"),
+            JSON.stringify(observations, null, 2),
+          );
+          await page.screenshot({
+            path: path.join(artifactDir, "utility-final.png"),
+            fullPage: true,
+          });
+        }
+      } finally {
+        await context.close();
+      }
     }
   });
 

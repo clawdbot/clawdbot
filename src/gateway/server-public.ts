@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -8,6 +9,14 @@ export type GatewayCloseOptions = {
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+};
+
+/** A capability for one host iteration; native completion belongs to the host. */
+export type GatewayHostLifecycle = {
+  request(
+    action: "start" | "stop" | "restart",
+    assertCaller: () => void,
+  ): Promise<Result<{ outcome: "already-running" | "scheduled" }, string>>;
 };
 
 export type GatewayServer = {
@@ -22,6 +31,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
+  hostLifecycle?: GatewayHostLifecycle;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
   /**

@@ -315,13 +315,14 @@ export function renderAppearanceSection(
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card settings-theme-card--${opt.id} ${opt.id ===
-                    props.theme
-                      ? "settings-theme-card--active"
-                      : ""}"
-                    aria-pressed=${opt.id === "custom" && !props.hasCustomTheme
-                      ? nothing
-                      : String(opt.id === props.theme)}
+                    class="settings-theme-card settings-theme-card--${opt.id} ${
+                      opt.id === props.theme ? "settings-theme-card--active" : ""
+                    }"
+                    aria-pressed=${
+                      opt.id === "custom" && !props.hasCustomTheme
+                        ? nothing
+                        : String(opt.id === props.theme)
+                    }
                     title=${opt.description}
                     @click=${(e: Event) => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
@@ -371,81 +372,94 @@ export function renderAppearanceSection(
             }),
           })}
           <div class="settings-row settings-row--stacked">
-            ${showCustomThemeImport
-              ? html`
-                  <div class="settings-theme-import">
-                    <div class="settings-theme-import__copy">
-                      <div class="settings-theme-import__title">
-                        ${t("configView.appearance.importFromTweakcn")}
+            ${
+              showCustomThemeImport
+                ? html`
+                    <div class="settings-theme-import">
+                      <div class="settings-theme-import__copy">
+                        <div class="settings-theme-import__title">
+                          ${t("configView.appearance.importFromTweakcn")}
+                        </div>
+                        <p class="settings-theme-import__hint">
+                          ${t("configView.appearance.tweakcnInstructions")}
+                        </p>
                       </div>
-                      <p class="settings-theme-import__hint">
-                        ${t("configView.appearance.tweakcnInstructions")}
-                      </p>
-                    </div>
-                    <a
-                      class="settings-theme-import__external"
-                      href="https://tweakcn.com/editor/theme"
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      ${t("configView.appearance.browseTweakcn")} ${icons.externalLink}
-                    </a>
-                    <label class="settings-theme-import__field">
-                      <span class="settings-theme-import__label"
-                        >${t("configView.appearance.themeLink")}</span
+                      <a
+                        class="settings-theme-import__external"
+                        href="https://tweakcn.com/editor/theme"
+                        target="_blank"
+                        rel="noreferrer noopener"
                       >
-                      ${inputs.customThemeImport}
-                    </label>
-                    <div class="settings-theme-import__actions">
-                      <button
-                        class="btn btn--sm primary"
-                        ?disabled=${props.customThemeImportBusy ||
-                        props.customThemeImportUrl.trim().length === 0}
-                        @click=${props.onImportCustomTheme}
-                      >
-                        ${props.customThemeImportBusy
-                          ? t("common.importing")
-                          : props.hasCustomTheme
-                            ? t("configView.appearance.replace", { name: importedName })
-                            : t("configView.appearance.importTheme")}
-                      </button>
-                      ${props.hasCustomTheme
-                        ? html`<button
-                            class="btn btn--sm danger"
-                            @click=${props.onClearCustomTheme}
-                          >
-                            ${t("configView.appearance.clear", { name: importedName })}
-                          </button>`
-                        : nothing}
-                    </div>
-                    ${props.hasCustomTheme
-                      ? html`<div class="settings-theme-import__meta">
-                          <span class="settings-theme-import__meta-label"
-                            >${t("configView.appearance.loaded")}</span
-                          >
-                          <span class="settings-theme-import__meta-value"
-                            >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
-                          >
-                        </div>`
-                      : nothing}
-                    ${props.customThemeImportMessage
-                      ? html`<div
-                          class="settings-theme-import__message settings-theme-import__message--${props
-                            .customThemeImportMessage.kind}"
-                          role=${props.customThemeImportMessage.kind === "error"
-                            ? "alert"
-                            : "status"}
+                        ${t("configView.appearance.browseTweakcn")} ${icons.externalLink}
+                      </a>
+                      <label class="settings-theme-import__field">
+                        <span class="settings-theme-import__label"
+                          >${t("configView.appearance.themeLink")}</span
                         >
-                          ${props.customThemeImportMessage.text}
-                        </div>`
-                      : nothing}
-                  </div>
-                `
-              : html`<p class="settings-theme-import__inline-hint">
-                  ${t("configView.appearance.inlineHintBefore")}
-                  <strong>${t("configView.appearance.import")}</strong>
-                  ${t("configView.appearance.inlineHintAfter")}
-                </p>`}
+                        ${inputs.customThemeImport}
+                      </label>
+                      <div class="settings-theme-import__actions">
+                        <button
+                          class="btn btn--sm primary"
+                          ?disabled=${
+                            props.customThemeImportBusy ||
+                            props.customThemeImportUrl.trim().length === 0
+                          }
+                          @click=${props.onImportCustomTheme}
+                        >
+                          ${
+                            props.customThemeImportBusy
+                              ? t("common.importing")
+                              : props.hasCustomTheme
+                                ? t("configView.appearance.replace", { name: importedName })
+                                : t("configView.appearance.importTheme")
+                          }
+                        </button>
+                        ${
+                          props.hasCustomTheme
+                            ? html`<button
+                                class="btn btn--sm danger"
+                                @click=${props.onClearCustomTheme}
+                              >
+                                ${t("configView.appearance.clear", { name: importedName })}
+                              </button>`
+                            : nothing
+                        }
+                      </div>
+                      ${
+                        props.hasCustomTheme
+                          ? html`<div class="settings-theme-import__meta">
+                              <span class="settings-theme-import__meta-label"
+                                >${t("configView.appearance.loaded")}</span
+                              >
+                              <span class="settings-theme-import__meta-value"
+                                >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
+                              >
+                            </div>`
+                          : nothing
+                      }
+                      ${
+                        props.customThemeImportMessage
+                          ? html`<div
+                              class="settings-theme-import__message settings-theme-import__message--${
+                                props.customThemeImportMessage.kind
+                              }"
+                              role=${
+                                props.customThemeImportMessage.kind === "error" ? "alert" : "status"
+                              }
+                            >
+                              ${props.customThemeImportMessage.text}
+                            </div>`
+                          : nothing
+                      }
+                    </div>
+                  `
+                : html`<p class="settings-theme-import__inline-hint">
+                    ${t("configView.appearance.inlineHintBefore")}
+                    <strong>${t("configView.appearance.import")}</strong>
+                    ${t("configView.appearance.inlineHintAfter")}
+                  </p>`
+            }
           </div>
         </div>
       </section>
@@ -468,9 +482,9 @@ export function renderAppearanceSection(
                 return html`
                   <button
                     type="button"
-                    class="settings-accent-swatch${themeChipScope} ${selected
-                      ? "settings-accent-swatch--active"
-                      : ""}"
+                    class="settings-accent-swatch${themeChipScope} ${
+                      selected ? "settings-accent-swatch--active" : ""
+                    }"
                     style=${styleMap({
                       "--settings-accent-swatch": preset.hex ?? themeAccentColor,
                     })}
@@ -480,22 +494,24 @@ export function renderAppearanceSection(
                     title=${label}
                     @click=${() => props.setAccent(preset.hex)}
                   >
-                    ${isDefault && !defaultAccentSelected
-                      ? html`<span class="settings-accent-swatch__reset" aria-hidden="true"
-                          >${icons.rotateCcw}</span
-                        >`
-                      : selected
-                        ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
-                            >${icons.check}</span
+                    ${
+                      isDefault && !defaultAccentSelected
+                        ? html`<span class="settings-accent-swatch__reset" aria-hidden="true"
+                            >${icons.rotateCcw}</span
                           >`
-                        : nothing}
+                        : selected
+                          ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
+                              >${icons.check}</span
+                            >`
+                          : nothing
+                    }
                   </button>
                 `;
               })}
               <span
-                class="settings-accent-swatch settings-accent-swatch--custom ${customAccentSelected
-                  ? "settings-accent-swatch--active"
-                  : ""}"
+                class="settings-accent-swatch settings-accent-swatch--custom ${
+                  customAccentSelected ? "settings-accent-swatch--active" : ""
+                }"
                 style=${styleMap({
                   "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
                   "--settings-accent-swatch-ink": controlUiAccentInk(
@@ -582,12 +598,14 @@ export function renderAppearanceSection(
               label: props.connected ? t("common.connected") : t("common.offline"),
             }),
           })}
-          ${props.assistantName
-            ? renderSettingsRow({
-                title: t("configView.connection.assistant"),
-                control: renderSettingsValue(props.assistantName),
-              })
-            : nothing}
+          ${
+            props.assistantName
+              ? renderSettingsRow({
+                  title: t("configView.connection.assistant"),
+                  control: renderSettingsValue(props.assistantName),
+                })
+              : nothing
+          }
         </div>
       </section>
     </div>

@@ -50,6 +50,7 @@ type TokenResponseJson = {
 };
 type TokenRequestOptions = {
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
 };
 
@@ -171,6 +172,7 @@ async function postTokenForm(
     },
     timeoutMs,
     signal: options.signal,
+    beforeRequest: options.assertCurrent,
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
@@ -254,7 +256,7 @@ export async function exchangeOpenAIAuthorizationCode(
         code_verifier: verifier,
         redirect_uri: redirectUri,
       }),
-      { signal: options.signal, timeoutMs },
+      { ...options, timeoutMs },
     );
   } catch (error) {
     return {
@@ -279,7 +281,7 @@ export async function refreshOpenAIAccessToken(
         refresh_token: refreshToken,
         client_id: CLIENT_ID,
       }),
-      { signal: options.signal, timeoutMs },
+      { ...options, timeoutMs },
     );
     return await readOpenAITokenResponse(response, "refresh", refreshToken);
   } catch (error) {

@@ -5,7 +5,7 @@ import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
@@ -227,6 +227,7 @@ function resolveManifestRuntimeAuthFacts(
 ) {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   const refs = new Set<string>();
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params?.config);
   for (const plugin of snapshot.plugins) {
     const evidenceProviders = (plugin.setup?.providers ?? []).filter(
       (provider) => provider.authEvidence?.length,
@@ -240,10 +241,7 @@ function resolveManifestRuntimeAuthFacts(
     }
     // Package contributions are fixed, but their eligibility follows current config.
     // Evaluate each contributing owner once without narrowing credential-scrubbing hints.
-    if (
-      snapshot.index.plugins.length > 0 &&
-      !isInstalledPluginEnabled(snapshot.index, plugin.id, params?.config)
-    ) {
+    if (snapshot.index.plugins.length > 0 && !isEnabled(plugin.id)) {
       continue;
     }
     if (shouldUsePluginProviderAuthEvidence(plugin, params)) {

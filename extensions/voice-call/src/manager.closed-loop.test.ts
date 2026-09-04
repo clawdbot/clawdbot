@@ -1,17 +1,7 @@
 // Voice Call tests cover manager.closed loop plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
-
-function requireCall(
-  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
-  callId: string,
-) {
-  const call = manager.getCall(callId);
-  if (!call) {
-    throw new Error(`expected active call ${callId}`);
-  }
-  return call;
-}
 
 function requireTurnToken(provider: Awaited<ReturnType<typeof createManagerHarness>>["provider"]) {
   const firstStart = provider.startListeningCalls[0];
@@ -66,7 +56,7 @@ describe("CallManager closed-loop turns", () => {
     expect(provider.startListeningCalls).toHaveLength(1);
     expect(provider.stopListeningCalls).toHaveLength(1);
 
-    const call = requireCall(manager, started.callId);
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
     expect(call.transcript.map((entry) => entry.text)).toEqual([
       "How can I help?",
       "Please check status",
@@ -164,7 +154,7 @@ describe("CallManager closed-loop turns", () => {
     expect(turnResult.success).toBe(true);
     expect(turnResult.transcript).toBe("final answer");
 
-    const call = requireCall(manager, started.callId);
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
     expect(call.transcript.map((entry) => entry.text)).toEqual(["Prompt", "final answer"]);
   });
 
@@ -212,7 +202,7 @@ describe("CallManager closed-loop turns", () => {
 
     expect(secondResult.success).toBe(true);
 
-    const call = requireCall(manager, started.callId);
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
     expect(call.transcript.map((entry) => entry.text)).toEqual([
       "First question",
       "First answer",
@@ -257,7 +247,7 @@ describe("CallManager closed-loop turns", () => {
       expect(result.transcript).toBe(`Answer ${i}`);
     }
 
-    const call = requireCall(manager, started.callId);
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
     const metadata = call.metadata ?? {};
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);

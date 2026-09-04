@@ -30,6 +30,7 @@ export async function proveHotReloadBrowserSettings({
   const SESSION_KEY = "agent:qa:main";
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
+    recordVideo: { dir: outputDir, size: { width: 1280, height: 900 } },
     serviceWorkers: "block",
   });
   await context.addInitScript(
@@ -147,5 +148,7 @@ export async function proveHotReloadBrowserSettings({
     );
   });
 
+  const video = page.video();
   await context.close();
+  await video?.saveAs(path.join(outputDir, "control-ui-hot-reload.webm"));
 }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -147,7 +148,9 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
-  LaunchedEffect(sessionKey, timeline, historyLoading) {
+  // Loading only changes empty-timeline transitions. A populated-history refresh
+  // must not cancel a moving scroll after its content version has been recorded.
+  LaunchedEffect(sessionKey, timeline, historyLoading && timeline.items.isEmpty()) {
     val transition =
       if (readerState.initialized) {
         readerState.onTimelineChanged(timeline, historyLoading)
@@ -176,9 +179,19 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
+  // reverseLayout puts the latest tail at the viewport start. Scrolling within
+  // content padding does not hide text; this geometry must not change follow intent.
+  val latestContentHidden by
+    remember(listState) {
+      derivedStateOf {
+        val layoutInfo = listState.layoutInfo
+        val latestItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentTimeline.latestContentIndex }
+        latestItem?.let { it.offset < layoutInfo.viewportStartOffset } ?: listState.canScrollBackward
+      }
+    }
   return ChatReaderScrollController(
     listState = listState,
-    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty(),
+    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty() && latestContentHidden,
     jumpToLatest = {
       scope.launch {
         applyTransition(readerState.jumpToLatest(currentTimeline))

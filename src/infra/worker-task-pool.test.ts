@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -196,4 +197,17 @@ describe("worker task pool", () => {
     );
     expect(stdout.trim()).toBe("finished");
   }, 20_000);
+
+  it("releases parent inputs while their worker copies are still executing", async () => {
+    await promisify(execFile)(
+      process.execPath,
+      [
+        "--expose-gc",
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./worker-task-pool.retention.test-support.ts", import.meta.url)),
+      ],
+      { timeout: 20_000 },
+    );
+  }, 25_000);
 });

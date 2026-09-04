@@ -1018,6 +1018,15 @@ export async function runModelsAuthLoginFlowCore(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
+  await prompter.note(
+    [
+      "Scope: System / agent",
+      `Agent: ${context.agentId}`,
+      "Location: the machine running OpenClaw",
+      `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
+    ].join("\n"),
+    "Provider sign-in",
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter

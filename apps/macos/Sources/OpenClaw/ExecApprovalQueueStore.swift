@@ -10,12 +10,14 @@ struct ExecApprovalQueueItem: Decodable, Identifiable {
         case systemAgent
     }
 
+    // The Gateway's durable operator_approvals registry shares IDs across kinds.
     let id: String
     let request: ExecApprovalPromptRequest
     let createdAtMs: Int
     let expiresAtMs: Int
     let kind: ApprovalKind
     let allowedDecisions: [ExecApprovalDecision]
+    fileprivate var serverLease: GatewayConnection.ServerLease?
 
     init(
         id: String,
@@ -50,15 +52,21 @@ struct ExecApprovalQueueItem: Decodable, Identifiable {
             policyPresent: requestContainer.contains(.allowedDecisions))
     }
 
-    func assigningKind(_ kind: ApprovalKind) -> Self {
+    fileprivate func owned(by lease: GatewayConnection.ServerLease, kind: ApprovalKind = .exec) -> Self {
         var request = self.request
         request.allowedDecisions = self.allowedDecisions
-        return Self(
+        var owned = Self(
             id: self.id,
             request: request,
             createdAtMs: self.createdAtMs,
             expiresAtMs: self.expiresAtMs,
             kind: kind)
+        owned.serverLease = lease
+        return owned
+    }
+
+    fileprivate func hasSameSource(as other: Self) -> Bool {
+        self.id == other.id && self.kind == other.kind && self.serverLease == other.serverLease
     }
 
     private static func inlineDecisions(
@@ -91,6 +99,10 @@ final class ExecApprovalQueueStore {
     @ObservationIgnored private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.queue")
     @ObservationIgnored private let gateway: GatewayConnection
     @ObservationIgnored private var eventTask: Task<Void, Never>?
+    @ObservationIgnored private var admittedLease: GatewayConnection.ServerLease?
+    @ObservationIgnored private var pendingRefresh: (
+        lease: GatewayConnection.ServerLease,
+        task: Task<Void, Never>)?
     @ObservationIgnored private var expiryTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
@@ -101,9 +113,9 @@ final class ExecApprovalQueueStore {
     func start() {
         guard self.eventTask == nil else { return }
         self.eventTask = Task { [weak self, gateway] in
-            for await push in await gateway.subscribe(bufferingNewest: 200) {
+            for await delivery in await gateway.subscribe(bufferingNewest: 200) {
                 guard !Task.isCancelled, let self else { return }
-                self.handle(push: push)
+                self.handle(delivery: delivery)
             }
         }
     }
@@ -111,6 +123,9 @@ final class ExecApprovalQueueStore {
     func stop() {
         self.eventTask?.cancel()
         self.eventTask = nil
+        self.pendingRefresh?.task.cancel()
+        self.pendingRefresh = nil
+        self.admittedLease = nil
         for task in self.expiryTasks.values {
             task.cancel()
         }
@@ -121,26 +136,87 @@ final class ExecApprovalQueueStore {
     func refresh() async {
         let generation = self.refreshGeneration
         do {
-            let listed: [ExecApprovalQueueItem] = try await self.gateway.requestDecoded(
-                method: .execApprovalList,
-                timeoutMs: 10000)
-            // A resolution received during the request owns newer state; an old
-            // list must never resurrect its already-dismissed approval card.
-            guard generation == self.refreshGeneration, !Task.isCancelled else { return }
-            let nowMs = Self.currentTimeMs()
-            let systemApprovals = self.requests.filter { $0.kind == .systemAgent && $0.expiresAtMs > nowMs }
-            self.replaceRequests(listed.filter { $0.expiresAtMs > nowMs } + systemApprovals)
+            let lease = try await self.gateway.acquireServerLease()
+            guard generation == self.refreshGeneration, !Task.isCancelled,
+                  self.gateway.serverLeaseMatchesCurrentState(lease)
+            else { return }
+            self.admit(lease)
+            await self.reconcile(lease).value
         } catch {
             guard !Task.isCancelled else { return }
             self.logger.error("exec approval listing failed \(error.localizedDescription, privacy: .public)")
         }
     }
 
+    @discardableResult
+    private func admit(_ lease: GatewayConnection.ServerLease) -> Bool {
+        guard self.admittedLease != lease else { return false }
+        self.admittedLease = lease
+        self.replaceRequests(self.requests.filter { $0.serverLease == lease })
+        return true
+    }
+
+    private func reconcile(_ lease: GatewayConnection.ServerLease) -> Task<Void, Never> {
+        if let pending = self.pendingRefresh, pending.lease == lease {
+            return pending.task
+        }
+        self.pendingRefresh?.task.cancel()
+        let task = Task { [weak self] in
+            guard !Task.isCancelled, let self else { return }
+            defer {
+                // A replacement cancels its predecessor before installing its own task.
+                if !Task.isCancelled { self.pendingRefresh = nil }
+            }
+            do {
+                while !Task.isCancelled, self.gateway.serverLeaseMatchesCurrentState(lease) {
+                    let generation = self.refreshGeneration
+                    async let exec = self.listRequests(kind: .exec, lease: lease)
+                    async let system = self.listRequests(kind: .systemAgent, lease: lease)
+                    let listed = try await exec + system
+                    guard !Task.isCancelled, self.gateway.serverLeaseMatchesCurrentState(lease) else { return }
+                    // Reconcile again after newer events so untouched pending rows are still recovered.
+                    guard generation == self.refreshGeneration else { continue }
+                    self.replaceRequests(listed.filter { $0.expiresAtMs > Self.currentTimeMs() })
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.logger.error("exec approval listing failed \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        self.pendingRefresh = (lease, task)
+        return task
+    }
+
+    private func listRequests(
+        kind: ExecApprovalQueueItem.ApprovalKind,
+        lease: GatewayConnection.ServerLease) async throws -> [ExecApprovalQueueItem]
+    {
+        let method = kind == .exec ? "exec.approval.list" : "openclaw.approval.list"
+        if kind == .systemAgent,
+           await self.gateway.supportsServerMethod(method, ifCurrentServerLease: lease) != true
+        {
+            return []
+        }
+        let data = try await self.gateway.request(
+            method: method,
+            params: nil,
+            timeoutMs: 10000,
+            ifCurrentServerLease: lease)
+        return try JSONDecoder().decode([ExecApprovalQueueItem].self, from: data)
+            .map { $0.owned(by: lease, kind: kind) }
+    }
+
     func resolve(request: ExecApprovalQueueItem, decision: ExecApprovalDecision) async {
         guard request.allowedDecisions.contains(decision),
               decision != .allowAlways,
-              self.requests.contains(where: { $0.id == request.id })
-        else { return }
+              request.expiresAtMs > Self.currentTimeMs(),
+              let lease = request.serverLease,
+              self.requests.contains(where: { $0.hasSameSource(as: request) })
+        else {
+            self.logger.info("exec approval decision ignored; request or available decisions changed")
+            return
+        }
 
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
@@ -156,10 +232,17 @@ final class ExecApprovalQueueStore {
         }
 
         do {
-            try await self.gateway.requestVoid(method: method, params: params, timeoutMs: 10000)
-            self.removeRequest(id: request.id)
+            _ = try await self.gateway.request(
+                method: method.rawValue,
+                params: params,
+                timeoutMs: 10000,
+                ifCurrentServerLease: lease)
+            self.removeRequest(request)
         } catch {
             self.logger.error("exec approval resolution failed \(error.localizedDescription, privacy: .public)")
+            if !self.gateway.serverLeaseMatchesCurrentState(lease) {
+                self.removeRequest(request)
+            }
             // A losing race (the modal prompter or another client resolved first)
             // surfaces here as a gateway rejection. Re-list instead of parsing
             // error text so the card converges to the authoritative queue.
@@ -167,7 +250,23 @@ final class ExecApprovalQueueStore {
         }
     }
 
-    private func handle(push: GatewayPush) {
+    private func handle(delivery: GatewayConnection.PushDelivery) {
+        let serverLease = delivery.serverLease
+        guard let push = delivery.push else {
+            // Retirement still clears A's rows while replacement B is unavailable.
+            if self.pendingRefresh?.lease == serverLease {
+                self.pendingRefresh?.task.cancel()
+                self.pendingRefresh = nil
+            }
+            if self.admittedLease == serverLease { self.admittedLease = nil }
+            self.replaceRequests(self.requests.filter { $0.serverLease != serverLease })
+            return
+        }
+        guard delivery.isCurrent else { return }
+        // The short hello admission can let current events precede the ordinary snapshot.
+        if self.admit(serverLease) {
+            _ = self.reconcile(serverLease)
+        }
         guard case let .event(event) = push, let payload = event.payload else { return }
         switch event.event {
         case "exec.approval.requested", "openclaw.approval.requested":
@@ -176,7 +275,7 @@ final class ExecApprovalQueueStore {
                 let kind: ExecApprovalQueueItem.ApprovalKind = event.event == "openclaw.approval.requested"
                     ? .systemAgent
                     : .exec
-                self.insertRequest(request.assigningKind(kind))
+                self.insertRequest(request.owned(by: serverLease, kind: kind))
             } catch {
                 self.logger.error("exec approval event decode failed \(error.localizedDescription, privacy: .public)")
             }
@@ -184,7 +283,15 @@ final class ExecApprovalQueueStore {
             guard let resolved = try? GatewayPayloadDecoding.decode(payload, as: ResolvedApproval.self) else {
                 return
             }
-            self.removeRequest(id: resolved.id)
+            self.refreshGeneration &+= 1
+            let kind: ExecApprovalQueueItem.ApprovalKind = event.event == "openclaw.approval.resolved"
+                ? .systemAgent
+                : .exec
+            if let request = self.requests.first(where: {
+                $0.id == resolved.id && $0.kind == kind && $0.serverLease == serverLease
+            }) {
+                self.removeRequest(request)
+            }
         default:
             break
         }
@@ -199,10 +306,13 @@ final class ExecApprovalQueueStore {
         self.scheduleExpiry(for: request)
     }
 
-    private func removeRequest(id: String) {
+    private func removeRequest(_ request: ExecApprovalQueueItem) {
+        // A retained menu action, timer, or reply must not retire the same id
+        // admitted later from another Gateway or physical connection.
+        guard let index = self.requests.firstIndex(where: { $0.hasSameSource(as: request) }) else { return }
         self.refreshGeneration &+= 1
-        self.requests.removeAll { $0.id == id }
-        self.expiryTasks.removeValue(forKey: id)?.cancel()
+        self.requests.remove(at: index)
+        self.expiryTasks.removeValue(forKey: request.id)?.cancel()
     }
 
     private func replaceRequests(_ requests: [ExecApprovalQueueItem]) {
@@ -220,7 +330,7 @@ final class ExecApprovalQueueStore {
         self.expiryTasks.removeValue(forKey: request.id)?.cancel()
         let (remainingMs, overflow) = request.expiresAtMs.subtractingReportingOverflow(Self.currentTimeMs())
         guard !overflow, remainingMs > 0 else {
-            self.removeRequest(id: request.id)
+            self.removeRequest(request)
             return
         }
         // Task startup may be delayed; keep the Gateway's expiry deadline.
@@ -228,7 +338,7 @@ final class ExecApprovalQueueStore {
         self.expiryTasks[request.id] = Task { [weak self] in
             try? await Task.sleep(until: deadline, clock: .continuous)
             guard !Task.isCancelled else { return }
-            self?.removeRequest(id: request.id)
+            self?.removeRequest(request)
         }
     }
 

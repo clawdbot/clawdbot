@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -40,17 +41,18 @@ export function resolveModelAuthLabel(params: {
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const store =
     params.includeExternalProfiles === false
-      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
       : ensureAuthProfileStore(params.agentDir, {
+          profileId: profileOverride,
           externalCli: externalCliDiscoveryForProviderAuth({
             cfg: params.cfg,
             provider: providerKey,
-            preferredProfile: params.sessionEntry?.authProfileOverride,
+            preferredProfile: profileOverride,
           }),
         });
-  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const acceptedProviderKeys = uniqueStrings(
     [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
   );
@@ -80,18 +82,12 @@ export function resolveModelAuthLabel(params: {
     ) {
       continue;
     }
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId,
-    });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    // Status can be visible to collaborators; personal credential metadata stays private.
+    const label = isUserModelAuthProfileId(profileId)
+      ? "personal account"
+      : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store, profileId });
+    const mode = profile.type === "api_key" ? "api-key" : profile.type;
+    return `${mode}${label ? ` (${label})` : ""}`;
   }
 
   const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({

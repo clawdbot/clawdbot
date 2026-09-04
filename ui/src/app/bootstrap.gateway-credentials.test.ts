@@ -3,11 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
-import { persistSessionToken } from "./settings.ts";
+import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const NATIVE_AUTH_KEY = "__OPENCLAW_NATIVE_CONTROL_AUTH__";
 const originalUrl = window.location.href;
@@ -198,5 +199,68 @@ describe("pending Gateway credentials", () => {
 
     expect(runtime.context.gateway.connection.gatewayUrl).toBe(nextGatewayUrl);
     expect(runtime.context.gateway.connection.bootstrapToken).toBe("next-bootstrap");
+  });
+
+  it("uses paired-device credentials while other connection bootstrap work is pending", async () => {
+    const gatewayUrl = "ws://localhost";
+    setNativeAuth({ gatewayUrl });
+    window.history.replaceState({}, "", "/settings/appearance");
+    const store = createGatewayStoreTestStore({
+      settings: { ...loadSettings(), gatewayUrl, token: "" },
+    });
+    vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+    const pending = createDeferred();
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      if (new Headers(init?.headers).get("Authorization") !== "Bearer fixture-device-token") {
+        return new Response(null, { status: 401 });
+      }
+      return new Response(
+        JSON.stringify({
+          serverVersion: "paired",
+          pluginAssetsRequireAuth: true,
+          pluginFrameGrants: [
+            {
+              pluginId: "fixture",
+              path: "/__openclaw__/plugins/control-ui/fixture/",
+              match: "prefix",
+            },
+          ],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    runtime = bootstrapApplication();
+    runtime.context.gateway.start();
+    const client = store.current();
+    client.request.mockImplementation(async (method) => {
+      if (method === "update.status" || method === "exec.approval.list") {
+        await pending.promise;
+      }
+      return {};
+    });
+
+    try {
+      client.opts.onHello?.({
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "fixture-device-token" },
+      });
+      await vi.waitFor(() => {
+        const methods = client.request.mock.calls.map(([method]) => method);
+        expect(methods).toContain("update.status");
+        expect(methods).toContain("exec.approval.list");
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Native plugin activation requests its grant before unrelated queued
+      // startup RPCs finish; the connected Gateway already owns its credential.
+      await expect(runtime.context.config.refresh()).resolves.toMatchObject({
+        serverVersion: "paired",
+        pluginFrameGrants: [{ pluginId: "fixture" }],
+      });
+    } finally {
+      runtime.stop();
+      pending.resolve();
+    }
   });
 });

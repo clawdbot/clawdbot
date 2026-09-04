@@ -2027,6 +2027,61 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(messagesToSummarize).toStrictEqual(transcriptBefore);
   });
 
+  it("sends pairing-discarded retained results to the dropped-history summary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("dropped history summary"))
+      .mockResolvedValueOnce(summaryResult("main history summary"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({ contextWindow: 2_000 });
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.5,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: "x".repeat(4_000), timestamp: 1 },
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "missing-call",
+        toolName: "test_tool",
+        content: [{ type: "text", text: "orphan-result ".repeat(500) }],
+        isError: false,
+        timestamp: 2,
+      }),
+      { role: "user", content: "x".repeat(4_000), timestamp: 3 },
+    ];
+    const event = {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = await compactionHandler(event, mockContext);
+
+    expectCompactionResult(result as Parameters<typeof expectCompactionResult>[0]);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const droppedMessages = requireArray(droppedCall.messages) as AgentMessage[];
+    expect(droppedMessages.map((message) => message.timestamp)).toEqual([1, 2]);
+  });
+
   it("propagates caller abort while summarizing dropped history", async () => {
     mockSummarizeInStages.mockReset();
     const controller = new AbortController();

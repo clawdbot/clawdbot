@@ -3,6 +3,7 @@ import path from "node:path";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
@@ -20,13 +21,17 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
-let registeredAgentDatabasesMemo:
-  | {
-      pathname: string;
-      token: symbol;
-      entries?: readonly OpenClawRegisteredAgentDatabase[];
-    }
-  | undefined;
+type AgentDatabaseRegistryMemo = {
+  pathname: string;
+  token: symbol;
+  entries?: readonly OpenClawRegisteredAgentDatabase[];
+};
+// A plugin may first open a hot-created agent; its registration must invalidate
+// native discovery even when subsequent callers reuse the shared connection.
+const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
+  Symbol.for("openclaw.agentDatabaseRegistryMemo"),
+  () => ({}),
+);
 
 function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -34,14 +39,14 @@ function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions)
 
 function activateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
-): NonNullable<typeof registeredAgentDatabasesMemo> {
+): AgentDatabaseRegistryMemo {
   const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registeredAgentDatabasesMemo?.pathname !== pathname) {
+  if (registry.memo?.pathname !== pathname) {
     // One active pathname keeps registry metadata process-stable without retaining
     // an unbounded generation map. Switching back creates a fresh generation.
-    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
+    registry.memo = { pathname, token: Symbol(pathname) };
   }
-  return registeredAgentDatabasesMemo;
+  return registry.memo;
 }
 
 /** Return the process-stable generation for the active agent database registry. */
@@ -55,8 +60,8 @@ export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): void {
   const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registeredAgentDatabasesMemo?.pathname === pathname) {
-    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
+  if (registry.memo?.pathname === pathname) {
+    registry.memo = { pathname, token: Symbol(pathname) };
   }
 }
 

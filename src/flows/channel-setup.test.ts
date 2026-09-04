@@ -1,4 +1,5 @@
 // Channel setup tests cover setup flow prompts and config output.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -79,19 +80,8 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
 }
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
+  const call = expectDefined(mock.mock.calls[index], `mock call ${index}`);
   return call[0] as T;
-}
-
-function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call;
 }
 
 function expectExternalCatalogInstallCall(index = 0) {
@@ -1280,7 +1270,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       username: "new-name",
       token: "secret-token",
     });
-    expect(mockCall(text, 2)[0]).toEqual(
+    expect(expectDefined(text.mock.calls[2], "third text prompt call")[0]).toEqual(
       expect.objectContaining({
         initialValue: "old-name",
         navigation: { canGoBack: true, canGoForward: true },
@@ -1322,7 +1312,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     ).rejects.toBe(navigationError);
 
     expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
-    expect(mockCall(text, 1)[0]).toEqual(
+    expect(expectDefined(text.mock.calls[1], "second text prompt call")[0]).toEqual(
       expect.objectContaining({
         navigation: { canGoBack: false, canGoForward: false },
       }),
@@ -1741,10 +1731,10 @@ describe("setupChannels workspace shadow exclusion", () => {
 
       await runChannelSetup({}, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
-      const catalogLookupCall = mockCall(getTrustedChannelPluginCatalogEntry) as [
-        string,
-        { workspaceDir?: string } | undefined,
-      ];
+      const catalogLookupCall = expectDefined(
+        getTrustedChannelPluginCatalogEntry.mock.calls[0],
+        "catalog lookup call",
+      ) as [string, { workspaceDir?: string } | undefined];
       expect(catalogLookupCall[0]).toBe("external-chat");
       expect(catalogLookupCall[1]?.workspaceDir).toBe("/tmp/openclaw-workspace");
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);

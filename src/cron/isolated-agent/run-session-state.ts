@@ -6,6 +6,7 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -55,11 +56,9 @@ export type CronLiveSelection = LiveSessionModelSelection;
  * returns the full entry to commit. `fallbackEntry` seeds creation when the
  * row does not exist yet.
  */
-type PersistSessionEntry = (params: {
+export type CronSessionRowWriter = (params: {
   fallbackEntry: SessionEntry;
-  resetBoundaryReason?: "cron-stale";
-  /** Cron run workspace recorded in a header created for an empty window at reset time. */
-  resetBoundaryCwd?: string;
+  resetBoundary?: SessionResetBoundaryWrite;
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -149,10 +148,8 @@ export function createPersistCronSessionEntry(params: {
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
   sandbox?: "required";
-  /** Resolved run workspace, forwarded with a pending reset boundary so an
-   * empty prior window records it (not the gateway process cwd) in its header. */
-  workspaceDir?: string;
-  persistSessionEntry: PersistSessionEntry;
+  workspaceDir: string;
+  persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
   return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
@@ -179,8 +176,11 @@ export function createPersistCronSessionEntry(params: {
       assertCommitAllowed,
       ...(resetBoundaryPending
         ? {
-            resetBoundaryReason: "cron-stale" as const,
-            ...(params.workspaceDir ? { resetBoundaryCwd: params.workspaceDir } : {}),
+            resetBoundary: {
+              context: "preserve-tail",
+              reason: "cron-stale",
+              cwd: params.workspaceDir,
+            } satisfies SessionResetBoundaryWrite,
           }
         : {}),
       update: (currentEntry) => {
@@ -282,7 +282,7 @@ export function createCronRunContinuationSession(params: {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     requireExplicitMessageTarget?: boolean;
   };
-  persistSessionEntry: PersistSessionEntry;
+  persistSessionEntry: CronSessionRowWriter;
 }): CronRunContinuationSession {
   const scheduledToolPolicy =
     params.toolsAllow === undefined

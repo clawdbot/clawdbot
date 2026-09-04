@@ -177,6 +177,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       progressEnabled,
       scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
+      sutOpenClawCommand: params.sutOpenClawCommand,
       mutateConfig: params.mutateConfig,
       writeEvidenceFile: params.writeEvidenceFile,
     });

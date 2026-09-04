@@ -775,7 +775,9 @@ suite.define(() => {
         .toBe(3);
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
       const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
@@ -925,7 +927,9 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
-      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
+        "Research",
+      );
       await pollLocatorText(
         page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");

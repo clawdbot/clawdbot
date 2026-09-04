@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
@@ -479,11 +480,15 @@ function resolveCollectedSourceText(
     : fallback;
 }
 
-function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
+function buildCollectItemPrefix(item: FollowupRun, idx: number): string {
   const senderLabel =
     item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
   const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
-  return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
+  return `---\nQueued #${idx + 1}${senderSuffix}\n`;
+}
+
+function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
+  return `${buildCollectItemPrefix(item, idx)}${prompt}`.trim();
 }
 
 function collectQueuedPromptMedia(
@@ -551,6 +556,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
+  | "replyOperationRunStates"
   | "queuedFollowupReplyDisposition"
 >;
 
@@ -566,21 +572,38 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
   return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
 }
 
-function buildCollectTranscriptPrompt(
+function buildCollectTranscriptInput(
   items: FollowupRun[],
   messages?: (PersistedUserTurnMessage | undefined)[],
-): string {
-  return buildCollectPrompt({
-    title: "[Queued messages while agent was busy]",
+): { text: string; mentions: HumanMention[] } {
+  const title = "[Queued messages while agent was busy]";
+  const mentions: HumanMention[] = [];
+  let offset = title.length;
+  const text = buildCollectPrompt({
+    title,
     items,
     renderItem: (item, index) => {
       const message = messages?.[index] ?? item.userTurnTranscriptRecorder?.message;
       // Staging may redact or rewrite a source. Collection must never restore
       // its pre-approval text from the queue's display/runtime projection.
-      const text = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
-      return renderCollectItemPrompt(item, index, text);
+      const sourceText = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
+      const block = renderCollectItemPrompt(item, index, sourceText);
+      const sourceOffset = offset + 2 + buildCollectItemPrefix(item, index).length;
+      const sourceEnd = sourceText.trimEnd().length;
+      for (const mention of message?.["__openclaw"]?.humanMentions ?? []) {
+        if (mention.end <= sourceEnd) {
+          mentions.push({
+            ...mention,
+            start: sourceOffset + mention.start,
+            end: sourceOffset + mention.end,
+          });
+        }
+      }
+      offset += 2 + block.length;
+      return block;
     },
   });
+  return { text, mentions };
 }
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
@@ -625,7 +648,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         ? candidate
         : latest;
     }, undefined);
-    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources, messages);
+    const transcriptInput = buildCollectTranscriptInput(transcriptSources, messages);
     const identityHash = createHash("sha256")
       .update(
         JSON.stringify(
@@ -638,7 +661,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       )
       .digest("hex");
     return {
-      text: transcriptPrompt,
+      ...transcriptInput,
       senderIsOwner: source.run.senderIsOwner,
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
@@ -646,10 +669,10 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       ...(media.length === 0 ? {} : { media }),
     };
   };
-  const initialTranscriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
+  const initialTranscriptInput = buildCollectTranscriptInput(transcriptSources);
   return createUserTurnTranscriptRecorder({
     input: {
-      text: initialTranscriptPrompt,
+      ...initialTranscriptInput,
       senderIsOwner: source.run.senderIsOwner,
       provenance: source.run.inputProvenance,
     },
@@ -817,6 +840,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+    replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
 }
@@ -1196,6 +1220,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
+    replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
@@ -1266,6 +1291,7 @@ async function runSyntheticOverflowSummary(params: {
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
+    replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -1559,7 +1585,7 @@ export function scheduleFollowupDrain(
               items: activeGroupItems,
               renderItem: renderCollectItem,
             });
-            const transcriptPrompt = buildCollectTranscriptPrompt(activeGroupItems);
+            const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
             const userTurnTranscriptRecorder =
               createCollectUserTurnTranscriptRecorder(activeGroupItems);
             const aggregateOwner = resolveAggregateOwner(activeGroupItems);

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+source scripts/lib/docker-e2e-logs.sh
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
   echo "blocked destructive package self-update; set OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 to run" >&2
@@ -38,11 +39,20 @@ package_root() {
   printf '%s/lib/node_modules/openclaw\n' "$npm_config_prefix"
 }
 
-write_update_command() {
-  local output="$1" target="$2"
+run_update() {
+  local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json >"$output"
-  printf '\n' >>"$output"
+    update --yes "--tag=$target" --json >"$output-command.txt"
+  printf '\n' >>"$output-command.txt"
+  openclaw update --yes "--tag=$target" --json \
+    >"$output.stdout" 2>"$output.stderr" || update_status="$?"
+  printf '%s\n' "$update_status" >"$output.exit"
+  if [ "$update_status" -ne 0 ]; then
+    echo "package update $1 exited with status $update_status" >&2
+    docker_e2e_print_log "$output.stdout" >&2
+    docker_e2e_print_log "$output.stderr" >&2
+  fi
+  return "$update_status"
 }
 
 record_residue() {
@@ -108,7 +118,10 @@ setup_lane() {
 
   mkdir -p "$OPENCLAW_STATE_DIR" "$npm_config_prefix" "$npm_config_cache"
   npm install -g --prefix "$npm_config_prefix" "$SOURCE_PACKAGE" --no-fund --no-audit \
-    >"$ARTIFACT_DIR/$lane-install-source.log" 2>&1
+    >"$ARTIFACT_DIR/$lane-install-source.log" 2>&1 || {
+      docker_e2e_print_log "$ARTIFACT_DIR/$lane-install-source.log" >&2
+      return 1
+    }
   openclaw --version >"$ARTIFACT_DIR/$lane-source-version.txt"
   install_update_restart_systemctl_shim
   openclaw config set gateway.mode local >"$ARTIFACT_DIR/$lane-config.log" 2>&1
@@ -138,14 +151,8 @@ reset_lane() {
 run_negative_control() {
   local lane=negative
   setup_lane "$lane" 18791
-  write_update_command "$ARTIFACT_DIR/$lane-update-command.txt" "$NEGATIVE_PACKAGE"
-  set +e
-  openclaw update --yes "--tag=$NEGATIVE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-update.stdout" \
-    2>"$ARTIFACT_DIR/$lane-update.stderr"
-  local update_status="$?"
-  set -e
-  printf '%s\n' "$update_status" >"$ARTIFACT_DIR/$lane-update.exit"
+  local update_status=0
+  run_update "$lane-update" "$NEGATIVE_PACKAGE" || update_status="$?"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-installed-build-info.json"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
@@ -174,11 +181,7 @@ run_positive_hops() {
   local first_pid
   first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
 
-  write_update_command "$ARTIFACT_DIR/$lane-first-command.txt" "$CANDIDATE_PACKAGE"
-  openclaw update --yes "--tag=$CANDIDATE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-first.stdout" \
-    2>"$ARTIFACT_DIR/$lane-first.stderr"
-  printf '0\n' >"$ARTIFACT_DIR/$lane-first.exit"
+  run_update "$lane-first" "$CANDIDATE_PACKAGE"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
   wait_service_active
   local candidate_pid
@@ -196,11 +199,7 @@ run_positive_hops() {
   assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
 
-  write_update_command "$ARTIFACT_DIR/$lane-second-command.txt" "$FUTURE_PACKAGE"
-  openclaw update --yes "--tag=$FUTURE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-second.stdout" \
-    2>"$ARTIFACT_DIR/$lane-second.stderr"
-  printf '0\n' >"$ARTIFACT_DIR/$lane-second.exit"
+  run_update "$lane-second" "$FUTURE_PACKAGE"
   assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-second-build-info.json"
   wait_service_active
   local future_pid

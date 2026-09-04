@@ -74,7 +74,7 @@ describe("gateway-backed CLI process exit", () => {
     async ({ timeout, valid }) => {
       const root = tempDirs.make("openclaw-nodes-timeout-");
       const token = "test-token";
-      const gateway = await startNodePairingGateway(token);
+      const gateway = await startNodePairingGateway({ token });
       const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
         mode: "remote",
         remote: { url: gateway.url, token },
@@ -107,7 +107,7 @@ describe("gateway-backed CLI process exit", () => {
   it("dispatches node pairing mutations without opening the writable state database", async () => {
     const root = tempDirs.make("openclaw-node-pairing-cli-");
     const token = "test-token";
-    const gateway = await startNodePairingGateway(token);
+    const gateway = await startNodePairingGateway({ token });
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
       remote: { url: gateway.url, token },
@@ -131,7 +131,10 @@ describe("gateway-backed CLI process exit", () => {
   it("uses existing device auth without persisting a hello-issued token or coordinator state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-stored-auth-");
     const storedToken = "stored-device-token";
-    const gateway = await startNodePairingGateway(storedToken, "issued-device-token");
+    const gateway = await startNodePairingGateway(
+      { deviceToken: storedToken },
+      "issued-device-token",
+    );
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
       remote: { url: gateway.url },
@@ -178,7 +181,7 @@ describe("gateway-backed CLI process exit", () => {
   it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
     const token = "configured-token";
-    const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+    const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
       remote: { url: gateway.url, token },
@@ -194,7 +197,7 @@ describe("gateway-backed CLI process exit", () => {
 
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
     expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
-    expect(gateway.authTokens).toEqual([token]);
+    expect(gateway.authInputs).toEqual([{ token }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
   });
@@ -202,7 +205,10 @@ describe("gateway-backed CLI process exit", () => {
   it("calls a reachable Gateway with stored auth without changing shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-stored-auth-");
     const storedToken = "stored-device-token";
-    const gateway = await startGatewayStabilityRpcServer(storedToken, "issued-device-token");
+    const gateway = await startGatewayStabilityRpcServer(
+      { deviceToken: storedToken },
+      "issued-device-token",
+    );
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
       remote: { url: gateway.url },
@@ -234,7 +240,7 @@ describe("gateway-backed CLI process exit", () => {
 
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
     expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
-    expect(gateway.authTokens).toEqual([storedToken]);
+    expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(
       loadOriginDeviceTokenReadOnly({
@@ -255,7 +261,7 @@ describe("gateway-backed CLI process exit", () => {
     async ({ label, seeded }) => {
       const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
       const token = "configured-token";
-      const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
       const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
         mode: "remote",
         remote: { url: gateway.url, token },
@@ -315,7 +321,7 @@ describe("gateway-backed CLI process exit", () => {
       const pidLogPath = path.join(root, "entry-pids");
       const preloadPath = path.join(root, "track-entry-pid.mjs");
       const token = "configured-token";
-      const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
       const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
         mode: "remote",
         remote: { url: gateway.url, token },
@@ -575,7 +581,7 @@ describe("gateway-backed CLI process exit", () => {
 
   it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-invalid-config-");
-    const gateway = await startNodePairingGateway("test-token");
+    const gateway = await startNodePairingGateway({ token: "test-token" });
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remtoe",
       remote: { url: gateway.url, token: "test-token" },

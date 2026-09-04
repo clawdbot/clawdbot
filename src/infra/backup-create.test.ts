@@ -3046,16 +3046,24 @@ describe("createBackupArchive", () => {
     {
       label: "absolute",
       relative: false,
+      targetExists: true,
+      error: /Archive symbolic link target must be relative/iu,
+    },
+    {
+      label: "dangling absolute",
+      relative: false,
+      targetExists: false,
       error: /Archive symbolic link target must be relative/iu,
     },
     {
       label: "declared-asset-escaping relative",
       relative: true,
+      targetExists: true,
       error: /Archive symbolic link is outside the declared backup assets/iu,
     },
   ])(
     "rejects $label symlink targets before publishing the archive",
-    async ({ relative, error }) => {
+    async ({ relative, targetExists, error }) => {
       if (process.platform === "win32") {
         return;
       }
@@ -3069,7 +3077,9 @@ describe("createBackupArchive", () => {
         async (state) => {
           const outputPath = state.path("absolute-symlink.tar.gz");
           const outsideTarget = state.path("outside-target.txt");
-          await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          if (targetExists) {
+            await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          }
           await fs.symlink(
             relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
             state.statePath("ordinary-link"),
@@ -3082,6 +3092,163 @@ describe("createBackupArchive", () => {
               nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
             }),
           ).rejects.toThrow(error);
+          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { label: "direct config", kind: "config" as const, hops: 1 },
+    { label: "chained config", kind: "config" as const, hops: 2 },
+    { label: "direct credentials", kind: "credentials" as const, hops: 1 },
+    { label: "chained credentials", kind: "credentials" as const, hops: 2 },
+    { label: "volatile-path config", kind: "config" as const, hops: 1, volatile: true },
+    {
+      label: "volatile-path credentials",
+      kind: "credentials" as const,
+      hops: 1,
+      volatile: true,
+    },
+  ])(
+    "creates, verifies, and restores a $label symlink through its declared asset",
+    async ({ kind, hops, volatile }) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-declared-config-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path(`declared-${kind}-symlink.tar.gz`);
+          const restorePath = state.path(`restored-${kind}`);
+          const sourcePath = volatile
+            ? state.statePath(
+                "cache.tmp",
+                "managed",
+                kind === "config" ? "openclaw.json" : "credentials",
+              )
+            : kind === "config"
+              ? state.configPath
+              : state.statePath("credentials");
+          if (volatile) {
+            if (kind === "config") {
+              state.envVars.OPENCLAW_CONFIG_PATH = sourcePath;
+            } else {
+              state.envVars.OPENCLAW_OAUTH_DIR = sourcePath;
+            }
+            state.applyEnv();
+            await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+            await fs.writeFile(path.join(path.dirname(sourcePath), "neighbor.tmp"), "omit\n");
+            await fs.writeFile(path.join(path.dirname(sourcePath), "neighbor.json"), "omit\n");
+          }
+          const externalSourcePath = state.path(
+            "nix-store",
+            kind === "config" ? "openclaw-default.json" : "credentials",
+          );
+          if (kind === "config") {
+            await fs.mkdir(path.dirname(externalSourcePath), { recursive: true });
+            if (volatile) {
+              await fs.writeFile(externalSourcePath, "{}\n");
+            } else {
+              await fs.rename(sourcePath, externalSourcePath);
+            }
+          } else {
+            await fs.mkdir(externalSourcePath, { recursive: true });
+            await fs.writeFile(path.join(externalSourcePath, "credentials.json"), "managed\n");
+          }
+          let linkTarget = externalSourcePath;
+          if (hops > 1) {
+            const intermediatePath = state.path("nix-store", `${kind}-link`);
+            await fs.symlink(externalSourcePath, intermediatePath);
+            linkTarget = intermediatePath;
+          }
+          await fs.symlink(linkTarget, sourcePath);
+          const canonicalExternalSourcePath = await fs.realpath(externalSourcePath);
+          const sourceContentsPath =
+            kind === "config"
+              ? externalSourcePath
+              : path.join(externalSourcePath, "credentials.json");
+          const expectedContents = await fs.readFile(sourceContentsPath, "utf8");
+
+          const result = await createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const sourceArchiveSuffix = path
+            .relative(state.stateDir, sourcePath)
+            .split(path.sep)
+            .join(path.posix.sep);
+          const archivedLink = expectDefined(
+            entries.find((entry) => entry.path.endsWith(`/state/${sourceArchiveSuffix}`)),
+            `archived ${kind} symlink`,
+          );
+          const managedAsset = expectDefined(
+            result.assets.find(
+              (asset) => asset.kind === kind && asset.sourcePath === canonicalExternalSourcePath,
+            ),
+            `declared ${kind} asset`,
+          );
+
+          expect(archivedLink.type).toBe("SymbolicLink");
+          expect(archivedLink.linkpath).toBe(
+            path.posix.relative(path.posix.dirname(archivedLink.path), managedAsset.archivePath),
+          );
+          expect(managedAsset.sourcePath).toBe(canonicalExternalSourcePath);
+          if (volatile) {
+            expect(result.assets).toContainEqual(expect.objectContaining({ kind, sourcePath }));
+            const neighborArchiveSuffix = path
+              .relative(state.stateDir, path.dirname(sourcePath))
+              .split(path.sep)
+              .join(path.posix.sep);
+            expect(
+              entries.some((entry) =>
+                ["neighbor.json", "neighbor.tmp"].some((neighbor) =>
+                  entry.path.endsWith(`/state/${neighborArchiveSuffix}/${neighbor}`),
+                ),
+              ),
+            ).toBe(false);
+          }
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+          await backupRestoreCommand(runtime, { archive: result.archivePath, target: restorePath });
+
+          const restoredLinkPath = path.join(restorePath, archivedLink.path);
+          const restoredAssetPath = path.join(restorePath, managedAsset.archivePath);
+          expect(await fs.readlink(restoredLinkPath)).toBe(archivedLink.linkpath);
+          expect(await fs.realpath(restoredLinkPath)).toBe(await fs.realpath(restoredAssetPath));
+          const restoredContentsPath =
+            kind === "config" ? restoredLinkPath : path.join(restoredLinkPath, "credentials.json");
+          await expect(fs.readFile(restoredContentsPath, "utf8")).resolves.toBe(expectedContents);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a declared absolute target containing a backslash before rewriting it",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-declared-backslash-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("declared-backslash-symlink.tar.gz");
+          const externalConfigPath = state.path("nix\\store", "openclaw-default.json");
+          await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
+          await fs.rename(state.configPath, externalConfigPath);
+          await fs.symlink(externalConfigPath, state.configPath);
+
+          await expect(
+            createBackupArchive({ output: outputPath, includeWorkspace: false }),
+          ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
           await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
         },
       );

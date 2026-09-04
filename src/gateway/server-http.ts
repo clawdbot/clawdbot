@@ -18,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
@@ -29,6 +30,7 @@ import {
   type ControlUiResourceRoute,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
@@ -97,6 +99,9 @@ type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) =
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
+const getControlUiPluginAssetsModule = createLazyRuntimeModule(
+  () => import("./control-ui-plugin-assets.js"),
+);
 const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
@@ -202,6 +207,7 @@ export function createGatewayHttpServer(opts: {
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
+  const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -306,6 +312,10 @@ export function createGatewayHttpServer(opts: {
         req,
         trustedProxies,
         allowRealIpFallback,
+        // HTTP authorization must observe Tailnet revocation on the next request.
+        // WebSocket upgrades retain the ordinary cache because they authenticate once.
+        tailscaleWhois: (ip) =>
+          readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
@@ -485,6 +495,15 @@ export function createGatewayHttpServer(opts: {
           resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
+      addAdmittedStage(scopedRequestPath.startsWith(pluginAssetRoot), async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        return await (
+          await getControlUiPluginAssetsModule()
+        ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
+      });
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,

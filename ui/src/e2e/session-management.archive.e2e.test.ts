@@ -17,6 +17,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
   const dialog = await waitForConfirmModal(page);
@@ -138,7 +139,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "filtered-roster-forced-refresh-before.png");
 
       const archivedRequests = async () =>
-        (await gateway.getRequests("sessions.list")).filter(
+        (await gateway.getRequests("sessions.list", rosterMatch)).filter(
           (request) => requireRecord(request.params).archived === true,
         );
       const initialRequests = (await archivedRequests()).length;
@@ -438,7 +439,7 @@ suite.define(() => {
       for (const key of batchKeys.slice(1)) {
         await rowFor(key).waitFor({ state: "visible" });
       }
-      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       for (const key of batchKeys) {
         await rowFor(key).click({ modifiers: ["Alt"] });
@@ -468,7 +469,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
       expect(await gateway.getRequests("agent.wait")).toEqual([]);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+          timeout: 10_000,
+        })
         .toBe(listCountBeforeBatch + 1);
       for (const key of batchKeys) {
         await rowFor(key).waitFor({ state: "detached" });
@@ -479,7 +482,9 @@ suite.define(() => {
         .toContain("Archived 3 sessions");
       await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
-      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+      expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
+        listCountBeforeBatch + 1,
+      );
     } finally {
       await context.close();
     }
@@ -868,7 +873,7 @@ suite.define(() => {
       await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
-      let listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      let listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 1_000,
@@ -876,7 +881,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await gateway.setMethodResponse(
@@ -887,7 +892,7 @@ suite.define(() => {
           { ...archived, archived: false, updatedAt: baseTime + 3_000 },
         ]),
       );
-      listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 2_000,
@@ -895,7 +900,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await page.goBack();
@@ -944,7 +949,8 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
 
-      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
+      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       await gateway.setSessionsListResponse(sessionsListResponse([mainSession]));
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
@@ -967,23 +973,29 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(requestsBeforeDeletion);
       await expect
         .poll(
           async () => {
-            const count = (await gateway.getRequests("sessions.list")).length;
+            const count = (await gateway.getRequests("sessions.list", rosterMatch)).length;
             await new Promise((resolve) => {
               setTimeout(resolve, 350);
             });
-            return (await gateway.getRequests("sessions.list")).length - count;
+            return (await gateway.getRequests("sessions.list", rosterMatch)).length - count;
           },
           { timeout: 5_000 },
         )
         .toBe(0);
 
-      const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
-      await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
+      const settledRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await expectRequestCountStable(
+        gateway,
+        "sessions.list",
+        settledRequestCount,
+        500,
+        rosterMatch,
+      );
       expect(routeErrors).toEqual([]);
       await captureUiProof(suite, page, "deleted-active-session-fallback.png");
     } finally {

@@ -86,16 +86,14 @@ const TASK_ACTIONS = {
 function taskActions(cloudProfileIds: string[]): TaskAction[] {
   return [
     TASK_ACTIONS.local,
-    ...cloudProfileIds.map(
-      (profileId): TaskAction => ({
-        value: "accept-cloud",
-        label: `Send to cloud · ${clean(profileId)}`,
-        description: "Start a new session on this cloud worker",
-        kind: "accept",
-        mode: "cloud",
-        cloudProfileId: profileId,
-      }),
-    ),
+    ...cloudProfileIds.map((profileId): TaskAction => ({
+      value: "accept-cloud",
+      label: `Send to cloud · ${clean(profileId)}`,
+      description: "Start a new session on this cloud worker",
+      kind: "accept",
+      mode: "cloud",
+      cloudProfileId: profileId,
+    })),
     TASK_ACTIONS.session,
     // Keep the established one-Up shortcut from the default Dismiss selection.
     TASK_ACTIONS.worktree,

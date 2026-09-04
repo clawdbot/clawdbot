@@ -118,16 +118,26 @@ describe("SQLite historical session disk budget", () => {
       const admission = prepareSystemAgentRunAdmission({}, "maintenance-lifetime", "main", "setup");
       const assertActive = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"))!;
       const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
-      const exec = owner.db.exec.bind(owner.db);
       if (phase === "rollback") {
-        let failed = false;
-        vi.spyOn(owner.db, "exec").mockImplementation((sql) => {
-          if (sql === "COMMIT" && !failed) {
-            failed = true;
-            throw new Error("injected commit failure");
-          }
-          return exec(sql);
-        });
+        const generation = owner.db
+          .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+          .get("target-old") as { generation: string };
+        // sqlite-allow-raw -- a conflicting canonical row reaches the Worker's connection.
+        owner.db
+          .prepare(
+            `INSERT INTO session_transcript_archives (
+               session_id, generation, session_key, reason, encoding, archive_blob,
+               archive_sha256, archive_name, created_at, published_at
+             ) VALUES (?, ?, ?, 'deleted', 'identity', ?, ?, ?, 1, NULL)`,
+          )
+          .run(
+            "target-old",
+            generation.generation,
+            sessionKey,
+            Buffer.from("conflict"),
+            "0".repeat(64),
+            "conflicting-target-old.jsonl.deleted",
+          );
       }
       try {
         if (phase === "closed") {
@@ -165,8 +175,15 @@ describe("SQLite historical session disk budget", () => {
           await expect(attempt).resolves.toMatchObject({ deleted: true });
         } else {
           await expect(attempt).rejects.toThrow(
-            phase === "rollback" ? "injected commit failure" : "authority is no longer active",
+            phase === "rollback"
+              ? "Conflicting SQLite transcript archive"
+              : "authority is no longer active",
           );
+        }
+        if (phase === "rollback") {
+          owner.db
+            .prepare("DELETE FROM session_transcript_archives WHERE session_id = ?")
+            .run("target-old");
         }
         // Warn mode shares the real retention queue but performs no reclamation itself.
         await enforceSqliteSessionHistoryDiskBudget({

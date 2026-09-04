@@ -219,6 +219,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : {
               options: {
                 raw: built.patch,
+                replacePaths: built.replacePaths,
                 note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
                 canDispatch: isCurrent,
               },
@@ -285,6 +286,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : {
               options: {
                 raw: built.patch,
+                replacePaths: built.replacePaths,
                 note: `cloud workers: delete ${profile.id}`,
                 canDispatch: isCurrent,
               },
@@ -527,22 +529,30 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       ? profiles.map((profile) => this.renderProfile(profile))
       : renderSettingsEmpty(t("cloudWorkersPage.empty"));
     const body = renderSettingsPage(html`
-      ${!this.hasManageAccess()
-        ? html`<div class="callout warning" role="note">
-            ${t("cloudWorkersPage.adminRequired")}
-          </div>`
-        : nothing}
-      ${this.catalogError
-        ? html`<div class="callout warning" role="status">
-            ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
-          </div>`
-        : nothing}
-      ${this.formError && !this.editor
-        ? html`<div class="callout warning" role="alert">${this.formError}</div>`
-        : nothing}
-      ${this.notice
-        ? html`<div class="callout warning" role="status">${this.notice}</div>`
-        : nothing}
+      ${
+        !this.hasManageAccess()
+          ? html`<div class="callout warning" role="note">
+              ${t("cloudWorkersPage.adminRequired")}
+            </div>`
+          : nothing
+      }
+      ${
+        this.catalogError
+          ? html`<div class="callout warning" role="status">
+              ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
+            </div>`
+          : nothing
+      }
+      ${
+        this.formError && !this.editor
+          ? html`<div class="callout warning" role="alert">${this.formError}</div>`
+          : nothing
+      }
+      ${
+        this.notice
+          ? html`<div class="callout warning" role="status">${this.notice}</div>`
+          : nothing
+      }
       ${renderSettingsSection(
         {
           title: t("cloudWorkersPage.sectionTitle"),

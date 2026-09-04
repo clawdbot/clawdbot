@@ -270,52 +270,50 @@ describe("controlUi.githubPreview", () => {
     });
   });
 
-  it("returns a retryable unavailable error for GitHub quota failures", async () => {
-    const handlers = createControlUiHandlers(
-      vi.fn().mockRejectedValue(new ControlUiGitHubError(429, "rate limited")),
-    );
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.githubPreview"],
-      'handlers["controlUi.githubPreview"] test invariant',
-    )(
-      requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
-    );
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
+  it.each([
+    {
+      failure: "GitHub quota",
+      error: new ControlUiGitHubError(429, "rate limited"),
       message: "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
       retryable: true,
-    });
-  });
-
-  it("preserves a configured-unavailable preview credential diagnostic", async () => {
-    const error = new SecretSurfaceUnavailableError({
-      ownerKind: "capability",
-      ownerId: "control-ui-github",
-      state: "unavailable",
-      paths: ["gateway.controlUi.github.token"],
-      refKeys: [],
-      reason: "secret reference was not found",
-    });
-    const handlers = createControlUiHandlers(vi.fn().mockRejectedValue(error));
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.githubPreview"],
-      'handlers["controlUi.githubPreview"] test invariant',
-    )(
-      requestOptions({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" }, respond),
-    );
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
+    },
+    {
+      failure: "configured-unavailable preview credential",
+      error: new SecretSurfaceUnavailableError({
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: [],
+        reason: "secret reference was not found",
+      }),
       message:
         "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
       retryable: false,
-    });
-  });
+    },
+  ])(
+    "preserves the $failure diagnostic in the RPC response",
+    async ({ error, message, retryable }) => {
+      const handlers = createControlUiHandlers(vi.fn().mockRejectedValue(error));
+      const respond = vi.fn<RespondFn>();
+
+      await expectDefined(
+        handlers["controlUi.githubPreview"],
+        'handlers["controlUi.githubPreview"] test invariant',
+      )(
+        requestOptions(
+          { kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" },
+          respond,
+        ),
+      );
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message,
+        retryable,
+      });
+    },
+  );
 });
 
 describe("controlUi.sessionPreview", () => {

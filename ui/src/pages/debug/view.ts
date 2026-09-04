@@ -11,7 +11,6 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import type {
   CommandLaneDynamicSummary,
@@ -20,8 +19,6 @@ import type {
 import { formatEventPayload } from "../../lib/presenter.ts";
 import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
-
-registerDebugEnglish();
 
 type DebugProps = {
   loading: boolean;
@@ -172,9 +169,11 @@ export function renderDebug(props: DebugProps) {
             .value=${props.callMethod}
             @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
           >
-            ${!props.callMethod
-              ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
-              : nothing}
+            ${
+              !props.callMethod
+                ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
+                : nothing
+            }
             ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
           </select>
         `,
@@ -199,22 +198,26 @@ export function renderDebug(props: DebugProps) {
           <button class="btn primary" @click=${props.onCall}>${t("common.call")}</button>
         `,
       })}
-      ${props.callError
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
-              <pre class="code-block">${props.callError}</pre>
-            </div>
-          `
-        : nothing}
-      ${props.callResult
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-              <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
-            </div>
-          `
-        : nothing}
+      ${
+        props.callError
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
+                <pre class="code-block">${props.callError}</pre>
+              </div>
+            `
+          : nothing
+      }
+      ${
+        props.callResult
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
+                <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
+              </div>
+            `
+          : nothing
+      }
     `,
   );
 

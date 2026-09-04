@@ -40,6 +40,7 @@ type ControlUiE2eSuite = {
   withPage: <T>(
     options: Parameters<Browser["newContext"]>[0],
     run: (fixture: ControlUiE2ePage) => Promise<T>,
+    cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
   ) => Promise<T>;
 };
 
@@ -206,14 +207,17 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     async withPage<T>(
       contextOptions: Parameters<Browser["newContext"]>[0],
       run: (fixture: ControlUiE2ePage) => Promise<T>,
+      cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
     ) {
       const context = await newBrowserContext(contextOptions);
       let result!: T;
+      let fixture: ControlUiE2ePage | undefined;
       await runQaGatewayFixture(
         async () => {
           const page = await context.newPage();
+          fixture = { context, page };
           try {
-            result = await run({ context, page });
+            result = await run(fixture);
           } catch (error) {
             await captureControlUiE2eFailureDiagnostics(page, {
               error: error instanceof Error ? error : new Error(String(error)),
@@ -222,6 +226,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throw error;
           }
         },
+        // Capture assertion diagnostics before a test closes its page or drains routes.
+        () => (fixture ? cleanup?.(fixture) : undefined),
         () => closeBrowserContext(context),
       );
       return result;

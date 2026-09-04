@@ -7,10 +7,8 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelKind } from "./config-reload-plan.js";
-import {
-  isGatewayReloadGenerationAborted,
-  type GatewayReloadHandlerParams,
-} from "./server-reload-contracts.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
+import { isGatewayReloadGenerationAborted } from "./server-reload-generation.js";
 
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;

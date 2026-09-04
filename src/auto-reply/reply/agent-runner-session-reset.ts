@@ -120,11 +120,7 @@ export async function resetReplyRunSession(params: {
       nextEntry,
       nextSessionFile,
       previousEntry: prevEntry,
-      // An empty-window reset creates the transcript header inside the
-      // lifecycle transaction. The prior row's own workspace wins there; the
-      // run workspace only covers rows that never recorded one, so the header
-      // never falls back to the service process cwd.
-      resetBoundaryCwd: params.followupRun.run.workspaceDir,
+      workspaceDir: params.followupRun.run.workspaceDir,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });

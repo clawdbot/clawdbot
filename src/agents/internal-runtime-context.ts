@@ -16,9 +16,6 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Position-independent instructions for context belonging to the active user turn. */
-export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -39,22 +36,29 @@ export function escapeInternalRuntimeContextDelimiters(value: string): string {
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
 }
 
-function delimitedTokenLinePattern(token: string): string {
-  return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
+function createDelimitedToken(token: string) {
+  return {
+    token,
+    pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`, "g"),
+  };
 }
 
-function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(delimitedTokenLinePattern(token), "g");
-  tokenRe.lastIndex = Math.max(0, from);
-  const match = tokenRe.exec(text);
+const BEGIN_DELIMITER = createDelimitedToken(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+const END_DELIMITER = createDelimitedToken(INTERNAL_RUNTIME_CONTEXT_END);
+
+function findDelimitedTokenIndex(
+  text: string,
+  delimiter: ReturnType<typeof createDelimitedToken>,
+  from: number,
+): number {
+  // Private patterns are reused synchronously; each search owns its offset so
+  // nested blocks and later calls never inherit an earlier match's lastIndex.
+  delimiter.pattern.lastIndex = Math.max(0, from);
+  const match = delimiter.pattern.exec(text);
   if (!match) {
     return -1;
   }
-  return match.index + match[0].indexOf(token);
-}
-
-function stripStandaloneDelimitedTokenLines(text: string, token: string): string {
-  return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
+  return match.index + match[0].indexOf(delimiter.token);
 }
 
 function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): number {
@@ -67,10 +71,10 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
 
 function extractDelimitedBlocks(
   text: string,
-  begin: string,
-  end: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): { text: string; blocks: string[] } {
+  const begin = BEGIN_DELIMITER;
+  const end = END_DELIMITER;
   let next = text;
   const blocks: string[] = [];
   for (;;) {
@@ -79,7 +83,7 @@ function extractDelimitedBlocks(
       return { text: next, blocks };
     }
 
-    let cursor = start + begin.length;
+    let cursor = start + begin.token.length;
     let depth = 1;
     let finish = -1;
     while (depth > 0) {
@@ -90,12 +94,12 @@ function extractDelimitedBlocks(
       }
       if (nextBegin !== -1 && nextBegin < nextEnd) {
         depth += 1;
-        cursor = nextBegin + begin.length;
+        cursor = nextBegin + begin.token.length;
         continue;
       }
       depth -= 1;
       finish = nextEnd;
-      cursor = nextEnd + end.length;
+      cursor = nextEnd + end.token.length;
     }
 
     const blockStart = options.preserveSurroundingWhitespace
@@ -107,7 +111,7 @@ function extractDelimitedBlocks(
     if (finish === -1 || depth !== 0) {
       return { text: before, blocks };
     }
-    let blockEnd = finish + end.length;
+    let blockEnd = finish + end.token.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
       blockEnd += 1;
     }
@@ -120,15 +124,6 @@ function extractDelimitedBlocks(
         ? `${before}${options.separator ?? "\n\n"}${after}`
         : `${before}${after}`;
   }
-}
-
-function stripDelimitedBlock(
-  text: string,
-  begin: string,
-  end: string,
-  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
-): string {
-  return extractDelimitedBlocks(text, begin, end, options).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -212,8 +207,9 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
+// Prefaces of carriers persisted before the system prompt explained the markers; kept for stripping.
 const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
@@ -254,7 +250,7 @@ export function stripInternalRuntimeContext(
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
   // All removable formats contain a delimiter or the exact runtime notice.
-  // Skip regex construction and line parsing for ordinary display text.
+  // Skip delimiter scans and line parsing for ordinary display text.
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
@@ -262,14 +258,9 @@ export function stripInternalRuntimeContext(
   ) {
     return text;
   }
-  const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(
-    stripDelimitedBlock(
-      text,
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      INTERNAL_RUNTIME_CONTEXT_END,
-      options,
-    ),
-    INTERNAL_RUNTIME_CONTEXT_END,
+  const withoutDelimitedBlocks = extractDelimitedBlocks(text, options).text.replace(
+    END_DELIMITER.pattern,
+    "",
   );
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
@@ -281,11 +272,7 @@ export function extractInternalRuntimeContext(text: string): {
   text: string;
   runtimeContext?: string;
 } {
-  const extracted = extractDelimitedBlocks(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    INTERNAL_RUNTIME_CONTEXT_END,
-  );
+  const extracted = extractDelimitedBlocks(text);
   return {
     text: extracted.text,
     ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
@@ -298,7 +285,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
     return false;
   }
   return (
-    findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
+    findDelimitedTokenIndex(text, BEGIN_DELIMITER, 0) !== -1 ||
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
     RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
       text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),

@@ -117,17 +117,15 @@ describe("memory index", () => {
   });
 
   it("indexes trailing recall annotations only from curated memory files", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-      [
-        "# Curated entries",
-        "",
-        "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
-        "  Keep the alpha gateway local.",
-        "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
-        "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
-      ].join("\n"),
-    );
+    const curatedContent = [
+      "# Curated entries",
+      "",
+      "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
+      "  Keep the alpha gateway local.",
+      "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+      "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
+    ].join("\n");
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), curatedContent);
     await fs.writeFile(
       path.join(fixture.paths.workspace, "USER.md"),
       "- Prefer concise replies. <!-- trigger: writing style --> <!-- importance: 7 -->\n",
@@ -146,7 +144,16 @@ describe("memory index", () => {
 
     const manager = await getFreshManager(createCfg({}));
     try {
-      await manager.sync({ reason: "test", force: true });
+      const split = vi.spyOn(String.prototype, "split");
+      try {
+        await manager.sync({ reason: "test", force: true });
+        // Indexing may decompose the annotation source once, independent of chunk count.
+        expect(
+          split.mock.contexts.filter((source) => source === curatedContent).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        split.mockRestore();
+      }
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
@@ -910,7 +917,7 @@ describe("memory index", () => {
     }
   });
 
-  it("derives batch attempts locally instead of trusting provider error metadata", async () => {
+  it("counts local batch attempts and bypasses batching after repeated failures", async () => {
     providerFixture.providerRuntimeBatchErrors = [
       Object.assign(new Error("provider runtime batch failed"), {
         batchAttempts: Number.MAX_SAFE_INTEGER,
@@ -929,6 +936,23 @@ describe("memory index", () => {
         failures: 1,
         lastError: "provider runtime batch failed",
       });
+
+      for (const day of [13, 14]) {
+        await fs.writeFile(
+          path.join(fixture.paths.memory, `2026-01-${day}.md`),
+          `# Log\nBeta memory line ${day}.`,
+        );
+        providerFixture.providerRuntimeBatchErrors = [new Error("second batch failure")];
+        await manager.sync({ reason: "test", force: true });
+        expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+        expect(providerFixture.embedBatchCalls).toBe(day - 11);
+        expect(manager.status().batch).toMatchObject({
+          enabled: false,
+          failures: 2,
+          lastError: "second batch failure",
+          lastProvider: "batch-wide-test",
+        });
+      }
     } finally {
       await manager.close?.();
     }
@@ -1077,41 +1101,58 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "2026-01-13.md"),
-      "# Log\nBeta memory line.",
-    );
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "2026-01-14.md"),
-      "# Log\nGamma memory line.",
-    );
-    const cfg = createCfg({
-      provider: "batch-test",
-      batchEnabled: true,
-    });
-    const manager = await getFreshManager(cfg);
-    let releaseBatchGate: (() => void) | undefined;
-    providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
-      releaseBatchGate = resolve;
-    });
-    const syncPromise = manager.sync({ reason: "test" });
-    let waitError: Error | undefined;
-    try {
-      await vi.waitFor(() =>
-        expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1),
+  it.each([
+    ["success", 0, 0, { enabled: true, failures: 0, lastError: undefined }],
+    ["repeated failures", 0, 2, { enabled: false, failures: 2, lastError: "failure 2" }],
+    ["late failure", 1, 2, { enabled: false, failures: 2, lastError: "failure 1" }],
+    ["late recovery", 1, 1, { enabled: false, failures: 0, lastError: undefined }],
+  ] as const)(
+    "keeps custom batches concurrent through %s",
+    async (_outcome, priorFailures, errors, expected) => {
+      const manager = await getFreshManager(
+        createCfg({ provider: "batch-test", batchEnabled: true }),
       );
-    } catch (err) {
-      waitError = err instanceof Error ? err : new Error(String(err));
-    } finally {
-      releaseBatchGate?.();
-      await syncPromise;
-      await manager.close?.();
-    }
-    if (waitError) {
-      throw waitError;
-    }
-  });
+      try {
+        providerFixture.providerRuntimeBatchFailuresRemaining = priorFailures;
+        await manager.sync({ reason: "test" });
+        expect(manager.status().batch?.failures).toBe(priorFailures);
+
+        await fs.writeFile(
+          path.join(fixture.paths.memory, "2026-01-13.md"),
+          "# Log\nBeta memory line.",
+        );
+        await fs.writeFile(
+          path.join(fixture.paths.memory, "2026-01-14.md"),
+          "# Log\nGamma memory line.",
+        );
+        providerFixture.providerRuntimeBatchCalls = [];
+        providerFixture.providerRuntimeMaxActiveBatchCalls = 0;
+        providerFixture.embedBatchCalls = 0;
+        providerFixture.providerRuntimeBatchErrors = Array.from(
+          { length: errors },
+          (_, index) => new Error(`failure ${index + 1}`),
+        );
+        let releaseBatchGate: (() => void) | undefined;
+        providerFixture.providerRuntimeBatchGate = new Promise((resolve) => {
+          releaseBatchGate = resolve;
+        });
+        const syncPromise = manager.sync({ reason: "test", force: true });
+        try {
+          await vi.waitFor(() =>
+            expect(providerFixture.providerRuntimeMaxActiveBatchCalls).toBe(2),
+          );
+        } finally {
+          releaseBatchGate?.();
+          await syncPromise;
+        }
+        expect(manager.status().batch).toMatchObject(expected);
+        expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+        expect(providerFixture.embedBatchCalls).toBe(errors);
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
 
   it("bounds source-wide memory batches", async () => {
     const batchFileLimit = 2048;
@@ -2419,6 +2460,13 @@ describe("memory index", () => {
       await diagnostic.sync({ reason: "cli", force: true });
 
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
+      db.prepare(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+      expect(diagnostic.status().storage).toMatchObject({
+        embeddingCacheEntries: 1,
+        embeddingCacheBytes: 5,
+      });
       const storedBytes = db
         .prepare(
           "SELECT SUM(length(CAST(text AS BLOB)) + length(CAST(embedding AS BLOB))) AS bytes FROM memory_index_chunks WHERE source = 'memory'",
@@ -2432,6 +2480,7 @@ describe("memory index", () => {
     }
     expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
     expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
+    expect(serving.status().storage).toBeUndefined();
   });
 
   it("reports vector availability after probe", async () => {

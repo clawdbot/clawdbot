@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -16,6 +17,7 @@ import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-a
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
+import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
@@ -119,6 +121,7 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -158,6 +161,9 @@ export async function sendGatewayHello(
       ],
     },
     snapshot,
+    ...(controlUiLocation
+      ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -222,7 +228,24 @@ export async function sendGatewayHello(
     }
   }
   try {
-    // Bootstrap bookkeeping can await; hello must supersede any earlier admission event.
+    // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
+    if (role === "operator") {
+      const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
+      if (identity) {
+        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.signal && !context.handler.isClosed()) {
+          const signal = identity.signal;
+          const withdraw = () => {
+            setCloseCause("browser-identity-route-withdrawn");
+            close(1012, "browser identity route changed");
+          };
+          // Hello is frozen for this connection. Bind its route lifetime before
+          // delivery can await, so a vanished claim cannot remain advertised.
+          signal.addEventListener("abort", withdraw, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+        }
+      }
+    }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

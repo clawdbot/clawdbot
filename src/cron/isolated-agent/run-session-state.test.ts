@@ -32,6 +32,7 @@ import {
   markCronSessionPreRun,
   resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
+  type CronSessionRowWriter,
   type MutableCronSession,
 } from "./run-session-state.js";
 
@@ -64,18 +65,9 @@ function makeCronSession(
  * when absent), may throw to reject a stale claim, and its return is committed.
  */
 function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEntry>) {
-  return vi.fn(
-    async (params: {
-      fallbackEntry: SessionEntry;
-      resetBoundaryReason?: "cron-stale";
-      resetBoundaryCwd?: string;
-      sessionKey: string;
-      storePath: string;
-      update: (currentEntry: SessionEntry | undefined) => SessionEntry;
-    }) => {
-      persistedStore[params.sessionKey] = params.update(persistedStore[params.sessionKey]);
-    },
-  );
+  return vi.fn<CronSessionRowWriter>(async (params) => {
+    persistedStore[params.sessionKey] = params.update(persistedStore[params.sessionKey]);
+  });
 }
 
 describe("markCronSessionPreRun", () => {
@@ -221,13 +213,16 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
 
     await persist();
 
     expect(persistSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ resetBoundaryReason: "cron-stale" }),
+      expect.objectContaining({
+        resetBoundary: { context: "preserve-tail", reason: "cron-stale", cwd: "/tmp/workspace" },
+      }),
     );
     expect(resetBoundaryMocks.clearBootstrap).toHaveBeenCalledWith({
       boundaryAppended: true,
@@ -261,8 +256,11 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(persistSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        resetBoundaryReason: "cron-stale",
-        resetBoundaryCwd: "/tmp/cron-run-workspace",
+        resetBoundary: {
+          context: "preserve-tail",
+          reason: "cron-stale",
+          cwd: "/tmp/cron-run-workspace",
+        },
       }),
     );
   });
@@ -279,7 +277,7 @@ describe("createPersistCronSessionEntry", () => {
     })();
 
     expect(persistSessionEntry).toHaveBeenCalledWith(
-      expect.not.objectContaining({ resetBoundaryCwd: expect.anything() }),
+      expect.not.objectContaining({ resetBoundary: expect.anything() }),
     );
   });
 
@@ -319,11 +317,10 @@ describe("createPersistCronSessionEntry", () => {
       persistSessionEntry: async ({
         sessionKey,
         storePath: rowStorePath,
-        resetBoundaryReason,
-        resetBoundaryCwd,
+        resetBoundary,
         update,
       }) => {
-        if (!resetBoundaryReason) {
+        if (!resetBoundary) {
           throw new Error("expected a pending cron reset boundary");
         }
         await applySessionEntryLifecycleMutation({
@@ -333,8 +330,7 @@ describe("createPersistCronSessionEntry", () => {
           upserts: [
             {
               sessionKey,
-              resetBoundary: { context: "preserve-tail", reason: resetBoundaryReason },
-              ...(resetBoundaryCwd ? { resetBoundaryCwd } : {}),
+              resetBoundary,
               buildEntry: ({ currentEntry }) => update(currentEntry),
             },
           ],
@@ -377,6 +373,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: vi.fn(async () => {
         throw new Error("write failed");
       }),
@@ -568,6 +565,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      workspaceDir: "/tmp/workspace",
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       persistSessionEntry,
     });
@@ -606,6 +604,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:shell-only",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
 
@@ -652,6 +651,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:completed",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: vi.fn(async () => {}),
     });
 
@@ -672,6 +672,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:session",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
 
@@ -709,11 +710,13 @@ describe("createPersistCronSessionEntry", () => {
     const persistOlder = createPersistCronSessionEntry({
       cronSession: olderSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
     const persistNewer = createPersistCronSessionEntry({
       cronSession: newerSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
 
@@ -742,6 +745,7 @@ describe("createPersistCronSessionEntry", () => {
     const persistNext = createPersistCronSessionEntry({
       cronSession: nextSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
     const activeLease = await beginSessionWorkAdmission({
@@ -800,6 +804,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
@@ -843,6 +848,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
@@ -878,6 +884,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
@@ -925,6 +932,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
@@ -973,6 +981,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
     });
 
@@ -1009,6 +1018,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:telegram:direct:42",
+      workspaceDir: "/tmp/workspace",
       persistSessionEntry,
     });
 

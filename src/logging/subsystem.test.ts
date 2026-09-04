@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
@@ -21,14 +22,6 @@ function installConsoleMethodSpy(method: "log" | "warn" | "error") {
     error: method === "error" ? spy : vi.fn(),
   };
   return spy;
-}
-
-function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected console mock call");
-  }
-  return String(call[0]);
 }
 
 beforeAll(async () => {
@@ -139,7 +132,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
       log.warn("subsystem diagnostic");
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(firstMockArgAsString(warn)).toContain(`[${subsystem ?? "unknown"}]`);
+      expect(String(mockCall(warn)[0])).toContain(`[${subsystem ?? "unknown"}]`);
     },
   );
 
@@ -255,7 +248,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.warn(`token=${secret}`);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(warn);
+    const written = String(mockCall(warn)[0]);
     expect(written).not.toContain(secret);
     expect(written).toMatch(/sk-sup…2345|\*\*\*/);
   });
@@ -269,7 +262,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.error(`Authorization failed: ${bearer}`);
 
     expect(error).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(error);
+    const written = String(mockCall(error)[0]);
     expect(written).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(written).toContain("Bearer ");
   });
@@ -289,7 +282,7 @@ describe("createSubsystemLogger().isEnabled", () => {
         log.info(`provider API_KEY=${secret}`);
 
         expect(logSpy).toHaveBeenCalledTimes(1);
-        const written = firstMockArgAsString(logSpy);
+        const written = String(mockCall(logSpy)[0]);
         expect(written).not.toContain(secret);
         expect(written).toContain("API_KEY=***");
         expect(written).toContain("[auth]");
@@ -307,7 +300,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.raw(`raw token ${secret}`);
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(logSpy);
+    const written = String(mockCall(logSpy)[0]);
     expect(written).not.toContain(secret);
     expect(written).toContain("sk-raw…3456");
   });
@@ -319,7 +312,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     createSubsystemLogger("gateway/auth").raw("raw diagnostic");
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(firstMockArgAsString(logSpy))).toMatchObject({
+    expect(JSON.parse(String(mockCall(logSpy)[0]))).toMatchObject({
       level: "info",
       subsystem: "gateway/auth",
       message: "raw diagnostic",
@@ -344,7 +337,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     createSubsystemLogger("gateway/auth").warn("authentication retry", { attempt: 2 });
 
-    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+    expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
       level: "warn",
       subsystem: "gateway/auth",
       message: "authentication retry",

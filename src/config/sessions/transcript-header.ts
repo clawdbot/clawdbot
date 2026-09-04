@@ -1,8 +1,8 @@
-// Transcript headers record session identity and version as the first JSONL entry.
+// Transcript headers record session identity and version as the first entry.
 import { randomUUID } from "node:crypto";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
-/** Inputs for the first JSONL entry in a session transcript. */
+/** Inputs for the first entry in a session transcript. */
 type SessionTranscriptHeaderParams = {
   sessionId?: string;
   cwd?: string;
@@ -30,16 +30,10 @@ type ResetHeaderCwdSource = {
   spawnedWorkspaceDir?: string;
 };
 
-/**
- * Picks the cwd for a transcript header created by a reset boundary landing on
- * an empty window. The prior session row owns that value: a custom-workspace
- * session must keep its own cwd even when the reset caller only knows the
- * configured agent workspace. The caller value is a fallback for rows that
- * never recorded one.
- */
+/** The prior transcript owns its workspace; caller context covers an unset row. */
 export function resolveResetBoundaryHeaderCwd(
-  priorEntry: ResetHeaderCwdSource | undefined,
-  fallbackCwd: string | undefined,
-): string | undefined {
-  return priorEntry?.spawnedCwd ?? priorEntry?.spawnedWorkspaceDir ?? fallbackCwd;
+  priorEntry: ResetHeaderCwdSource,
+  fallbackCwd: string,
+): string {
+  return priorEntry.spawnedCwd ?? priorEntry.spawnedWorkspaceDir ?? fallbackCwd;
 }

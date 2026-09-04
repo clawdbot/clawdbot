@@ -100,13 +100,60 @@ describe("provider replay helpers", () => {
 
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext: false,
       sanitizeMode: "full",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
+  });
+
+  it.each([
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+    ["us.anthropic.claude-fable-5-1-v1:0", true],
+    ["claude-fable-5", false],
+    ["claude-mythos-5", false],
+    ["claude-opus-5", false],
+    ["claude-sonnet-5", false],
+    ["claude-opus-4-8", false],
+    ["claude-sonnet-4-6", false],
+    ["claude-haiku-4-5", false],
+    ["MiniMax-M2.7", false],
+  ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
+    for (const buildPolicy of [
+      buildAnthropicReplayPolicyForModel,
+      buildNativeAnthropicReplayPolicyForModel,
+    ]) {
+      expect(buildPolicy(modelId).appendOnlyRuntimeContext).toBe(expected);
+      expect(
+        buildPolicy("deployment", { params: { canonicalModelId: modelId } })
+          .appendOnlyRuntimeContext,
+      ).toBe(expected);
+    }
+    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+      expect(
+        buildHybridAnthropicOrOpenAIReplayPolicy({
+          provider: "custom-proxy",
+          modelApi,
+          modelId: "deployment",
+          model: {
+            id: "deployment",
+            name: "Deployment",
+            api: modelApi,
+            provider: "custom-proxy",
+            baseUrl: "https://example.invalid",
+            input: ["text"],
+            reasoning: true,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            params: { canonicalModelId: modelId },
+          },
+        })?.appendOnlyRuntimeContext,
+      ).toBe(expected);
+    }
   });
 
   it("derives claude-only anthropic replay policy from the model id", () => {
@@ -177,7 +224,7 @@ describe("provider replay helpers", () => {
     // Sonnet 4.6 preserves thinking blocks
     const policy46 = buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6");
     expectFields(policy46, {
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext: false,
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
@@ -205,7 +252,7 @@ describe("provider replay helpers", () => {
       { anthropicModelDropThinkingBlocks: true },
     );
     expectFields(sonnet46Policy, {
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext: false,
       validateAnthropicTurns: true,
     });
     expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");

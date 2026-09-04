@@ -143,6 +143,106 @@ describe("parseCliJson", () => {
       },
     },
     {
+      name: "records a Claude hook-stopped terminal result in JSON mode",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+        num_turns: 4,
+        permission_denials: [],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "bounds and flattens the CLI-controlled terminal reason it repeats back",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-long-reason",
+        terminal_reason: "hook_stopped",
+        stop_reason: "y".repeat(200),
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-long-reason",
+        usage: undefined,
+        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: ${"y".repeat(64)}).`,
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "y".repeat(64),
+        },
+      },
+    },
+    {
+      name: "records an aborted-tools terminal result as a turn stop",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-aborted-tools",
+        stop_reason: "tool_use",
+        terminal_reason: "aborted_tools",
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-aborted-tools",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "aborted_tools",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "keeps a stopped Claude turn that still delivered result text",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-hook-text",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "partial answer",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "partial answer",
+        sessionId: "session-json-hook-text",
+        usage: undefined,
+      },
+    },
+    {
       name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
       input: {
         type: "result",
@@ -229,6 +329,33 @@ describe("parseCliJson", () => {
     );
 
     expect(result).toEqual(expected);
+  });
+
+  it("keeps earlier assistant text when a later terminal result is reply-less", () => {
+    const result = parseCliJson(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial answer" }] },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "session-json-earlier-text",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+        }),
+      ].join("\n"),
+      { command: "claude", output: "json", sessionIdFields: ["session_id"] },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-json-earlier-text",
+      usage: undefined,
+    });
   });
 
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -447,6 +574,42 @@ describe("parseCliJson", () => {
 });
 
 describe("parseCliJsonl", () => {
+  it.each([
+    {
+      name: "records a reply-less terminal stop for any claude-stream-json backend",
+      backend: { command: "acme-agent", jsonlDialect: "claude-stream-json" as const },
+      expected: [
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        { reason: "turn_stopped", terminalReason: "hook_stopped", stopReason: "tool_use" },
+      ],
+    },
+    {
+      name: "leaves terminal_reason alone outside the claude-stream-json dialect",
+      backend: { command: "acme-agent" },
+      expected: [undefined, undefined],
+    },
+  ])("$name", ({ backend, expected }) => {
+    // The dialect, not the provider id, owns Claude Code's terminal semantics:
+    // a plugin backend that declares `claude-stream-json` gets the same stop
+    // classification as the bundled `claude-cli`, and one that does not stays
+    // on the generic result path.
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "acme-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+      }),
+      { ...backend, output: "jsonl", sessionIdFields: ["session_id"] },
+      "acme-cli",
+    );
+
+    expect([result.errorText, result.terminalFailure]).toEqual(expected);
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name from CLI JSONL output",
     ({ raw, normalized }) => {

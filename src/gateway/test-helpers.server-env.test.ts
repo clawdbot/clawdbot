@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { listAgentIds } from "../agents/agent-scope.js";
+import { type AgentsConfig, resetConfigRuntimeState } from "../config/config.js";
 import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
@@ -158,11 +159,13 @@ describe("Gateway test environment lifecycle", () => {
     async (fixture) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       const { writeConfigFile } = createGatewayConfigOverrides(actual);
-      await writeConfigFile({ session: { reset: { idleMinutes: 30 } } });
+      const agents: AgentsConfig = { ownership: "explicit", entries: { main: {}, authored: {} } };
+      await writeConfigFile({ agents, session: { reset: { idleMinutes: 30 } } });
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, fixture: {} } };
       const configPath = process.env.OPENCLAW_CONFIG_PATH!;
-      const readIdleMinutes = () =>
-        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true })
-          .session?.reset?.idleMinutes;
+      const readAuthoredConfig = () =>
+        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true });
+      const readIdleMinutes = () => readAuthoredConfig().session?.reset?.idleMinutes;
       expect(readIdleMinutes()).toBe(30);
       const writeFile = fs.writeFile.bind(fs);
       const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
@@ -183,9 +186,11 @@ describe("Gateway test environment lifecycle", () => {
           testState.sessionConfig = { reset: { idleMinutes: 60 } };
           await writeSessionStore({ entries: {} });
         } else {
-          await writeConfigFile({ session: { reset: { idleMinutes: 60 } } });
+          await writeConfigFile({ agents, session: { reset: { idleMinutes: 60 } } });
         }
         expect(readIdleMinutes()).toBe(60);
+        expect(listAgentIds(actual.getRuntimeConfig())).toEqual(["main", "fixture"]);
+        expect(listAgentIds(readAuthoredConfig())).toEqual(["main", "authored"]);
       } finally {
         writeSpy.mockRestore();
       }

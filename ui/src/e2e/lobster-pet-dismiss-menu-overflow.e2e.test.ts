@@ -36,7 +36,7 @@ async function loadControlUiPage(currentPage: Page) {
   await currentPage.goto(suite.server.baseUrl);
   await currentPage.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
   await currentPage.locator("openclaw-app-sidebar").waitFor();
-  await currentPage.locator("openclaw-community-invite-card").waitFor();
+  await currentPage.locator(".community-invite-card").waitFor();
   const loadedAt = await currentPage.evaluate(() => Date.now());
   await currentPage.clock.pauseAt(loadedAt + 1_000);
 }
@@ -87,7 +87,7 @@ async function measureDismissMenu(currentPage: Page) {
     const hostStyle = host ? getComputedStyle(host) : null;
     const hostRect = host?.getBoundingClientRect() ?? null;
     const invite = document.querySelector<HTMLElement>(".sidebar-shell__invite");
-    const inviteCard = invite?.querySelector("openclaw-community-invite-card") ?? null;
+    const inviteCard = invite?.querySelector(".community-invite-card") ?? null;
     const inviteRect = invite?.getBoundingClientRect() ?? null;
     const footerRect = document
       .querySelector<HTMLElement>(".sidebar-shell__footer")
@@ -214,7 +214,7 @@ suite.define(() => {
       ).toBeLessThan(0.5);
 
       await page.keyboard.press("Escape");
-      const invite = page.locator("openclaw-community-invite-card");
+      const invite = page.locator(".community-invite-card");
       await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
       await invite.waitFor({ state: "detached" });
 

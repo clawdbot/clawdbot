@@ -1,8 +1,15 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
+import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
-import type { SessionActivityFilters } from "./session-activity.ts";
+import {
+  canonicalSessionActivityLocation,
+  sessionActivityLocation,
+  type SessionActivityFilters,
+} from "./session-activity.ts";
 
 /** The Activity query owns its page; selecting a person must not replace the sidebar roster. */
 export class SessionActivityController implements ReactiveController {
@@ -14,6 +21,7 @@ export class SessionActivityController implements ReactiveController {
   private pending?: AbortController;
   private refreshPending = false;
   private filters: SessionActivityFilters | null = null;
+  private normalizedLocation = "";
   private readonly observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   private pageActive = !this.observesPageLifecycle || document.visibilityState !== "hidden";
@@ -47,6 +55,68 @@ export class SessionActivityController implements ReactiveController {
     this.result = undefined;
     this.refreshPending = false;
     this.filters = null;
+    this.normalizedLocation = "";
+  }
+
+  private personLabel(id: string, presence: readonly PresenceViewer[]): string | undefined {
+    return (
+      this.result?.people?.find((person) => person.identity.id === id)?.label ??
+      presence.find((person) => person.identity?.id === id)?.name
+    );
+  }
+
+  canonicalLocation(
+    location: RouteLocation,
+    basePath: string,
+    presence: readonly PresenceViewer[],
+  ): RouteLocation | null {
+    if (!this.filters?.personId || !this.result?.involvingProfileId || this.loading) {
+      return null;
+    }
+    const personId = this.result.involvingProfileId;
+    const canonical = canonicalSessionActivityLocation(
+      location,
+      personId,
+      this.personLabel(personId, presence),
+      basePath,
+    );
+    if (!canonical) {
+      this.normalizedLocation = "";
+      return null;
+    }
+    const source = `${location.pathname}${location.search}${location.hash}`;
+    if (this.normalizedLocation === source) {
+      return null;
+    }
+    // The resolved ID owns the link; replace each stale name once without adding history.
+    this.normalizedLocation = source;
+    return canonical;
+  }
+
+  locationForFilters(
+    filters: SessionActivityFilters,
+    current: RouteLocation,
+    basePath: string,
+    presence: readonly PresenceViewer[],
+  ) {
+    const location = sessionActivityLocation(
+      filters,
+      basePath,
+      filters.personId ? this.personLabel(filters.personId, presence) : undefined,
+    );
+    const currentId = this.result?.involvingProfileId ?? this.filters?.personId;
+    if (filters.personId && filters.personId === currentId) {
+      // Filter changes must not broaden an exact legacy bookmark into a shared prefix.
+      location.pathname = activityPersonFromPath(current.pathname, basePath)
+        ? current.pathname
+        : activityPersonLocation(
+            filters.personId,
+            basePath,
+            this.personLabel(filters.personId, presence),
+            32,
+          ).pathname;
+    }
+    return location;
   }
 
   private readonly handlePageLifecycle = (event: Event): void => {

@@ -462,10 +462,18 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
   sessionKey?: string;
+  authority?: import("./talk-client-gateway-control.js").TalkAgentConsultAuthority;
   text: string;
   mode?: string;
   assertCurrent?: () => void;
 }): Promise<RealtimeVoiceAgentControlResult> {
+  return await prepareTalkRealtimeRelayAgentControl(params)();
+}
+
+/** Capture the call-owned registration before control queue/readiness waits. */
+export function prepareTalkRealtimeRelayAgentControl(
+  params: Parameters<typeof steerTalkRealtimeRelayAgentRun>[0],
+): () => Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const { sessionKey, canonicalKey } = session.sessionTarget;
   const requestedSessionKey = params.sessionKey?.trim();
@@ -476,6 +484,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
     context: session.context,
     clientConnId: session.connId,
     sessionTarget: session.sessionTarget,
+    scope: { kind: "voice-session", voiceSessionId: session.id },
     assertCurrent: () => {
       params.assertCurrent?.();
       if (relaySessions.get(session.id) !== session) {
@@ -483,43 +492,55 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
       }
     },
   });
-  const result = await controlRealtimeVoiceAgentRun({
-    sessionKey: canonicalKey,
-    runTarget,
-    text: params.text,
-    mode: params.mode,
-    recentEvents: session.harness.talk.recentEvents,
-  });
-  if (relaySessions.get(session.id) !== session) {
-    throw new Error("Realtime relay session closed while steering the agent run");
-  }
-  const turnId = ensureRelayTurn(session);
-  const providerSubmission = submitRelayAgentControlProviderResults(session, result, turnId);
-  if (providerSubmission?.completion) {
-    await providerSubmission.completion;
-  }
-  const finalResult = providerSubmission?.providerResponseStarted
-    ? { ...result, suppress: true }
-    : result;
-  if (relaySessions.get(session.id) !== session) {
-    return finalResult;
-  }
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "toolProgress",
-    result: finalResult,
-    talkEvent: session.harness.talk.emit({
-      type: "tool.progress",
-      turnId,
-      payload: {
-        name: "openclaw_agent_control",
-        phase: finalResult.mode,
-        result: finalResult,
+  return async () => {
+    params.assertCurrent?.();
+    if (relaySessions.get(session.id) !== session) {
+      throw new Error("Realtime relay session closed while steering the agent run");
+    }
+    const result = await controlRealtimeVoiceAgentRun({
+      sessionKey: canonicalKey,
+      runTarget,
+      getToolAuthorityOverlay: () => {
+        if (!session.getToolAuthorityOverlay) {
+          throw new Error("Relay steering caller authority is unavailable");
+        }
+        return session.getToolAuthorityOverlay(params.authority, runTarget?.toolAuthoritySource);
       },
-      final: finalResult.mode === "cancel" || finalResult.mode === "status",
-    }),
-  });
-  return finalResult;
+      text: params.text,
+      mode: params.mode,
+      recentEvents: session.harness.talk.recentEvents,
+    });
+    if (relaySessions.get(session.id) !== session) {
+      throw new Error("Realtime relay session closed while steering the agent run");
+    }
+    const turnId = ensureRelayTurn(session);
+    const providerSubmission = submitRelayAgentControlProviderResults(session, result, turnId);
+    if (providerSubmission?.completion) {
+      await providerSubmission.completion;
+    }
+    const finalResult = providerSubmission?.providerResponseStarted
+      ? { ...result, suppress: true }
+      : result;
+    if (relaySessions.get(session.id) !== session) {
+      return finalResult;
+    }
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "toolProgress",
+      result: finalResult,
+      talkEvent: session.harness.talk.emit({
+        type: "tool.progress",
+        turnId,
+        payload: {
+          name: "openclaw_agent_control",
+          phase: finalResult.mode,
+          result: finalResult,
+        },
+        final: finalResult.mode === "cancel" || finalResult.mode === "status",
+      }),
+    });
+    return finalResult;
+  };
 }
 
 /** Cancels the active relay turn, aborts agent work, and clears provider audio. */

@@ -710,13 +710,15 @@ Codex runtime, so `Promise.all` does not submit them concurrently; use a
 bounded sequential launch loop when starting collector children.
 
 Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
-tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
-Codex's `code_mode.direct_only_tool_namespaces` list without replacing
+tool and regular-agent `openclaw` delegation, are grouped under `openclaw_direct`.
+OpenClaw adds that namespace to Codex's
+`features.code_mode.direct_only_tool_namespaces` list without replacing
 operator-supplied entries. Codex therefore exposes those tools as
 `DirectModelOnly` in normal and code-mode-only threads instead of routing them
-through nested Code Mode `tools.*` calls. This boundary is required for
-image-bearing results: nested Code Mode serialization flattens image output to
-text, which would discard the screenshot needed for the next computer action.
+through nested Code Mode `tools.*` calls. This preserves image-bearing results,
+which nested Code Mode otherwise flattens to text. It also keeps delegated human
+approval on the direct model call: a yielded script cell must not let the model
+finish its turn while that approval is still waiting.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
@@ -725,7 +727,7 @@ the full tool payload.
 ## Timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`. Each Codex `item/tool/call` request uses the
+`appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
@@ -741,11 +743,19 @@ first available timeout in this order:
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms of
-outer completion grace, and the app-server client allows 660000 ms so that
-structured wait result can reach Codex. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+Ordinary dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms
+of outer completion grace. Human-interaction tools use the validated question
+wait plus 30000 ms: `ask_user` and `secrets` credential requests honor their question
+timeout, while delegated `openclaw` calls use the fixed 930000 ms default. That
+budget covers the ten-minute approval window plus staging and application;
+model-authored arguments cannot override it. The app-server request watchdog
+leaves another 30000 ms beyond the applicable tool budget for the result to reach
+Codex.
+
+On timeout, OpenClaw aborts the tool signal where supported and returns a failed
+dynamic-tool response to Codex so the turn can continue instead of leaving the
+session in `processing`. These wait budgets never preserve approval authority
+after the requesting run or tool closes.
 
 ### Turn execution and settlement
 

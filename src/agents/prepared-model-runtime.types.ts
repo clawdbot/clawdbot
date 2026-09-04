@@ -44,6 +44,9 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Session active project set, ordered most-recent first; empty before run binding. */
   activeProjectKeys: readonly string[];
   config: OpenClawConfig;
+  /** Native observations retain preparation identity across model-neutral config publications. */
+  observationConfig: OpenClawConfig;
+  isCurrent: () => boolean;
   /** Secret-free usable auth modes captured by this exact lifecycle generation. */
   authModes: PreparedAgentCredentialModes;
   metadataSnapshot: PluginMetadataSnapshot;

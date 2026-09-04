@@ -3,6 +3,7 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
@@ -14,6 +15,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
   return thread.evaluate((element) => {
@@ -372,7 +374,7 @@ suite.define(() => {
           targetHeader.evaluate((header) => {
             const owner = header.closest("openclaw-chat-pane");
             return (
-              header.parentElement?.classList.contains("chat-main__conversation-column") === true &&
+              header.parentElement?.classList.contains("chat-pane-layout") === true &&
               owner?.classList.contains("chat-split-view__pane") === true
             );
           }),
@@ -654,7 +656,7 @@ suite.define(() => {
 
       // The chat boot hydrates the sidebar session list; that request stays
       // deferred here while the composer must remain fully usable.
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
 
       await composer.fill("draft while sessions load");
       expect(await composer.inputValue()).toBe("draft while sessions load");
@@ -765,7 +767,7 @@ suite.define(() => {
     }
   });
 
-  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
+  it("releases a retained queued send after the canonical session list records idle", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -774,12 +776,40 @@ suite.define(() => {
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const sessions = chatSessionListResponse([
-      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+    const activeSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 2,
+        activeRunIds: ["server-run"],
+        hasActiveRun: true,
+        status: "running",
+      },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const idleSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 3,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: "server-run",
+        status: "done",
+      },
       { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+        "sessions.list": activeSessions,
+      },
       sessionKey: firstKey,
     });
 
@@ -791,9 +821,9 @@ suite.define(() => {
         .getByText("Instant A")
         .waitFor();
       await page.waitForTimeout(500);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
 
       await page
         .locator(
@@ -804,9 +834,9 @@ suite.define(() => {
         .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
         .getByText("Instant B")
         .waitFor();
-      const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
-        initialListCount,
-      );
+      const emptyOutboxListRequests = (
+        await gateway.getRequests("sessions.list", rosterMatch)
+      ).slice(initialListCount);
       expect(emptyOutboxListRequests).toHaveLength(0);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
       const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
@@ -855,11 +885,20 @@ suite.define(() => {
         .getByText("Instant A")
         .waitFor();
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBe(emptyOutboxListCount + 1);
-      if (emptyOutboxListRequests.length === 0) {
-        await gateway.resolveDeferred("sessions.list", sessions);
-      }
+      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
+      await queued.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
+      await gateway.resolveDeferred("sessions.list", idleSessions);
+      const send = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(send.params)).toMatchObject({
+        message: "flush after idle reconciliation",
+        sessionKey: firstKey,
+      });
+      await queued.waitFor({ state: "detached" });
+      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -929,7 +968,7 @@ suite.define(() => {
       await row.locator("a.sidebar-recent-session__link").click();
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
@@ -948,7 +987,7 @@ suite.define(() => {
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
       await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
-      const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforePatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await row.hover();
       await row.getByRole("button", { name: "Pin session" }).click();
 
@@ -959,7 +998,7 @@ suite.define(() => {
       });
       await expect
         .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
+          const requests = await gateway.getRequests("sessions.list", rosterMatch);
           return requests.slice(listCountBeforePatch).map((request) => request.params);
         })
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));

@@ -1,4 +1,5 @@
 // Voice Call tests cover manager.notify plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
@@ -90,14 +91,6 @@ const requireRecord = createRequireRecord("record", "expected-label-record");
 function requireSingleStartListeningCall(provider: FakeProvider) {
   expect(provider.startListeningCalls).toHaveLength(1);
   return requireRecord(provider.startListeningCalls.at(0), "start listening call");
-}
-
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
@@ -363,7 +356,7 @@ describe("CallManager notify and mapping", () => {
       expect(startListeningCall.callId).toBe(callId);
       expect(startListeningCall.providerCallId).toBe("call-uuid");
       expect(warn).toHaveBeenCalledOnce();
-      expect(String(requireFirstMockCall(warn.mock.calls, "console warn")[0])).toContain(
+      expect(String(expectDefined(warn.mock.calls.at(0), "console warn")[0])).toContain(
         `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
       );
     } finally {

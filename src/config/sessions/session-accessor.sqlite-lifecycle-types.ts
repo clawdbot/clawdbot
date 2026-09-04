@@ -1,8 +1,10 @@
 import type { ConversationRouteContext } from "./conversation-route-context.js";
-import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
+import type {
+  SessionLifecycleArchivedTranscript,
+  SessionResetBoundaryWrite,
+} from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
 import type { SessionEntryLifecycleRemoval } from "./session-accessor.sqlite-contract.js";
-import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { SessionEntry } from "./types.js";
 
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
@@ -43,9 +45,7 @@ export type ProjectedLifecycleMutation = {
     entry: SessionEntry;
     expectedEntry: SessionEntry | undefined;
     routeContext?: ConversationRouteContext | null;
-    resetBoundary?: SessionResetBoundaryRequest;
-    /** Session workspace for a header created at reset time. */
-    resetBoundaryCwd?: string;
+    resetBoundary?: SessionResetBoundaryWrite;
     sessionKey: string;
   }>;
 };

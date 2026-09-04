@@ -1,10 +1,15 @@
 // Control UI tests cover the initial-connect splash shown instead of the
 // login gate while the Gateway resolves its first connection attempt.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -42,32 +47,35 @@ async function createPage(): Promise<Page> {
   return page;
 }
 
-async function waitForSettledSurface(page: Page): Promise<void> {
-  // Playwright visibility ignores opacity. Let entrance/resize motion finish;
-  // do not fast-forward animations or wait for perpetual descendant motion.
-  const surface = page.locator(".connect-splash, .shell");
-  await expect
-    .poll(() =>
-      surface.evaluate(
-        (element) =>
-          getComputedStyle(element).opacity === "1" &&
-          element
-            .getAnimations()
-            .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
-            .every((animation) => animation.playState === "finished"),
-      ),
-    )
-    .toBe(true);
-}
-
 async function takeProofScreenshot(page: Page, name: string, content: Locator[]): Promise<Buffer> {
-  // Lazy hosts can have boxes before their definitions or children have loaded.
-  await Promise.all(content.map((locator) => locator.waitFor()));
-  await waitForSettledSurface(page);
+  await waitForControlUiProofSurface(page.locator(".connect-splash, .shell"), content);
   return page.screenshot({
     fullPage: true,
     ...(artifactDir ? { path: path.join(artifactDir, `${name}.png`) } : {}),
   });
+}
+
+async function proofContentPainted(page: Page, proof: Buffer, content: Locator): Promise<boolean> {
+  const contentBounds = await content.boundingBox();
+  expect(contentBounds).not.toBeNull();
+  return page.evaluate(
+    async ({ png, bounds }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${png}`;
+      await image.decode();
+      const crop = document.createElement("canvas");
+      crop.width = bounds.width;
+      crop.height = bounds.height;
+      const context = crop.getContext("2d")!;
+      context.drawImage(image, -bounds.x, -bounds.y);
+      const pixels = context.getImageData(0, 0, crop.width, crop.height).data;
+      // Reject a flat (or effectively invisible) crop without fixing the pose or palette.
+      return pixels.some(
+        (value, index) => index % 4 !== 3 && Math.abs(value - pixels[index % 4]!) > 10,
+      );
+    },
+    { png: proof.toString("base64"), bounds: contentBounds! },
+  );
 }
 
 async function captureProof(page: Page, name: string, content: Locator[]): Promise<void> {
@@ -163,24 +171,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const proof = await takeProofScreenshot(page, "01-centered-connecting-mascot", [
       mascot.locator("canvas"),
     ]);
-    const painted = await page.evaluate(
-      async ({ png, bounds }) => {
-        const image = new Image();
-        image.src = `data:image/png;base64,${png}`;
-        await image.decode();
-        const crop = document.createElement("canvas");
-        crop.width = bounds.width;
-        crop.height = bounds.height;
-        const context = crop.getContext("2d")!;
-        context.drawImage(image, -bounds.x, -bounds.y);
-        const pixels = context.getImageData(0, 0, crop.width, crop.height).data;
-        // Reject a flat (or effectively invisible) crop without fixing the pose or palette.
-        return pixels.some(
-          (value, index) => index % 4 !== 3 && Math.abs(value - pixels[index % 4]!) > 10,
-        );
-      },
-      { png: proof.toString("base64"), bounds: mascotBounds! },
-    );
+    const painted = await proofContentPainted(page, proof, mascot);
     expect(painted, "connecting proof must contain the centered mascot").toBe(true);
 
     await gateway.resolveDeferred("connect");
@@ -328,7 +319,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
     await page.evaluate(() => document.fonts.ready);
     // Compare section layouts at rest, not the shell's translated entrance frame.
-    await waitForSettledSurface(page);
+    await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
       "Found on this Gateway",
       "Run a model locally",
@@ -389,7 +380,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
     // Restoring desktop starts a grid-row transition after the responsive Lit update.
     await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
-    await waitForSettledSurface(page);
+    await waitForControlUiProofSurface(page.locator(".shell"), [
+      page.getByRole("heading", { name: "Connect a verified AI model" }),
+    ]);
     const readySectionTops = await Promise.all(
       sectionTitles.map(
         async (name) => (await page.getByRole("heading", { name }).boundingBox())!.y,
@@ -411,6 +404,101 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       .toBe(true);
     await captureProof(page, "07b-first-run-model-setup-ready-mobile", [setupHeading]);
   });
+
+  it.each(["entrance", "lazy content"] as const)(
+    "captures recovery pixels after %s readiness despite perpetual descendant animation",
+    async (pending) => {
+      const page = await createPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      // The endpoint rejects every attempt, including automatic reconnects.
+      await installMockGateway(page, {
+        methodResponses: {
+          connect: {
+            __mockError: {
+              code: "INVALID_REQUEST",
+              message: "origin not allowed",
+              details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+            },
+          },
+        },
+      });
+      await page.goto(server.baseUrl);
+      const surface = page.locator(".login-gate__card");
+      const recoveryTitle = page.locator(".login-gate__failure-title");
+      const recovery = page.getByText("Browser origin not allowed", { exact: true });
+      await waitForControlUiProofSurface(surface, [recovery]);
+
+      await page.evaluate((pendingPresentation) => {
+        const card = document.querySelector<HTMLElement>(".login-gate__card")!;
+        const title = document.querySelector<HTMLElement>(".login-gate__failure-title")!;
+        const activity = document.createElement("span");
+        activity.dataset.proofActivity = "";
+        activity.textContent = "•";
+        card.append(activity);
+        activity.animate([{ opacity: 0.4 }, { opacity: 1 }], {
+          duration: 100,
+          iterations: Infinity,
+        });
+        // Explicit scheduling perturbations widen the unsafe capture window;
+        // they do not change the application's wait budgets or capture policy.
+        if (pendingPresentation === "entrance") {
+          card.style.animationName = "none";
+          void getComputedStyle(card).animationName;
+          card.style.animationDelay = "1s";
+          card.style.animationFillMode = "backwards";
+          card.style.animationName = "scale-in";
+          return;
+        }
+        const text = title.textContent!;
+        const height = title.getBoundingClientRect().height;
+        const lazyHost = document.createElement("openclaw-proof-recovery-title");
+        lazyHost.style.display = "block";
+        lazyHost.style.minHeight = `${height}px`;
+        // Keep Lit's marker and text nodes intact for reconnect-driven renders.
+        for (const child of title.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            child.textContent = "";
+          }
+        }
+        title.append(lazyHost);
+        // A boxed lazy host is not meaningful content. An independent finite
+        // descendant completes registration while the activity above stays live.
+        const loading = lazyHost.animate([{ opacity: 1 }, { opacity: 1 }], { duration: 1_000 });
+        void loading.finished.then(() => {
+          customElements.define(
+            "openclaw-proof-recovery-title",
+            class extends HTMLElement {
+              connectedCallback() {
+                const label = document.createElement("span");
+                label.textContent = text;
+                this.replaceChildren(label);
+              }
+            },
+          );
+        });
+      }, pending);
+
+      const proof = await takeControlUiViewportScreenshot(page, surface, [recovery]);
+      if (artifactDir) {
+        await writeFile(
+          path.join(artifactDir, `capture-readiness-${pending.replaceAll(" ", "-")}.png`),
+          proof,
+        );
+      }
+      // The crop contains recovery words, not the card border or animated dot.
+      expect(
+        await proofContentPainted(page, proof, recoveryTitle),
+        "capture must paint recovery guidance",
+      ).toBe(true);
+      expect(
+        await page
+          .locator("[data-proof-activity]")
+          .evaluate((element) => element.getAnimations()[0]?.playState),
+      ).toBe("running");
+      expect(pageErrors).toEqual([]);
+    },
+  );
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();

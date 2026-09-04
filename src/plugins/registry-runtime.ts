@@ -585,6 +585,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
+          complete: (params) =>
+            withPluginRuntimePluginIdScope(pluginId, () => subagent.complete(params)),
           run: async (params) => {
             const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
             return await withPluginRuntimePluginIdScope(pluginId, async () => {

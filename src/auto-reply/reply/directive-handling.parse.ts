@@ -24,7 +24,7 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy } from "./queue/types.js";
 
-const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
+const REPLY_DIRECTIVE_COMMANDS = {
   think: true,
   verbose: true,
   trace: true,
@@ -37,19 +37,19 @@ const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
 } as const;
 
 /** Canonical command-registry keys that share the session-directive execution pipeline. */
-type NativeReplyDirectiveCommand = keyof typeof NATIVE_REPLY_DIRECTIVE_COMMANDS;
+type ReplyDirectiveCommand = keyof typeof REPLY_DIRECTIVE_COMMANDS;
 
 /** Resolves a registered command key without inferring directive ownership from slash text. */
-export function resolveNativeReplyDirectiveCommand(
+export function resolveReplyDirectiveCommand(
   commandKey: string | undefined,
-): NativeReplyDirectiveCommand | undefined {
-  return commandKey && Object.hasOwn(NATIVE_REPLY_DIRECTIVE_COMMANDS, commandKey)
-    ? (commandKey as NativeReplyDirectiveCommand)
+): ReplyDirectiveCommand | undefined {
+  return commandKey && Object.hasOwn(REPLY_DIRECTIVE_COMMANDS, commandKey)
+    ? (commandKey as ReplyDirectiveCommand)
     : undefined;
 }
 
 type NativeDirectiveInvocation = {
-  name: NativeReplyDirectiveCommand;
+  name: ReplyDirectiveCommand;
   unconsumedArguments?: string;
 };
 
@@ -120,14 +120,14 @@ export function parseInlineSessionDirectives(
     modelAliases?: string[];
     disableElevated?: boolean;
     allowStatusDirective?: boolean;
-    nativeCommand?: NativeReplyDirectiveCommand;
+    nativeCommand?: ReplyDirectiveCommand;
   },
 ): InlineDirectives {
   const nativeCommand = options?.nativeCommand;
   let cleaned = body;
   let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
-    commandName: NativeReplyDirectiveCommand,
+    commandName: ReplyDirectiveCommand,
     extract: (value: string) => T,
     enabled = true,
   ): T => {

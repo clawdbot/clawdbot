@@ -4,8 +4,14 @@ import {
   listNodes,
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import pluginEntry from "../../index.js";
+import { createDirFetchTool } from "./dir-fetch-tool.js";
 import { createDirListTool } from "./dir-list-tool.js";
+import { createFileFetchTool } from "./file-fetch-tool.js";
+import { createFileWriteTool } from "./file-write-tool.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   callGatewayTool: vi.fn(),
@@ -21,6 +27,77 @@ afterEach(() => {
   vi.mocked(callGatewayTool).mockReset();
   vi.mocked(listNodes).mockReset();
   vi.mocked(resolveNodeIdFromList).mockReset();
+});
+
+describe("file-transfer standalone guidance", () => {
+  it.each([
+    {
+      name: "file_fetch",
+      create: createFileFetchTool,
+      unavailable: "file_write",
+      parameter: "maxBytes",
+    },
+    {
+      name: "dir_list",
+      create: createDirListTool,
+      unavailable: "file_fetch",
+      parameter: "pageToken",
+    },
+    {
+      name: "file_write",
+      create: createFileWriteTool,
+      unavailable: "file_fetch",
+      parameter: "sourceMediaId",
+    },
+    {
+      name: "dir_fetch",
+      create: createDirFetchTool,
+      unavailable: undefined,
+      parameter: "maxBytes",
+    },
+  ])("keeps eager and lazy $name guidance standalone with canonical opt-in", (entry) => {
+    const registered: AnyAgentTool[] = [];
+    pluginEntry.register(
+      createTestPluginApi({
+        registerTool(tool) {
+          const resolved = typeof tool === "function" ? tool({ config: {} }) : tool;
+          if (resolved) {
+            registered.push(...(Array.isArray(resolved) ? resolved : [resolved]));
+          }
+        },
+      }),
+    );
+    const lazy = registered.find((tool) => tool.name === entry.name);
+    const eager = entry.create();
+    expect(lazy).toMatchObject({
+      name: eager.name,
+      description: eager.description,
+      parameters: eager.parameters,
+    });
+    expect(eager.name).toBe(entry.name);
+    expect(eager.parameters).toMatchObject({ required: ["node", "path"] });
+    expect(eager.parameters).toHaveProperty(`properties.${entry.parameter}`);
+    expect.soft(eager.description).toContain("gateway.nodes.commands.allow");
+    if (entry.unavailable) {
+      expect
+        .soft(JSON.stringify({ description: eager.description, parameters: eager.parameters }))
+        .not.toContain(entry.unavailable);
+    }
+    if (entry.name === "file_fetch") {
+      expect.soft(eager.description).toContain("returns localPath and mediaId");
+    }
+    if (entry.name === "file_write") {
+      expect.soft(eager.parameters).toMatchObject({
+        properties: {
+          sourceMediaId: {
+            description: expect.stringContaining(
+              "Not a local path or an ID from another media store",
+            ),
+          },
+        },
+      });
+    }
+  });
 });
 
 describe("dir_list tool", () => {
