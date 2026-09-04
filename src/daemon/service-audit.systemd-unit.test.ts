@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/service-audit-mocks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import {
-  execSystemctlUser,
+  execSystemctlUserMock,
   hasIssue,
   resetServiceAuditMocks,
 } from "./test-helpers/service-audit-fixtures.js";
@@ -117,7 +117,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
       const unitName = "openclaw-audit.service";
       const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unitName };
       await writeSystemdUnitForAudit(home, unit, unitName);
-      execSystemctlUser.mockResolvedValueOnce({
+      execSystemctlUserMock.mockResolvedValueOnce({
         stdout: manager.join("\n"),
         stderr: "",
         code: 0,
@@ -134,7 +134,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
       });
 
       expect(hasIssue(audit, code)).toBe(expected);
-      expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
+      expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
         env,
         ["show", unitName, "--no-page", "--property", "After,Wants,RestartUSec,KillMode,LoadState"],
         321,
@@ -184,7 +184,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
           ["KillMode=control-group"],
           unitName,
         );
-        execSystemctlUser.mockResolvedValueOnce({
+        execSystemctlUserMock.mockResolvedValueOnce({
           stdout: manager.join("\n"),
           stderr: "",
           code: 0,
@@ -201,7 +201,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
         });
 
         expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
-        expect(execSystemctlUser).toHaveBeenCalledExactlyOnceWith(
+        expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
           env,
           [
             "show",
@@ -240,7 +240,11 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
             },
           });
           expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone)).toBe(true);
-          expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
+          expect(execSystemctlUserMock).toHaveBeenCalledWith(
+            { HOME: home },
+            expect.any(Array),
+            10_000,
+          );
         }
       } finally {
         await fs.rm(home, { recursive: true, force: true });

@@ -15,7 +15,7 @@ import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import {
   hasIssue,
   resetServiceAuditMocks,
-  resolveBunRuntimeInfo,
+  resolveBunRuntimeInfoMock,
 } from "./test-helpers/service-audit-fixtures.js";
 
 function buildMinimalServicePath(options: {
@@ -85,7 +85,7 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("flags Bun runtimes without WAL-safe SQLite", async () => {
-    resolveBunRuntimeInfo.mockResolvedValue({
+    resolveBunRuntimeInfoMock.mockResolvedValue({
       version: "1.4.0",
       sqliteVersion: "3.51.2",
       nodeSharedSqlite: false,
@@ -119,7 +119,7 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("reports a failed Bun probe without recommending runtime migration", async () => {
-    resolveBunRuntimeInfo.mockResolvedValue({
+    resolveBunRuntimeInfoMock.mockResolvedValue({
       status: "probe-failed",
       error: new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES"),
     });
