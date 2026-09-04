@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
@@ -4498,7 +4499,7 @@ describe("buildCachedChatItems", () => {
     expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
   });
 
-  it("renders Gateway-embedded App previews once at their tool positions", () => {
+  it("renders Gateway-embedded App previews once without removing assistant-only views", () => {
     const first = mcpAppResult("mcp-app-first", "call-first", 1_001);
     const second = mcpAppResult("mcp-app-second", "call-second", 1_002);
     const groups = messageGroups({
@@ -4519,18 +4520,51 @@ describe("buildCachedChatItems", () => {
       showToolCalls: false,
     });
 
-    expect(groups.map((group) => group.role)).toEqual([
-      "user",
-      "assistant",
-      "assistant",
-      "assistant",
-    ]);
-    expect(groups.map((group) => canvasBlocksAcross(group).length)).toEqual([0, 1, 1, 1]);
-    expect(messageRecord(groupAt(groups, 3)).content).toStrictEqual([
-      { type: "text", text: "Both Apps are ready." },
-      mcpAppCanvasBlock("mcp-app-assistant-only", "call-assistant-only"),
-    ]);
+    expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(3);
+    expect(
+      groups.flatMap((group) =>
+        group.messages.flatMap(({ message }) => normalizeMessage(message).content),
+      ),
+    ).toContainEqual({ type: "text", text: "Both Apps are ready." });
   });
+
+  it.each([false, true])(
+    "renders the real widget history representations once (showToolCalls=%s)",
+    (showToolCalls) => {
+      const viewId = "cv_widget_history";
+      const groups = messageGroups({
+        messages: [
+          userMessage("Show a widget", 1_000),
+          toolResultMessage(
+            "call-widget",
+            "show_widget",
+            [{ type: "text", text: canvasToolOutput(viewId, "Widget", 320) }],
+            1_001,
+          ),
+          assistantMessage(
+            [
+              { type: "text", text: `[embed ref="${viewId}" title="Widget" /]\n\nReady.` },
+              {
+                type: "canvas",
+                preview: {
+                  kind: "canvas",
+                  surface: "assistant_message",
+                  render: "url",
+                  viewId,
+                  url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+                  sandbox: "scripts",
+                },
+              },
+            ],
+            1_002,
+          ),
+        ],
+        showToolCalls,
+      });
+
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(1);
+    },
+  );
 
   it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
     const viewId = "cv_url_match";
@@ -4559,9 +4593,11 @@ describe("buildCachedChatItems", () => {
     });
 
     expect(groups.flatMap((group) => canvasBlocksAcross(group))).toHaveLength(1);
-    expect(messageRecord(groupAt(groups, 2)).content).toStrictEqual([
-      { type: "text", text: "The App is ready." },
-    ]);
+    expect(
+      groups.flatMap((group) =>
+        group.messages.flatMap(({ message }) => normalizeMessage(message).content),
+      ),
+    ).toContainEqual({ type: "text", text: "The App is ready." });
   });
 
   it("keeps an App preview row stable when live state becomes persisted history", () => {
@@ -5366,10 +5402,9 @@ function canvasBlocksIn(group: MessageGroup): unknown[] {
 }
 
 function canvasBlocksAcross(group: MessageGroup): unknown[] {
-  return group.messages.flatMap(({ message }) => {
-    const content = (message as { content?: unknown }).content;
-    return Array.isArray(content) ? content.filter((block) => isCanvasBlock(block)) : [];
-  });
+  return group.messages.flatMap(({ message }) =>
+    normalizeMessage(message).content.filter(isCanvasBlock),
+  );
 }
 
 function isCanvasBlock(block: unknown): boolean {

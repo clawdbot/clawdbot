@@ -50,7 +50,7 @@ function canvasBlock(viewId: string) {
 }
 
 suite.define(() => {
-  it("keeps history-backed Canvas previews at their tool positions after reload", async () => {
+  it("renders each persisted Canvas view once after reload", async () => {
     const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
@@ -74,7 +74,10 @@ suite.define(() => {
         role: "assistant",
         timestamp: 1_003,
         content: [
-          { type: "text", text: finalText },
+          {
+            type: "text",
+            text: `[embed ref="cv_first" /]\n[embed ref="cv_second" /]\n${finalText}`,
+          },
           canvasBlock("cv_first"),
           canvasBlock("cv_second"),
         ],
@@ -86,23 +89,14 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
-      const readLayout = () =>
-        page.locator(".chat-thread-inner").evaluate(
-          (thread, expectedFinalText) =>
-            Array.from(thread.querySelectorAll(".chat-group.assistant")).map((group) => ({
-              canvasCount: group.querySelectorAll('.chat-tool-card__preview[data-kind="canvas"]')
-                .length,
-              hasFinalText: group.textContent?.includes(expectedFinalText) ?? false,
-            })),
-          finalText,
-        );
-      const expectedLayout = [
-        { canvasCount: 1, hasFinalText: false },
-        { canvasCount: 1, hasFinalText: false },
-        { canvasCount: 0, hasFinalText: true },
-      ];
+      const readPreviews = () =>
+        page
+          .locator(".chat-tool-card__widget-host iframe")
+          .evaluateAll((frames) => frames.map((frame) => frame.getAttribute("title")));
+      const expectedPreviews = ["Preview cv_first", "Preview cv_second"];
 
-      await expect.poll(readLayout).toEqual(expectedLayout);
+      await expect.poll(readPreviews).toEqual(expectedPreviews);
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
@@ -115,7 +109,8 @@ suite.define(() => {
       // Reload reinstalls the in-page mock Gateway and its request ring, so the
       // first startup request in the new document is the synchronization point.
       await gateway.waitForRequest("chat.startup");
-      await expect.poll(readLayout).toEqual(expectedLayout);
+      await expect.poll(readPreviews).toEqual(expectedPreviews);
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",

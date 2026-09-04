@@ -22,7 +22,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  canvasPreviewsMatch,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
+import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
@@ -39,7 +43,6 @@ import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageItems,
-  canvasPreviewArtifactIdentities,
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
@@ -55,7 +58,6 @@ import {
   sanitizeStreamText,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
-  turnHasMatchingAssistant,
   type TurnInsertionBounds,
   userTurnRunId,
 } from "./chat-thread-items.ts";
@@ -114,32 +116,6 @@ function canvasAssistantItemKey(
   return identity ? `canvas:${identity}` : `${fallback}:canvas`;
 }
 
-function stripPendingCanvasCopies(
-  message: unknown,
-  pendingPreviewIdentities: ReadonlySet<string>,
-): unknown {
-  const record = asRecord(message);
-  if (!record || !Array.isArray(record.content) || pendingPreviewIdentities.size === 0) {
-    return message;
-  }
-  let changed = false;
-  const content = record.content.filter((block) => {
-    const entry = asRecord(block);
-    if (entry?.type !== "canvas") {
-      return true;
-    }
-    const matchesPending = canvasPreviewArtifactIdentities(entry.preview).some((identity) =>
-      pendingPreviewIdentities.has(identity),
-    );
-    if (!matchesPending) {
-      return true;
-    }
-    changed = true;
-    return false;
-  });
-  return changed ? { ...record, content } : message;
-}
-
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter(
@@ -163,17 +139,39 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
-  const pendingPersistedCanvasPreviewIdentities = new Set<string>();
+  const normalizedHistory = history.map(safeNormalizeMessage);
+  let canvasTurn: { previews: CanvasToolPreview[]; lastMatchingAssistantIndex: number } = {
+    previews: [],
+    lastMatchingAssistantIndex: -1,
+  };
+  // Rows in one turn share these facts so a tool result can see the assistant
+  // projection that follows it, without consuming a view from another turn.
+  const canvasTurns = normalizedHistory.map((message, index) => {
+    const role = message && normalizeRoleForGrouping(message.role);
+    if (role === "user" || role === "system") {
+      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
+    }
+    if (
+      role === "assistant" &&
+      message &&
+      (!searchFiltering || messageMatchesSearchQuery(history[index], props.searchQuery ?? ""))
+    ) {
+      canvasTurn.lastMatchingAssistantIndex = index;
+      canvasTurn.previews.push(
+        ...message.content.flatMap((block) => (block.type === "canvas" ? [block.preview] : [])),
+      );
+    }
+    return canvasTurn;
+  });
   const compaction = props.compactionStatus;
   const compactionKey = compaction
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
   for (const [i, item] of buildMessageItems(history).entries()) {
-    let displayItem = item;
-    let msg = item.message;
+    const msg = item.message;
     const itemKey = item.key;
-    let raw = asRecord(msg) ?? {};
+    const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
@@ -190,7 +188,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       hasPersistedCompaction ||= matchesLive;
       continue;
     }
-    const normalized = safeNormalizeMessage(msg);
+    const normalized = normalizedHistory[i];
     if (!normalized) {
       continue;
     }
@@ -200,18 +198,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const role = normalizeRoleForGrouping(normalized.role);
-    if (role === "assistant" && pendingPersistedCanvasPreviewIdentities.size > 0) {
-      // Gateway history also embeds pending Canvas previews in the next visible
-      // assistant message for clients that cannot render tool-result rows. The
-      // Control UI already lifted those rows above, so keep only that causal copy.
-      const deduplicated = stripPendingCanvasCopies(msg, pendingPersistedCanvasPreviewIdentities);
-      pendingPersistedCanvasPreviewIdentities.clear();
-      if (deduplicated !== msg) {
-        msg = deduplicated;
-        displayItem = { ...item, message: msg };
-        raw = asRecord(msg) ?? {};
-      }
-    }
     if (role === "system") {
       const text = extractTextCached(msg);
       if (text?.trim()) {
@@ -230,11 +216,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+      !canvasTurns[i]!.previews.some((preview) =>
+        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
+      ) &&
+      (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
-      for (const identity of canvasPreviewArtifactIdentities(persistedCanvasSource.preview)) {
-        pendingPersistedCanvasPreviewIdentities.add(identity);
-      }
       items.push({
         kind: "message",
         key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
@@ -284,7 +270,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    items.push(displayItem);
+    items.push(item);
   }
   const queuedSends = props.queue ?? [];
   const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
