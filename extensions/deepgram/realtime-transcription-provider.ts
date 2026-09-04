@@ -27,6 +27,7 @@ type DeepgramRealtimeTranscriptionProviderConfig = {
   encoding?: DeepgramRealtimeTranscriptionEncoding;
   interimResults?: boolean;
   endpointingMs?: number;
+  idleFlushMs?: number;
 };
 
 type DeepgramRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
@@ -37,6 +38,7 @@ type DeepgramRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCr
   encoding: DeepgramRealtimeTranscriptionEncoding;
   interimResults: boolean;
   endpointingMs: number;
+  idleFlushMs: number;
   language?: string;
 };
 
@@ -57,6 +59,11 @@ type DeepgramRealtimeTranscriptionEvent = {
 const DEEPGRAM_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const DEEPGRAM_REALTIME_DEFAULT_ENCODING: DeepgramRealtimeTranscriptionEncoding = "mulaw";
 const DEEPGRAM_REALTIME_DEFAULT_ENDPOINTING_MS = 800;
+// Host-side idle-flush margin, ADDED on top of Deepgram's endpointing. The
+// backstop fires at endpointingMs + idleFlushMs after the transcript stops
+// growing, so in clean audio Deepgram's own speech_final (~endpointingMs) wins
+// and clears it; the backstop only acts when speech_final never arrives (noise).
+const DEEPGRAM_REALTIME_DEFAULT_IDLE_FLUSH_MS = 1000;
 const DEEPGRAM_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
 const DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
@@ -153,6 +160,9 @@ function normalizeProviderConfig(
     encoding: normalizeDeepgramEncoding(raw.encoding),
     interimResults: readBoolean(raw.interimResults ?? raw.interim_results),
     endpointingMs: readFiniteNumber(raw.endpointingMs ?? raw.endpointing ?? raw.silenceDurationMs),
+    idleFlushMs: readFiniteNumber(
+      raw.idleFlushMs ?? raw.idleFlush ?? raw.idle_flush_ms ?? raw.idleGapMs,
+    ),
   };
 }
 
@@ -179,6 +189,7 @@ function createDeepgramRealtimeTranscriptionSession(
   let finalizeRequested = false;
   let finalizeFallbackFired = false;
   let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleFlushTimer: ReturnType<typeof setTimeout> | undefined;
   let openedOnce = false;
 
   const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
@@ -193,8 +204,16 @@ function createDeepgramRealtimeTranscriptionSession(
     }
   };
 
+  const clearIdleFlush = () => {
+    if (idleFlushTimer) {
+      clearTimeout(idleFlushTimer);
+      idleFlushTimer = undefined;
+    }
+  };
+
   const clearTurn = () => {
     clearFinalizeFallback();
+    clearIdleFlush();
     finalizedTranscript = "";
     pendingPartial = "";
     speechStarted = false;
@@ -228,6 +247,20 @@ function createDeepgramRealtimeTranscriptionSession(
     if (full) {
       config.onTranscript?.(full);
     }
+  };
+
+  // Host-side idle-flush backstop: when the transcript stops growing, finalize
+  // the turn after endpointingMs + idleFlushMs. The margin keeps this strictly
+  // AFTER Deepgram's own endpointing, so in clean audio speech_final fires first
+  // and flushTurn() -> clearTurn() clears this timer (no double-emit); the
+  // backstop only fires when speech_final never arrives (e.g. noisy audio).
+  const armIdleFlush = () => {
+    clearIdleFlush();
+    idleFlushTimer = setTimeout(() => {
+      idleFlushTimer = undefined;
+      flushTurn();
+    }, config.endpointingMs + config.idleFlushMs);
+    idleFlushTimer.unref?.();
   };
 
   const flushFinalizedTurn = () => {
@@ -277,6 +310,7 @@ function createDeepgramRealtimeTranscriptionSession(
           }
           config.onPartial?.(joinTranscript(finalizedTranscript, text));
         }
+        armIdleFlush();
         return;
       }
       case "SpeechStarted":
@@ -374,6 +408,7 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
         encoding: config.encoding ?? DEEPGRAM_REALTIME_DEFAULT_ENCODING,
         interimResults: config.interimResults ?? true,
         endpointingMs: config.endpointingMs ?? DEEPGRAM_REALTIME_DEFAULT_ENDPOINTING_MS,
+        idleFlushMs: config.idleFlushMs ?? DEEPGRAM_REALTIME_DEFAULT_IDLE_FLUSH_MS,
         language: config.language,
       });
     },
