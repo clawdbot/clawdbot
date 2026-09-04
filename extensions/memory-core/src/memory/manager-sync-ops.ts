@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_CHUNKING_VERSION,
+  MEMORY_INDEX_VECTOR_TABLE,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -22,6 +23,7 @@ import {
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
+  memoryDatabaseTableExists,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
@@ -607,7 +609,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           // Bound the cache before copying it into the shared agent database;
           // deleting overflow afterward does not undo primary-file growth.
           this.pruneEmbeddingCacheIfNeeded();
-          return { nextMeta, vectorIndexComplete };
+          return {
+            nextMeta,
+            vectorIndexComplete,
+            hasVectors: memoryDatabaseTableExists(shadow.db, "main", MEMORY_INDEX_VECTOR_TABLE),
+          };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
           shadow.closed = true;
@@ -621,6 +627,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             sourcePath: tempDbPath,
             metaKey: MEMORY_INDEX_META_KEY,
             expectedRevision: originalRevision,
+            sourceHasVectors: rebuilt.hasVectors,
             vectorExtensionPath: shadow.vector.extensionPath,
           });
         });

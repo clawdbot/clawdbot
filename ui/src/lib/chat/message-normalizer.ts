@@ -36,6 +36,15 @@ const OPAQUE_ID_LABEL_SUFFIX_RE =
 type CanvasPreview = Extract<MessageContentItem, { type: "canvas" }>["preview"];
 type MessageDelivery = { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string };
 
+export function canvasPreviewsMatch(
+  first: Pick<CanvasPreview, "viewId" | "url">,
+  second: Pick<CanvasPreview, "viewId" | "url">,
+): boolean {
+  return Boolean(
+    (first.viewId && first.viewId === second.viewId) || (first.url && first.url === second.url),
+  );
+}
+
 function readMessageDelivery(value: unknown): MessageDelivery | undefined {
   const delivery = asOptionalRecord(value);
   if (
@@ -338,6 +347,7 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
 function expandTextContent(
   text: string,
   delivery: MessageDelivery | undefined,
+  projectedCanvasPreviews: readonly CanvasPreview[],
 ): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
@@ -379,7 +389,10 @@ function expandTextContent(
     }
   }
   for (const preview of extracted.previews) {
-    if (preview.surface !== "assistant_message") {
+    if (
+      preview.surface !== "assistant_message" ||
+      projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
+    ) {
       continue;
     }
     parts.push({
@@ -424,6 +437,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
+  // History's structured blocks retain sandbox and dashboard metadata that
+  // an assistant shortcode cannot carry. Keep that representation when both exist.
+  const projectedCanvasPreviews = (contentItems ?? []).flatMap((value) => {
+    const item = asOptionalRecord(value);
+    const rawPreview = item?.type === "canvas" ? asOptionalRecord(item.preview) : undefined;
+    const preview = rawPreview ? coerceCanvasPreview(rawPreview) : null;
+    return preview ? [preview] : [];
+  });
 
   // Extract content
   let content: MessageContentItem[] = [];
@@ -432,7 +453,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (typeof m.content === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content, delivery);
+      const expanded = expandTextContent(m.content, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -491,7 +512,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           (role === "assistant" && (type === "input_text" || type === "output_text")))
       ) {
         if (isAssistantMessage) {
-          const expanded = expandTextContent(text, delivery);
+          const expanded = expandTextContent(text, delivery, projectedCanvasPreviews);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
           if (expanded.replyTarget?.kind === "id") {
             replyTarget = expanded.replyTarget;
@@ -524,7 +545,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   } else if (typeof m.text === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text, delivery);
+      const expanded = expandTextContent(m.text, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;

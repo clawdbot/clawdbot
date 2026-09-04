@@ -40,6 +40,7 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    canRestoreComposer?: () => boolean;
     chatMentions?: readonly HumanMention[];
     /** Captured once at submit; queued delivery never re-reads the current page. */
     getWorkContext?: () => string | undefined;

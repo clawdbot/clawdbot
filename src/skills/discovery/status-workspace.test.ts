@@ -274,33 +274,36 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(enabledStatus?.missing.config).toStrictEqual([]);
   });
 
-  it("does not mark an overridden workspace skill as bundled by bundled name alone", async () => {
-    const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
-    tempDirs.push(bundledDir);
-    await writeSkill({
-      dir: path.join(bundledDir, "peekaboo"),
-      name: "peekaboo",
-      description: "Bundled peekaboo",
-    });
-
-    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
-      const report = buildWorkspaceSkillStatus("/tmp/ws", {
-        entries: [
-          makeEntry({
-            name: "peekaboo",
-            source: "openclaw-workspace",
-          }),
-        ],
-        config: { skills: { allowBundled: ["other-skill"] } },
+  it.each(["openclaw-workspace", "unknown"])(
+    "does not mark a %s skill as bundled by bundled name alone",
+    async (source) => {
+      const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
+      tempDirs.push(bundledDir);
+      await writeSkill({
+        dir: path.join(bundledDir, "peekaboo"),
+        name: "peekaboo",
+        description: "Bundled peekaboo",
       });
-      const skill = requireReportedSkill(report, "peekaboo");
 
-      expect(skill.source).toBe("openclaw-workspace");
-      expect(skill.bundled).toBe(false);
-      expect(skill.blockedByAllowlist).toBe(false);
-      expect(skill.eligible).toBe(true);
-    });
-  });
+      await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
+        const report = buildWorkspaceSkillStatus("/tmp/ws", {
+          entries: [
+            makeEntry({
+              name: "peekaboo",
+              source,
+            }),
+          ],
+          config: { skills: { allowBundled: ["other-skill"] } },
+        });
+        const skill = requireReportedSkill(report, "peekaboo");
+
+        expect(skill.source).toBe(source);
+        expect(skill.bundled).toBe(false);
+        expect(skill.blockedByAllowlist).toBe(false);
+        expect(skill.eligible).toBe(true);
+      });
+    },
+  );
 
   it("filters install options by OS", () => {
     const entry = makeEntry({

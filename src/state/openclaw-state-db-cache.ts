@@ -58,22 +58,15 @@ export function registerOpenClawStateDatabaseLifecycleListener(
   return () => databaseLifecycleListeners.delete(listener);
 }
 
-type OpenClawStateDatabaseCloseResult = {
-  caught: boolean;
-  errors: unknown[];
-};
-
 /** Close both physical-handle owners while retaining every cleanup failure. */
 function closeOpenClawStateDatabaseHandle(
   database: OpenClawStateDatabase,
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
-): OpenClawStateDatabaseCloseResult {
-  let caught = false;
+): unknown[] {
   const errors: unknown[] = [];
   try {
     database.walMaintenance.close(options);
   } catch (error) {
-    caught = true;
     errors.push(error);
   }
   clearNodeSqliteKyselyCacheForDatabase(database.db);
@@ -82,10 +75,9 @@ function closeOpenClawStateDatabaseHandle(
       database.db.close();
     }
   } catch (error) {
-    caught = true;
     errors.push(error);
   }
-  return { caught, errors };
+  return errors;
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {

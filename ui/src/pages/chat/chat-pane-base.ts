@@ -42,6 +42,7 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import { GitHubPublicationController } from "./chat-github-publication.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import type {
   ChatPaneConnectionScope,
@@ -149,6 +150,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.presentedChanged(value);
   }
   protected presentedChanged(_presented: boolean): void {}
+  /** True while the authoritative transcript for this pane is still being fetched. */
+  get transcriptLoading(): boolean {
+    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    return phase === "pending-connection" || phase === "in-flight";
+  }
   protected get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }

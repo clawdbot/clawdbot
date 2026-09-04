@@ -428,7 +428,7 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         managementOnly ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5)) : CRON_ACTIONS,
       ),
       ...gatewayCallOptionSchemaProperties(),
-      ...createCronFlatJobSchemaProperties(),
+      ...(managementOnly ? {} : createCronFlatJobSchemaProperties()),
       includeDisabled: Type.Optional(Type.Boolean()),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,

@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  getChangedCoreTestPaths,
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
@@ -792,17 +793,7 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
-  const changedTestPaths = result.paths.filter(
-    (file) => getChangedPathFacts(file).surface !== "docs",
-  );
-  const narrowCoreTests =
-    !runAll &&
-    !lanes.core &&
-    !lanes.ui &&
-    !lanes.tooling &&
-    !lanes.liveDockerTooling &&
-    changedTestPaths.length > 0 &&
-    changedTestPaths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file));
+  const narrowCoreTests = getChangedCoreTestPaths(result) !== undefined;
   if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
     if (narrowCoreTests) {
@@ -1122,7 +1113,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
 
   const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
     ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
-        result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs"),
+        getChangedCoreTestPaths(result)!,
         createSparseTsgoSkipEnv(childEnv),
       )
     : undefined;

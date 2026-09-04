@@ -8,10 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
-import {
-  createCodeModeCatalogProjection,
-  type CodeModeCatalogBinding,
-} from "./code-mode-catalog.js";
+import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -166,10 +163,10 @@ function createCodeModeExecDescription(
     : "";
   const { maxOutputBytes } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
-  const projection = catalog
-    ? createCodeModeCatalogProjection(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
+  const bindings = catalog
+    ? createCodeModeCatalogBindings(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
     : undefined;
-  const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
+  const catalogIndex = bindings ? formatCodeModeCatalogIndex(bindings) : "";
   return (
     `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Tool failures are catchable JavaScript errors; otherwise, use the failed result to correct your code or choose another tool. If an action may have started, inspect its outcome without repeating mutations. Never replay actions that already ran. Each nested result is bounded separately to ${maxOutputBytes} bytes. Cumulative output and the final value or error share ${maxOutputBytes} bytes across waits. Model-facing results may use a smaller allowance to preserve complete status and continuation within model context limits. Output/value truncation reports a prefix and omitted bytes of the original normalized JSON; rerun with narrower args. Ordinary output is incremental; unchanged summaries are suppressed, changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
