@@ -146,6 +146,13 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func requestMethod(from message: URLSessionWebSocketTask.Message) -> String? {
+        guard let obj = requestFrameObject(from: message), (obj["type"] as? String) == "req" else {
+            return nil
+        }
+        return obj["method"] as? String
+    }
+
     private static func requestFrameObject(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
         let data: Data? = switch message {
         case let .data(d): d
