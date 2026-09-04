@@ -723,11 +723,18 @@ suite.define(() => {
     }
   });
 
-  it("scrolls a delayed pending send into view before the ACK resolves", async () => {
+  it("scrolls a delayed pending send past expanding progress before the ACK resolves", async () => {
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-send-scroll", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
@@ -741,11 +748,33 @@ suite.define(() => {
       role: index % 2 === 0 ? "assistant" : "user",
       timestamp: baseTs + index,
     }));
-    const gateway = await installMockGateway(page, { historyMessages });
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+      historyMessages,
+      methodResponses: {
+        "progressCard.get": {
+          card: {
+            revision: 1,
+            sessionKey: "agent:main:main",
+            updatedAt: baseTs,
+            steps: [
+              { step: "Inspect the conversation", status: "completed" },
+              { step: "Review the requested changes", status: "completed" },
+              { step: "Check the latest result", status: "in_progress" },
+              { step: "Verify the next reply", status: "pending" },
+            ],
+          },
+        },
+      },
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("History message 49").waitFor({ timeout: 10_000 });
+      const progress = page.locator('[data-progress-card-placement="composer"]');
+      await expect.poll(() => progress.getAttribute("open")).toBe("");
+      await progress.locator("summary").click();
+      await expect.poll(() => progress.getAttribute("open")).toBeNull();
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(4);
@@ -764,16 +793,33 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
 
       const prompt = `pending send should scroll before ack\n${"visible now\n".repeat(6)}`;
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(prompt);
+      const draftHeight = await composer.evaluate((element) => element.clientHeight);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "before-send.png"), fullPage: true });
+      }
+      // Keyboard submission can land while the progress disclosure is resizing;
+      // a pointer click on the moving send button would wait for stable layout.
+      await progress.locator("summary").click();
+      await composer.press("Enter");
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
+      await expect.poll(() => progress.getAttribute("open")).toBe("");
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect
+        .poll(() => composer.evaluate((element) => element.clientHeight))
+        .toBeLessThan(draftHeight);
       await page.locator(".chat-thread").getByText("pending send should scroll").waitFor({
         timeout: 10_000,
       });
+      await waitForChatScrollIdle(page);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "after-send.png"), fullPage: true });
+      }
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(4);
