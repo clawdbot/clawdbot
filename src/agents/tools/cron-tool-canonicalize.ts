@@ -251,12 +251,13 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     if (isNonEmptyString(payload.script)) {
       payload.kind = "script";
     } else {
+      // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
       const hasAgentTurnSignal =
         isNonEmptyString(payload.message) ||
         isNonEmptyString(payload.model) ||
         payload.model === null ||
         isNonEmptyString(payload.thinking) ||
-        typeof payload.timeoutSeconds === "number" ||
+        (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));

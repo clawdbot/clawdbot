@@ -26,6 +26,7 @@ async function withAdminTool(
     calls: Array<{ method: string; params: unknown }>;
     resolveCreator: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
+  currentPayload?: Record<string, unknown>,
 ) {
   const runId = "admin-management-tool-run";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
@@ -68,7 +69,7 @@ async function withAdminTool(
                       ? {
                           id: "telegram-created-job",
                           configRevision: "sha256:stored-job",
-                          payload: {
+                          payload: currentPayload ?? {
                             kind: "agentTurn",
                             message: "Original channel task",
                             toolsAllow: ["read"],
@@ -150,6 +151,36 @@ describe("Control UI admin automation management tool", () => {
       ]);
       expect(resolveCreator).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    { kind: "command", argv: ["printf", "synthetic-proof"] },
+    { kind: "script", script: "return { output: 'synthetic-proof' };" },
+    { kind: "agentTurn", message: "Synthetic reminder" },
+  ])("inherits the stored $kind kind for a timeout-only update", async (currentPayload) => {
+    await withAdminTool(
+      "unknown",
+      async ({ tool, calls, resolveCreator }) => {
+        await tool.execute("timeout-update", {
+          action: "update",
+          jobId: "telegram-created-job",
+          job: { payload: { timeoutSeconds: 30 } },
+        });
+        expect(calls).toEqual([
+          { method: "cron.get", params: { id: "telegram-created-job" } },
+          {
+            method: "cron.update",
+            params: {
+              id: "telegram-created-job",
+              expectedConfigRevision: "sha256:stored-job",
+              patch: { payload: { kind: currentPayload.kind, timeoutSeconds: 30 } },
+            },
+          },
+        ]);
+        expect(resolveCreator).not.toHaveBeenCalled();
+      },
+      currentPayload,
+    );
   });
 
   it("advertises only the five admitted management actions and their inputs remotely", async () => {
