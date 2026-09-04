@@ -84,10 +84,36 @@ export function createQaGatewayChildLogCollector() {
   let recent = "";
   let end = 0;
 
-  const readFrom = (mark: number) => {
+  const resolveRead = (mark: number) => {
     const start = end - recent.length;
     const wasTruncated = mark < start;
-    const text = recent.slice(Math.max(0, mark - start));
+    const offset = Math.min(recent.length, Math.max(0, mark - start));
+    return {
+      prefix: recent.slice(0, offset),
+      text: recent.slice(offset),
+      wasTruncated,
+    };
+  };
+  const resolveRedactedRead = (mark: number) => {
+    const retainedStart = end - recent.length;
+    const firstSafeOffset =
+      retainedStart === 0
+        ? 0
+        : (() => {
+            const newline = recent.indexOf("\n");
+            return newline < 0 ? recent.length : newline + 1;
+          })();
+    const redactionSafeRecent = recent.slice(firstSafeOffset);
+    const start = retainedStart + firstSafeOffset;
+    const offset = Math.min(redactionSafeRecent.length, Math.max(0, mark - start));
+    return {
+      all: redactionSafeRecent,
+      prefix: redactionSafeRecent.slice(0, offset),
+      text: redactionSafeRecent.slice(offset),
+      wasTruncated: mark < start,
+    };
+  };
+  const withTruncationMarker = (text: string, wasTruncated: boolean) => {
     return `${wasTruncated ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${text}`;
   };
   return {
@@ -103,7 +129,28 @@ export function createQaGatewayChildLogCollector() {
       return end;
     },
     readSince(mark: number) {
-      return readFrom(mark);
+      const read = resolveRead(mark);
+      return withTruncationMarker(read.text, read.wasTruncated);
+    },
+    readRedactedSince(mark: number) {
+      const read = resolveRedactedRead(mark);
+      const redactedRecent = redactQaGatewayDebugText(read.all);
+      const redactedPrefix = redactQaGatewayDebugText(read.prefix);
+      if (redactedRecent.startsWith(redactedPrefix)) {
+        return withTruncationMarker(redactedRecent.slice(redactedPrefix.length), read.wasTruncated);
+      }
+
+      // A redaction crossed the cursor. Drop only the affected line, then require
+      // the retained suffix to redact independently before exposing later logs.
+      let newline = read.text.indexOf("\n");
+      while (newline >= 0) {
+        const redactedSuffix = redactQaGatewayDebugText(read.text.slice(newline + 1));
+        if (redactedRecent.endsWith(redactedSuffix)) {
+          return withTruncationMarker(redactedSuffix, read.wasTruncated);
+        }
+        newline = read.text.indexOf("\n", newline + 1);
+      }
+      return withTruncationMarker("", read.wasTruncated);
     },
     text() {
       return `${end > recent.length ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
@@ -113,11 +160,11 @@ export function createQaGatewayChildLogCollector() {
 
 export function createQaGatewayChildLogAccess(output: {
   mark(): number;
-  readSince(mark: number): string;
+  readRedactedSince(mark: number): string;
 }) {
   return {
     markLogs: () => output.mark(),
-    readLogsSince: (mark: number) => redactQaGatewayDebugText(output.readSince(mark)),
+    readLogsSince: (mark: number) => output.readRedactedSince(mark),
   };
 }
 

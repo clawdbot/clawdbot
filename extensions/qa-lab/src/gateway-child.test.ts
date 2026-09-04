@@ -1291,7 +1291,7 @@ describe("buildQaRuntimeEnv", () => {
   it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
     const output = createQaGatewayChildLogCollector();
     const childLogs = createQaGatewayChildLogAccess(output);
-    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}`));
+    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}\n`));
     const mark = childLogs.markLogs();
     expect(mark).toBeGreaterThan(output.text().length);
     output.push(
@@ -1308,6 +1308,37 @@ describe("buildQaRuntimeEnv", () => {
     expect(output.text()).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
     );
+  });
+
+  it("redacts credentials whose pattern crosses a monotonic log cursor", () => {
+    const bearerOutput = createQaGatewayChildLogCollector();
+    const bearerLogs = createQaGatewayChildLogAccess(bearerOutput);
+    bearerOutput.push("stdout", Buffer.from("Authorization: Bearer "));
+    const bearerMark = bearerLogs.markLogs();
+    bearerOutput.push("stdout", Buffer.from("fixture-secret-value\nfresh line\n"));
+
+    expect(bearerLogs.readLogsSince(bearerMark)).toBe("<redacted>\nfresh line\n");
+
+    const telegramOutput = createQaGatewayChildLogCollector();
+    const telegramLogs = createQaGatewayChildLogAccess(telegramOutput);
+    telegramOutput.push("stdout", Buffer.from("123456789:"));
+    const telegramMark = telegramLogs.markLogs();
+    telegramOutput.push("stdout", Buffer.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\nfresh line\n"));
+
+    const freshTelegramLogs = telegramLogs.readLogsSince(telegramMark);
+    expect(freshTelegramLogs).toBe("fresh line\n");
+    expect(freshTelegramLogs).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef");
+
+    const truncatedOutput = createQaGatewayChildLogCollector();
+    const truncatedLogs = createQaGatewayChildLogAccess(truncatedOutput);
+    truncatedOutput.push(
+      "stdout",
+      Buffer.from(`Authorization: Bearer ${"s".repeat(70_000)}\nfresh line\n`),
+    );
+
+    const freshTruncatedLogs = truncatedLogs.readLogsSince(0);
+    expect(freshTruncatedLogs).toBe("[qa-lab] older gateway logs truncated\nfresh line\n");
+    expect(freshTruncatedLogs).not.toContain("s".repeat(100));
   });
 
   it("decodes interleaved stdout and stderr independently", () => {
