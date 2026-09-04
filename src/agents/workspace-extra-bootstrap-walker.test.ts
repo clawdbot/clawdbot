@@ -1162,7 +1162,9 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
       const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
         "packages/[ab]/*/AGENTS.md",
       ]);
-      const contents = files.map((file) => file.content).toSorted();
+      const contents = files
+        .map((file) => file.content)
+        .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
       expect(contents).toStrictEqual(["a", "b"]);
       expect(diagnostics).toStrictEqual([]);
     });
