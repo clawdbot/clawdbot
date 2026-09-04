@@ -118,7 +118,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
-  bindWorkerTurnOwner(
+  const takeFinishingOutcome = bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
     runtimeIdentity.executionIdentityToken,
@@ -131,6 +131,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
     assertActive,
+    takeFinishingOutcome,
   };
 }
 

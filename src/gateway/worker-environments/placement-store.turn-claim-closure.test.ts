@@ -13,6 +13,7 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
+  rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -30,6 +31,8 @@ import {
 } from "./placement-store.js";
 import {
   bindWorkerTurnOwner,
+  captureWorkerTurnFinishing,
+  acknowledgeWorkerTurnFinishing,
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
@@ -95,6 +98,168 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   }
   return active;
 }
+
+function bindFinishingOwner() {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-finishing",
+    runId: "run-finishing",
+  });
+  const instance = createOperationalRunInstanceRef(claim.runId);
+  const authority = claimAgentRunDelegatedAuthority(instance);
+  const abort = new AbortController();
+  const bind = () =>
+    bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () =>
+      abort.signal.throwIfAborted(),
+    );
+  const take = bind();
+  const identity: WorkerConnectionIdentity = {
+    environmentId: active.environmentId,
+    credentialHash: "finishing-credential-hash",
+    bundleHash: "a".repeat(64),
+    sessionId: claim.sessionId,
+    runId: claim.runId,
+    turnClaim: claim,
+    ownerEpoch: active.activeOwnerEpoch,
+    rpcSetVersion: 1,
+    protocolFeatures: [],
+    credentialExpiresAtMs: Date.now() + 60_000,
+  };
+  const request = {
+    runEpoch: identity.ownerEpoch,
+    lastAckedSeq: 0,
+    seq: 2,
+    runId: claim.runId,
+    event: {
+      kind: "lifecycle" as const,
+      payload: {
+        phase: "finishing" as const,
+        endedAt: 2,
+        stopReason: "error",
+        error: "native close failed",
+        replayInvalid: true as const,
+      },
+    },
+  };
+  const close = () => {
+    if (store.validateTurnClaim(claim)) {
+      store.releaseTurn(claim);
+    }
+    releaseAgentRunDelegatedAuthority(authority);
+  };
+  return { claim, authority, abort, bind, take, identity, request, close };
+}
+
+it.each([false, true])(
+  "consumes finishing only under its current ACK (credential replaced: %s)",
+  (replaced) => {
+    const h = bindFinishingOwner();
+    try {
+      const record = captureWorkerTurnFinishing(h.identity, h.request);
+      expect(record).toBeTypeOf("function");
+      record?.();
+      expect(h.take(h.identity.credentialHash)).toBeUndefined();
+      acknowledgeWorkerTurnFinishing(h.identity, 1, () => true);
+      expect(h.take(h.identity.credentialHash)).toBeUndefined();
+      acknowledgeWorkerTurnFinishing(
+        { ...h.identity, credentialHash: "other-process" },
+        2,
+        () => true,
+      );
+      expect(h.take(h.identity.credentialHash)).toBeUndefined();
+      let credentialCurrent = true;
+      acknowledgeWorkerTurnFinishing(h.identity, 2, () => credentialCurrent);
+      expect(h.take("other-process")).toBeUndefined();
+      credentialCurrent = !replaced;
+      expect(h.take(h.identity.credentialHash)).toEqual(
+        replaced ? undefined : { error: "native close failed", replayInvalid: true },
+      );
+      expect(h.take(h.identity.credentialHash)).toBeUndefined();
+    } finally {
+      h.close();
+    }
+  },
+);
+
+it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as const)(
+  "rejects retained finishing readers and delayed events after %s closure",
+  (closure) => {
+    const h = bindFinishingOwner();
+    try {
+      const record = captureWorkerTurnFinishing(h.identity, h.request);
+      expect(record).toBeTypeOf("function");
+      record?.();
+      acknowledgeWorkerTurnFinishing(h.identity, 2, () => true);
+      let replacement: typeof h.take | undefined;
+      if (closure === "claim") {
+        store.releaseTurn(h.claim);
+      } else if (closure === "run") {
+        releaseAgentRunDelegatedAuthority(h.authority);
+      } else if (closure === "abort") {
+        h.abort.abort(new Error("turn cancelled"));
+      } else if (closure === "lifecycle") {
+        rotateAgentRunRegistryLifecycleGeneration();
+      } else {
+        replacement = h.bind();
+      }
+      record?.();
+      acknowledgeWorkerTurnFinishing(h.identity, 2, () => true);
+      expect(() => h.take(h.identity.credentialHash)).toThrow();
+      if (replacement) {
+        expect(replacement(h.identity.credentialHash)).toBeUndefined();
+        captureWorkerTurnFinishing(h.identity, h.request)?.();
+        acknowledgeWorkerTurnFinishing(h.identity, 2, () => true);
+        expect(replacement(h.identity.credentialHash)).toEqual({
+          error: "native close failed",
+          replayInvalid: true,
+        });
+      }
+    } finally {
+      h.close();
+    }
+  },
+);
+
+it.each([
+  "session",
+  "run",
+  "environment",
+  "epoch",
+  "claim",
+  "generation",
+  "request run",
+  "request epoch",
+] as const)("does not retain finishing from a mismatched %s binding", (field) => {
+  const h = bindFinishingOwner();
+  try {
+    const identity = { ...h.identity };
+    const request = { ...h.request };
+    if (field === "session") {
+      identity.sessionId = "other-session";
+    } else if (field === "run") {
+      identity.runId = "other-run";
+    } else if (field === "environment") {
+      identity.environmentId = "other-environment";
+    } else if (field === "epoch") {
+      identity.ownerEpoch += 1;
+    } else if (field === "claim") {
+      identity.turnClaim = { ...h.claim, claimId: "other-claim" };
+    } else if (field === "generation") {
+      identity.turnClaim = { ...h.claim, placementGeneration: h.claim.placementGeneration + 1 };
+    } else if (field === "request run") {
+      request.runId = "other-run";
+    } else {
+      request.runEpoch += 1;
+    }
+    expect(captureWorkerTurnFinishing(identity, request)).toBeUndefined();
+    acknowledgeWorkerTurnFinishing(identity, 2, () => true);
+    expect(h.take(h.identity.credentialHash)).toBeUndefined();
+  } finally {
+    h.close();
+  }
+});
 
 it("emits exact worker claim closure after release and owner fencing", () => {
   const closed = vi.fn();

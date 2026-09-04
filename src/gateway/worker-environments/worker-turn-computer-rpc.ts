@@ -10,6 +10,7 @@ import {
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   ComputerActParamsSchema,
@@ -97,7 +98,8 @@ export function createWorkerComputerRpc(params: {
       if (!current.ok) {
         return current;
       }
-      const message = error instanceof Error ? error.message : "Worker computer operation failed";
+      const message =
+        error instanceof Error ? formatErrorMessage(error) : "Worker computer operation failed";
       return {
         ok: false,
         reason: "gateway-unavailable",

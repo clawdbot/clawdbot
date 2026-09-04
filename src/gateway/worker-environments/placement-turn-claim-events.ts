@@ -1,3 +1,4 @@
+import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -11,6 +12,7 @@ import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../../process/gateway-work-admission.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -54,12 +56,21 @@ export type WorkerTurnExecutionIdentityCapability = Readonly<{
   run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
 }>;
 
+type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
+
 type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
   runtime: {
+    assertActive: () => void;
     delegatedAuthority: AgentRunDelegatedAuthority;
+    finishing?: {
+      credentialHash: string;
+      seq: number;
+      outcome: WorkerTurnFinishingOutcome;
+      isAckCurrent?: () => boolean;
+    };
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     scope?: GatewayRootWorkAdmissionContinuationScope;
     store: WorkerTurnExecutionIdentityStore;
@@ -71,6 +82,7 @@ const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwn
   (ownersByPath) => {
     for (const owners of ownersByPath.values()) {
       for (const owner of owners.values()) {
+        owner.runtime.finishing = undefined;
         owner.runtime?.scope?.release();
       }
     }
@@ -104,7 +116,7 @@ export function bindWorkerTurnOwner(
   source: { agentId: string; sessionKey: string },
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
-): void {
+): (credentialHash: string) => WorkerTurnFinishingOutcome | undefined {
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
@@ -117,6 +129,7 @@ export function bindWorkerTurnOwner(
     assertRunActive();
     if (
       owners.get(claim.sessionId) !== owner ||
+      workerTurnOwners.get(path) !== owners ||
       !store.validateTurnClaim(claim) ||
       !validateAgentRunDelegatedAuthority(delegatedAuthority)
     ) {
@@ -143,12 +156,16 @@ export function bindWorkerTurnOwner(
   });
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
+  if (existing) {
+    existing.runtime.finishing = undefined;
+  }
   existing?.runtime.scope?.release();
   const owner: BoundWorkerTurnOwner = {
     capability,
     claim,
     claimKey: currentClaimKey,
     runtime: {
+      assertActive,
       delegatedAuthority,
       prepareAssistantTranscriptMessage,
       scope: scope ?? undefined,
@@ -157,6 +174,19 @@ export function bindWorkerTurnOwner(
   };
   owners.set(claim.sessionId, owner);
   workerTurnOwners.set(path, owners);
+  return (credentialHash) => {
+    assertActive();
+    const finishing = owner.runtime.finishing;
+    if (
+      !finishing ||
+      !safeEqualSecret(finishing.credentialHash, credentialHash) ||
+      !finishing.isAckCurrent?.()
+    ) {
+      return undefined;
+    }
+    owner.runtime.finishing = undefined;
+    return finishing.outcome;
+  };
 }
 
 export function getWorkerTurnExecutionIdentityCapability(
@@ -206,6 +236,69 @@ function resolveWorkerTurnRuntime(
     return undefined;
   }
   return runtime;
+}
+
+/** Capture before buffering; delayed events must never bind to a replacement owner. */
+export function captureWorkerTurnFinishing(
+  identity: WorkerConnectionIdentity,
+  request: WorkerLiveEventParams,
+): (() => void) | undefined {
+  if (
+    request.runId !== identity.runId ||
+    request.runEpoch !== identity.ownerEpoch ||
+    request.event.kind !== "lifecycle" ||
+    request.event.payload.phase !== "finishing"
+  ) {
+    return undefined;
+  }
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (!runtime) {
+    return undefined;
+  }
+  const finishing = {
+    credentialHash: identity.credentialHash,
+    seq: request.seq,
+    outcome: {
+      error: request.event.payload.error,
+      replayInvalid: request.event.payload.replayInvalid,
+    },
+  };
+  return () => {
+    if (resolveWorkerTurnRuntime(identity) !== runtime) {
+      return;
+    }
+    try {
+      runtime.assertActive();
+      runtime.finishing = finishing;
+    } catch {
+      // Cancellation still drains its ACK, but cannot revive a closed turn's failure.
+    }
+  };
+}
+
+/** The durable ACK and its admission predicate belong to the same process turn. */
+export function acknowledgeWorkerTurnFinishing(
+  identity: WorkerConnectionIdentity,
+  ackedSeq: number,
+  isAckCurrent: () => boolean,
+): void {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  const finishing = runtime?.finishing;
+  if (
+    !runtime ||
+    !finishing ||
+    finishing.seq > ackedSeq ||
+    !safeEqualSecret(finishing.credentialHash, identity.credentialHash)
+  ) {
+    return;
+  }
+  try {
+    runtime.assertActive();
+    // Recheck at consumption too: credentials may rotate before the claim is released.
+    finishing.isAckCurrent = isAckCurrent;
+  } catch {
+    // Retaining error detail cannot change cancellation or terminal ACK semantics.
+  }
 }
 
 export function runWorkerTurnAdmissionContinuation<T>(
@@ -300,6 +393,7 @@ export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTu
   const owners = workerTurnOwners.get(path);
   const owner = owners?.get(claim.sessionId);
   if (owner?.claimKey === claimKey(claim)) {
+    owner.runtime.finishing = undefined;
     owner.runtime?.scope?.release();
     owners?.delete(claim.sessionId);
     if (owners?.size === 0) {

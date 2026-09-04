@@ -17,6 +17,7 @@ import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
@@ -261,11 +262,27 @@ async function runWorkerEmbeddedTurnWithResources(
     ? AbortSignal.any([params.signal, turnLifetime.signal])
     : turnLifetime.signal;
   let computerCleanup: ((reason: string) => Promise<void>) | undefined;
-  const disposeComputer = async () => {
+  function disposeTools(failure: Error): Promise<Error>;
+  function disposeTools(failure?: Error): Promise<Error | undefined>;
+  async function disposeTools(failure?: Error): Promise<Error | undefined> {
+    turnLifetime.abort();
     const cleanup = computerCleanup;
     computerCleanup = undefined;
-    await cleanup?.("Worker turn finished");
-  };
+    const failures = failure ? [failure] : [];
+    for (const dispose of [
+      () => cleanup?.("Worker turn finished"),
+      () => browserRuntime?.dispose(),
+    ]) {
+      try {
+        await dispose();
+      } catch (error) {
+        const cleanupFailure = toWorkerAgentError(error, "Worker tool cleanup failed.");
+        recordModelFallbackStop(cleanupFailure);
+        failures.push(cleanupFailure);
+      }
+    }
+    return failures.length > 1 ? new AggregateError(failures, "Worker turn failed") : failures[0];
+  }
   const { session } = await (async () => {
     try {
       const computerTool = params.computer
@@ -350,13 +367,7 @@ async function runWorkerEmbeddedTurnWithResources(
         withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
       });
     } catch (error) {
-      turnLifetime.abort();
-      try {
-        await disposeComputer();
-      } finally {
-        await browserRuntime?.dispose();
-      }
-      throw error;
+      throw await disposeTools(toWorkerAgentError(error, "Worker agent setup failed."));
     }
   })();
   session.agent.sessionId = params.sessionId;
@@ -410,21 +421,14 @@ async function runWorkerEmbeddedTurnWithResources(
     runFailure = params.signal?.aborted
       ? toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.")
       : toWorkerAgentError(error, "Worker agent turn failed.");
-    liveRuntime.enqueueRunFailure({
-      aborted: params.signal?.aborted === true,
-      error: runFailure,
-    });
   }
 
   let finalTranscriptFailure: Error | undefined;
   try {
     // Provider executions must close while the Gateway still admits this turn.
     // The terminal ACK fences every later desktop RPC, including cleanup.
-    turnLifetime.abort();
-    try {
-      await disposeComputer();
-    } catch (error) {
-      runFailure ??= toWorkerAgentError(error, "Worker computer cleanup failed.");
+    runFailure = await disposeTools(runFailure);
+    if (runFailure) {
       liveRuntime.enqueueRunFailure({
         aborted: params.signal?.aborted === true,
         error: runFailure,
@@ -445,7 +449,6 @@ async function runWorkerEmbeddedTurnWithResources(
     params.signal?.removeEventListener("abort", abortTurn);
     unsubscribe();
     session.dispose();
-    await browserRuntime?.dispose();
   }
   if (runFailure !== undefined) {
     throw runFailure;

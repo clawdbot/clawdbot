@@ -41,7 +41,10 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
+import {
+  acknowledgeWorkerTurnFinishing,
+  type WorkerTurnExecutionIdentityCapability,
+} from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import {
@@ -527,6 +530,18 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!result.ok || !placement || !processTurn) {
         return result;
       }
+      const validate = () =>
+        validateAttachedWorkerRequest(identity, request.runEpoch, {
+          kind: "live",
+          seq: request.seq,
+        });
+      // Synchronous live listeners may revoke admission while the receiver publishes.
+      const current = validate();
+      if (!current.ok) {
+        return "closeReason" in current
+          ? current
+          : { ok: false, details: { reason: current.reason } };
+      }
       const pending = pendingTerminalTurnFences.get(placement.sessionId);
       if (pending && !matchesTurnBinding(pending, processTurn)) {
         pendingTerminalTurnFences.delete(placement.sessionId);
@@ -549,6 +564,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           claim: placement,
           liveSeq: result.result.ackedSeq,
         });
+        acknowledgeWorkerTurnFinishing(identity, result.result.ackedSeq, () => validate().ok);
         // A gap fill can ACK a previously buffered terminal event. Fence from
         // the observed high-water marks, not only from the request carrying it.
         terminalTurnFences.set(

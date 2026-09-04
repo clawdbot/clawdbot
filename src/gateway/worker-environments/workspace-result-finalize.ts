@@ -79,7 +79,10 @@ function retainRemoteExecCleanupFailure(error: unknown, diagnostic?: string): Er
     : primary;
 }
 
-function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+export function workerWorkspaceFailure(
+  executionError: unknown,
+  reconciliationError: unknown,
+): Error {
   const executionMessage = formatErrorMessageForDisplay(executionError);
   const reconciliationDetail =
     reconciliationError instanceof WorkerWorkspaceReconciliationError &&
@@ -520,10 +523,10 @@ export async function executeRemoteExecTurn(params: {
       });
     }
     if (!execution.ok) {
-      throw remoteExecWorkspaceFailure(execution.error, reconciliationError);
+      throw workerWorkspaceFailure(execution.error, reconciliationError);
     }
     if (execution.value.meta.error) {
-      throw remoteExecWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
+      throw workerWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
     }
     throw reconciliationError;
   });
