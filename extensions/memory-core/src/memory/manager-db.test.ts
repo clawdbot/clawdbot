@@ -522,4 +522,34 @@ describe("memory manager database publication", () => {
     await expectPathMissing(`${oldShadow}-journal`);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
+
+  it("removes aged legacy .tmp-<uuid> shadows from pre-reindex-safety deployments", async () => {
+    // Pre-reindex-safety deployments wrote shadow databases as
+    // `<db>.tmp-<uuid>` rather than `<db>.memory-reindex-<uuid>`. A crashed
+    // reindex under the old naming leaves orphans the current matcher skips.
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.close();
+    const legacyShadow = `${databasePath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const legacyYoung = `${databasePath}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await fs.writeFile(`${legacyShadow}${suffix}`, "orphan");
+      await fs.utimes(`${legacyShadow}${suffix}`, old, old);
+    }
+    await fs.writeFile(legacyYoung, "active");
+
+    const lock = await waitForMemoryReindexLock(databasePath);
+    try {
+      cleanupAgedMemoryReindexTempFiles(databasePath);
+    } finally {
+      lock.release();
+    }
+
+    await expectPathMissing(legacyShadow);
+    await expectPathMissing(`${legacyShadow}-wal`);
+    await expectPathMissing(`${legacyShadow}-shm`);
+    await expect(fs.access(legacyYoung)).resolves.toBeUndefined();
+  });
 });

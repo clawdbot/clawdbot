@@ -46,12 +46,18 @@ function resolveMemoryReindexBaseName(
       continue;
     }
     const baseName = entryName.slice(0, entryName.length - suffix.length);
-    const prefix = `${databaseBaseName}.memory-reindex-`;
-    if (
-      baseName.startsWith(prefix) &&
-      MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
-    ) {
-      return baseName;
+    // Match both the current `.memory-reindex-<uuid>` shadow naming and the
+    // legacy `.tmp-<uuid>` shadow naming from deployments that predate the
+    // reindex-safety rewrite. Without the legacy matcher, orphaned
+    // `<db>.tmp-<uuid>` shadow databases (and their `-wal`/`-shm` sidecars)
+    // from a crashed reindex under the old naming are never swept. See #136284.
+    for (const prefix of [`${databaseBaseName}.memory-reindex-`, `${databaseBaseName}.tmp-`]) {
+      if (
+        baseName.startsWith(prefix) &&
+        MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
+      ) {
+        return baseName;
+      }
     }
   }
   return undefined;
