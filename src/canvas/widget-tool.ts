@@ -289,7 +289,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       : "";
   const usageGuidance = pinnedOnly
     ? "This scheduled surface is pinned-only: set pin=true to create or update a durable session dashboard widget."
-    : "Keep one ad hoc visualization inline; pin for explicit dashboard requests or multiple non-code visualizations.";
+    : "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.";
   const destinationGuidance = pinnedOnly
     ? "Author a widget for the current session dashboard. Inline and device presentation are unavailable"
     : `Show a widget on the user's current surface. ${
