@@ -100,7 +100,9 @@ async function createStartupFailureFixture(
       "    }",
       '    const result = message.method === "initialize"',
       '      ? { userAgent: `openclaw/${mode === "unsupported" ? "0.1.0" : "0.149.0"} (macOS; test)` }',
-      `      : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      '      : message.method === "configRequirements/read"',
+      "        ? { requirements: null }",
+      `        : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",
@@ -594,7 +596,7 @@ describe("Codex app-server startup retry", () => {
       });
       const requests = await fs.readFile(fixture.requestLogPath, "utf8");
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-        new Set(["thread/read", "thread/resume"]),
+        new Set(["configRequirements/read", "thread/read", "thread/resume"]),
       );
       expect(testCodexAppServerBindingStore.read(identity)).toEqual(binding);
 

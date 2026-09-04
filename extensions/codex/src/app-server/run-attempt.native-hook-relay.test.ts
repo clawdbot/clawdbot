@@ -1,4 +1,3 @@
-// Codex tests cover run attempt.native hook relay plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -105,9 +104,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       harness.requests.filter((request) => request.method === "configRequirements/read"),
     ).toHaveLength(1);
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const config = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
-      ?.config;
-    expect(config?.["hooks.PreToolUse"]).toBeUndefined();
+    expect(startRequest?.params).not.toHaveProperty(["config", "hooks.PreToolUse"]);
   });
 
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {

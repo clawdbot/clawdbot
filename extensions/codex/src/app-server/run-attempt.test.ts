@@ -869,7 +869,7 @@ async function runSharedClientRestartTest(
       },
     });
     const nativeRequest = CodexAppServerClient.prototype.request.bind(wire.client);
-    wire.request.mockImplementation((method, params, options) => {
+    wire.request.mockImplementation((method, params, requestOptions) => {
       if (method !== "initialize") {
         methods.push(method);
       }
@@ -878,15 +878,15 @@ async function runSharedClientRestartTest(
       if (method === "thread/resume" && startIndex < closeCount) {
         wire.client.close();
       }
-      return nativeRequest(method, params, options);
+      return nativeRequest(method, params, requestOptions);
     });
     clients.push(wire);
     return wire.client;
   });
   setCodexAppServerClientFactoryForTest(
-    async (_start, _auth, _agent, _config, options) =>
+    async (_start, _auth, _agent, _config, clientOptions) =>
       await sharedClientModule.getLeasedSharedCodexAppServerClient({
-        ...options,
+        ...clientOptions,
         startOptions: {
           transport: "stdio",
           command: process.execPath,

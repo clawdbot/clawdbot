@@ -141,10 +141,10 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       "configRequirements/read",
       "thread/start",
     ]);
-    const [method, payload] =
+    const [startMethod, payload] =
       request.mock.calls.find(([method]) => method === "thread/start") ?? [];
-    if (method !== "thread/start") {
-      throw new Error(`expected thread/start request, got ${method}`);
+    if (startMethod !== "thread/start") {
+      throw new Error(`expected thread/start request, got ${startMethod}`);
     }
     const startPayload = payload as CodexThreadStartParams | undefined;
     expect(startPayload?.dynamicTools).toStrictEqual([

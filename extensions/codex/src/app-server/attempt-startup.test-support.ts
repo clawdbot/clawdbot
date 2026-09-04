@@ -17,6 +17,17 @@ import { createClientHarness, createCodexTestModel } from "./test-support.js";
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
 export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
+export function createAttemptClientHarness(): AttemptClientHarness {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "configRequirements/read") {
+        send({ id: request.id, result: { requirements: null } });
+      }
+    },
+  });
+}
+
 export function readHarnessMessages(
   writes: string[],
 ): Array<{ id?: number; method?: string; params?: unknown }> {
