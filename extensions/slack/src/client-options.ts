@@ -145,15 +145,15 @@ export function resolveSlackWriteClientOptions(
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
   // A caller's nonzero SDK retry policy already owns rate-limit recovery.
   if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
-    const fetch = resolved.fetch ?? buildSlackFetch(dispatcher);
-    if (fetch) {
+    const slackFetch = resolved.fetch ?? buildSlackFetch(dispatcher);
+    if (slackFetch) {
       // Replay the SDK's serialized body, not chatStream.append(), which retains
       // its buffer after rejection. Only an HTTP 429 proves this write was refused.
       resolved.fetch = (input, init) =>
         retryAsync(
           async () => {
             init?.signal?.throwIfAborted();
-            const response = await fetch(input, init);
+            const response = await slackFetch(input, init);
             if (response.status !== 429) {
               return response;
             }
