@@ -96,6 +96,21 @@ describe("server chat stream text merge", () => {
     expect(result.endsWith("bbbb")).toBe(true);
   });
 
+  it("does not resurrect a discarded scoped prefix after a shorter correction", () => {
+    const scope = { prefix: "x🚀keep" };
+    const snapshot = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 5);
+    const capped = resolveMergedAssistantText({
+      previousText: scope.prefix,
+      nextText: snapshot,
+      nextDelta: snapshot,
+      scope,
+    });
+    expect(capped).toBe(`keep${snapshot}`);
+    expect(
+      resolveMergedAssistantText({ previousText: capped, nextText: "!", nextDelta: "", scope }),
+    ).toBe("keep!");
+  });
+
   it("does not start the capped tail with the low half of a surrogate pair", () => {
     const safeTail = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 1);
     const result = resolveMergedAssistantText({

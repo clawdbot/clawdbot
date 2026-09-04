@@ -2580,6 +2580,59 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it.each([
+    { itemId: "message-2", text: "Hello", replace: false, expected: "HelloHello" },
+    { itemId: "message-2", text: "Hi", replace: true, expected: "Hi" },
+    { itemId: "message-1", text: "Hi", replace: true, expected: "EarlierHi" },
+    { itemId: "message-1", text: "", replace: true, expected: "Earlier" },
+  ])(
+    "keeps item ownership across $itemId correction $text",
+    ({ itemId, text, replace, expected }) => {
+      const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+        now: 11_800,
+      });
+      registerNamedChatRun(chatRunState, "item-correction");
+      if (itemId === "message-1") {
+        emitAgentEvent(
+          handler,
+          "run-item-correction",
+          "assistant",
+          {
+            itemId: "earlier",
+            text: "Earlier",
+          },
+          { seq: 1 },
+        );
+      }
+      emitAgentEvent(
+        handler,
+        "run-item-correction",
+        "assistant",
+        {
+          itemId: "message-1",
+          text: "Hello",
+          delta: "Hello",
+        },
+        { seq: itemId === "message-1" ? 2 : 1 },
+      );
+      emitAgentEvent(
+        handler,
+        "run-item-correction",
+        "assistant",
+        { itemId, text, replace },
+        {
+          seq: itemId === "message-1" ? 3 : 2,
+        },
+      );
+      emitLifecycleEnd(handler, "run-item-correction", itemId === "message-1" ? 4 : 3);
+
+      const final = { state: "final", message: { content: [{ type: "text", text: expected }] } };
+      expect(chatBroadcastCalls(broadcast).at(-1)?.[1]).toMatchObject(final);
+      expect(sessionChatCalls(nodeSendToSession).at(-1)?.[2]).toMatchObject(final);
+      nowSpy?.mockRestore();
+    },
+  );
+
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
     const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
     registerNamedChatRun(chatRunState, "cleanup");
