@@ -193,6 +193,7 @@ export async function processResponsesStream<TApi extends Api>(
       appendResponsesPendingTextDelta(slot, delta, materializeDeferredTextSlot);
     } else if (slot.block && slot.contentIndex !== undefined) {
       slot.block.text += delta;
+      // llm-core makes text_delta.partial optional to avoid retaining a full snapshot per token.
       stream.push({
         type: "text_delta",
         contentIndex: slot.contentIndex,
