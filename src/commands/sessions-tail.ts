@@ -217,11 +217,11 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-async function followSelections(
+function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<void> {
+): Promise<"SIGINT" | "SIGTERM"> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -230,7 +230,7 @@ async function followSelections(
     };
   });
 
-  await new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -246,14 +246,16 @@ async function followSelections(
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = () => {
+    const stop = (signal: "SIGINT" | "SIGTERM") => {
       clearInterval(interval);
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
+      process.off("SIGINT", stopSigint);
+      process.off("SIGTERM", stopSigterm);
+      resolve(signal);
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopSigint = () => stop("SIGINT");
+    const stopSigterm = () => stop("SIGTERM");
+    process.once("SIGINT", stopSigint);
+    process.once("SIGTERM", stopSigterm);
   });
 }
 
@@ -319,6 +321,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followSnapshots);
+    const signal = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(signal === "SIGINT" ? 130 : 143);
   }
 }

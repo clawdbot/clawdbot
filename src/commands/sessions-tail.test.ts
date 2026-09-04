@@ -364,7 +364,10 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("stale ok");
   });
 
-  it("continues following when SQLite trajectory rows are appended", async () => {
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
     await writeSessionEntry();
@@ -399,13 +402,15 @@ describe("sessionsTailCommand", () => {
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit("SIGTERM", "SIGTERM");
+      process.emit(signal, signal);
       await run;
     }
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("sqlite ok");
+    expect(runtime.exit).toHaveBeenCalledOnce();
+    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
