@@ -70,20 +70,21 @@ function buildSpawnedAcpBindingMetadata(params: {
   accountId: string;
   sessionKey: string;
   agentId: string;
+  displayAgentId: string;
   label: string;
   senderId: string;
   sessionMeta?: SessionAcpMeta;
 }): Record<string, unknown> {
   return {
     threadName: resolveThreadBindingThreadName({
-      agentId: params.agentId,
+      agentId: params.displayAgentId,
       label: params.label,
     }),
     agentId: params.agentId,
     label: params.label,
     boundBy: params.senderId || "unknown",
     introText: resolveThreadBindingIntroText({
-      agentId: params.agentId,
+      agentId: params.displayAgentId,
       label: params.label,
       idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
         cfg: params.cfg,
@@ -114,6 +115,7 @@ export async function bindSpawnedAcpSession(params: {
   commandParams: HandleCommandsParams;
   sessionKey: string;
   agentId: string;
+  displayAgentId: string;
   label?: string;
   mode: "conversation" | "thread-here" | "thread-auto";
   sessionMeta?: SessionAcpMeta;
@@ -217,7 +219,8 @@ export async function bindSpawnedAcpSession(params: {
         accountId: policy.accountId,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        label: params.label || params.agentId,
+        displayAgentId: params.displayAgentId,
+        label: params.label || params.displayAgentId,
         senderId,
         sessionMeta: params.sessionMeta,
       }),

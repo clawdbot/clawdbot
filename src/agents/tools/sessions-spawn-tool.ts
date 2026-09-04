@@ -195,7 +195,7 @@ function createSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository. Otherwise, native subagents use the target agent workspace; ACP uses a configured alias workspace or the requester workspace for an unconfigured harness.",
       }),
     ),
     ...(params.threadAvailable

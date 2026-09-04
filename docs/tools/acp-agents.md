@@ -287,7 +287,7 @@ Examples:
     - `--bind here` and `--thread ...` are mutually exclusive.
     - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
     - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` - not `--bind here`.
-    - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
+    - Without `--cwd`, OpenClaw inherits the configured ACP alias workspace when one owns the session; an unconfigured external harness inherits the requester workspace. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
     - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/session` also stay local whenever command handling is enabled for that surface.
 
   </Accordion>
@@ -476,7 +476,7 @@ its current reasoning effort or conversation.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
 - Runtime bindings created by thread-bound spawns still apply where present.
-- For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
+- Without an explicit `cwd`, configured ACP aliases inherit their owner workspace; unconfigured external harnesses inherit the requester workspace.
 - Missing inherited workspace paths fall back to the backend default cwd; non-missing access failures surface as spawn errors.
 
 ## Start ACP sessions
@@ -550,9 +550,9 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="cwd" type="string">
   Requested runtime working directory (validated by backend/runtime policy).
-  If omitted, ACP spawn inherits the target agent workspace when configured;
-  missing inherited paths fall back to backend defaults, while real access
-  errors are returned.
+  If omitted, ACP spawn inherits a configured alias owner workspace or the
+  requester workspace for an unconfigured external harness. Missing inherited
+  paths fall back to backend defaults, while real access errors are returned.
 </ParamField>
 <ParamField path="label" type="string">
   Operator-facing label used in session/banner text.
@@ -794,11 +794,21 @@ If no target resolves, OpenClaw returns a clear error
 
 ### Session owner and harness
 
-The OpenClaw agent that owns a session is separate from the external harness
-selected by ACP. For example, a session owned by `work` can run the `claude`
-harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
-name. Configured bindings use their OpenClaw agent owner and their configured
-ACP harness independently. Free ACP spawns keep their existing harness namespace.
+Three identities can participate in an ACP spawn:
+
+- **Requested alias**: the OpenClaw agent id passed to `/acp spawn` or
+  `sessions_spawn`, such as `reviewer`.
+- **External harness**: the ACP implementation selected by
+  `agents.entries.*.runtime.acp.agent`, such as `codex` or `claude`.
+- **Session owner**: the OpenClaw agent whose session key, store, workspace,
+  account binding, and lifecycle controls persist the session.
+
+A configured ACP alias is the session owner while its `runtime.acp.agent` value
+is only the external dispatch harness. For example, `reviewer` can own
+`agent:reviewer:acp:<uuid>` while running the `codex` harness. An unconfigured
+external harness has no OpenClaw alias to own it, so the requester owns the
+session. Owner-aware manager calls carry `agentId`; `agent` remains the harness
+name.
 
 Bare keys such as `global` require an explicit owner when ownership is explicit.
 ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes
@@ -812,7 +822,7 @@ sessions must be upgraded before those sessions can run.
 | Command              | What it does                                              | Example                                                       |
 | -------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
 | `/acp spawn`         | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
-| `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
+| `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:<owner>:acp:<uuid>`                        |
 | `/acp steer`         | Send steer instruction to running session.                | `/acp steer --session support inbox prioritize failing tests` |
 | `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
 | `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
