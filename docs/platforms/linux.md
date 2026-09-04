@@ -290,6 +290,16 @@ openclaw doctor
 service guidance, including the **system**-level unit variant for shared or
 always-on hosts, lives in the [Gateway runbook](/gateway#supervision-and-service-lifecycle).
 
+Managed units escape literal paths automatically. In a custom unit, do not add
+shell quotes around `WorkingDirectory=` or `EnvironmentFile=` paths, even when
+they contain spaces. Use a separate `EnvironmentFile=` directive for each absolute
+path; systemd ignores relative paths. Write `%%` for a literal percent sign.
+`EnvironmentFile=` also accepts glob patterns, so escape literal glob characters
+with a backslash. Managed working-directory paths must not end in spaces or
+tabs: systemd 255 loses that trailing whitespace when starting the process.
+OpenClaw rejects those paths rather than risk using a different directory;
+choose a path without trailing whitespace.
+
 Write a unit by hand only for a custom setup. Minimal user-unit example
 (`~/.config/systemd/user/openclaw-gateway[-<profile>].service`):
 
