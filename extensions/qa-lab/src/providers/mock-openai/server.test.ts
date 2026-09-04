@@ -3435,7 +3435,7 @@ Update and merge these partial structured summaries.`,
         ].join("\n"),
         input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
       });
-    const settleParent = async (
+    const respondFromParent = async (
       runtimeSessionId: string,
       childSessionKey: string,
       callId: string,
@@ -3473,13 +3473,13 @@ Update and merge these partial structured summaries.`,
       })
       .toBe(2);
 
-    await settleParent("qa-terminal-parent-2", secondChildSessionKey, "call_spawn_2");
+    await respondFromParent("qa-terminal-parent-2", secondChildSessionKey, "call_spawn_2");
     const secondChild = await (await expectOk(secondChildResponse)).json();
     expect(outputText(secondChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
     expect(secondChildSettled).toBe(true);
     expect(firstChildSettled).toBe(false);
 
-    await settleParent("qa-terminal-parent-1", firstChildSessionKey, "call_spawn_1");
+    await respondFromParent("qa-terminal-parent-1", firstChildSessionKey, "call_spawn_1");
     const firstChild = await (await expectOk(firstChildResponse)).json();
     expect(outputText(firstChild)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   });
@@ -3680,7 +3680,7 @@ Update and merge these partial structured summaries.`,
   });
 
   it.each(["visible", "silent", "fallback", "restart", "empty"])(
-    "ends the %s parent turn before direct terminal delivery",
+    "keeps the %s parent silent when no acknowledgement was requested",
     async (terminalCase) => {
       const server = await startMockServer();
       const prompt = `Subagent terminal reply QA check: ${terminalCase}.`;
@@ -3700,24 +3700,33 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it("acknowledges the empty worker before its intentional non-delivery", async () => {
-    const server = await startMockServer();
-    const payload = await expectNonStreamingResponsesJson(server, {
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
-      input: [
-        makeUserInput(
-          "Subagent terminal reply QA check: empty. Reply to the requester after spawning.",
-        ),
-        makeToolOutputWithCallId(
-          "call_mock_sessions_spawn_1",
-          JSON.stringify({ status: "accepted", runId: "run-empty" }),
-        ),
-      ],
-    });
+  it.each([
+    ["empty", "QA-SUBAGENT-EMPTY-PARENT-ACK"],
+    ["visible", "QA-SUBAGENT-PARENT-ACK"],
+    ["silent", "QA-SUBAGENT-PARENT-ACK"],
+    ["fallback", "QA-SUBAGENT-PARENT-ACK"],
+    ["restart", "QA-SUBAGENT-PARENT-ACK"],
+  ])(
+    "acknowledges the %s worker when the parent explicitly requests it",
+    async (terminalCase, expected) => {
+      const server = await startMockServer();
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+        input: [
+          makeUserInput(
+            `Subagent terminal reply QA check: ${terminalCase}. Reply to the requester after spawning.`,
+          ),
+          makeToolOutputWithCallId(
+            "call_mock_sessions_spawn_1",
+            JSON.stringify({ status: "accepted", runId: `run-${terminalCase}` }),
+          ),
+        ],
+      });
 
-    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(payload)).toBe("QA-SUBAGENT-EMPTY-PARENT-ACK");
-  });
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe(expected);
+    },
+  );
 
   it.each([
     ["visible", "NO_REPLY"],
