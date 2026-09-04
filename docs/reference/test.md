@@ -499,11 +499,17 @@ mocked proof retention guarantee.
 
 ### Screenshots during Chromium recordings
 
-During `recordVideo`, capture viewport PNGs with `page.screenshot({ path })`,
-without `clip` or `fullPage: true`. Keep the scenario's existing viewport,
-recording size, readiness waits, and animation options. If an element-only PNG
-is needed, crop the captured PNG outside the browser. A crop cannot recover
-missing content from an already-corrupted recording.
+The session-host command-state real-Gateway proof uses `page.screenshot({ path })`
+without `clip` or `fullPage: true`, keeping its existing viewport, recording size,
+waits, and animation options. This path was verified on Linux with Playwright
+1.62.1 and full Chrome for Testing 151.0.7922.34.
+
+Other recording owners have not been migrated or certified by this proof; some
+still use locator or full-page screenshots. This is not a suite-wide capture
+policy. Verify each owner's screenshot content and finalized video before
+changing its capture mode. When using the verified viewport path, crop any
+element-only PNG outside the browser. Cropping cannot recover missing content
+from an already-corrupted recording.
 
 In a macOS arm64 reproduction with Playwright 1.62.1 and its bundled full Chrome
 for Testing 151.0.7922.34, `locator.screenshot()` and
