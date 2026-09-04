@@ -22,9 +22,9 @@ from pathlib import Path
 root, work = map(Path, sys.argv[1:])
 for name, (source, dark_fill) in {
     "paper": ("Icon.icon", {"linear-gradient": ["srgb:0.19200,0.19200,0.19200,1.00000", "srgb:0.07800,0.07800,0.07800,1.00000"]}),
+    "heritage": ("AppIconDesigns/Heritage.icon", {"solid": "srgb:0.13333,0.13333,0.13333,1.00000"}),
+    "clawmark": ("AppIconDesigns/Clawmark.icon", {"solid": "srgb:0.10196,0.10980,0.12157,1.00000"}),
     "origami": ("AppIconDesigns/Origami.icon", {"solid": "srgb:0.07451,0.12549,0.20000,1.00000"}),
-    "arcade": ("AppIconDesigns/Arcade.icon", {"solid": "srgb:0.11765,0.08627,0.18039,1.00000"}),
-    "orbit": ("AppIconDesigns/Orbit.icon", {"solid": "srgb:0.03137,0.12549,0.15686,1.00000"}),
 }.items():
     for appearance in ("light", "dark"):
         icon = work / f"{name}-{appearance}" / "Icon.icon"
@@ -35,7 +35,7 @@ for name, (source, dark_fill) in {
             (icon / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
 PY
 
-for style in paper-light paper-dark origami-light origami-dark arcade-light arcade-dark orbit-light orbit-dark; do
+for style in paper-light paper-dark heritage-light heritage-dark clawmark-light clawmark-dark origami-light origami-dark; do
   mkdir "$WORK_DIR/$style/compiled"
   xcrun actool "$WORK_DIR/$style/Icon.icon" \
     --compile "$WORK_DIR/$style/compiled" \

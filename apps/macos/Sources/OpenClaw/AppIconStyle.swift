@@ -2,9 +2,9 @@ import AppKit
 
 enum AppIconStyle: String, CaseIterable, Identifiable {
     case paper
+    case heritage
+    case clawmark
     case origami
-    case arcade
-    case orbit
 
     var id: String {
         rawValue
@@ -12,10 +12,10 @@ enum AppIconStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .paper: String(localized: "Paper")
+        case .paper: String(localized: "Original")
+        case .heritage: String(localized: "Heritage")
+        case .clawmark: String(localized: "Clawmark")
         case .origami: String(localized: "Origami")
-        case .arcade: String(localized: "Arcade")
-        case .orbit: String(localized: "Orbit")
         }
     }
 
@@ -65,6 +65,6 @@ enum AppIconArtwork {
     }()
 
     static func image(for style: AppIconStyle, appearance: AppIconAppearance) -> NSImage? {
-        images[style.resourceName(for: appearance)]
+        self.images[style.resourceName(for: appearance)]
     }
 }

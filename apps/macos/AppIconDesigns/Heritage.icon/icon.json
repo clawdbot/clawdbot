@@ -1,15 +1,15 @@
 {
   "fill": {
-    "solid": "extended-srgb:0.96078,0.93333,0.84706,1.00000"
+    "solid": "extended-srgb:0.98039,0.95686,0.90980,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
           "image-name": "molty.svg",
-          "name": "Arcade",
+          "name": "Heritage",
           "position": {
-            "scale": 0.86,
+            "scale": 0.98,
             "translation-in-points": [
               0,
               0

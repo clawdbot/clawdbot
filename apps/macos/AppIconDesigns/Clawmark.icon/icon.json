@@ -1,15 +1,15 @@
 {
   "fill": {
-    "solid": "extended-srgb:0.87843,0.96078,0.94902,1.00000"
+    "solid": "extended-srgb:0.96078,0.96863,0.97647,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
           "image-name": "molty.svg",
-          "name": "Orbit",
+          "name": "Clawmark",
           "position": {
-            "scale": 0.86,
+            "scale": 0.96,
             "translation-in-points": [
               0,
               0

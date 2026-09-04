@@ -18,7 +18,7 @@ struct AppIconPicker: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(
-                    "Paper uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.")
+                    "Original uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -27,7 +27,7 @@ struct AppIconTests {
         #expect(try #require(light.tiffRepresentation) != #require(dark.tiffRepresentation))
     }
 
-    @Test func `only Paper delegates to native icon styling`() {
+    @Test func `only Original delegates to native icon styling`() {
         for style in AppIconStyle.allCases {
             if #available(macOS 26, *) {
                 #expect(style.usesSystemIcon == (style == .paper))
