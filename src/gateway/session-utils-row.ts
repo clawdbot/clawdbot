@@ -534,7 +534,9 @@ export function buildGatewaySessionRow(params: {
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
-    hasActiveSubagentDescendantRun: activeSubagentDescendantCount > 0 ? true : undefined,
+    // Emit an explicit false so clients can distinguish a current Gateway with
+    // no live descendants from a legacy Gateway that does not expose this fact.
+    hasActiveSubagentDescendantRun: activeSubagentDescendantCount > 0,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,

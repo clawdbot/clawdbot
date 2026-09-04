@@ -1301,7 +1301,7 @@ describe("session list subagent metadata", () => {
     expect(parent?.hasActiveSubagentDescendantRun).toBe(true);
     expect(
       result.sessions.find((session) => session.key === childKey)?.hasActiveSubagentDescendantRun,
-    ).toBeUndefined();
+    ).toBe(false);
   });
 
   test("falls back to persisted subagent timing after run archival", async () => {

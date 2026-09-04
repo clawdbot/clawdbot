@@ -500,9 +500,13 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
-        self.normalized(session.sessionId) != nil &&
+        // Current Gateways emit the descendant-only fact explicitly. Older
+        // Gateways expose only the combined subagent activity bit, so retain
+        // that conservative veto until the new fact is present.
+        let hasActiveDescendants = session.hasActiveSubagentDescendantRun ?? session.hasActiveSubagentRun
+        return self.normalized(session.sessionId) != nil &&
             self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            session.hasActiveSubagentDescendantRun != true
+            hasActiveDescendants != true
     }
 
     public static func isSessionInActiveAgentScope(

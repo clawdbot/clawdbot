@@ -584,6 +584,13 @@ struct ChatSessionSidebarModelTests {
             self.entry(
                 key: "agent:main:active-subagent",
                 sessionId: "session-active-subagent",
+                hasActiveSubagentRun: true,
+                hasActiveSubagentDescendantRun: false),
+            mainSessionKey: "agent:main:main"))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(
+            self.entry(
+                key: "agent:main:legacy-active-subagent",
+                sessionId: "session-legacy-active-subagent",
                 hasActiveSubagentRun: true),
             mainSessionKey: "agent:main:main"))
         #expect(!ChatSessionSidebarModel.canArchiveSession(
