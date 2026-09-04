@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { prepareCurrentGitHubPublicationIdentity } from "../github-publication-availability.js";
+import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
@@ -91,6 +92,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           errorShape(
             ErrorCodes.UNAVAILABLE,
             error instanceof Error ? error.message : "GitHub publication request failed",
+            error instanceof GitHubPublicationKnownFailure &&
+              error.rejection?.idempotencyKey === params.idempotencyKey
+              ? { details: error.rejection }
+              : undefined,
           ),
         );
       }

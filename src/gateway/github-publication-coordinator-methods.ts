@@ -217,10 +217,22 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       input.assertCurrent?.();
       const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
       input.assertCurrent?.();
-      assertExpectedSharedGitHubPublisher(expected, {
-        source: identity.source,
-        ...identity.account,
-      });
+      assertExpectedSharedGitHubPublisher(
+        expected,
+        { source: identity.source, ...identity.account },
+        existing
+          ? undefined
+          : {
+              idempotencyKey: input.idempotencyKey,
+              hasRequest: () =>
+                Boolean(
+                  readGitHubPublicationRequest(database, {
+                    sessionId,
+                    idempotencyKey: input.idempotencyKey,
+                  }),
+                ),
+            },
+      );
       const insertSessionRequest = (snapshot?: {
         sourceHeadCommit: string;
         sourceIndexTree: string;
