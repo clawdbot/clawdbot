@@ -370,6 +370,8 @@ describe("sessionsTailCommand", () => {
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
     appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
       makeEvent({
@@ -411,11 +413,15 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("sqlite ok");
     expect(runtime.exit).toHaveBeenCalledOnce();
     expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
     await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
 
@@ -435,7 +441,9 @@ describe("sessionsTailCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual([[1]]);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
   it.each([

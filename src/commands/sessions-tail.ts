@@ -44,6 +44,7 @@ type TrajectorySnapshot = {
   events: TrajectoryEvent[];
   maxStorageSeq: number;
 };
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -221,7 +222,7 @@ function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
-): Promise<"SIGINT" | "SIGTERM"> {
+): Promise<FollowOutcome> {
   const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
     return {
@@ -231,6 +232,7 @@ function followSelections(
   });
 
   return new Promise((resolve) => {
+    let finished = false;
     const interval = setInterval(() => {
       for (const state of states) {
         try {
@@ -241,19 +243,22 @@ function followSelections(
               error,
             )}`,
           );
-          runtime.exit(1);
+          return finish("ERROR");
         }
       }
     }, FOLLOW_INTERVAL_MS);
 
-    const stop = (signal: "SIGINT" | "SIGTERM") => {
-      clearInterval(interval);
-      process.off("SIGINT", stopSigint);
-      process.off("SIGTERM", stopSigterm);
-      resolve(signal);
+    const finish = (outcome: FollowOutcome) => {
+      if (!finished) {
+        finished = true;
+        clearInterval(interval);
+        process.off("SIGINT", stopSigint);
+        process.off("SIGTERM", stopSigterm);
+        resolve(outcome);
+      }
     };
-    const stopSigint = () => stop("SIGINT");
-    const stopSigterm = () => stop("SIGTERM");
+    const stopSigint = () => finish("SIGINT");
+    const stopSigterm = () => finish("SIGTERM");
     process.once("SIGINT", stopSigint);
     process.once("SIGTERM", stopSigterm);
   });
@@ -321,7 +326,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    const signal = await followSelections(selected, runtime, followSnapshots);
-    runtime.exit(signal === "SIGINT" ? 130 : 143);
+    const outcome = await followSelections(selected, runtime, followSnapshots);
+    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
   }
 }
