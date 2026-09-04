@@ -135,7 +135,9 @@ describe("Control UI admin automation management tool", () => {
 
   it("permits an admin to edit an existing command automation", async () => {
     await withAdminTool("unknown", async ({ tool, calls, resolveCreator }) => {
-      const patch = { payload: { kind: "command", argv: ["printf", "synthetic-proof"] } };
+      const patch = {
+        payload: { kind: "command", argv: ["printf", "synthetic-proof"], timeoutSeconds: 30 },
+      };
       await expect(
         tool.execute("command-update", {
           action: "update",
