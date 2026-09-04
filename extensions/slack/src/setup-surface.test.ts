@@ -11,7 +11,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackSetupWizardBase, slackSetupContract } from "./setup-core.js";
-import { buildSlackSetupLines } from "./setup-shared.js";
+import { buildSlackManifest, buildSlackSetupLines } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: async ({ cfg }) => cfg,
@@ -188,6 +188,16 @@ describe("slackSetupWizard.prepare", () => {
         },
       },
     });
+  });
+
+  it("keeps canvas scopes out of the default manifest (opt-in consent)", () => {
+    // The `canvas` action is disabled by default, so the default setup manifest
+    // must not request `canvases:read`/`canvases:write` — operators add those
+    // scopes and reinstall only when activating the canvas action.
+    const manifest = JSON.parse(buildSlackManifest());
+    const botScopes = manifest.oauth_config.scopes.bot as string[];
+    expect(botScopes).not.toContain("canvases:read");
+    expect(botScopes).not.toContain("canvases:write");
   });
 
   it("collects only the user token and Socket Mode transport token for user identity", async () => {

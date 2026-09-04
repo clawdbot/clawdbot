@@ -131,6 +131,7 @@ const SlackAccountSchema = z
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
         emojiList: z.boolean().optional(),
+        canvas: z.boolean().optional(),
       })
       .strict()
       .optional(),

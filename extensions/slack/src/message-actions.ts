@@ -58,6 +58,14 @@ export function listSlackMessageActions(
     actions.add("unpin");
     actions.add("list-pins");
   }
+  // `canvas` is a new Slack surface: existing installs gained a valid token
+  // before `canvases:read`/`canvases:write` existed, so default-off avoids
+  // advertising a model-callable action that cannot succeed until the app is
+  // reinstalled with the scopes. Operators opt in with `actions.canvas: true`
+  // after reinstalling — mirroring the docs reinstall guidance.
+  if (isActionEnabled("canvas", false)) {
+    actions.add("canvas");
+  }
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }

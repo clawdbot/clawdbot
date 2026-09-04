@@ -8,6 +8,7 @@ import {
   jsonResult,
   readPositiveIntegerParam,
   readReactionParams,
+  readStringArrayParam,
   readStringParam,
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -22,7 +23,17 @@ import {
   resolveSlackAutoThreadId,
   SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
 } from "./action-threading.js";
+import {
+  assertCanvasId,
+  type SlackCanvasChange,
+  type SlackCanvasDocumentContent,
+} from "./actions-canvas.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import {
+  forgetSlackCanvasBinding,
+  recordSlackCanvasBinding,
+  resolveSlackCanvasBindingChannel,
+} from "./canvas-binding.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackChannelIdCandidates } from "./group-policy.js";
@@ -53,6 +64,12 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const canvasActions = new Set([
+  "createCanvas",
+  "editCanvas",
+  "deleteCanvas",
+  "lookupCanvasSections",
+]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.js");
@@ -73,13 +90,17 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
 }
 
 export const slackActionRuntime = {
+  createSlackCanvas: createLazySlackAction("createSlackCanvas"),
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
+  deleteSlackCanvas: createLazySlackAction("deleteSlackCanvas"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
+  editSlackCanvas: createLazySlackAction("editSlackCanvas"),
   getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
   listSlackPins: createLazySlackAction("listSlackPins"),
   listSlackReactions: createLazySlackAction("listSlackReactions"),
+  lookupSlackCanvasSections: createLazySlackAction("lookupSlackCanvasSections"),
   openSlackConversation: createLazySlackAction("openSlackConversation"),
   parseSlackBlocksInput,
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
@@ -152,6 +173,93 @@ function resolveThreadTsFromContext(
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
   return slackActionRuntime.parseSlackBlocksInput(params.blocks);
+}
+
+// Canvas tool params arrive as structured objects (documentContent, changes)
+// rather than strings, so they bypass readStringParam. Accept either camelCase
+// or snake_case keys to match the wire shape the Slack API expects.
+function readRawObjectParam(params: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
+  return Object.hasOwn(params, snakeKey) ? params[snakeKey] : undefined;
+}
+
+function parseCanvasDocumentContent(raw: unknown): SlackCanvasDocumentContent | undefined {
+  if (raw == null) {
+    return undefined;
+  }
+  // SAFETY: params arrive as `unknown`; each field is narrowed before use (type === "markdown", typeof markdown === "string").
+  const record = raw as { type?: unknown; markdown?: unknown };
+  if (record.type !== "markdown" || typeof record.markdown !== "string") {
+    throw new Error(
+      'Slack canvas document content must be { type: "markdown", markdown: string }.',
+    );
+  }
+  return { type: "markdown", markdown: record.markdown };
+}
+
+function readCanvasDocumentContentParam(
+  params: Record<string, unknown>,
+): SlackCanvasDocumentContent | undefined {
+  return parseCanvasDocumentContent(readRawObjectParam(params, "documentContent"));
+}
+
+function readCanvasChangesParam(params: Record<string, unknown>): SlackCanvasChange[] {
+  const raw = readRawObjectParam(params, "changes");
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("Slack canvas edit requires a non-empty changes array.");
+  }
+  return raw.map((entry, index) => {
+    // SAFETY: each array element is `unknown`; keys are read via typeof/in guards below before any field is used as a typed canvas change.
+    const change = entry as Record<string, unknown>;
+    const operation = change.operation;
+    if (typeof operation !== "string") {
+      throw new Error(`Slack canvas change at index ${index} is missing operation.`);
+    }
+    const sectionId =
+      typeof change.sectionId === "string"
+        ? change.sectionId
+        : typeof change.section_id === "string"
+          ? change.section_id
+          : undefined;
+    if (operation === "rename") {
+      const titleContent = parseCanvasDocumentContent(readRawObjectParam(change, "titleContent"));
+      if (!titleContent) {
+        throw new Error(`Slack canvas rename at index ${index} requires titleContent.`);
+      }
+      return { operation: "rename", titleContent } satisfies SlackCanvasChange;
+    }
+    if (operation === "delete") {
+      if (!sectionId) {
+        throw new Error(`Slack canvas delete at index ${index} requires sectionId.`);
+      }
+      return { operation: "delete", sectionId } satisfies SlackCanvasChange;
+    }
+    const documentContent = readCanvasDocumentContentParam(change);
+    if (!documentContent) {
+      throw new Error(`Slack canvas ${operation} at index ${index} requires documentContent.`);
+    }
+    if (operation === "insert_at_start" || operation === "insert_at_end") {
+      return { operation, documentContent } satisfies SlackCanvasChange;
+    }
+    if (operation === "insert_after" || operation === "insert_before") {
+      if (!sectionId) {
+        throw new Error(`Slack canvas ${operation} at index ${index} requires sectionId.`);
+      }
+      return { operation, sectionId, documentContent } satisfies SlackCanvasChange;
+    }
+    if (operation === "replace") {
+      if (sectionId) {
+        return { operation, documentContent, sectionId } satisfies SlackCanvasChange;
+      }
+      return { operation, documentContent } satisfies SlackCanvasChange;
+    }
+    throw new Error(
+      `Slack canvas change at index ${index} has unsupported operation: ${operation}.`,
+    );
+  });
 }
 
 function isImageContentType(value: string | undefined): boolean {
@@ -1038,6 +1146,122 @@ export async function handleSlackAction(
           : { name, identifier: name },
       );
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (canvasActions.has(action)) {
+    // Default-off: existing installs lack the `canvases:read`/`canvases:write`
+    // scopes until reinstalled, so a model-callable canvas action would fail at
+    // the Slack API. Operators opt in with `actions.canvas: true` after
+    // reinstalling. See message-actions.ts for the matching advertisement gate.
+    if (!isActionEnabled("canvas", false)) {
+      throw new Error("Slack canvas actions are disabled.");
+    }
+    // Canvas operations target a canvas document (canvas_id), but authorization
+    // is the owning channel: reusing the channel read-target gate ensures the
+    // agent may only touch canvases attached to channels it is allowed to read.
+    const target = resolveChannelTarget();
+    const { channelId } = target;
+    const readOpts = buildActionOpts("read", target.teamId);
+    const writeOpts = buildActionOpts("write", target.teamId);
+    if (action === "createCanvas") {
+      const title = readStringParam(params, "title");
+      const documentContent = readCanvasDocumentContentParam(params);
+      await assertReadTargetAllowed(target);
+      const canvas = await slackActionRuntime.createSlackCanvas(channelId, {
+        ...writeOpts,
+        ...(title ? { title } : {}),
+        ...(documentContent ? { documentContent } : {}),
+      });
+      // Record the canvas->channel binding so a later edit/delete/lookup can
+      // re-check the owning channel even though canvases.* sends only canvas_id.
+      // The binding is mandatory: without it every follow-up operation rejects
+      // the canvas as unbound, so a persistence failure must not be swallowed —
+      // the create reports failure and the orphan canvas is cleaned up below.
+      try {
+        // Bind to the resolved account (not the raw optional request `accountId`,
+        // which is undefined for the default account). The binding is the
+        // authorization authority for later edit/delete/sections, which send only
+        // canvas_id, so it must name the exact account that owns the document —
+        // otherwise a second configured account that can address the same channel
+        // could reuse this binding through its own credential.
+        await recordSlackCanvasBinding(canvas.canvasId, {
+          channelId,
+          teamId: target.teamId,
+          accountId: account.accountId,
+          recordedAt: Date.now(),
+        });
+      } catch (bindingError) {
+        // The canvas was created at Slack but cannot be bound for follow-up
+        // operations; delete it so a retry does not accumulate orphan canvases.
+        // Cleanup is best-effort: a delete failure does not mask the binding
+        // error that is the real reason the create is unusable.
+        await slackActionRuntime.deleteSlackCanvas(canvas.canvasId, writeOpts).catch(() => {});
+        throw bindingError;
+      }
+      return jsonResult({ ok: true, canvas });
+    }
+    // edit/delete/lookup send only canvas_id to Slack (no channel_id), so the
+    // caller-named channel is not what Slack binds the canvas to. OpenClaw
+    // recorded a `canvas_id -> channel` binding at create time; re-check the
+    // bound channel against the allowlist before any HTTP call. A canvas with no
+    // binding (created outside OpenClaw, or before this binding existed) is
+    // rejected: OpenClaw has no authoritative way to bind an external canvas_id
+    // to an allowed channel, and falling back to the caller-named channel would
+    // let an agent proxy a denied channel's canvas through an allowed target.
+    const canvasId = readStringParam(params, "canvasId", { required: true });
+    assertCanvasId(canvasId);
+    const binding = await resolveSlackCanvasBindingChannel(canvasId);
+    if (!binding) {
+      throw new Error(
+        `Slack canvas "${canvasId}" is not bound to an authorized channel. Only canvases created through the canvas action can be edited, deleted, or inspected.`,
+      );
+    }
+    // The canvas_id identifies the document, not the request's channel: an agent
+    // could otherwise name an allowed channel A while the canvas is actually
+    // bound to channel B (or a different workspace). Reject any binding that is
+    // not the exact conversation this request targets; the request's own
+    // context-gate already proved the agent may act in `target`, so this only
+    // forbids reaching a *different* conversation's canvas through a mismatched
+    // canvas_id. teamId is compared when both sides name one (slack canvases are
+    // workspace-scoped, so a cross-team match would never be legitimate).
+    if (
+      binding.channelId !== channelId ||
+      (binding.teamId !== undefined &&
+        target.teamId !== undefined &&
+        binding.teamId !== target.teamId) ||
+      // The binding also records the exact account that created the canvas; a
+      // second configured account that can address the same channel must not be
+      // able to act on the document through its own credential. Reject any
+      // binding whose account differs from the resolved account for this request.
+      (binding.accountId !== undefined && binding.accountId !== account.accountId)
+    ) {
+      throw new Error(
+        `Slack canvas "${canvasId}" is bound to a different conversation or Slack account than the one this request targets and cannot be acted on.`,
+      );
+    }
+    await assertReadTargetAllowed(target);
+    if (action === "editCanvas") {
+      const changes = readCanvasChangesParam(params);
+      await slackActionRuntime.editSlackCanvas(canvasId, changes, writeOpts);
+      return jsonResult({ ok: true });
+    }
+    if (action === "deleteCanvas") {
+      await slackActionRuntime.deleteSlackCanvas(canvasId, writeOpts);
+      await forgetSlackCanvasBinding(canvasId);
+      return jsonResult({ ok: true });
+    }
+    const sectionTypes = readStringArrayParam(params, "sectionTypes");
+    const containsText = readStringParam(params, "containsText");
+    const limit = readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    });
+    const result = await slackActionRuntime.lookupSlackCanvasSections(canvasId, {
+      ...readOpts,
+      ...(sectionTypes ? { sectionTypes } : {}),
+      ...(containsText ? { containsText } : {}),
+      ...(limit ? { limit } : {}),
+    });
+    return jsonResult({ ok: true, sections: result.sections });
   }
 
   throw new Error(`Unknown action: ${action}`);

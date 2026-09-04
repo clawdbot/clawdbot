@@ -44,6 +44,11 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-create",
   "thread-reply",
   "sticker",
+  // Canvas create/edit/delete mutate a document; the shared cross-context policy
+  // must bound them like other mutations (provider + within-provider), or an
+  // agent bound to another provider (or allowWithinProvider:false) could reach
+  // a Slack canvas through Slack's own channel read gate alone.
+  "canvas",
 ]);
 
 // Mutations are guarded above, but markers only apply to outbound payloads that

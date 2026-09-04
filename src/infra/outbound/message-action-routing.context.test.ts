@@ -337,6 +337,19 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
+      name: "blocks cross-provider canvas mutations by default",
+      action: "canvas" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "C12345678",
+        action: "createCanvas",
+        title: "Status",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
       name: "blocks same-provider cross-context when disabled",
       action: "send" as const,
       cfg: {

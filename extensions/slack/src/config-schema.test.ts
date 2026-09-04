@@ -598,4 +598,16 @@ describe("slack config schema", () => {
   it("rejects the retired thread requireExplicitMention runtime key", () => {
     expectSlackConfigIssue({ thread: { requireExplicitMention: true } }, "thread");
   });
+
+  it("accepts the opt-in canvas action flag", () => {
+    expectSlackConfigValid({ actions: { canvas: true } });
+    expectSlackConfigValid({ actions: { canvas: false } });
+    expectSlackConfigValid({ actions: { canvas: true, reactions: true } });
+    expectSlackConfigValid({ accounts: { ops: { actions: { canvas: true } } } });
+  });
+
+  it("rejects non-boolean canvas action flags", () => {
+    expectSlackConfigIssue({ actions: { canvas: "yes" } }, "actions.canvas");
+    expectSlackConfigIssue({ actions: { canvas: 1 } }, "actions.canvas");
+  });
 });
