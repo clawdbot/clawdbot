@@ -243,16 +243,26 @@ function finalizeCatalogAvailability(
   entries: ToolSearchCatalogEntry[],
   toolExecutionAllow?: readonly string[],
 ): ToolSearchCatalogEntry[] {
+  const orderedEntries = entries.toSorted((a, b) => a.id.localeCompare(b.id));
   // Client definitions win exact-name shadows, matching the guest projection.
-  const tools = entries
+  const tools = orderedEntries
     .toSorted((a, b) => Number(a.source === "client") - Number(b.source === "client"))
     .map((entry) => entry.tool);
   finalizeAgentToolAvailability(tools, { toolExecutionAllow });
-  return entries.map((entry) =>
-    entry.parameters === entry.tool.parameters && entry.description === entry.tool.description
-      ? entry
-      : { ...entry, parameters: entry.tool.parameters, description: entry.tool.description ?? "" },
-  );
+  // The array is a fresh copy, but its descriptors may belong to retained snapshots.
+  orderedEntries.forEach((entry, index) => {
+    if (
+      entry.parameters !== entry.tool.parameters ||
+      entry.description !== entry.tool.description
+    ) {
+      orderedEntries[index] = {
+        ...entry,
+        parameters: entry.tool.parameters,
+        description: entry.tool.description ?? "",
+      };
+    }
+  });
+  return orderedEntries;
 }
 
 function registerToolSearchCatalog(params: {
@@ -271,10 +281,7 @@ function registerToolSearchCatalog(params: {
     byId.set(entry.id, entry);
   }
   const next = {
-    entries: finalizeCatalogAvailability(
-      Array.from(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
-      toolExecutionAllow,
-    ),
+    entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     counterScope: prior?.counterScope ?? generateCounterScope(),
@@ -330,8 +337,12 @@ export function restrictToolSearchCatalog(params: {
   if (!current) {
     return 0;
   }
-  const entries = (params.baselineEntries ?? current.entries).filter((entry) =>
-    params.allowedToolNames.has(entry.name),
+  const metadata = catalogMetadata.get(current);
+  const entries = finalizeCatalogAvailability(
+    (params.baselineEntries ?? current.entries).filter((entry) =>
+      params.allowedToolNames.has(entry.name),
+    ),
+    metadata?.toolExecutionAllow,
   );
   if (
     entries.length === current.entries.length &&
@@ -339,8 +350,7 @@ export function restrictToolSearchCatalog(params: {
   ) {
     return entries.length;
   }
-  const metadata = catalogMetadata.get(current);
-  current.entries = finalizeCatalogAvailability(entries, metadata?.toolExecutionAllow);
+  current.entries = entries;
   catalogMetadata.set(current, {
     ...metadata,
     fingerprint: catalogEntriesFingerprint(current.entries),
@@ -451,7 +461,7 @@ export function applyToolCatalogCompaction(
   }
 
   const visible: AnyAgentTool[] = [];
-  const catalog: ToolSearchCatalogEntry[] = [];
+  let catalog: ToolSearchCatalogEntry[] = [];
   const shouldCatalog = (tool: AnyAgentTool) =>
     shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
   for (const tool of params.tools) {
@@ -470,6 +480,8 @@ export function applyToolCatalogCompaction(
     }
     visible.push(tool);
   }
+  // Callable bindings can change while descriptors stay equal; normalize before cache reuse.
+  catalog = finalizeCatalogAvailability(catalog, params.toolExecutionAllow);
   const existingCatalog = catalogRef.current;
   const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
   const metadata = existingCatalog && catalogMetadata.get(existingCatalog);

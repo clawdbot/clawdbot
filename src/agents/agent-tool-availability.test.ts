@@ -10,6 +10,13 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
+import {
+  applyToolSearchCatalog,
+  clearToolSearchCatalog,
+  createToolSearchCatalogRef,
+  createToolSearchTools,
+  restrictToolSearchCatalog,
+} from "./tool-search.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
@@ -80,6 +87,83 @@ describe("collector tool availability", () => {
         }),
         expect.anything(),
       );
+    },
+  );
+
+  it.each([
+    { boundary: "reuse", readerState: "same-object-denied" },
+    { boundary: "reuse", readerState: "denied-wrapper" },
+    { boundary: "reuse", readerState: "lookalike" },
+    { boundary: "restriction", readerState: "same-object-denied" },
+  ] as const)(
+    "revokes collection after $boundary with a $readerState reader and unchanged descriptors",
+    async ({ boundary, readerState }) => {
+      const catalogConfig = {
+        ...config,
+        tools: { toolSearch: { enabled: true, mode: "tools" as const } },
+      };
+      const catalogRef = createToolSearchCatalogRef();
+      const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
+      const tool = spawnTool();
+      const wait = wrapToolWithBeforeToolCallHook(reader());
+      const compact = (currentReader: typeof wait) =>
+        applyToolSearchCatalog({
+          tools: [...controls, tool, currentReader],
+          config: catalogConfig,
+          catalogRef,
+        });
+      try {
+        compact(wait);
+        const firstCatalog = catalogRef.current!;
+        const firstEntries = firstCatalog.entries;
+        const allowedToolNames = new Set(firstEntries.map((entry) => entry.name));
+        expect(tool.parameters).toHaveProperty("properties.collect");
+        if (boundary === "reuse") {
+          expect(compact(wait).catalogReused).toBe(true);
+        } else {
+          expect(restrictToolSearchCatalog({ catalogRef, allowedToolNames })).toBe(2);
+        }
+        expect(catalogRef.current).toBe(firstCatalog);
+        expect(catalogRef.current?.entries).toBe(firstEntries);
+        expect(tool.parameters).toHaveProperty("properties.collect");
+
+        const currentReader =
+          readerState === "lookalike"
+            ? { ...wait }
+            : readerState === "denied-wrapper"
+              ? markAgentToolExecutionUnavailable(
+                  copyAgentToolMetadata(wait, {
+                    ...wait,
+                    execute: vi.fn(wait.execute).mockRejectedValue(new Error("executor denied")),
+                  }),
+                )
+              : markAgentToolExecutionUnavailable(wait);
+        if (boundary === "reuse") {
+          compact(currentReader);
+        } else {
+          restrictToolSearchCatalog({ catalogRef, allowedToolNames });
+        }
+
+        // Exercise the real spawn guard before schema assertions can hide an admitted child.
+        await expect(
+          tool.execute("collect-after-revocation", { task: "inspect", collect: true }),
+        ).rejects.toThrow("Collector results are unavailable");
+        expect(spawn).not.toHaveBeenCalled();
+        expect(
+          firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
+        ).toHaveProperty("properties.collect");
+        const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
+        for (const schema of [tool.parameters, entry?.parameters]) {
+          expect(schema).toHaveProperty("properties.fastMode");
+          for (const field of ["collect", "outputSchema", "groupId"]) {
+            expect(schema).not.toHaveProperty(`properties.${field}`);
+          }
+        }
+        expect(tool.description).not.toContain("collect=true");
+        expect(entry?.description).not.toContain("collect=true");
+      } finally {
+        clearToolSearchCatalog({ catalogRef });
+      }
     },
   );
 
