@@ -14,6 +14,7 @@ export type RemoteProfileTestDeps = {
   closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
   createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
   createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
+  createTestBrowserRouteContext: typeof import("./server-context.remote-tab-ops.harness.js").createTestBrowserRouteContext;
   createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
   createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
   makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
@@ -33,6 +34,7 @@ const loadRemoteProfileTestDepsOnce = createLazyRuntimeModule(() =>
     const { createBrowserRouteContext } = await import("./server-context.js");
     const {
       createJsonListFetchMock,
+      createTestBrowserRouteContext,
       createRemoteRouteHarness,
       createSequentialPageLister,
       makeState,
@@ -47,6 +49,7 @@ const loadRemoteProfileTestDepsOnce = createLazyRuntimeModule(() =>
       closePlaywrightBrowserConnection,
       createBrowserRouteContext,
       createJsonListFetchMock,
+      createTestBrowserRouteContext,
       createRemoteRouteHarness,
       createSequentialPageLister,
       makeState,
