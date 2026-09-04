@@ -58,6 +58,7 @@ type MessageCutMutationResult =
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+const ACTIVE_SESSION_RUN_ERROR_REASON = "session-run-active";
 
 // A message realistically carries a handful of images; a corrupt transcript must
 // not turn rewind into a bulk media read.
@@ -352,6 +353,7 @@ async function mutateSessionAtMessage(
             action === "switch"
               ? "Branch switch is unavailable while the agent is working."
               : `${action === "fork" ? "Fork" : "Rewind"} is unavailable while the agent is working.`,
+            { details: { reason: ACTIVE_SESSION_RUN_ERROR_REASON } },
           ),
         );
         return;

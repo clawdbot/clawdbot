@@ -143,8 +143,10 @@ private actor SessionActionTransportState {
         self.resetSessionKeys.append(sessionKey)
     }
 
-    func recordSessionListRequest() {
+    func recordSessionListRequest() -> Int {
+        let index = self.sessionListRequestCount
         self.sessionListRequestCount += 1
+        return index
     }
 }
 
@@ -190,6 +192,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let rewindGate: SessionActionCompletionGate?
     private let forkAtMessageGate: SessionActionCompletionGate?
     private let branchSwitchGate: SessionActionCompletionGate?
+    private let branchSwitchError: Error?
+    private let sessionListResponses: [OpenClawChatSessionsListResponse]
     private let branchListGates: [SessionActionCompletionGate]
     private let rewindEditorText: String?
     private let rewindEditorAttachments: [OpenClawChatEditorAttachment]?
@@ -211,6 +215,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         rewindGate: SessionActionCompletionGate? = nil,
         forkAtMessageGate: SessionActionCompletionGate? = nil,
         branchSwitchGate: SessionActionCompletionGate? = nil,
+        branchSwitchError: Error? = nil,
+        sessionListResponses: [OpenClawChatSessionsListResponse] = [],
         branchListGates: [SessionActionCompletionGate] = [],
         rewindEditorText: String? = "rewound draft",
         rewindEditorAttachments: [OpenClawChatEditorAttachment]? = nil,
@@ -231,6 +237,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.rewindGate = rewindGate
         self.forkAtMessageGate = forkAtMessageGate
         self.branchSwitchGate = branchSwitchGate
+        self.branchSwitchError = branchSwitchError
+        self.sessionListResponses = sessionListResponses
         self.branchListGates = branchListGates
         self.rewindEditorText = rewindEditorText
         self.rewindEditorAttachments = rewindEditorAttachments
@@ -324,6 +332,9 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     func switchSessionBranch(sessionKey: String, agentID _: String?, leafEntryId: String) async throws {
         await self.state.recordBranchSwitch(sessionKey: sessionKey, leafEntryID: leafEntryId)
         await self.branchSwitchGate?.suspendCompletion()
+        if let branchSwitchError {
+            throw branchSwitchError
+        }
     }
 
     func patchSession(
@@ -399,7 +410,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         search _: String?,
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
-        await self.state.recordSessionListRequest()
+        let callIndex = await self.state.recordSessionListRequest()
+        if self.sessionListResponses.indices.contains(callIndex) {
+            return self.sessionListResponses[callIndex]
+        }
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
@@ -1145,6 +1159,116 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.switchedBranches().isEmpty)
         #expect(await transport.historySessionKeys().isEmpty)
         #expect(await transport.branchListSessionKeys().isEmpty)
+    }
+
+    @Test func `branch switch does not dispatch for liveness only active run`() async {
+        let branches = self.branches()
+        let transport = SessionActionTransport(branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+        viewModel.sessions = [self.entry(key: "main", hasActiveRun: true)]
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().isEmpty)
+        #expect(await transport.historySessionKeys().isEmpty)
+        #expect(await transport.branchListSessionKeys().isEmpty)
+    }
+
+    @Test func `branch switch reconciles an authoritative active run rejection`() async {
+        let branches = self.branches()
+        let activeSession = self.entry(key: "main", hasActiveRun: true)
+        let completedSession = self.entry(key: "main", hasActiveRun: false)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is temporarily blocked.",
+                details: ["reason": AnyCodable("session-run-active")]),
+            sessionListResponses: [
+                OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    defaults: nil,
+                    sessions: [activeSession]),
+                OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    defaults: nil,
+                    sessions: [completedSession]),
+            ],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == true)
+        #expect(!viewModel.hasActiveSessionRunWithoutChatSnapshot)
+        #expect(viewModel.canSwitchSessionBranch == false)
+        #expect(viewModel.errorText == nil)
+
+        await viewModel.fetchSessions(limit: 50)
+
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == false)
+        #expect(!viewModel.hasActiveSessionRunWithoutChatSnapshot)
+        #expect(viewModel.canSwitchSessionBranch)
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 2)
+    }
+
+    @Test func `branch switch reconciles a legacy active run rejection`() async {
+        let branches = self.branches()
+        let activeSession = self.entry(key: "main", hasActiveRun: true)
+        let transport = SessionActionTransport(
+            branchSwitchError: GatewayResponseError(
+                method: "sessions.branches.switch",
+                code: "UNAVAILABLE",
+                message: "Branch switch is unavailable while the agent is working.",
+                details: nil),
+            sessionListResponses: [
+                OpenClawChatSessionsListResponse(
+                    ts: nil,
+                    path: nil,
+                    count: 1,
+                    defaults: nil,
+                    sessions: [activeSession]),
+            ],
+            branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+        #expect(await transport.sessionListRequestCount() == 1)
+        #expect(viewModel.currentSessionEntry()?.hasActiveRun == true)
+        #expect(viewModel.canSwitchSessionBranch == false)
+        #expect(viewModel.errorText == nil)
+    }
+
+    @Test func `branch switch surfaces a non active run rejection`() async {
+        let branches = self.branches()
+        let error = GatewayResponseError(
+            method: "sessions.branches.switch",
+            code: "UNAVAILABLE",
+            message: "Branch switch is unavailable while the agent is working.",
+            details: ["reason": AnyCodable("session-lifecycle-changed")])
+        let transport = SessionActionTransport(branchSwitchError: error, branches: branches)
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessionBranches = branches
+
+        await viewModel.switchToBranch("leaf-new")
+
+        #expect(await transport.switchedBranches().count == 1)
+        #expect(await transport.sessionListRequestCount() == 0)
+        #expect(viewModel.canSwitchSessionBranch)
+        #expect(viewModel.errorText == error.localizedDescription)
     }
 
     @Test func `branch switch does not overlap an in flight switch`() async {

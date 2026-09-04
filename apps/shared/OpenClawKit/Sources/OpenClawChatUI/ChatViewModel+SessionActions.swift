@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OSLog
 
 private let chatSessionActionsLogger = Logger(
@@ -582,10 +583,21 @@ extension OpenClawChatViewModel {
     }
 
     var canSwitchSessionBranch: Bool {
-        !self.hasBlockingRunActivity &&
+        self.currentSessionEntry()?.hasActiveRun != true &&
+            !self.hasBlockingRunActivity &&
             !self.isSending &&
             !self.isAborting &&
             !self.hasUnresolvedOutboxCommandsForCurrentSession
+    }
+
+    private nonisolated static func branchSwitchIsBlockedByActiveRun(_ error: Error) -> Bool {
+        guard let error = error as? GatewayResponseError else { return false }
+        guard error.method == "sessions.branches.switch", error.code == "UNAVAILABLE" else { return false }
+        if let reason = error.detailsReason {
+            return reason == "session-run-active"
+        }
+        // Released gateways through v2026.8.x did not include the structured reason.
+        return error.message == "Branch switch is unavailable while the agent is working."
     }
 
     var canPerformMessageSessionAction: Bool {
@@ -637,6 +649,12 @@ extension OpenClawChatViewModel {
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
+            if Self.branchSwitchIsBlockedByActiveRun(error) {
+                await self.fetchSessions(limit: 50, sessionSnapshot: initiatingSession)
+                chatSessionActionsLogger.info(
+                    "sessions.branches.switch blocked by active run; refreshed session liveness")
+                return
+            }
             self.errorText = error.localizedDescription
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")
