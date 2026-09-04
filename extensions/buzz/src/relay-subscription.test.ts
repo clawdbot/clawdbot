@@ -1,6 +1,10 @@
 import type { Filter, Relay } from "nostr-tools";
 import { describe, expect, it, vi } from "vitest";
-import { BUZZ_MAX_CONCURRENT_RELAY_QUERIES, acquireBuzzQueryLease } from "./query-lease.js";
+import {
+  BUZZ_MAX_CONCURRENT_RELAY_QUERIES,
+  acquireBuzzQueryLease,
+  countBuzzQueryLeases,
+} from "./query-lease.js";
 import {
   BuzzQueryLeaseUnavailableError,
   openBuzzRelaySubscription,
@@ -169,6 +173,47 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     expect(close).not.toHaveBeenCalled();
 
     for (const release of held) {
+      release?.();
+    }
+  });
+
+  it("holds its query slot until a timed-out subscription actually closes", async () => {
+    let releaseSend: (() => void) | undefined;
+    const { close, relay } = createRelay(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseSend = resolve;
+        }),
+    );
+
+    const pending = queryBuzzRelaySnapshot(snapshotParams(relay));
+    const rejection = expect(pending).rejects.toThrow("timed out");
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 80);
+    });
+    await rejection;
+
+    // The REQ is still in flight, so the subscription is still open and this
+    // slot must stay taken: admitting a replacement now would put the relay
+    // over the reserve.
+    expect(close).not.toHaveBeenCalled();
+    expect(countBuzzQueryLeases(relay)).toBe(1);
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.not.toBeNull();
+    const saturating: Array<(() => void) | null> = [];
+    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES - 2; index += 1) {
+      saturating.push(await acquireBuzzQueryLease(relay, { wait: false }));
+    }
+    expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES);
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
+
+    // Once the frame lands the close runs and only then is the slot returned.
+    releaseSend?.();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES - 1),
+    );
+
+    for (const release of saturating) {
       release?.();
     }
   });

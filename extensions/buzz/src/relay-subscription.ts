@@ -98,15 +98,28 @@ export async function queryBuzzRelaySnapshot<TResult>(
   if (!releaseLease) {
     throw new BuzzQueryLeaseUnavailableError();
   }
+  const cleanup: PendingSnapshotCleanup = {};
   try {
-    return await runBuzzRelaySnapshot(params);
+    return await runBuzzRelaySnapshot(params, cleanup);
   } finally {
-    releaseLease();
+    // A timed-out lookup closes its subscription only once its REQ frame has
+    // landed, so the slot stays taken until then. Releasing at rejection would
+    // admit a replacement query while the old subscription is still open and
+    // put the relay over the reserve this lease exists to protect.
+    if (cleanup.pending) {
+      void cleanup.pending.then(releaseLease, releaseLease);
+    } else {
+      releaseLease();
+    }
   }
 }
 
+/** Carries deferred subscription cleanup back to the lease holder. */
+type PendingSnapshotCleanup = { pending?: Promise<void> };
+
 async function runBuzzRelaySnapshot<TResult>(
   params: BuzzRelaySnapshotParams<TResult>,
+  cleanup: PendingSnapshotCleanup,
 ): Promise<TResult> {
   return await new Promise<TResult>((resolve, reject) => {
     let settled = false;
@@ -115,12 +128,16 @@ async function runBuzzRelaySnapshot<TResult>(
     let subscription: BuzzRelaySubscriptionHandle | undefined;
     const timeout = setTimeout(() => {
       const error = new Error(params.timeoutMessage);
-      finish(error);
-      params.onTimeout?.(error);
       if (params.closeSubscriptionOnTimeout) {
         // Never CLOSE ahead of the REQ this subscription still owes the relay.
-        void subscription?.requestSent.then(closeSubscription, closeSubscription);
+        // Recorded before rejecting so the lease holder sees it and waits.
+        cleanup.pending = (subscription?.requestSent ?? Promise.resolve()).then(
+          closeSubscription,
+          closeSubscription,
+        );
       }
+      finish(error);
+      params.onTimeout?.(error);
       if (params.closeRelayOnTimeout !== false) {
         params.relay.close();
       }
