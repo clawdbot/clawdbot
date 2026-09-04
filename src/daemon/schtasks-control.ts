@@ -10,7 +10,6 @@ import {
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import {
-  findInstalledProcessPid,
   findInstalledProcessPids,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
@@ -207,7 +206,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (!installedArguments?.length) {
       return false;
     }
-    const installedPid = findInstalledProcessPid(
+    const installedPids = findInstalledProcessPids(
       entries,
       taskPort,
       installedArguments,
@@ -217,7 +216,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     );
     // Same rule as the managed-port check above: a process that already matched the
     // persisted argv before `/Run` is the caller's own gateway, not this run's product.
-    return installedPid != null && !params.preLaunchGatewayPids.has(installedPid);
+    return installedPids.some((pid) => !params.preLaunchGatewayPids.has(pid));
   };
 
   let previous = await readLaunchObservation();
