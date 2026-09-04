@@ -2,19 +2,25 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaBatch } from "../../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
+import { isPerAgentSessionStoreConfig } from "../../../config/sessions/session-store-config.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  isUnscopedSessionKeySentinel,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -193,13 +199,14 @@ function sessionEntryIsOwnedByRequester(params: {
   );
 }
 
-export function validateAcpResumeSessionOwnership(params: {
+export async function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
-  targetAgentId: string;
+  sessionOwnerAgentId: string;
+  harnessAgentId: string;
   backendId?: string;
   requesterSessionKey?: string;
   resumeSessionId?: string;
-}): { ok: true } | { ok: false; error: string } {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
   if (!resumeSessionId) {
     return { ok: true };
@@ -214,13 +221,35 @@ export function validateAcpResumeSessionOwnership(params: {
 
   const configuredBackend = normalizeOptionalLowercaseString(params.backendId);
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.targetAgentId,
+    agentId: params.sessionOwnerAgentId,
   });
-  for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
-    const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
+  const entries = listSessionEntriesReadOnly({ storePath, clone: false });
+  const metaByEntry = readAcpSessionMetaBatch({
+    entries: entries.map(({ sessionKey, entry }) => ({
+      sessionKey,
+      agentId: params.sessionOwnerAgentId,
+      entry,
+    })),
+    cfg: params.cfg,
+  });
+  for (const { sessionKey, entry } of entries) {
+    const parsedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, sessionKey);
+    const hasCanonicalOwner = parsedOwner
+      ? parsedOwner === params.sessionOwnerAgentId
+      : isUnscopedSessionKeySentinel(sessionKey) &&
+        (isPerAgentSessionStoreConfig(params.cfg.session?.store) ||
+          (persistedOwner.kind === "configured" &&
+            persistedOwner.agentId === params.sessionOwnerAgentId));
+    if (!hasCanonicalOwner) {
+      continue;
+    }
+    const acp = metaByEntry.get(entry);
     // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
     if (
-      (configuredBackend && normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||
+      !acp ||
+      (configuredBackend && normalizeOptionalLowercaseString(acp.backend) !== configuredBackend) ||
+      normalizeOptionalString(acp.agent) !== params.harnessAgentId ||
       !sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)
     ) {
       continue;
@@ -234,7 +263,6 @@ export function validateAcpResumeSessionOwnership(params: {
     ) {
       return { ok: true };
     }
-    break;
   }
 
   return {

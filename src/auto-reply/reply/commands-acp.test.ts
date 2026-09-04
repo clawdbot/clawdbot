@@ -923,6 +923,7 @@ describe("/acp command", () => {
     hoisted.resolveSessionStorePathForAcpMock.mockReset().mockReturnValue({
       cfg: baseCfg,
       storePath: "/tmp/sessions-acp.json",
+      agentId: "main",
     });
     hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
     hoisted.updateSessionEntryMock.mockReset().mockResolvedValue(null);
@@ -982,19 +983,24 @@ describe("/acp command", () => {
     acpManagerTesting.setAcpSessionManagerForTests({
       initializeSession: async (input: {
         sessionKey: string;
+        agentId: string;
         agent: string;
         mode: "persistent" | "oneshot";
         cwd?: string;
+        backendId?: string;
+        runtimeOptions?: { model?: string; thinking?: string; timeoutSeconds?: number };
       }) => {
-        const backend = hoisted.requireAcpRuntimeBackendMock("acpx") as {
+        const backend = hoisted.requireAcpRuntimeBackendMock(input.backendId ?? "acpx") as {
           id?: string;
           runtime: typeof runtimeBackend.runtime;
         };
         const ensured = await hoisted.ensureSessionMock({
           sessionKey: input.sessionKey,
+          agentId: input.agentId,
           agent: input.agent,
           mode: input.mode,
           cwd: input.cwd,
+          runtimeOptions: input.runtimeOptions,
         });
         const now = Date.now();
         const meta = {
@@ -1179,19 +1185,20 @@ describe("/acp command", () => {
 
   it("spawns an ACP session and binds a Discord thread", async () => {
     hoisted.ensureSessionMock.mockResolvedValueOnce({
-      sessionKey: "agent:codex:acp:s1",
+      sessionKey: "agent:main:acp:s1",
       backend: "acpx",
-      runtimeSessionName: "agent:codex:acp:s1:runtime",
+      runtimeSessionName: "agent:main:acp:s1:runtime",
       agentSessionId: "codex-inner-1",
       backendSessionId: "acpx-1",
     });
 
     const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/clawd");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx");
     expectMockCallFields(hoisted.ensureSessionMock, {
+      agentId: "main",
       agent: "codex",
       mode: "persistent",
       cwd: "/home/bob/clawd",
@@ -1202,6 +1209,10 @@ describe("/acp command", () => {
     });
     const introText = (bindInput.metadata as { introText?: unknown } | undefined)?.introText;
     expect(typeof introText).toBe("string");
+    expect(introText).toContain("codex session active");
+    expect(bindInput.metadata).toEqual(
+      expect.objectContaining({ agentId: "main", label: "codex" }),
+    );
     expect(introText).toContain("cwd: /home/bob/clawd");
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
@@ -1218,17 +1229,49 @@ describe("/acp command", () => {
           };
         }
       | undefined;
-    expect(upsertArgs?.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(upsertArgs?.sessionKey).toMatch(/^agent:main:acp:/);
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
     expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
-  it("inherits the target agent workspace when /acp spawn omits --cwd", async () => {
+  it("maps a configured default ACP alias to its external harness", async () => {
+    const cfg = {
+      ...baseCfg,
+      acp: {
+        ...baseCfg.acp,
+        defaultAgent: "codex-acp",
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: { type: "acp" as const, acp: { agent: "codex", backend: "alias-acpx" } },
+            model: "openai/gpt-5.4",
+            thinkingDefault: "high" as const,
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn --thread off", cfg);
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex-acp:acp:");
+    expectMockCallFields(hoisted.ensureSessionMock, {
+      agentId: "codex-acp",
+      agent: "codex",
+      mode: "persistent",
+      runtimeOptions: { model: "openai/gpt-5.4", thinking: "high" },
+    });
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("alias-acpx");
+  });
+
+  it("inherits the session owner workspace when /acp spawn omits --cwd", async () => {
     hoisted.ensureSessionMock.mockResolvedValueOnce({
-      sessionKey: "agent:codex:acp:s2",
+      sessionKey: "agent:main:acp:s2",
       backend: "acpx",
-      runtimeSessionName: "agent:codex:acp:s2:runtime",
+      runtimeSessionName: "agent:main:acp:s2:runtime",
       agentSessionId: "codex-inner-2",
       backendSessionId: "acpx-2",
     });
@@ -1240,7 +1283,7 @@ describe("/acp command", () => {
         agents: {
           list: [
             {
-              id: "codex",
+              id: "main",
               workspace,
             },
           ],
@@ -1249,8 +1292,9 @@ describe("/acp command", () => {
 
       const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
-      expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+      expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
       expectMockCallFields(hoisted.ensureSessionMock, {
+        agentId: "main",
         agent: "codex",
         mode: "persistent",
         cwd: workspace,
@@ -1262,9 +1306,9 @@ describe("/acp command", () => {
 
   it("falls back to the backend default cwd when the inherited target workspace is missing", async () => {
     hoisted.ensureSessionMock.mockResolvedValueOnce({
-      sessionKey: "agent:codex:acp:s3",
+      sessionKey: "agent:main:acp:s3",
       backend: "acpx",
-      runtimeSessionName: "agent:codex:acp:s3:runtime",
+      runtimeSessionName: "agent:main:acp:s3:runtime",
       agentSessionId: "codex-inner-3",
       backendSessionId: "acpx-3",
     });
@@ -1274,7 +1318,7 @@ describe("/acp command", () => {
       agents: {
         list: [
           {
-            id: "codex",
+            id: "main",
             workspace: "/home/bob/codex-workspace-missing",
           },
         ],
@@ -1283,20 +1327,22 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expectMockCallFields(hoisted.ensureSessionMock, {
+      agentId: "main",
       agent: "codex",
       mode: "persistent",
       cwd: undefined,
     });
   });
 
-  it("persists ACP spawn labels to the target store without a gateway self-call", async () => {
+  it("persists ACP spawn labels to the owner store without a gateway self-call", async () => {
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
     params.storePath = "/tmp/requester-sessions.json";
     hoisted.resolveSessionStorePathForAcpMock.mockReturnValue({
       cfg: baseCfg,
-      storePath: "/tmp/codex-sessions.json",
+      storePath: "/tmp/main-sessions.json",
+      agentId: "main",
     });
 
     const result = await handleAcpCommand(params, true);
@@ -1306,7 +1352,7 @@ describe("/acp command", () => {
     const spawnedSessionKey = (
       hoisted.ensureSessionMock.mock.calls[0]?.[0] as { sessionKey?: string } | undefined
     )?.sessionKey;
-    expect(spawnedSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(spawnedSessionKey).toMatch(/^agent:main:acp:/);
     const updateCall = hoisted.updateSessionEntryMock.mock.calls[0] as
       | [
           { storePath: string; sessionKey: string },
@@ -1314,7 +1360,8 @@ describe("/acp command", () => {
         ]
       | undefined;
     expect(updateCall?.[0]).toEqual({
-      storePath: "/tmp/codex-sessions.json",
+      storePath: "/tmp/main-sessions.json",
+      agentId: "main",
       sessionKey: spawnedSessionKey,
     });
     expect(updateCall?.[1]({ sessionId: "target", updatedAt: 1 })).toEqual({
@@ -1328,7 +1375,7 @@ describe("/acp command", () => {
       "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
     );
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this thread to");
     expectMockCallFields(hoisted.ensureSessionMock, {
       agent: "codex",
@@ -1455,7 +1502,7 @@ describe("/acp command", () => {
   it("binds Telegram topic ACP spawns to full conversation ids", async () => {
     const result = await runTelegramAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
     expectBindingBindCall({
@@ -1471,7 +1518,7 @@ describe("/acp command", () => {
   it("binds Telegram DM ACP spawns to the DM conversation id", async () => {
     const result = await runTelegramDmAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(result?.reply?.channelData).toBeUndefined();
     expectBindingBindCall({
@@ -1566,7 +1613,7 @@ describe("/acp command", () => {
   it("binds Feishu DM ACP spawns to the current DM conversation", async () => {
     const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expectBindingBindCall({
       placement: "current",
@@ -1581,7 +1628,7 @@ describe("/acp command", () => {
   it("binds LINE DM ACP spawns to the current conversation", async () => {
     const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
 
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
     expectBindingBindCall({
       placement: "current",

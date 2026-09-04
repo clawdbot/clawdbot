@@ -82,6 +82,7 @@ const hoisted = vi.hoisted(() => {
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const readAcpSessionMetaMock = vi.fn();
+  const writeAcpSessionMetaForMigrationMock = vi.fn();
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
@@ -177,6 +178,7 @@ const hoisted = vi.hoisted(() => {
     startAcpSpawnParentStreamRelayMock,
     loadSessionStoreMock,
     readAcpSessionMetaMock,
+    writeAcpSessionMetaForMigrationMock,
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
@@ -202,6 +204,22 @@ vi.mock("../../../acp/control-plane/spawn.js", () => ({
 
 vi.mock("../../../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta: (params: unknown) => hoisted.readAcpSessionMetaMock(params),
+  readAcpSessionMetaBatch: (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      entries: Array<{ sessionKey: string; agentId?: string; entry: SessionEntry }>;
+    };
+    return new Map(
+      params.entries.map(({ sessionKey, agentId, entry }) => {
+        const sessionOwner = sessionKey.match(/^agent:([^:]+):/)?.[1] ?? agentId;
+        return [
+          entry,
+          agentId === sessionOwner ? hoisted.readAcpSessionMetaMock({ sessionKey }) : undefined,
+        ];
+      }),
+    );
+  },
+  writeAcpSessionMetaForMigration: (params: unknown) =>
+    hoisted.writeAcpSessionMetaForMigrationMock(params),
 }));
 
 vi.mock("../../../channels/plugins/index.js", () => ({
@@ -800,7 +818,8 @@ describe("spawnAcpDirect", () => {
             metadata: {
               boundBy:
                 typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
-              agentId: "codex",
+              agentId:
+                typeof input.metadata?.agentId === "string" ? input.metadata.agentId : "main",
               webhookId: "wh-1",
             },
           }),
@@ -824,11 +843,12 @@ describe("spawnAcpDirect", () => {
       .mockImplementation(() => createRelayHandle());
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
     hoisted.readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
+    hoisted.writeAcpSessionMetaForMigrationMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<string, { sessionId: string; updatedAt: number }> = {};
       return new Proxy(store, {
         get(_target, prop) {
-          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+          if (typeof prop === "string" && /^agent:[^:]+:acp:/.test(prop)) {
             return { sessionId: "sess-123", updatedAt: Date.now() };
           }
           return undefined;
@@ -854,6 +874,7 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
@@ -877,7 +898,7 @@ describe("spawnAcpDirect", () => {
     );
 
     const accepted = expectAcceptedSpawn(result);
-    expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
     expect(accepted.inlineDelivery).toBe(true);
@@ -918,7 +939,7 @@ describe("spawnAcpDirect", () => {
     expectResolvedIntroTextInBindMetadata();
 
     const agentCall = gatewayRequest("agent");
-    expect(agentCall?.params?.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(agentCall?.params?.sessionKey).toMatch(/^agent:main:acp:/);
     expect(agentCall?.params?.to).toBe("channel:child-thread");
     expect(agentCall?.params?.threadId).toBe("child-thread");
     expect(agentCall?.params?.deliver).toBe(true);
@@ -935,10 +956,14 @@ describe("spawnAcpDirect", () => {
     );
     expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
+      agentId: "main",
       agent: "codex",
       mode: "persistent",
     });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(initInput.sessionKey).toMatch(/^agent:main:acp:/);
+    expectRecordFields(firstMockCall(hoisted.upsertSessionEntryMock, "session create")[0], {
+      agentId: "main",
+    });
     const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
       (call: unknown[]) => call[0] as { threadId?: string },
     );
@@ -991,7 +1016,7 @@ describe("spawnAcpDirect", () => {
     expect(agentDispatchAttempts).toBe(2);
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.runId).toBe("accepted-acp-run");
-    expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
   });
 
   it("does not register an ACP child when reconciliation finds a terminal run", async () => {
@@ -1154,7 +1179,8 @@ describe("spawnAcpDirect", () => {
       }
 
       const resumeSessionId = "codex-inner-resume";
-      const ownedSessionKey = "agent:codex:acp:owned";
+      const sessionOwnerAgentId = targetBackend ? "reviewer" : "main";
+      const ownedSessionKey = `agent:${sessionOwnerAgentId}:acp:owned`;
       hoisted.loadSessionStoreMock.mockReturnValue({
         [ownedSessionKey]: {
           sessionId: "sess-owned",
@@ -1193,6 +1219,9 @@ describe("spawnAcpDirect", () => {
           agentSessionKey: "agent:main:main",
         },
       );
+      expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, {
+        agentId: sessionOwnerAgentId,
+      });
 
       if (accepted) {
         expectAcceptedSpawn(result);
@@ -1209,8 +1238,55 @@ describe("spawnAcpDirect", () => {
     },
   );
 
+  it("allows requester-owned global resume IDs from an owner-scoped store", async () => {
+    const resumeSessionId = "owner-global-resume";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/main-sessions.json"
+        ? {
+            global: {
+              sessionId: "sess-owner-global",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === "global"
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: resumeSessionId,
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Resume owner global ACP session", agentId: "codex", resumeSessionId },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({ resumeSessionId, backendId: "acpx" });
+    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+  });
+
   it("rejects ACP resume IDs not recorded for the requester session", async () => {
-    const otherSessionKey = "agent:codex:acp:other";
+    const otherSessionKey = "agent:main:acp:other";
     hoisted.loadSessionStoreMock.mockReturnValue({
       [otherSessionKey]: {
         sessionId: "sess-other",
@@ -1258,6 +1334,466 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an owned resume ID recorded for a different ACP harness", async () => {
+    const ownedSessionKey = "agent:main:acp:other-harness";
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [ownedSessionKey]: {
+        sessionId: "sess-other-harness",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "claude",
+      runtimeSessionName: "claude",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "shared-resume-id",
+        acpxSessionId: "shared-resume-id",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Do not cross harnesses",
+        agentId: "codex",
+        resumeSessionId: "shared-resume-id",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects requester-owned legacy resume IDs stored under the harness agent", async () => {
+    const legacySessionKey = "agent:codex:acp:legacy";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/codex-sessions.json"
+        ? {
+            [legacySessionKey]: {
+              sessionId: "sess-legacy",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === legacySessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "codex-inner-legacy",
+              acpxSessionId: "acpx-legacy",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "codex-inner-legacy",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects requester-owned bare legacy keys from a separate harness store", async () => {
+    const legacySessionKey = "global";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/codex-sessions.json"
+        ? {
+            [legacySessionKey]: {
+              sessionId: "sess-bare-legacy",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === legacySessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "bare-legacy-resume",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "bare-legacy-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for bare legacy keys in a shared owner and harness store", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: { ...hoisted.state.cfg.session, store: "/tmp/shared-sessions.json" },
+    });
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      global: {
+        sessionId: "sess-ambiguous-bare",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "ambiguous-bare-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Reject ambiguous bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "ambiguous-bare-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("never consults legacy harness stores during runtime resume", async () => {
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockReturnValue({});
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Do not use an expired compatibility reader",
+        agentId: "codex",
+        resumeSessionId: "legacy-resume-id",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps bare keys in a shared owner and harness store unavailable at runtime", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: { ...hoisted.state.cfg.session, store: "/tmp/shared-sessions.json" },
+    });
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      global: {
+        sessionId: "sess-expired-ambiguous-bare",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "expired-ambiguous-bare-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Reject expired ambiguous bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "expired-ambiguous-bare-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not promote legacy metadata during runtime resume", async () => {
+    const legacySessionKey = "agent:codex:acp:retryable";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/codex-sessions.json"
+        ? {
+            [legacySessionKey]: {
+              sessionId: "sess-retryable",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === legacySessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "retryable-resume",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+    hoisted.writeAcpSessionMetaForMigrationMock.mockImplementationOnce(() => {
+      throw new Error("synthetic metadata write failure");
+    });
+
+    const firstAttempt = await spawnAcpDirect(
+      {
+        task: "First migration attempt",
+        agentId: "codex",
+        resumeSessionId: "retryable-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(firstAttempt, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+
+    const retried = await spawnAcpDirect(
+      {
+        task: "Retry migration",
+        agentId: "codex",
+        resumeSessionId: "retryable-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(retried, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes the canonical row after a shared-store legacy row was already promoted", async () => {
+    const legacySessionKey = "agent:codex:acp:promoted";
+    const ownerSessionKey = "agent:main:acp:promoted";
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [legacySessionKey]: {
+        sessionId: "sess-promoted",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+      [ownerSessionKey]: {
+        sessionId: "sess-promoted",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "promoted-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume the promoted canonical ACP session",
+        agentId: "codex",
+        resumeSessionId: "promoted-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({ resumeSessionId: "promoted-resume" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects requester-owned resume IDs from a third owner in a shared store", async () => {
+    const foreignSessionKey = "agent:other:acp:foreign";
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [foreignSessionKey]: {
+        sessionId: "sess-foreign",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "foreign-resume-id",
+        acpxSessionId: "foreign-resume-id",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Do not cross owner namespaces",
+        agentId: "codex",
+        resumeSessionId: "foreign-resume-id",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consult a legacy store after an owner-store resume collision", async () => {
+    const ownerSessionKey = "agent:main:acp:collision";
+    const legacySessionKey = "agent:codex:acp:owned-legacy";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) => {
+      if (storePath === "/tmp/main-sessions.json") {
+        return {
+          [ownerSessionKey]: {
+            sessionId: "sess-collision",
+            updatedAt: Date.now(),
+            spawnedBy: "agent:other:main",
+          } satisfies SessionEntry,
+        };
+      }
+      if (storePath === "/tmp/codex-sessions.json") {
+        return {
+          [legacySessionKey]: {
+            sessionId: "sess-owned-legacy",
+            updatedAt: Date.now(),
+            spawnedBy: "agent:main:main",
+          } satisfies SessionEntry,
+        };
+      }
+      return {};
+    });
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      if (params.sessionKey !== ownerSessionKey && params.sessionKey !== legacySessionKey) {
+        return undefined;
+      }
+      return {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "codex",
+        identity: {
+          state: "resolved",
+          source: "ensure",
+          agentSessionId: "shared-resume-id",
+          acpxSessionId: "shared-resume-id",
+          lastUpdatedAt: Date.now(),
+        },
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      };
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume the requester-owned legacy session",
+        agentId: "codex",
+        resumeSessionId: "shared-resume-id",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
   it("passes model and thinking overrides into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
@@ -1279,7 +1815,7 @@ describe("spawnAcpDirect", () => {
         thinking: "high",
       },
     });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(initInput.sessionKey).toMatch(/^agent:main:acp:/);
   });
 
   it("strips an inherited OpenClaw auth profile before ACP initialization", async () => {
@@ -1401,8 +1937,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expectAcceptedSpawn(result);
+    expect(expectAcceptedSpawn(result).childSessionKey).toMatch(/^agent:codex-acp:acp:/);
     expectInitializeSessionFields({
+      agentId: "codex-acp",
       agent: "codex",
       runtimeOptions: {
         model: "openai/gpt-5.5",
@@ -1542,7 +2079,7 @@ describe("spawnAcpDirect", () => {
         timeoutSeconds: 45,
       },
     });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    expect(initInput.sessionKey).toMatch(/^agent:main:acp:/);
     const agentCall = findAgentGatewayCall();
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.timeout).toBe(45);
@@ -1755,8 +2292,8 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    const initInput = expectInitializeSessionFields({ agentId: "reviewer", agent: "codex" });
+    expect(initInput.sessionKey).toMatch(/^agent:reviewer:acp:/);
   });
 
   it("inherits subagent envelope fields onto ACP children", async () => {
@@ -2271,6 +2808,41 @@ describe("spawnAcpDirect", () => {
     expect(failed.error).toContain("agentId is not allowed");
   });
 
+  it("admits configured ACP aliases by their configured owner id", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        defaults: {
+          subagents: { allowAgents: ["reviewer"], maxSpawnDepth: 2 },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: { allowAgents: ["reviewer"] },
+          },
+          {
+            id: "reviewer",
+            runtime: { type: "acp", acp: { agent: "codex" } },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest({ agentId: "reviewer" }), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({ agentId: "reviewer", agent: "codex" });
+  });
+
   it("rejects explicit ACP self-targets when the subagent allowlist excludes the requester", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
@@ -2479,7 +3051,7 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("uses the target agent workspace for cross-agent ACP spawns when cwd is omitted", async () => {
+  it("uses the configured session owner workspace for cross-agent ACP spawns", async () => {
     const fixture = await createCrossAgentWorkspaceFixture();
     try {
       configureCrossAgentWorkspaceSpawn(fixture);
@@ -2497,6 +3069,7 @@ describe("spawnAcpDirect", () => {
 
       expect(result.status).toBe("accepted");
       const initInput = expectInitializeSessionFields({
+        agentId: "claude-code",
         agent: "claude-code",
         cwd: fixture.targetWorkspace,
       });
@@ -2506,7 +3079,84 @@ describe("spawnAcpDirect", () => {
     }
   });
 
-  it("falls back to backend default cwd when the inherited target workspace does not exist", async () => {
+  it("uses the requester workspace for an unconfigured external ACP harness", async () => {
+    const fixture = await createCrossAgentWorkspaceFixture({
+      targetDirName: "unused-harness-workspace",
+      createTargetWorkspace: false,
+    });
+    try {
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        acp: {
+          ...hoisted.state.cfg.acp,
+          allowedAgents: ["codex"],
+        },
+        agents: {
+          list: [{ id: "main", default: true, workspace: fixture.mainWorkspace }],
+        },
+      });
+
+      const result = await spawnAcpDirect(
+        { task: "Inspect owner workspace", agentId: "codex", mode: "run" },
+        { agentSessionKey: "agent:main:main" },
+      );
+
+      expectAcceptedSpawn(result);
+      const initInput = expectInitializeSessionFields({
+        agentId: "main",
+        agent: "codex",
+        cwd: fixture.mainWorkspace,
+      });
+      expect(initInput.sessionKey).toMatch(/^agent:main:acp:/);
+    } finally {
+      await fs.rm(fixture.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps requester account routing for an unconfigured external ACP harness", async () => {
+    const boundRoom = "!external-harness-room:example.org";
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex"],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "codex",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: boundRoom },
+            accountId: "harness-account",
+          },
+        },
+      ],
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Keep requester routing", agentId: "codex", mode: "run" },
+      {
+        agentSessionKey: "agent:main:matrix:room:requester",
+        agentChannel: "matrix",
+        agentAccountId: "requester-account",
+        agentTo: `room:${boundRoom}`,
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterOrigin: expect.objectContaining({
+          channel: "matrix",
+          accountId: "requester-account",
+          to: `room:${boundRoom}`,
+        }),
+      }),
+    );
+  });
+
+  it("falls back to the backend cwd when the configured owner workspace is missing", async () => {
     const fixture = await createCrossAgentWorkspaceFixture({
       targetDirName: "claude-code-missing",
       createTargetWorkspace: false,
@@ -2527,6 +3177,7 @@ describe("spawnAcpDirect", () => {
 
       expect(result.status).toBe("accepted");
       const initInput = expectInitializeSessionFields({
+        agentId: "claude-code",
         agent: "claude-code",
         cwd: undefined,
       });
@@ -2724,7 +3375,15 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       acp: {
         ...hoisted.state.cfg.acp,
-        allowedAgents: ["codex", "bot-alpha"],
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [
+          {
+            id: "bot-alpha",
+            runtime: { type: "acp", acp: { agent: "codex" } },
+          },
+        ],
       },
       channels: {
         ...hoisted.state.cfg.channels,
@@ -2829,6 +3488,131 @@ describe("spawnAcpDirect", () => {
         requesterOrigin: expect.objectContaining({
           channel: "matrix",
           accountId: "bot-alpha",
+          to: `room:${boundRoom}`,
+        }),
+      }),
+    );
+  });
+
+  it("uses a configured ACP alias's bound account instead of the external harness account", async () => {
+    const boundRoom = "!alias-room:example.org";
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            runtime: { type: "acp", acp: { agent: "codex" } },
+          },
+        ],
+      },
+      channels: {
+        ...hoisted.state.cfg.channels,
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnSessions: true,
+          },
+          accounts: {
+            reviewer: {
+              threadBindings: {
+                enabled: true,
+                spawnSessions: true,
+              },
+            },
+          },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "reviewer",
+          match: {
+            channel: "matrix",
+            peer: {
+              kind: "channel",
+              id: boundRoom,
+            },
+            accountId: "reviewer",
+          },
+        },
+      ],
+    });
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "reviewer",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: {
+          accountId: string;
+          conversationId: string;
+          parentConversationId?: string;
+        };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "matrix",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+            parentConversationId: input.conversation.parentConversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "reviewer",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Review flaky tests",
+        agentId: "reviewer",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:matrix:room:requester",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        agentTo: `room:${boundRoom}`,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expectBindingCallFields({
+      placement: "child",
+      conversation: {
+        channel: "matrix",
+        accountId: "reviewer",
+        conversationId: boundRoom,
+      },
+    });
+    expectRecordFields(gatewayRequest("agent").params, {
+      deliver: true,
+      channel: "matrix",
+      accountId: "reviewer",
+      to: `room:${boundRoom}`,
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterOrigin: expect.objectContaining({
+          channel: "matrix",
+          accountId: "reviewer",
           to: `room:${boundRoom}`,
         }),
       }),
@@ -2997,7 +3781,7 @@ describe("spawnAcpDirect", () => {
         {
           sessionId: "sess-123",
           storePath: "/tmp/codex-sessions.json",
-          agentId: "codex",
+          agentId: "main",
         },
       );
     }
@@ -3023,7 +3807,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(result.childSessionKey).toMatch(/^agent:main:acp:/);
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -3209,7 +3993,7 @@ describe("spawnAcpDirect", () => {
     expect(relayCallOrder < agentCallOrder).toBe(true);
     expectRelayCallFields({
       parentSessionKey: "agent:main:main",
-      agentId: "codex",
+      agentId: "main",
       childSessionId: "sess-123",
       emitStartNotice: false,
     });
@@ -3261,7 +4045,7 @@ describe("spawnAcpDirect", () => {
       };
       return new Proxy(store, {
         get(target, prop) {
-          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+          if (typeof prop === "string" && /^agent:[^:]+:acp:/.test(prop)) {
             return { sessionId: "sess-123", updatedAt: Date.now() };
           }
           return target[prop as keyof typeof target];
@@ -3293,7 +4077,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.threadId).toBeUndefined();
     expectRelayCallFields({
       parentSessionKey: "agent:main:subagent:parent",
-      agentId: "codex",
+      agentId: "main",
       childSessionId: "sess-123",
       deliveryContext: {
         channel: "discord",
@@ -3350,7 +4134,7 @@ describe("spawnAcpDirect", () => {
       };
       return new Proxy(store, {
         get(target, prop) {
-          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+          if (typeof prop === "string" && /^agent:[^:]+:acp:/.test(prop)) {
             return { sessionId: "sess-123", updatedAt: Date.now() };
           }
           return target[prop as keyof typeof target];
@@ -3481,8 +4265,8 @@ describe("spawnAcpDirect", () => {
       expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
         expect.objectContaining({
           requesterSessionKey: "global",
-          childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
-          agentId: "codex",
+          childSessionKey: expect.stringMatching(/^agent:research:acp:/),
+          agentId: "research",
           requesterAgentId: "research",
         }),
       );

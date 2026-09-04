@@ -22,6 +22,8 @@ import {
   prepareAgentRunAdmission,
 } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
+import { resolveAcpSpawnRuntimeOptions } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
+import { resolveTargetAcpAgentId } from "../../../agents/subagents/spawn/acp-spawn-target.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
@@ -127,6 +129,14 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
+  const targetAgent = resolveTargetAcpAgentId({
+    requestedAgentId: spawn.agentId,
+    cfg: params.cfg,
+  });
+  if (!targetAgent.ok) {
+    return commandReply(`⚠️ ${targetAgent.error}`);
+  }
+  const harnessAgentId = targetAgent.agentId;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg: params.cfg,
     requesterAgentId: params.agentId,
@@ -135,7 +145,7 @@ export async function handleAcpSpawnAction(
   if (runtimePolicyError) {
     return commandReply(`⚠️ ${runtimePolicyError}`);
   }
-  const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
+  const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, harnessAgentId);
   if (agentPolicyError) {
     return commandReply(
       collectAcpErrorText({
@@ -147,10 +157,11 @@ export async function handleAcpSpawnAction(
   }
 
   const acpManager = getAcpSessionManager();
-  const sessionKey = `agent:${spawn.agentId}:acp:${randomUUID()}`;
+  const sessionOwnerAgentId = targetAgent.configAgentId ?? params.agentId;
+  const sessionKey = `agent:${sessionOwnerAgentId}:acp:${randomUUID()}`;
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: params.cfg,
-    targetAgentId: spawn.agentId,
+    targetAgentId: sessionOwnerAgentId,
     requesterSessionKey: params.sessionKey,
     explicitWorkspaceDir: spawn.cwd,
   });
@@ -173,14 +184,24 @@ export async function handleAcpSpawnAction(
   let initializedBackend;
   let initializedMeta: SessionAcpMeta | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  const runtimeOptionsResult = resolveAcpSpawnRuntimeOptions({
+    cfg: params.cfg,
+    targetAgentId: harnessAgentId,
+    configAgentId: targetAgent.configAgentId,
+  });
+  if (!runtimeOptionsResult.ok) {
+    return commandReply(`⚠️ ${runtimeOptionsResult.error}`);
+  }
   try {
     const initialized = await acpManager.initializeSession({
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
-      agent: spawn.agentId,
+      agentId: sessionOwnerAgentId,
+      agent: harnessAgentId,
+      backendId: targetAgent.backendId,
       mode: spawn.mode,
       cwd: runtimeCwd,
+      runtimeOptions: runtimeOptionsResult.runtimeOptions,
     });
     initializedRuntime = {
       runtime: initialized.runtime,
@@ -203,7 +224,8 @@ export async function handleAcpSpawnAction(
     const result = await bindSpawnedAcpSession({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: sessionOwnerAgentId,
+      displayAgentId: harnessAgentId,
       label: spawn.label,
       mode:
         spawn.bind !== "off"
@@ -217,7 +239,7 @@ export async function handleAcpSpawnAction(
       await cleanupFailedSpawn({
         cfg: params.cfg,
         sessionKey,
-        agentId: spawn.agentId,
+        agentId: sessionOwnerAgentId,
         shouldDeleteSession: true,
         initializedRuntime,
       });
@@ -230,14 +252,14 @@ export async function handleAcpSpawnAction(
     await persistSpawnedSessionLabel({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: sessionOwnerAgentId,
       label: spawn.label,
     });
   } catch (err) {
     await cleanupFailedSpawn({
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: sessionOwnerAgentId,
       shouldDeleteSession: true,
       initializedRuntime,
     });

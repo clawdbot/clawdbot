@@ -69,11 +69,18 @@ export function resolveTargetAcpAgentId(params: {
   const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (configuredDefault) {
     const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
+    if (configuredAgent?.runtime?.type === "acp") {
+      return resolveAcpAgentTarget({
+        cfg: params.cfg,
+        agentId: normalizeOptionalAgentId(configuredAgent.runtime.acp?.agent) ?? configuredDefault,
+        configAgentId: configuredDefault,
+        agentBackend: configuredAgent.runtime.acp?.backend,
+      });
+    }
     return resolveAcpAgentTarget({
       cfg: params.cfg,
       agentId: configuredDefault,
-      agentBackend:
-        configuredAgent?.runtime?.type === "acp" ? configuredAgent.runtime.acp?.backend : undefined,
+      ...(configuredAgent ? { configAgentId: configuredDefault } : {}),
     });
   }
 

@@ -21,4 +21,42 @@ describe("resolveTargetAcpAgentId", () => {
       }),
     ).toEqual({ ok: true, agentId: "codex" });
   });
+
+  it("maps a configured default ACP alias to its external harness", () => {
+    expect(
+      resolveTargetAcpAgentId({
+        cfg: {
+          acp: { defaultAgent: "codex-acp" },
+          agents: {
+            list: [
+              {
+                id: "codex-acp",
+                runtime: { type: "acp", acp: { agent: "codex", backend: "acpx" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      agentId: "codex",
+      configAgentId: "codex-acp",
+      backendId: "acpx",
+    });
+  });
+
+  it("preserves ownership for a configured default allowed ACP agent", () => {
+    expect(
+      resolveTargetAcpAgentId({
+        cfg: {
+          acp: { defaultAgent: "claude-code", allowedAgents: ["claude-code"] },
+          agents: { list: [{ id: "claude-code" }] },
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      agentId: "claude-code",
+      configAgentId: "claude-code",
+    });
+  });
 });

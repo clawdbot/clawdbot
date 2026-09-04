@@ -155,7 +155,8 @@ export function resolveAcpSpawnRuntimeOptions(params: {
 export async function initializeAcpSpawnRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  targetAgentId: string;
+  sessionOwnerAgentId: string;
+  harnessAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
   backendId?: string;
   resumeSessionId?: string;
@@ -164,12 +165,12 @@ export async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.targetAgentId,
+    agentId: params.sessionOwnerAgentId,
   });
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
+    agentId: params.sessionOwnerAgentId,
     clone: false,
   });
   const sessionId = sessionEntry?.sessionId;
@@ -179,7 +180,7 @@ export async function initializeAcpSpawnRuntime(params: {
       sessionKey: params.sessionKey,
       storePath,
       sessionEntry,
-      agentId: params.targetAgentId,
+      agentId: params.sessionOwnerAgentId,
       stage: "spawn",
     });
   }
@@ -187,8 +188,8 @@ export async function initializeAcpSpawnRuntime(params: {
   const initialized = await getAcpSessionManager().initializeSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-    agent: params.targetAgentId,
+    agentId: params.sessionOwnerAgentId,
+    agent: params.harnessAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
@@ -212,7 +213,8 @@ export async function initializeAcpSpawnRuntime(params: {
 export async function bindPreparedAcpThread(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  targetAgentId: string;
+  sessionOwnerAgentId: string;
+  harnessAgentId: string;
   label?: string;
   preparedBinding: PreparedSpawnThreadBinding;
   initializedRuntime: AcpSpawnInitializedRuntime;
@@ -234,14 +236,14 @@ export async function bindPreparedAcpThread(params: {
     placement: params.preparedBinding.placement,
     metadata: {
       threadName: resolveThreadBindingThreadName({
-        agentId: params.targetAgentId,
-        label: params.label || params.targetAgentId,
+        agentId: params.harnessAgentId,
+        label: params.label || params.harnessAgentId,
       }),
-      agentId: params.targetAgentId,
+      agentId: params.sessionOwnerAgentId,
       label: params.label || undefined,
       boundBy: "system",
       introText: resolveThreadBindingIntroText({
-        agentId: params.targetAgentId,
+        agentId: params.harnessAgentId,
         label: params.label || undefined,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
           cfg: params.cfg,
@@ -278,7 +280,7 @@ export async function bindPreparedAcpThread(params: {
         sessionKey: params.sessionKey,
         storePath: params.initializedRuntime.storePath,
         sessionEntry,
-        agentId: params.targetAgentId,
+        agentId: params.sessionOwnerAgentId,
         threadId: boundThreadId,
         stage: "thread-bind",
       });
