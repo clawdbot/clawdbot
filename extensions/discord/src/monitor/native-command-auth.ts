@@ -325,17 +325,9 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   }
   if (params.skipCommandOwnerAllowFrom !== true) {
     const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(cfg);
-    const { ownerAllowed: commandOwnerOk } = resolveDiscordOwnerAccess({
-      allowFrom: commandOwnerAllowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      allowNameMatching,
-    });
     const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
-    const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+    const senderIsCommandOwner =
+      commandOwnerAllowFrom?.includes(sender.id) === true || commandOwnerAllowAll;
     if (commandOwnerAllowFrom && !senderIsCommandOwner && !commandsAllowFromAccess.allowed) {
       return false;
     }

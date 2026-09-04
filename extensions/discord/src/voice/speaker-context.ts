@@ -4,7 +4,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { Client } from "../internal/discord.js";
-import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
@@ -47,7 +46,7 @@ export class DiscordVoiceSpeakerContextResolver {
       label: identity.label,
       name: identity.name,
       tag: identity.tag,
-      senderIsOwner: this.resolveIsOwner(identity),
+      senderIsOwner: this.params.ownerAllowFrom?.includes(identity.id) === true,
     };
     this.setCachedContext(guildId, userId, context);
     return context;
@@ -85,18 +84,6 @@ export class DiscordVoiceSpeakerContextResolver {
         return { id: userId, label: userId, memberRoleIds: [] };
       }
     }
-  }
-
-  private resolveIsOwner(identity: Pick<VoiceSpeakerIdentity, "id" | "name" | "tag">): boolean {
-    return resolveDiscordOwnerAccess({
-      allowFrom: this.params.ownerAllowFrom,
-      sender: {
-        id: identity.id,
-        name: identity.name,
-        tag: identity.tag,
-      },
-      allowNameMatching: false,
-    }).ownerAllowed;
   }
 
   private resolveCacheKey(guildId: string, userId: string): string {

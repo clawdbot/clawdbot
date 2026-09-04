@@ -312,33 +312,17 @@ export function resolveDiscordOwnerAccess(params: {
 }
 
 export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
-  const raw = cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
-  }
-  const entries: string[] = [];
-  for (const entry of raw) {
-    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
-      if (prefix === "discord") {
-        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
-        if (remainder) {
-          entries.push(remainder);
-        }
-        continue;
-      }
-      if (prefix !== "user" && prefix !== "pk") {
-        continue;
-      }
-    }
-    entries.push(trimmed);
-  }
-  return entries.length > 0 ? entries : undefined;
+  // Doctor canonicalizes legacy owner prefixes; transport allowlist parsing must
+  // not grant different owner authority than the shared command authorization.
+  // A present noncanonical list stays empty so callers cannot fall back to channel access.
+  const entries = (cfg.commands?.ownerAllowFrom ?? [])
+    .map((entry) => String(entry).trim())
+    .filter((entry) => entry && (/^(discord|user|pk):/i.test(entry) || !entry.includes(":")));
+  return entries.length > 0
+    ? entries
+        .map((entry) => entry.replace(/^discord:/i, "").trim())
+        .filter((entry) => entry && !entry.includes(":"))
+    : undefined;
 }
 
 export function resolveDiscordCommandAuthorized(params: {

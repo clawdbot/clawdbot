@@ -153,15 +153,21 @@ describe("createDiscordVoiceCommand", () => {
     });
   });
 
-  it("authorizes vc commands through commands.ownerAllowFrom", async () => {
+  it.each([
+    { prefix: "", authorized: true },
+    { prefix: "discord:", authorized: true },
+    { prefix: "discord:user:", authorized: false },
+    { prefix: "user:", authorized: false },
+    { prefix: "pk:", authorized: false },
+  ])("uses canonical $prefix owner IDs for vc commands", async ({ prefix, authorized }) => {
     const ownerId = "100000000000000001";
     const statusSpy = vi.fn(() => []);
     const manager = {
       status: statusSpy,
     } as unknown as DiscordVoiceManager;
     const { status } = createVoiceCommandHarness(manager, {
-      cfg: { commands: { ownerAllowFrom: [`discord:${ownerId}`] } },
-      discordConfig: { dmPolicy: "disabled" },
+      cfg: { commands: { ownerAllowFrom: [`${prefix}${ownerId}`] } },
+      discordConfig: { dmPolicy: "disabled", allowFrom: ["*"] },
       useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
@@ -173,7 +179,9 @@ describe("createDiscordVoiceCommand", () => {
 
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
+      content: authorized
+        ? "No active voice sessions."
+        : "You are not authorized to use this command.",
       ephemeral: true,
     });
   });
