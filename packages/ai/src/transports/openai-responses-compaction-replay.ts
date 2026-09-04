@@ -24,6 +24,7 @@ import {
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
+import { providerReplayContextMatches } from "./provider-replay-context.js";
 
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
 const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
@@ -106,21 +107,6 @@ function readOpenAIResponsesCompactionReplayState(
     isOpenAIResponsesCompactionState(value)
     ? value
     : undefined;
-}
-
-export function openAIResponsesReplayContextMatches(
-  state: OpenAIResponsesReplayContext,
-  context: OpenAIResponsesReplayContext,
-): boolean {
-  // Replay state is scoped to the exact request identity that captured it.
-  return (
-    state.provider === context.provider &&
-    state.api === context.api &&
-    state.model === context.model &&
-    state.baseUrlHash === context.baseUrlHash &&
-    state.sessionHash === context.sessionHash &&
-    state.authProfileHash === context.authProfileHash
-  );
 }
 
 export function captureOpenAIResponsesCompaction(
@@ -273,7 +259,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
     if (replay?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
       // A successful encrypted-content fallback records this provider-owned
       // tombstone so later turns never retry an already rejected compaction.
-      if (openAIResponsesReplayContextMatches(replay, context)) {
+      if (providerReplayContextMatches(replay, context)) {
         return undefined;
       }
       continue;
@@ -290,7 +276,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       }
       continue;
     }
-    if (!openAIResponsesReplayContextMatches(replay, context)) {
+    if (!providerReplayContextMatches(replay, context)) {
       return undefined;
     }
     if (

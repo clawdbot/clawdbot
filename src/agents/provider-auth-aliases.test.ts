@@ -9,7 +9,7 @@ const pluginRegistryMocks = vi.hoisted(() => {
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({ snapshot: { plugins: [] } })),
     resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
@@ -38,7 +38,8 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata:
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -130,6 +131,7 @@ function createPluginMetadataSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -162,8 +164,10 @@ describe("provider auth aliases", () => {
       plugins: [],
       diagnostics: [],
     });
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      snapshot: { plugins: [] },
+    });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 

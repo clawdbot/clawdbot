@@ -1,5 +1,6 @@
 // Cron list regression tests cover preserving cron jobs in list output.
 import { describe, expect, it, vi } from "vitest";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
@@ -26,16 +27,6 @@ function createCronFromStorePath(storePath: string) {
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
-}
-
-function requireEnqueueSystemEventCall(
-  enqueueSystemEvent: ReturnType<typeof vi.fn>,
-): [string, { agentId?: string } | undefined] {
-  const call = enqueueSystemEvent.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected enqueueSystemEvent call");
-  }
-  return call as [string, { agentId?: string } | undefined];
 }
 
 // regression: #16156
@@ -84,7 +75,10 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const updated = jobs.find((j) => j.id === job.id);
 
     // Job must have actually executed.
-    const [text, options] = requireEnqueueSystemEventCall(enqueueSystemEvent);
+    const [text, options] = mockCall(enqueueSystemEvent) as [
+      string,
+      { agentId?: string } | undefined,
+    ];
     expect(text).toBe("cron-tick");
     expect(options?.agentId).toBe("main");
     expect(updated?.state.lastStatus).toBe("ok");
@@ -128,7 +122,10 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((j) => j.id === job.id);
 
-    const [text, options] = requireEnqueueSystemEventCall(enqueueSystemEvent);
+    const [text, options] = mockCall(enqueueSystemEvent) as [
+      string,
+      { agentId?: string } | undefined,
+    ];
     expect(text).toBe("tick-5");
     expect(options?.agentId).toBe("main");
     expect(updated?.state.lastStatus).toBe("ok");

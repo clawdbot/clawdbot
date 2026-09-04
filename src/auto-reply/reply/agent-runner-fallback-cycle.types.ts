@@ -32,6 +32,7 @@ export type AgentFallbackCandidateCommonParams = {
   runId: string;
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
+  isFallbackRetry: boolean;
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
@@ -57,6 +58,8 @@ export type AgentFallbackCandidateCommonParams = {
 export type AgentFallbackCycleState = {
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
+  /** Turn admission time; terminal backstops must not stamp failure time as the start. */
+  turnStartedAtMs: number;
   compaction: AgentTurnCompaction;
   /** Failure attribution only; model start does not prove current token freshness. */
   postCompactionModelAttempted: boolean;
@@ -96,7 +99,7 @@ export type AgentFallbackCycleParams = {
   runtimeConfig: OpenClawConfig;
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
   runId: string;
   runAbortSignal?: AbortSignal;

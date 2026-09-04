@@ -1,3 +1,4 @@
+import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
@@ -25,7 +26,6 @@ import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
@@ -37,7 +37,6 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
-import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { showToast } from "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -71,11 +70,6 @@ import {
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import {
-  isBrowserPanelAvailable,
-  isDesktopPanelAvailable,
-  isHomePanelAvailable,
-} from "./panel-availability.ts";
 import {
   changedServerUiPrefs,
   isApplyingServerUiPrefs,
@@ -649,9 +643,13 @@ class OpenClawShell
     }
   }
 
-  override updated() {
+  override updated(changed: PropertyValues<this>) {
     this.syncDocumentTitle();
-    syncControlUiSystemChrome();
+    // Theme and breakpoint owners sync their changes; route/runtime changes
+    // can change whether the committed shell uses the chat background.
+    if (changed.has("routeState") || changed.has("runtime")) {
+      syncControlUiSystemChrome();
+    }
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
@@ -669,32 +667,8 @@ class OpenClawShell
     if (!context) {
       return;
     }
-    const gatewaySnapshot = context.gateway?.snapshot;
-    if (gatewaySnapshot && this.workspaceChromeVisible) {
-      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
-      // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
-      // show read-scoped clients a control the store then refuses to use.
-      const custodianAvailable = canCallGatewayMethod(
-        gatewaySnapshot,
-        "openclaw.chat",
-        "operator.admin",
-      );
-      if (this.commandPalette) {
-        this.commandPalette.desktopAvailable = desktopAvailable;
-        this.commandPalette.custodianAvailable = custodianAvailable;
-      }
-      if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
-        this.lazyCustomElements.preload(this.terminalPanelElement);
-      }
-      if (isBrowserPanelAvailable(gatewaySnapshot)) {
-        this.lazyCustomElements.preload(this.browserPanelElement);
-      }
-      if (desktopAvailable) {
-        this.lazyCustomElements.preload(this.desktopPanelElement);
-      }
-      if (custodianAvailable || isHomePanelAvailable(context.gateway)) {
-        this.lazyCustomElements.preload(this.assistantPanelElement);
-      }
+    if (this.workspaceChromeVisible) {
+      this.shellChrome.panels.restore();
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       this.lazyCustomElements.preload(this.execApprovalElement);
@@ -739,7 +713,7 @@ class OpenClawShell
     snapshot: ApplicationContext["gateway"]["snapshot"],
     runtimeConfig = this.context?.runtimeConfig,
   ) {
-    this.shellGateway.ensureRuntimeConfig(snapshot, runtimeConfig);
+    void this.shellGateway.ensureRuntimeConfig(snapshot, runtimeConfig).catch(() => undefined);
   }
 
   enabledRouteIds(): readonly RouteId[] {
@@ -757,7 +731,7 @@ class OpenClawShell
     snapshot: ApplicationContext["gateway"]["snapshot"],
     agents = this.context?.agents,
   ) {
-    this.shellGateway.ensureAgentsList(snapshot, agents);
+    void this.shellGateway.ensureAgentsList(snapshot, agents).catch(() => undefined);
   }
 
   private updateRouteState(routeState: ShellRouteState) {

@@ -39,6 +39,8 @@ export const STALLED_CATALOG_MODEL_ID = "bench-model";
 
 export const BASE_GATEWAY_BENCH_CONFIG = {
   browser: { enabled: false },
+  // Loopback listener binding does not suppress LAN discovery.
+  discovery: { mdns: { mode: "off" } },
   gateway: {
     mode: "local",
     bind: "loopback",

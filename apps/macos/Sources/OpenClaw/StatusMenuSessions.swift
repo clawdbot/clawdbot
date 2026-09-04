@@ -18,6 +18,7 @@ final class StatusMenuSessions: NSObject {
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
     func refresh(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
         if !force,
            let updatedAt,
            Date().timeIntervalSince(updatedAt) < self.refreshInterval
@@ -35,12 +36,14 @@ final class StatusMenuSessions: NSObject {
 
         do {
             let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = snapshot
             self.rows = snapshot.rows
             self.errorText = nil
             self.updatedAt = Date()
             self.prewarmPreviews(for: snapshot.rows)
         } catch {
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = nil
             self.rows = []
             self.errorText = self.compactError(error)
@@ -425,7 +428,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Reset session?"),
-                message: String(localized: "Starts a new session ID for “\(key)”."),
+                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                 action: String(localized: "Reset"))
             else { return }
 
@@ -465,7 +468,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Delete session?"),
-                message: String(localized: "Deletes the “\(key)” entry and archives its transcript."),
+                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
                 action: String(localized: "Delete"))
             else { return }
 

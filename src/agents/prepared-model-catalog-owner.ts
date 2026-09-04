@@ -58,12 +58,14 @@ export function resolvePublishedModelCatalogOwner(
     catalogOwner,
     agentId,
     agentDir: snapshot.agentDir,
-    ...(snapshot.inheritedAuthDir ? { inheritedAuthDir: snapshot.inheritedAuthDir } : {}),
     workspaceDir,
     config: snapshot.config,
+    observationConfig: snapshot.observationConfig,
     authModes: snapshot.authModes,
     authStore,
     metadataSnapshot: snapshot.metadataSnapshot,
+    pluginRegistry: snapshot.pluginRegistry,
+    isCurrent: snapshot.isCurrent,
     modelCatalog: snapshot.modelCatalog,
   });
 }

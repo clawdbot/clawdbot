@@ -66,6 +66,7 @@ export function checkpointResult(
 export function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
   stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
+  dependencies: Pick<Parameters<typeof createCrabboxWorkerProvider>[0], "sleep"> = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const calls: CommandCall[] = [];
@@ -77,6 +78,7 @@ export function createWarmProvider(
     wallpaperPath: WALLPAPER_PATH,
     warn,
     sleep: async () => {},
+    ...dependencies,
     runCommand: async (argv, options) => {
       const call = { argv, options };
       calls.push(call);
@@ -140,18 +142,22 @@ export async function provisionWarmProfile(
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
+  options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
+    ...options,
     ...(machineClass ? { machineClass } : {}),
-    beginNodeEnrollment: async () => ({
-      mode: "connect",
-      setupCode: "setup-code",
-      setupId: "setup-id",
-      openclawVersion: "2026.8.1",
-      nodeBootstrap: createNodeBootstrapFixture(),
-      displayName: "Warm cloud worker",
-      waitForDeviceId: async () => "device-1",
-    }),
+    beginNodeEnrollment:
+      options?.beginNodeEnrollment ??
+      (async () => ({
+        mode: "connect",
+        setupCode: "setup-code",
+        setupId: "setup-id",
+        openclawVersion: "2026.8.1",
+        nodeBootstrap: createNodeBootstrapFixture(),
+        displayName: "Warm cloud worker",
+        waitForDeviceId: async () => "device-1",
+      })),
   });
 }
 

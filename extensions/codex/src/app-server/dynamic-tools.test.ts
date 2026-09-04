@@ -5,7 +5,6 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
@@ -53,7 +52,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
-import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -765,7 +763,6 @@ describe("createCodexDynamicToolBridge", () => {
       tools: [createTool({ name: "progress_card" }), createTool({ name: "web_search" })],
       signal: new AbortController().signal,
       loading: "searchable",
-      directToolNames: resolveCodexDynamicToolDirectNames({} as EmbeddedRunAttemptParams),
     });
 
     const specs = flattenSpecsWithNamespace(bridge.specs);

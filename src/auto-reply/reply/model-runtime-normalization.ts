@@ -25,7 +25,7 @@ export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNo
     manifestPlugins: getCurrentPluginMetadataSnapshot({
       config: cfg,
       allowWorkspaceScopedSnapshot: true,
-    })?.plugins,
+    }),
   };
 }
 

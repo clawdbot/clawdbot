@@ -315,7 +315,7 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
 /** Sets or clears the preferred auth-profile order for one provider and agent. */
 export const ModelsAuthOrderSetParamsSchema = closedObject({
   provider: NonEmptyString,
-  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
   agentId: Type.Optional(Type.String()),
 });
 
@@ -375,6 +375,7 @@ export const ModelsProbeResultSchema = closedObject({
 /** Reads installed skill status, optionally for a selected agent. */
 export const SkillsStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Empty request payload for listing available skill bins. */

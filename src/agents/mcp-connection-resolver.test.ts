@@ -248,13 +248,18 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
     try {
-      // Model catalog provisioning is independent of plugin-owned MCP revocation.
-      // Keep both Gateway refresh calls observable without starting provider discovery.
+      // Keep Gateway refresh scheduling observable without starting provider discovery.
       const refreshPreparedModelRuntimeSnapshots = vi
         .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
         .mockResolvedValue(undefined);
       const refreshContextWindowCache = vi
         .spyOn(await import("./context.js"), "refreshContextWindowCache")
+        .mockResolvedValue(undefined);
+      const warmCurrentProviderAuthStateOffMainThread = vi
+        .spyOn(
+          await import("./model-provider-auth.js"),
+          "warmCurrentProviderAuthStateOffMainThread",
+        )
         .mockResolvedValue(undefined);
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
@@ -335,7 +340,6 @@ describe("mcp connection resolver helpers", () => {
           stopStreamWatchers: async () => {},
           reconcileHeartbeatJobs: async () => "converged" as const,
         },
-        channelHealthMonitor: null,
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
@@ -383,7 +387,6 @@ describe("mcp connection resolver helpers", () => {
           isClosing: () => false,
           async runHook() {},
         }),
-        createHealthMonitor: () => null,
         requestRecoveryRestart,
       });
 
@@ -393,6 +396,9 @@ describe("mcp connection resolver helpers", () => {
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+      expect(warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig, {
+        isCancelled: expect.any(Function),
+      });
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();

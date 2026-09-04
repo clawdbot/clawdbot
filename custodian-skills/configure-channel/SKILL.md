@@ -23,11 +23,20 @@ openclaw config schema --json | jq '.properties.channels.properties.telegram'
 
 ## Mutate
 
+Confirm the intended account and access changes with the operator before writing. Preserve existing approved allowlist entries, `dmPolicy`, and `groupPolicy` unless their replacement or change is explicitly approved; never broaden access to make a probe pass.
+
 Preferred shell path — token staged as an env var on the gateway process or in a `0600` file, wired as a SecretRef (Telegram example):
 
 ```
 openclaw config set channels.telegram.botToken --ref-provider default --ref-source env --ref-id TELEGRAM_BOT_TOKEN
-openclaw config set channels.telegram.allowFrom '["+15555550123"]' --strict-json
+```
+
+With the bot connected and DM policy `pairing`, ask the operator to DM it. Read `Your Telegram user id` in the pairing reply, or run `openclaw logs --follow` and read `senderUserId` in that sender's `telegram pairing request` entry. Stop following once captured; keep unrelated logs private. If the current policy prevents this flow, use an already verified ID or report the discovery blocker; do not broaden access.
+
+Use the numeric **Telegram user ID**, not a phone number, username, chat/group ID, or bot ID. In this single-user example, `123456789` is a placeholder: replace it with the verified, approved user ID and retain any other approved entries.
+
+```
+openclaw config set channels.telegram.allowFrom '["123456789"]' --strict-json
 ```
 
 Multi-field changes in one validated write:
@@ -43,11 +52,11 @@ In-session alternative: call the `connect_channel` tool action with the channel 
 ## Repair
 
 ```
-openclaw doctor --non-interactive
-openclaw channels status --deep
+openclaw doctor --lint
+openclaw channels status --probe
 ```
 
-Apply `openclaw doctor --fix --non-interactive` only after approval, then re-check status.
+`doctor --lint` can exit `1` for findings: read the report and continue the remaining checks. Ordinary `doctor` and `doctor --non-interactive` can write config/state; do not use them for diagnosis before approval. Apply `openclaw doctor --fix --non-interactive` only after explicit approval, then re-check status.
 
 ## Prove
 

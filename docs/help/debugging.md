@@ -171,9 +171,11 @@ Add gateway CLI flags after `gateway:watch` and they pass through on each restar
 
 When you run `pnpm openclaw`, `pnpm dev`, or a Gateway development runner from
 a checkout, the runner selects that checkout's plugins ahead of tracked global
-copies with the same id. Built plugin output remains preferred when available;
-source-only plugins still load from the checkout. Rebuild to pick up source
-changes when using built output.
+copies with the same id. Built plugin output remains preferred when available,
+including for separately published checkout plugins and Doctor's provider/tool
+checks. Source-only plugins still load from the checkout. Rebuild to pick up
+source changes when using built output. Intentional source-entry selections and
+mounted source overlays keep using source instead of their compiled peers.
 
 This selection is separate from the `--dev` profile. It does not grant trusted
 plugin capabilities to arbitrary local links, `npm-pack:` installs, or plugins

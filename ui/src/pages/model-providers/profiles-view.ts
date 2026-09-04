@@ -6,7 +6,11 @@ import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
-import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
+import type {
+  ModelProviderCard,
+  ModelProviderPendingLogout,
+  ModelProviderProfileOrderLock,
+} from "./data.ts";
 
 type ProviderProfile = ModelProviderCard["profiles"][number];
 
@@ -56,6 +60,14 @@ function apiKeySource(card: ModelProviderCard): string | undefined {
   return card.apiKey.envVar
     ? t("modelProviders.credentials.envKeyNamed", { name: card.apiKey.envVar })
     : t("modelProviders.credentials.envKey");
+}
+
+function profileOrderLockMessage(lock: ModelProviderProfileOrderLock): string {
+  return t(
+    lock === "auth-config"
+      ? "modelProviders.profiles.priorityManagedByAuth"
+      : "modelProviders.profiles.priorityManagedByProvider",
+  );
 }
 
 function profileMeta(profile: ProviderProfile): string {
@@ -276,21 +288,27 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   const providers = [
     ...new Set(profiles.map((profile) => card.profileProviderIds[profile.profileId] ?? card.id)),
   ];
-  const lockedProviders = new Set(card.profileOrderLockedProviders);
   const storedOrderProviders = new Set(card.profileOrderStoredProviders);
   const reorderOffered = providers.some((provider) => {
     const order = movableOrder(card, provider, props.profileOrders);
     return (
-      !lockedProviders.has(provider) &&
+      card.profileOrderLocks[provider] === undefined &&
       order.length > 1 &&
-      order.length === profilesForProvider(card, provider).length
+      hasExactProfileOrder(profilesForProvider(card, provider), order)
     );
   });
-  const priorityManaged = providers.some((provider) => lockedProviders.has(provider));
+  const priorityManaged = [
+    ...new Set(
+      providers.flatMap((provider) => {
+        const lock = card.profileOrderLocks[provider];
+        return lock ? [profileOrderLockMessage(lock)] : [];
+      }),
+    ),
+  ].join(" · ");
   const priorityAutomatic = providers.some((provider) => {
     const order = movableOrder(card, provider, props.profileOrders);
     return (
-      !lockedProviders.has(provider) &&
+      card.profileOrderLocks[provider] === undefined &&
       !storedOrderProviders.has(provider) &&
       !hasExactProfileOrder(profilesForProvider(card, provider), order)
     );
@@ -307,13 +325,13 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                 ? "modelProviders.profiles.accountOne"
                 : "modelProviders.profiles.accounts",
               { count: String(profiles.length) },
-            )}${reorderOffered
-              ? ` · ${t("modelProviders.profiles.reorderHint")}`
-              : ""}${priorityManaged
-              ? ` · ${t("modelProviders.profiles.priorityManaged")}`
-              : priorityAutomatic
-                ? ` · ${t("modelProviders.profiles.partialOrder")}`
-                : ""}${additionalCredentialSource ? ` · ${additionalCredentialSource}` : ""}</span
+            )}${reorderOffered ? ` · ${t("modelProviders.profiles.reorderHint")}` : ""}${
+              priorityManaged
+                ? ` · ${priorityManaged}`
+                : priorityAutomatic
+                  ? ` · ${t("modelProviders.profiles.partialOrder")}`
+                  : ""
+            }${additionalCredentialSource ? ` · ${additionalCredentialSource}` : ""}</span
           >
         </span>
         <span class="model-providers__profiles-heading-actions">
@@ -343,7 +361,8 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const order = movableOrder(card, provider, props.profileOrders);
             const index = order.indexOf(profile.profileId);
             const complete = hasExactProfileOrder(profilesForProvider(card, provider), order);
-            const locked = lockedProviders.has(provider);
+            const lock = card.profileOrderLocks[provider];
+            const locked = lock !== undefined;
             const automatic = !locked && !storedOrderProviders.has(provider) && !complete;
             const canMove =
               props.canMutate && !locked && complete && order.length > 1 && index >= 0;
@@ -354,8 +373,8 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
               : logoutLabel;
             const reorderBlocked = !props.canMutate
               ? (props.mutationBlockedReason ?? "")
-              : locked
-                ? t("modelProviders.profiles.priorityManaged")
+              : lock
+                ? profileOrderLockMessage(lock)
                 : !complete
                   ? t("modelProviders.profiles.partialStoredOrder")
                   : "";
@@ -372,45 +391,59 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                 data-profile-id=${profile.profileId}
                 data-profile-provider=${provider}
               >
-                ${locked || automatic
-                  ? html`<span
-                      class="model-providers__profile-grip-spacer"
-                      aria-hidden="true"
-                    ></span>`
-                  : html`<button
-                      type="button"
-                      class="model-providers__profile-grip"
-                      ?disabled=${!canMove}
-                      aria-label=${t("modelProviders.profiles.reorder", {
-                        account: identity,
-                        position: String(index + 1),
-                      })}
-                      aria-keyshortcuts=${canMove ? "ArrowUp ArrowDown" : nothing}
-                      title=${reorderBlocked}
-                      @pointerdown=${(event: PointerEvent) =>
-                        startPointerDrag({
-                          event,
-                          canMove,
-                          sourceId: profile.profileId,
-                          provider,
-                          move,
+                ${
+                  locked || automatic
+                    ? html`<span
+                        class="model-providers__profile-grip-spacer"
+                        aria-hidden="true"
+                      ></span>`
+                    : html`<button
+                        type="button"
+                        class="model-providers__profile-grip"
+                        ?disabled=${!canMove}
+                        aria-label=${t("modelProviders.profiles.reorder", {
+                          account: identity,
+                          position: String(index + 1),
                         })}
-                      @keydown=${(event: KeyboardEvent) => {
-                        if (!canMove) {
-                          return;
-                        }
-                        const delta =
-                          event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-                        const targetId = order[index + delta];
-                        if (!delta || !targetId) {
-                          return;
-                        }
-                        event.preventDefault();
-                        move(targetId, delta < 0 ? "before" : "after");
-                      }}
-                    >
-                      ${icons.gripVertical}
-                    </button>`}
+                        aria-keyshortcuts=${canMove ? "ArrowUp ArrowDown" : nothing}
+                        title=${reorderBlocked}
+                        @pointerdown=${(event: PointerEvent) =>
+                          startPointerDrag({
+                            event,
+                            canMove,
+                            sourceId: profile.profileId,
+                            provider,
+                            move,
+                          })}
+                        @keydown=${(event: KeyboardEvent) => {
+                          if (!canMove) {
+                            return;
+                          }
+                          const delta =
+                            event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                          const targetId = order[index + delta];
+                          if (!delta || !targetId) {
+                            return;
+                          }
+                          event.preventDefault();
+                          const grip = event.currentTarget;
+                          const restoreFocus =
+                            grip instanceof HTMLElement && document.activeElement === grip;
+                          move(targetId, delta < 0 ? "before" : "after");
+                          if (restoreFocus) {
+                            // Lit moves keyed rows through removal/reinsertion, dropping focus.
+                            // Restore this grip after rendering without taking focus from another control.
+                            queueMicrotask(() => {
+                              if (grip.isConnected && document.activeElement === document.body) {
+                                grip.focus({ preventScroll: true });
+                              }
+                            });
+                          }
+                        }}
+                      >
+                        ${icons.gripVertical}
+                      </button>`
+                }
                 <span class="model-providers__profile-avatar" aria-hidden="true"
                   >${profileInitials(profile)}</span
                 >
@@ -424,10 +457,12 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                   class="model-providers__profile-logout"
                   aria-label=${logoutLabel}
                   title=${logoutBlocked}
-                  ?disabled=${!props.canMutate ||
-                  profile.logoutSupported !== true ||
-                  !logoutProvider ||
-                  props.busy[`logout:${card.id}`]}
+                  ?disabled=${
+                    !props.canMutate ||
+                    profile.logoutSupported !== true ||
+                    !logoutProvider ||
+                    props.busy[`logout:${card.id}`]
+                  }
                   @click=${() => {
                     if (!logoutProvider) {
                       return;

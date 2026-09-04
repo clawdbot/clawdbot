@@ -9,17 +9,8 @@ import {
   type CodexMirroredSessionHistoryTarget,
 } from "./session-history.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
-import {
-  hasCodexMirrorOrigin,
-  readCodexMirrorSourceFingerprint,
-  serializeCodexMirrorSourceEvidence,
-} from "./transcript-mirror-attestation.js";
-import {
-  attachCodexMirrorIdentity,
-  attachUpstreamUserText,
-  readMirrorIdentity,
-  readUpstreamUserText,
-} from "./upstream-prompt-provenance.js";
+import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function freezeProjection(value: JsonValue): void {
   if (value !== null && typeof value === "object") {
@@ -30,12 +21,22 @@ function freezeProjection(value: JsonValue): void {
   }
 }
 
+type CodexSettledTurnSelection = {
+  model: string;
+  modelProvider?: string;
+  authProfileId?: string;
+};
+
 /** Only the Codex owner interprets this bounded, detached replay projection. */
 export class CodexSettledTurnContext {
   readonly source = "harness";
 
-  constructor(readonly data: JsonValue[]) {
+  constructor(
+    readonly data: JsonValue[],
+    readonly selection: CodexSettledTurnSelection,
+  ) {
     freezeProjection(data);
+    Object.freeze(selection);
     Object.freeze(this);
   }
 }
@@ -48,27 +49,6 @@ type SettledTurnMessages = {
 
 function rejectEvidence(): never {
   throw new Error("Codex settled-turn transcript does not match the settled turn");
-}
-
-function adoptPersistedHostPrompt(message: AgentMessage, source: AgentMessage): AgentMessage {
-  const sourceText = readUpstreamUserText(source);
-  const persistedText = readUpstreamUserText(message);
-  if (
-    readMirrorIdentity(message) !== undefined ||
-    readCodexMirrorSourceFingerprint(message) !== undefined ||
-    hasCodexMirrorOrigin(message) ||
-    (persistedText !== undefined && persistedText !== sourceText)
-  ) {
-    rejectEvidence();
-  }
-  let logical = attachCodexMirrorIdentity(message, readMirrorIdentity(source)!);
-  if (sourceText !== undefined) {
-    logical = attachUpstreamUserText(logical, sourceText);
-  }
-  if (serializeCodexMirrorSourceEvidence(logical) !== serializeCodexMirrorSourceEvidence(source)) {
-    rejectEvidence();
-  }
-  return logical;
 }
 
 /** Yields only the settled prefix, but exhausts suffix identity checks before accepting it. */
@@ -93,19 +73,7 @@ function* verifiedSettledMessages(
   ) {
     rejectEvidence();
   }
-  const sourcePrompt = params.settledMessages[0];
-  const sourceKey = (sourcePrompt as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
-  const adoption =
-    !params.mirroredMessages.some((message) => readMirrorIdentity(message) === promptIdentity) &&
-    sourcePrompt?.role === "user" &&
-    readMirrorIdentity(sourcePrompt) === promptIdentity &&
-    typeof sourceKey === "string" &&
-    sourceKey.trim().length > 0
-      ? { prompt: sourcePrompt, key: sourceKey }
-      : undefined;
-  const mirrored = adoption
-    ? [adoption.prompt, ...params.mirroredMessages]
-    : params.mirroredMessages;
+  const mirrored = params.mirroredMessages;
   const mirroredIds = mirrored.flatMap((message) => readMirrorIdentity(message) ?? []);
   const mirroredBoundaryIndex = mirrored.findIndex(
     (message) => readMirrorIdentity(message) === boundaryIdentity,
@@ -120,22 +88,9 @@ function* verifiedSettledMessages(
   const required = new Map(requiredIds.map((id, index) => [id, mirrored[index]!]));
   const seen = new Set<string>();
   let matched = 0;
-  let hostPromptMatches = 0;
   let throughBoundary = false;
   for (const message of history) {
-    let verificationMessage = message;
-    if (
-      adoption &&
-      message.role === "user" &&
-      (message as { idempotencyKey?: unknown }).idempotencyKey === adoption.key
-    ) {
-      hostPromptMatches += 1;
-      if (hostPromptMatches > 1) {
-        rejectEvidence();
-      }
-      verificationMessage = adoptPersistedHostPrompt(message, adoption.prompt);
-    }
-    const identity = readMirrorIdentity(verificationMessage);
+    const identity = readMirrorIdentity(message);
     if (identity) {
       if (seen.has(identity)) {
         rejectEvidence();
@@ -145,7 +100,7 @@ function* verifiedSettledMessages(
       if (expected) {
         if (
           identity !== requiredIds[matched] ||
-          serializeCodexMirrorSourceEvidence(verificationMessage) !==
+          serializeCodexMirrorSourceEvidence(message) !==
             serializeCodexMirrorSourceEvidence(expected)
         ) {
           rejectEvidence();
@@ -154,26 +109,32 @@ function* verifiedSettledMessages(
       }
     }
     if (!throughBoundary) {
-      // Adoption is verification-only: replay the canonical persisted prompt, not its synthetic view.
       yield message;
     }
     throughBoundary ||= identity === boundaryIdentity;
   }
-  if (!throughBoundary || matched !== requiredIds.length || (adoption && hostPromptMatches !== 1)) {
+  if (!throughBoundary || matched !== requiredIds.length) {
     rejectEvidence();
   }
 }
 
 /** Verifies and freezes a complete replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
-  params: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
+  params: CodexMirroredSessionHistoryTarget &
+    SettledTurnMessages &
+    Partial<CodexSettledTurnSelection>,
 ): Promise<CodexSettledTurnContext | undefined> {
   try {
+    const { model, modelProvider, authProfileId } = params;
+    if (!model) {
+      throw new Error("Codex settled-turn model selection is unavailable");
+    }
     return await readCodexMirroredSessionHistory(
       params,
       (messages) =>
         new CodexSettledTurnContext(
           projectSettledCodexMessages(verifiedSettledMessages(messages, params)),
+          { model, modelProvider, authProfileId },
         ),
     );
   } catch (error) {

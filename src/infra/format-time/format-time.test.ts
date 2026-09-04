@@ -70,6 +70,18 @@ describe("format-duration", () => {
       },
       { input: 59500, expected: "1m" },
       { input: 59400, expected: "59s" },
+      { input: 18_014_398_509_513_598_976, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_598_976,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
+      { input: 18_014_398_509_513_601_024, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_601_024,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
     ])("formats compact duration for %j", ({ input, options, expected }) => {
       expect(formatDurationCompact(input, options)).toBe(expected);
     });

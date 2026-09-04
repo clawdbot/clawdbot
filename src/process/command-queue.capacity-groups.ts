@@ -7,9 +7,6 @@ import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.sta
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
-/** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
-type DrainLaneFn = (lane: string) => void;
-
 /** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
@@ -111,29 +108,10 @@ function getMemberActiveCount(lane: string): number {
   return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
 }
 
-/**
- * Why `lane` cannot admit another task, or null if it can.
- *
- * Group capacity is always DERIVED from members' `activeTaskIds`, never tracked
- * in a separate counter. That is what makes timeout, abort, clear, reset and
- * stale-generation completion release capacity for free: they all remove the
- * task id, so the next admission decision simply sees a smaller number. The
- * only remaining obligation is that those paths re-drain the group.
- */
-function resolveLaneBlockReason(lane: string): CommandLaneBlockReason {
-  const state = getQueueState().lanes.get(lane);
-  if (state && state.activeTaskIds.size >= state.maxConcurrent) {
-    return "lane";
-  }
-  const group = getLaneGroup(lane);
-  if (!group) {
-    return null;
-  }
-  return resolveGroupBlockReason(group, lane, readGroupCapacity(group));
-}
-
 type GroupCapacity = { active: number; reserved: number };
 
+// Derive capacity from active task IDs so timeout, reset, and stale completion
+// handling share the queue's existing ownership accounting.
 function readGroupCapacity(group: LaneGroupState): GroupCapacity {
   let active = 0;
   let reserved = 0;
@@ -180,8 +158,8 @@ export function applyCommandLaneCapacity(snapshot: CommandLaneSnapshot): void {
 }
 
 export function canAdmitInGroup(lane: string): boolean {
-  const reason = resolveLaneBlockReason(lane);
-  return reason === null || reason === "lane";
+  const group = getLaneGroup(lane);
+  return !group || resolveGroupBlockReason(group, lane, readGroupCapacity(group)) === null;
 }
 
 /**
@@ -290,7 +268,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
  * group applies the same order across member queue heads so a completing lane
  * cannot synchronously reclaim shared capacity ahead of an older sibling.
  */
-function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
+export function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
   const group = getLaneGroup(lane);
   if (!group || DRAINING_GROUPS.has(group)) {
     return;
@@ -306,14 +284,4 @@ function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): voi
   } finally {
     DRAINING_GROUPS.delete(group);
   }
-}
-
-/**
- * Re-drain the owning capacity group after a member changes state.
- *
- * The legacy exported name and callback surface stay stable for internal SDK
- * consumers; the supplied queue drain also supports the private bounded call.
- */
-export function drainGroupSiblings(lane: string, drainLane: DrainLaneFn): void {
-  drainCommandLaneGroup(lane, drainLane);
 }

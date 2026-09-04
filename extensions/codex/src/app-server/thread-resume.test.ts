@@ -127,29 +127,30 @@ describe("resumeCodexAppServerThread", () => {
     expect(abandonClient).not.toHaveBeenCalled();
   });
 
-  it("preserves a physical pre-write ownership rejection without cleanup or retirement", async () => {
-    const harness = createClientHarness();
-    const rejection = new CodexAdoptedThreadActiveError();
-    const abandonClient = vi.fn(async () => undefined);
-    try {
-      await expect(
-        resumeCodexAppServerThread({
-          client: harness.client,
-          abandonClient,
-          request: { threadId: "thread-1" },
-          assertCurrent: () => {
-            throw rejection;
-          },
-          isPrewriteOwnershipError: (error) => error instanceof CodexAdoptedThreadActiveError,
-        }),
-      ).rejects.toBe(rejection);
-      expect(harness.writes).toEqual([]);
-      expect(harness.client.getCloseError()).toBeUndefined();
-      expect(abandonClient).not.toHaveBeenCalled();
-    } finally {
-      harness.client.close();
-    }
-  });
+  it.each([new CodexAdoptedThreadActiveError(), new Error("host authority ended")])(
+    "preserves a physical pre-write ownership rejection without cleanup or retirement: %s",
+    async (rejection) => {
+      const harness = createClientHarness();
+      const abandonClient = vi.fn(async () => undefined);
+      try {
+        await expect(
+          resumeCodexAppServerThread({
+            client: harness.client,
+            abandonClient,
+            request: { threadId: "thread-1" },
+            assertCurrent: () => {
+              throw rejection;
+            },
+          }),
+        ).rejects.toBe(rejection);
+        expect(harness.writes).toEqual([]);
+        expect(harness.client.getCloseError()).toBeUndefined();
+        expect(abandonClient).not.toHaveBeenCalled();
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
 
   it("retires the exact client after a written structured failure loses cleanup ownership", async () => {
     const harness = createClientHarness();
@@ -165,7 +166,6 @@ describe("resumeCodexAppServerThread", () => {
             throw new CodexAdoptedThreadActiveError();
           }
         },
-        isPrewriteOwnershipError: (error) => error instanceof CodexAdoptedThreadActiveError,
       });
       const failure = expect(resume).rejects.toMatchObject({
         name: "CodexAppServerUnsafeSubscriptionError",

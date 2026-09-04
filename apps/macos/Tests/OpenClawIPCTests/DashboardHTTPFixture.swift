@@ -15,13 +15,21 @@ final class DashboardHTTPFixture {
     private let listener: NWListener
     private let responseHTML: String
     private let contentSecurityPolicy: String
+    private let beforeResponse: (@MainActor () async -> Void)?
     private var clients: [UUID: Client] = [:]
     private var stopped = false
     nonisolated let port: UInt16
 
-    private init(listener: NWListener, port: UInt16, html: String, contentSecurityPolicy: String) {
+    private init(
+        listener: NWListener,
+        port: UInt16,
+        html: String,
+        contentSecurityPolicy: String,
+        beforeResponse: (@MainActor () async -> Void)?)
+    {
         self.responseHTML = html
         self.contentSecurityPolicy = contentSecurityPolicy
+        self.beforeResponse = beforeResponse
         self.listener = listener
         self.port = port
         self.listener.newConnectionHandler = { [weak self] connection in
@@ -37,7 +45,8 @@ final class DashboardHTTPFixture {
 
     static func start(
         html: String = DashboardHTTPFixture.html,
-        contentSecurityPolicy: String = "default-src 'none'") async throws -> DashboardHTTPFixture
+        contentSecurityPolicy: String = "default-src 'none'",
+        beforeResponse: (@MainActor () async -> Void)? = nil) async throws -> DashboardHTTPFixture
     {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -57,7 +66,8 @@ final class DashboardHTTPFixture {
                         listener: listener,
                         port: port.rawValue,
                         html: html,
-                        contentSecurityPolicy: contentSecurityPolicy)
+                        contentSecurityPolicy: contentSecurityPolicy,
+                        beforeResponse: beforeResponse)
                 case let .failed(error):
                     throw error
                 case .cancelled:
@@ -66,7 +76,9 @@ final class DashboardHTTPFixture {
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
-            throw URLError(.timedOut)
+            throw URLError(.timedOut, userInfo: [
+                NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
+            ])
         } catch {
             listener.cancel()
             throw error
@@ -109,14 +121,23 @@ final class DashboardHTTPFixture {
         guard let client = self.clients[id] else { return }
         // One bounded request per connection; neither slow clients nor a partial
         // header can leave a receive alive beyond the connection's deadline.
-        client.connection.receive(minimumIncompleteLength: 1, maximumLength: 8192 - client.request.count) {
-            [weak self] data, _, complete, error in
+        client.connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: 8192 - client.request.count)
+        { [weak self] data, _, complete, error in
             MainActor.assumeIsolated {
                 guard let self, var client = self.clients[id] else { return }
                 if let data { client.request.append(data) }
                 self.clients[id] = client
                 if client.request.range(of: Data("\r\n\r\n".utf8)) != nil {
-                    self.respond(id)
+                    if let beforeResponse = self.beforeResponse {
+                        Task { @MainActor [weak self] in
+                            await beforeResponse()
+                            self?.respond(id)
+                        }
+                    } else {
+                        self.respond(id)
+                    }
                 } else if error != nil || complete || client.request.count >= 8192 {
                     self.close(id)
                 } else {

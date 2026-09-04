@@ -16,6 +16,7 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import { markRuntimePersistedProfiles } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -110,6 +111,17 @@ describe("persisted auth profile boundary", () => {
             id: "not-a-secret-id",
           },
         },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          deviceAuthorizationEndpoint: ["wrong"],
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
+        },
         "broken:array": [],
       },
       order: {
@@ -166,6 +178,16 @@ describe("persisted auth profile boundary", () => {
           refresh: "refresh-token",
           expires: 0,
         },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
+        },
       },
       order: {
         openai: ["openai:default"],
@@ -184,6 +206,7 @@ describe("persisted auth profile boundary", () => {
     expect(store?.profiles["broken:array"]).toBeUndefined();
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
+    expect(store?.profiles["xai:oauth"]).not.toHaveProperty("deviceAuthorizationEndpoint");
   });
 
   it("lets authoritative runtime external metadata remove stale base profiles", () => {
@@ -316,6 +339,32 @@ describe("persisted auth profile boundary", () => {
 
     expect(merged.runtimePersistedProfileIds).toEqual(["openai:added", "openai:base"]);
     expect(merged.runtimeLocalProfileIds).toEqual(["openai:added"]);
+  });
+
+  it.each([
+    { name: "inherited order", order: undefined, localProviders: [] },
+    { name: "local override", order: { openai: ["openai:shared"] }, localProviders: ["openai"] },
+  ])("preserves local priority ownership for $name", ({ order, localProviders }) => {
+    const shared = markRuntimePersistedProfiles({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:shared": { type: "api_key", provider: "openai", key: "shared-key" },
+      },
+      order: { openai: ["openai:shared"] },
+    });
+    const local = markRuntimePersistedProfiles({
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      order,
+    });
+    const merged = mergeAuthProfileStores(shared, local);
+
+    expect(merged.order).toEqual({ openai: ["openai:shared"] });
+    expect(merged.runtimeLocalOrderProviderIds).toEqual(localProviders);
+    expect(markRuntimePersistedProfiles(merged, local).runtimeLocalOrderProviderIds).toEqual(
+      localProviders,
+    );
+    expect(shared.runtimeLocalOrderProviderIds).toEqual(["openai"]);
   });
 
   it("preserves config-only order fallbacks during agent-store merges", () => {

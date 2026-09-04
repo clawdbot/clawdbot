@@ -2,9 +2,23 @@ import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as agentsWorkspace from "./agents-workspace.js";
 import * as artifacts from "./artifacts.js";
 import * as commands from "./commands.js";
+import * as skillLibrary from "./skill-library.js";
 import * as skillWorkshop from "./skill-protocol-schemas.js";
+import * as transcripts from "./transcripts.js";
 
 export const AgentSkillProtocolSchemas = {
+  TranscriptSessionSummary: transcripts.TranscriptSessionSummarySchema,
+  TranscriptsListParams: transcripts.TranscriptsListParamsSchema,
+  TranscriptsListResult: transcripts.TranscriptsListResultSchema,
+  TranscriptsGetParams: transcripts.TranscriptsGetParamsSchema,
+  TranscriptsGetResult: transcripts.TranscriptsGetResultSchema,
+  SkillsLibraryListParams: skillLibrary.SkillsLibraryListParamsSchema,
+  SkillsLibraryReadParams: skillLibrary.SkillsLibraryReadParamsSchema,
+  SkillsLibrarySaveParams: skillLibrary.SkillsLibrarySaveParamsSchema,
+  SkillsLibraryMutateParams: skillLibrary.SkillsLibraryMutateParamsSchema,
+  SkillsLibraryActivateParams: skillLibrary.SkillsLibraryActivateParamsSchema,
+  SkillsLibraryImportParams: skillLibrary.SkillsLibraryImportParamsSchema,
+  SkillsLibraryUploadParams: skillLibrary.SkillsLibraryUploadParamsSchema,
   AgentKind: agentsModelsSkills.AgentKindSchema,
   AgentSummary: agentsModelsSkills.AgentSummarySchema,
   AgentsCreateParams: agentsModelsSkills.AgentsCreateParamsSchema,

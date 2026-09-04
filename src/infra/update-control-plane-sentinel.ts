@@ -37,7 +37,7 @@ const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
 
 export type ControlPlaneUpdateSentinelMetaFile = {
   version: 1;
-  meta: UpdateRestartSentinelMeta;
+  meta: UpdateRestartSentinelMeta & { triageContextPath?: string };
 };
 
 /** Convert an update result into the restart-health-pending sentinel result. */
@@ -69,7 +69,7 @@ export function isPendingControlPlaneUpdateRestartSentinel(
   );
 }
 
-function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
+function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta"] | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -77,6 +77,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   const threadId = readNonBlankString(value.threadId);
   const handoffId = readNonBlankString(value.handoffId);
   const root = readNonBlankString(value.root);
+  const triageContextPath = readNonBlankString(value.triageContextPath);
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
     : undefined;
@@ -96,6 +97,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
       : undefined;
   return {
     ...(root ? { root } : {}),
+    ...(triageContextPath ? { triageContextPath } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),
@@ -109,7 +111,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
 /** Read update sentinel routing metadata from the configured handoff file. */
 export async function readControlPlaneUpdateSentinelMeta(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<UpdateRestartSentinelMeta | null> {
+): Promise<ControlPlaneUpdateSentinelMetaFile["meta"] | null> {
   const filePath = env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]?.trim();
   if (!filePath) {
     return null;

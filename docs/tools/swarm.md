@@ -173,10 +173,13 @@ return await agents.run(
 order.
 
 Code Mode separately bounds concurrent guest bridge calls with
-`tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). For very
-large groups, launch bounded batches below that limit and leave headroom for
-`phase()`, `log()`, and child wait transitions. `maxConcurrent` limits running
-children; it does not raise the guest bridge-call limit.
+`tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). Swarm
+launches, progress notes, and result waits queue automatically when those slots
+are full. Queued requests retain their original arguments across snapshot
+resumes; stopping the run discards requests that have not been admitted.
+`maxConcurrent` still limits running children, and group child limits still
+apply. Raw tool calls do not use this Swarm queue and must remain within the
+bridge-call limit.
 
 ### Loop on a decision gate
 
@@ -235,6 +238,9 @@ complete drain loop.
 Collector children are ordinary isolated sub-agent sessions with a different
 completion path. They write a durable collector result for the parent to
 await instead of announcing or steering a reply back into the parent session.
+The accepted spawn receipt describes this path: collect the result with
+`agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
+`sessions_yield` to wait for collectors; they do not send completion notifications.
 
 The target agent resolves in this order:
 

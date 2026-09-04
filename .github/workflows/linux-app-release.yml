@@ -55,10 +55,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Ensure tag commit is reachable from main
+      - name: Checkout trusted release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Verify trusted release tooling identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node .release-tooling/scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Ensure tag commit is reachable from its release branch
         id: ancestry
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
@@ -69,28 +96,54 @@ jobs:
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           release_tag = os.environ["RELEASE_TAG"]
+
+          def is_ancestor(sha, ref):
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", sha, ref)
+                  return True
+              except GitFailure as error:
+                  if error.code == 1:
+                      return False
+                  raise
+
           run_git(
               workspace,
               "fetch",
-              "--quiet",
+              "--no-tags",
               "origin",
-              "main",
+              "+refs/heads/main:refs/remotes/origin/main",
               timeout=120,
               reclaim_locks=True,
           )
+          if not is_ancestor(os.environ["WORKFLOW_SHA"], "origin/main"):
+              print("Linux release tooling must be reachable from current main.", file=sys.stderr)
+              raise SystemExit(1)
           tag_sha = git_output(
               workspace,
               "rev-parse",
               f"refs/tags/{release_tag}^{{commit}}",
           ).rstrip("\n")
-          try:
-              run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")
-          except GitFailure:
-              print(
-                  f"Tag {release_tag} ({tag_sha}) is not reachable from main; "
-                  "Linux bundles ship for main-based releases only."
+          if not is_ancestor(tag_sha, "origin/main"):
+              # The validated stable tag chooses its sole eligible release branch;
+              # numeric correction tags share the base version's release branch.
+              release_branch = f"release/{release_tag[1:].split('-', 1)[0]}"
+              release_ref = f"refs/remotes/origin/{release_branch}"
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{release_branch}:{release_ref}",
+                  timeout=120,
+                  reclaim_locks=True,
               )
-              raise SystemExit(1)
+              if not is_ancestor(tag_sha, release_ref):
+                  print(
+                      f"Tag {release_tag} ({tag_sha}) is not reachable from main "
+                      f"or {release_branch}.",
+                      file=sys.stderr,
+                  )
+                  raise SystemExit(1)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"tag_sha={tag_sha}\n")
           PYTHON
@@ -119,18 +172,36 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            at-spi2-core \
             build-essential \
             curl \
+            dbus-x11 \
+            ffmpeg \
             file \
+            gir1.2-atspi-2.0 \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-good \
+            gstreamer1.0-tools \
+            libatk-adaptor \
             libayatana-appindicator3-dev \
+            libegl1 \
+            libgles2 \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
-            wget
+            mesa-utils \
+            patchelf \
+            pciutils \
+            procps \
+            psmisc \
+            python3-gi \
+            wget \
+            wmctrl \
+            xauth \
+            xdg-utils \
+            xvfb
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
@@ -140,6 +211,13 @@ jobs:
         with:
           cache-mode: restore
           install-bun: "false"
+
+      - name: Stage AppImage GStreamer plugins
+        run: |
+          plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
+          apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
+            | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
+          echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
@@ -181,6 +259,30 @@ jobs:
           cp "${appimages[0]}" "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage"
           cp "${appimages[0]}.sig" \
             "dist/linux-app/signatures/OpenClaw-${version}-amd64.AppImage.sig"
+
+      - name: Test packaged AppImage runtime
+        id: packaged-runtime
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/packaged_runtime_smoke.py \
+            "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage" \
+            --output "${RUNNER_TEMP}/linux-packaged-runtime" \
+            --require-fuse \
+            --shell-container \
+              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+
+      - name: Upload packaged runtime failure evidence
+        if: failure() && steps.packaged-runtime.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-app-release-runtime-failure
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-packaged-runtime
 
       - name: Upload Linux bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

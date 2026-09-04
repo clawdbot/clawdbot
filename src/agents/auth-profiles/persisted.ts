@@ -8,8 +8,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { oauthCredentialMetadataSchema } from "./credential-schema.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import { AuthProfileStoreUnreadableError } from "./legacy-source-diagnostic.js";
@@ -21,6 +23,7 @@ import {
 } from "./oauth-shared.js";
 import {
   getRuntimeExternalCliProfileIds,
+  removePersonalAuthProfileReferences,
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
 import {
@@ -189,15 +192,8 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     for (const field of [
       "access",
       "refresh",
-      "idToken",
-      "clientId",
-      "enterpriseUrl",
-      "projectId",
-      "accountId",
-      "chatgptPlanType",
-      "subscriptionType",
-      "rateLimitTier",
-    ] as const) {
+      ...Object.keys(oauthCredentialMetadataSchema.shape),
+    ]) {
       const value = normalizeOptionalCredentialString(entry[field]);
       if (value !== undefined) {
         normalized[field] = value;
@@ -621,7 +617,7 @@ export function mergeAuthProfileStores(
     !override.usageStats &&
     override.runtimePersistedProfileIds === undefined &&
     override.runtimeLocalProfileIds === undefined &&
-    override.runtimeLocalOrderProviders === undefined &&
+    override.runtimeLocalOrderProviderIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
     override.runtimeExternalProfileIdsAuthoritative !== true &&
@@ -696,7 +692,6 @@ export function mergeAuthProfileStores(
   const runtimeLocalProfileIds = override.runtimeLocalProfileIds
     ?.filter((profileId) => merged.profiles[profileId])
     .toSorted();
-  const runtimeLocalOrderProviders = override.runtimeLocalOrderProviders?.toSorted();
   const baseRuntimeExternalProfileIds =
     override.runtimeExternalProfileIdsAuthoritative === true &&
     options?.preserveBaseRuntimeExternalProfiles !== true
@@ -738,7 +733,9 @@ export function mergeAuthProfileStores(
         ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
         : {}),
       ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
-      ...(runtimeLocalOrderProviders ? { runtimeLocalOrderProviders } : {}),
+      ...(override.runtimeLocalOrderProviderIds !== undefined
+        ? { runtimeLocalOrderProviderIds: [...override.runtimeLocalOrderProviderIds] }
+        : {}),
       ...(override.runtimeInheritsMainState !== undefined
         ? { runtimeInheritsMainState: override.runtimeInheritsMainState }
         : {}),
@@ -759,6 +756,9 @@ export function buildPersistedAuthProfileSecretsStore(
 ): AuthProfileSecretsStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
+      if (isUserModelAuthProfileId(profileId)) {
+        return [];
+      }
       if (shouldPersistProfile && !shouldPersistProfile({ profileId, credential })) {
         return [];
       }
@@ -800,10 +800,10 @@ function mergePersistedAuthProfileState(
   if (!store) {
     return null;
   }
-  return {
+  return removePersonalAuthProfileReferences({
     ...store,
     ...mergeAuthProfileState(coerceAuthProfileState(raw), coerceAuthProfileState(readState())),
-  };
+  });
 }
 
 /** Loads the persisted auth profile store and merges runtime state. */

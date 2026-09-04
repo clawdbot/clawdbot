@@ -7,7 +7,6 @@ import {
   resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import { resolveInheritedAuthProfileWriteAgentDir } from "../../agents/legacy-inherited-auth-dir.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -101,7 +100,7 @@ export async function modelsAuthOrderClearCommand(
   const context = await resolveAuthOrderContext(opts, runtime, "mutation");
   const { cfg, agentId, agentDir, provider } = context;
   const updated = await setAuthProfileOrder({
-    agentDir: resolveInheritedAuthProfileWriteAgentDir(cfg, agentId, agentDir),
+    agentDir,
     provider: resolveProviderIdForAuth(provider, { config: cfg }),
     order: null,
   });
@@ -149,7 +148,7 @@ export async function modelsAuthOrderSetCommand(
   }
 
   const updated = await setAuthProfileOrder({
-    agentDir: resolveInheritedAuthProfileWriteAgentDir(cfg, agentId, agentDir),
+    agentDir,
     provider: providerKey,
     order: requested,
   });

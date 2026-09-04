@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
+import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -174,9 +176,7 @@ describe("renderChatComposer controls", () => {
     const { container } = renderComposer();
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
 
-    expect(textarea?.getAttribute("aria-label")).toBe(
-      t("chat.composer.placeholder", { name: "OpenClaw" }),
-    );
+    expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
   });
 
   it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
@@ -191,7 +191,31 @@ describe("renderChatComposer controls", () => {
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
     expect(textarea.value).toBe("");
-    expect(onDraftChange).toHaveBeenLastCalledWith("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
+    expect(textarea.matches(":placeholder-shown")).toBe(true);
+  });
+
+  it("clears a live whitespace draft when the last rendered draft was already empty", () => {
+    let currentDraft = "  \n  ";
+    const onDraftChange = vi.fn((next: string) => {
+      currentDraft = next;
+    });
+    const { container } = renderComposer({
+      draft: "",
+      getDraft: () => currentDraft,
+      onDraftChange,
+    });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("expected composer textarea");
+    }
+
+    textarea.value = currentDraft;
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+    expect(currentDraft).toBe("");
+    expect(textarea.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
@@ -307,6 +331,22 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
+  it("shows placement work as an attached busy status while composing is disabled", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "Preparing workspace…",
+      disabledReasonTone: "info",
+      disabledReasonBusy: true,
+      draft: "Keep this draft",
+    });
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
+    const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
+    expect(status?.textContent).toContain("Preparing workspace…");
+    expect(status?.querySelector(".btn__spinner")).not.toBeNull();
+  });
+
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
       devices: [
@@ -315,11 +355,20 @@ describe("renderChatComposer controls", () => {
       ],
       issue: null,
     });
-    patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
+    const settings = patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
+    const theme = createApplicationTheme(
+      settings,
+      createGatewayStoreTestStore({ settings }).gateway,
+    );
+    onTestFinished(() => theme.dispose());
     const container = document.createElement("div");
     document.body.append(container);
     const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
-    const draw = () => render(renderChatComposer(composerProps), container);
+    const draw = () => {
+      composerProps.realtimeTalkInputDeviceId = theme.settings.realtimeTalkInputDeviceId;
+      render(renderChatComposer(composerProps), container);
+    };
+    onTestFinished(theme.subscribe(draw));
     composerProps.onRequestUpdate = draw;
     draw();
 
@@ -331,7 +380,6 @@ describe("renderChatComposer controls", () => {
     await dropdown?.updateComplete;
 
     expect(dropdown?.open).toBe(true);
-    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledWith(true));
     await vi.waitFor(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
     );
@@ -367,6 +415,11 @@ describe("renderChatComposer controls", () => {
     button(container, t("chat.composer.microphoneInput")).click();
     await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
     expect(dropdown?.open).toBe(true);
+    expect(
+      [...container.querySelectorAll(".chat-talk-input-picker__item")].map((item) =>
+        item.getAttribute("aria-checked"),
+      ),
+    ).toEqual(["false", "false", "true"]);
   });
 
   it("keeps the controlled hold-to-dictate preference in sync after toggling", async () => {
@@ -1005,15 +1058,9 @@ describe("renderChatComposer status", () => {
     expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
   });
 
-  it("renders fresh compaction and fallback status", () => {
+  it("keeps fallback status in the composer without a compaction overlay", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { container } = renderComposer({
-      compactionStatus: {
-        phase: "active",
-        runId: "run-1",
-        startedAt: 1_000,
-        completedAt: null,
-      },
       fallbackStatus: {
         selected: "fireworks/minimax-m2p5",
         active: "deepinfra/moonshotai/Kimi-K2.5",
@@ -1021,9 +1068,8 @@ describe("renderChatComposer status", () => {
         occurredAt: 900,
       },
     });
-    expect(container.querySelector(".compaction-indicator--active")?.textContent?.trim()).toBe(
-      "Compacting context...",
-    );
+    expect(container.querySelector(".compaction-indicator--active")).toBeNull();
+    expect(container.querySelector(".chat-compaction")).toBeNull();
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
     );

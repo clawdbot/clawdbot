@@ -19,6 +19,7 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   sanitizeAssistantDisplayText,
@@ -72,6 +73,97 @@ export type SourceReplyContentState = {
   hasManagedOutgoingContent: boolean;
   backedManagedOutgoingContent: boolean;
 };
+
+function mergeAssistantDisplayContent(
+  modelContent: AssistantDisplayContentBlock[],
+  preparedDisplayContent: AssistantDisplayContentBlock[],
+): AssistantDisplayContentBlock[] {
+  const remainingDisplayContent = [...preparedDisplayContent];
+  const content: AssistantDisplayContentBlock[] = [];
+  for (const block of modelContent) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      content.push(block);
+      continue;
+    }
+    const matchingTextIndex = remainingDisplayContent.findIndex(
+      (candidate) => candidate.type === "text" && candidate.text === block.text,
+    );
+    if (matchingTextIndex < 0) {
+      content.push(block);
+      continue;
+    }
+    const nextTextOffset = remainingDisplayContent
+      .slice(matchingTextIndex + 1)
+      .findIndex((candidate) => candidate.type === "text");
+    const segmentEnd =
+      nextTextOffset < 0 ? remainingDisplayContent.length : matchingTextIndex + nextTextOffset + 1;
+    content.push(...remainingDisplayContent.splice(0, segmentEnd));
+  }
+  content.push(...remainingDisplayContent);
+  return content;
+}
+
+function buildAssistantDisplayRewrite(params: {
+  message: Record<string, unknown>;
+  displayContent: AssistantDisplayContentBlock[];
+  managedMediaUrls?: readonly string[];
+  retainOriginalText?: true;
+}): Record<string, unknown> {
+  const prepared = applyAssistantDeliveryDirectives(
+    {
+      ...params.message,
+      content: params.displayContent.map((block) => Object.assign({}, block)),
+    },
+    { managedMediaUrls: params.managedMediaUrls },
+  );
+  const original = Array.isArray(params.message.content)
+    ? (params.message.content as AssistantDisplayContentBlock[])
+    : [];
+  const content: AssistantDisplayContentBlock[] = [];
+  const seenText = new Set<string>();
+  for (const block of original) {
+    if (block.type === "thinking" || block.type === "toolCall") {
+      content.push(block);
+      continue;
+    }
+    if (
+      block.type !== "text" ||
+      typeof block.text !== "string" ||
+      (!params.retainOriginalText &&
+        !prepared.content.some(
+          (candidate) => candidate.type === "text" && candidate.text === block.text,
+        ))
+    ) {
+      continue;
+    }
+    const splitText = splitMediaFromOutput(block.text).text;
+    if (splitText === block.text && /\bMEDIA:/iu.test(block.text)) {
+      continue;
+    }
+    const text = sanitizeAssistantDisplayText(splitText, {
+      preserveBoundaries: true,
+    });
+    if (text) {
+      if (text === block.text) {
+        content.push(block);
+      } else {
+        const { textSignature: _textSignature, ...rest } = block;
+        content.push({ ...rest, text });
+      }
+      seenText.add(text);
+    }
+  }
+  for (const block of prepared.content) {
+    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
+      content.push(block);
+    }
+  }
+  return {
+    ...prepared,
+    content,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(content, prepared.content),
+  };
+}
 
 export function assistantTranscriptScope(
   params: AssistantTranscriptScopeParams,
@@ -154,43 +246,6 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     actualMedia.size === expectedMedia.size &&
     [...expectedMedia].every((value) => actualMedia.has(value));
   return exactMediaMatch ? { messageId, message } : null;
-}
-
-function mergeManagedMediaIntoAssistantContent(params: {
-  message: Record<string, unknown>;
-  replacement: AssistantDisplayContentBlock[];
-}): AssistantDisplayContentBlock[] | null {
-  const original = Array.isArray(params.message.content)
-    ? (params.message.content as AssistantDisplayContentBlock[])
-    : [];
-  const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
-  if (managedBlocks.length === 0) {
-    return null;
-  }
-  let replaced = false;
-  const merged: AssistantDisplayContentBlock[] = [];
-  for (const block of original) {
-    if (block?.type !== "text" || typeof block.text !== "string") {
-      merged.push(block);
-      continue;
-    }
-    const split = splitMediaFromOutput(block.text);
-    const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: true,
-    });
-    if (visibleText) {
-      const { textSignature: _textSignature, ...rest } = block;
-      merged.push({
-        ...rest,
-        text: visibleText,
-      });
-    }
-    if (split.mediaUrls?.length && !replaced) {
-      merged.push(...managedBlocks);
-      replaced = true;
-    }
-  }
-  return replaced ? merged : null;
 }
 
 function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
@@ -287,6 +342,7 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: {
     aborted: true;
     origin: ChatAbortOrigin;
@@ -313,6 +369,7 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
@@ -494,16 +551,14 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       if (!replacement) {
         return event;
       }
-      const message = applyAssistantDeliveryDirectives(
-        {
+      const message = buildAssistantDisplayRewrite({
+        message: {
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent.map((block) =>
-            Object.assign({}, block),
-          ),
         },
-        { managedMediaUrls: replacement.request.metadata?.mediaUrls },
-      );
+        displayContent: replacement.request.state.persistedContent,
+        managedMediaUrls: replacement.request.metadata?.mediaUrls,
+      });
       return Object.assign({}, event as Record<string, unknown>, {
         message,
       });
@@ -535,13 +590,11 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: applyAssistantDeliveryDirectives(
-              {
-                ...target.message,
-                content: params.content.map((block) => Object.assign({}, block)),
-              },
-              { managedMediaUrls: params.managedMediaUrls },
-            ),
+            message: buildAssistantDisplayRewrite({
+              message: target.message,
+              displayContent: params.content,
+              managedMediaUrls: params.managedMediaUrls,
+            }),
           })
         : event,
     );
@@ -582,20 +635,13 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!targetRow) {
     return null;
   }
-  const mergedContent = mergeManagedMediaIntoAssistantContent({
+  const rewrittenMessage = buildAssistantDisplayRewrite({
     message: target.message,
-    replacement: params.content,
+    displayContent: params.content,
+    managedMediaUrls: params.mediaUrls,
+    // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
+    retainOriginalText: true,
   });
-  if (!mergedContent) {
-    return null;
-  }
-  const rewrittenMessage = applyAssistantDeliveryDirectives(
-    {
-      ...target.message,
-      content: mergedContent,
-    },
-    { managedMediaUrls: params.mediaUrls },
-  );
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
     message: rewrittenMessage,
   });

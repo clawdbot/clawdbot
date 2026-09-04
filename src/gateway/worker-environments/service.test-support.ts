@@ -65,7 +65,7 @@ export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
   openclawVersion: "2026.8.1",
   enabledPluginIds: ["runtime-plugin"],
 };
-export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
+export const BUNDLE_ARTIFACT: Extract<WorkerInstallationArtifact, { install: "bundle" }> = {
   install: "bundle",
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.7.2",
@@ -538,6 +538,7 @@ export function placementHarness(
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });

@@ -14,7 +14,7 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     profileProviderIds: {},
     profileOrders: {},
     profileOrderStoredProviders: [],
-    profileOrderLockedProviders: [],
+    profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
     hasConfigApiKey: false,
@@ -97,7 +97,7 @@ describe("renderProviderProfiles", () => {
         "openai-config": ["openai:configured"],
         openai: ["openai:saved", "openai:inherited"],
       },
-      profileOrderLockedProviders: ["openai-config"],
+      profileOrderLocks: { "openai-config": "provider-config" },
     });
 
     mount(renderProviderProfiles(providerCard, props({ onProfileOrderChange })));
@@ -114,6 +114,30 @@ describe("renderProviderProfiles", () => {
       [...document.querySelectorAll("button")].map((button) => button.textContent),
     ).not.toContain("Reset");
     expect(onProfileOrderChange).not.toHaveBeenCalled();
+  });
+
+  it("points auth-config priority locks to auth.order", () => {
+    const container = mount(
+      renderProviderProfiles(
+        card({
+          profiles: [
+            { profileId: "openai:one", type: "oauth", status: "ok" },
+            { profileId: "openai:two", type: "oauth", status: "ok" },
+          ],
+          profileProviderIds: {
+            "openai:one": "openai",
+            "openai:two": "openai",
+          },
+          profileOrders: { openai: ["openai:one", "openai:two"] },
+          profileOrderLocks: { openai: "auth-config" },
+        }),
+        props(),
+      ),
+    );
+
+    expect(container.textContent).toContain("Priority is managed by auth.order");
+    expect(container.textContent).not.toContain("provider configuration");
+    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
   });
 
   it("keeps an environment API-key source visible beside account profiles", () => {
@@ -159,6 +183,36 @@ describe("renderProviderProfiles", () => {
     expect([...grips].every((grip) => grip.disabled)).toBe(true);
     expect(grips[0]?.title).toContain("Reset");
     grips[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    expect(onProfileOrderChange).not.toHaveBeenCalled();
+  });
+
+  it("identifies managed priority when a shared order spans provider routes", () => {
+    const onProfileOrderChange = vi.fn();
+    const container = mount(
+      renderProviderProfiles(
+        card({
+          id: "route-one",
+          profiles: [
+            { profileId: "shared:one", type: "oauth", status: "ok" },
+            { profileId: "shared:two", type: "oauth", status: "ok" },
+          ],
+          profileProviderIds: {
+            "shared:one": "shared-owner",
+            "shared:two": "shared-owner",
+          },
+          profileOrders: {
+            "shared-owner": ["shared:one", "shared:two", "shared:three"],
+          },
+        }),
+        props({ onProfileOrderChange }),
+      ),
+    );
+
+    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
+    expect(container.querySelectorAll(".model-providers__profile-grip-spacer")).toHaveLength(2);
+    expect(container.textContent).toContain(
+      "Priority is inherited or managed across provider routes",
+    );
     expect(onProfileOrderChange).not.toHaveBeenCalled();
   });
 });

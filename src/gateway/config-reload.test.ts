@@ -52,6 +52,7 @@ import {
   buildGatewayReloadPlan,
   type ChannelKind,
   isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -179,8 +180,8 @@ describe("diffConfigPaths", () => {
     { prev: {}, next: { mcp: { apps: { enabled: true } } } },
     { prev: { mcp: { apps: { enabled: true } } }, next: {} },
   ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
-    const changedPaths = diffGatewayReloadPaths(prev, next);
-    expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+    const changedPaths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
+    expect(changedPaths).toEqual(["mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
 
@@ -196,7 +197,11 @@ describe("diffConfigPaths", () => {
       [configure("first"), configure("second"), true],
       [configure("first", "before"), configure("first", "after"), false],
     ] as const) {
-      expect(buildGatewayReloadPlan(diffGatewayReloadPaths(prev, next)).reloadPlugins).toBe(reload);
+      expect(
+        buildGatewayReloadPlan(
+          diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes()),
+        ).reloadPlugins,
+      ).toBe(reload);
     }
   });
 
@@ -262,7 +267,11 @@ describe("diffConfigPaths", () => {
       expectedPaths: ["session.scope", "session.store"],
     },
   ])("preserves hook policy dependencies when it $name", ({ prev, next, expectedPaths }) => {
-    const changedPaths = diffGatewayReloadPaths(prev as OpenClawConfig, next as OpenClawConfig);
+    const changedPaths = diffGatewayReloadPaths(
+      prev as OpenClawConfig,
+      next as OpenClawConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
 
     for (const expectedPath of expectedPaths) {
       expect(changedPaths).toContain(expectedPath);
@@ -347,6 +356,12 @@ describe("buildGatewayReloadPlan", () => {
       registration: { restartPrefixes: ["plugins.entries.canvas"] },
       source: "test",
     },
+    {
+      pluginId: "codex",
+      pluginName: "Codex",
+      registration: { noopPrefixes: ["plugins.entries.codex.config.codexPlugins"] },
+      source: "test",
+    },
   ];
 
   beforeEach(() => {
@@ -397,9 +412,17 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     "gateway.port",
-    "gateway.terminal.enabled",
+    "gateway.bind",
+    "gateway.tls.enabled",
+    "gateway.controlUi.enabled",
+    "gateway.controlUi.basePath",
+    "gateway.controlUi.root",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
+    "browser.evaluateEnabled",
+    "browser.ssrfPolicy.allowedHostnames",
+    "browser.extensionRelay.enabled",
+    "browser.tabCleanup.enabled",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
@@ -413,6 +436,107 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
+
+  it.each([
+    "gateway.http.securityHeaders.strictTransportSecurity",
+    "gateway.nodes.pairing.autoApproveLocal",
+    "gateway.nodes.pairing.autoApproveCidrs",
+    "gateway.nodes.pairing.sshVerify",
+    "gateway.terminal.enabled",
+    "gateway.terminal.shell",
+    "gateway.terminal.detachedSessionTimeoutSeconds",
+    "gateway.http.endpoints.chatCompletions.enabled",
+    "gateway.http.endpoints.responses.enabled",
+    "gateway.http.endpoints.responses.files.maxBytes",
+    "gateway.tools.allow",
+    "gateway.tools.deny",
+    "gateway.cliAgents.enabled",
+    "gateway.controlUi.environment.label",
+    "gateway.controlUi.communityInvite",
+    "gateway.controlUi.github.token",
+    "gateway.controlUi.toolTitles",
+    "gateway.controlUi.sessionObserver",
+    "gateway.controlUi.embedSandbox",
+    "gateway.controlUi.allowExternalEmbedUrls",
+    "gateway.controlUi.automaticallyFetchFavicons",
+    "gateway.controlUi.allowedOrigins",
+    "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
+    "gateway.nodes.commands.allow",
+    "gateway.nodes.commands.deny",
+    "gateway.nodes.pluginTools.enabled",
+    "gateway.nodes.allowSkills",
+    "gateway.nodes.browser.mode",
+    "gateway.nodes.browser.node",
+    "gateway.push.apns.relay.baseUrl",
+  ])("hot-applies Gateway request policy without restarting subsystems: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      restartHeartbeat: false,
+      restartCron: false,
+      reloadHooks: false,
+      reloadPlugins: false,
+      disposeMcpRuntimes: false,
+      restartChannels: new Set(),
+      restartChannelAccounts: new Map(),
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it.each([
+    {
+      name: "only request policies",
+      config: {
+        gateway: {
+          tools: { deny: ["sessions_list"] },
+          http: { endpoints: { responses: { enabled: true } } },
+          controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
+          nodes: { browser: { mode: "off" }, pairing: { autoApproveLocal: false } },
+          terminal: { enabled: false, shell: "/bin/sh" },
+        },
+      },
+      restartReasons: [],
+    },
+    {
+      name: "request policies and startup settings",
+      config: {
+        gateway: {
+          port: 18791,
+          http: {
+            endpoints: { responses: { enabled: true } },
+            securityHeaders: { strictTransportSecurity: "max-age=31536000" },
+          },
+          controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
+          nodes: { pairing: { sshVerify: false } },
+        },
+      },
+      restartReasons: ["gateway.port", "gateway.controlUi.basePath"],
+    },
+  ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
+    "preserves $name when adding or removing Gateway config",
+    ({ config, restartReasons }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(plan.restartReasons).toEqual(restartReasons);
+        expect(plan.restartGateway).toBe(restartReasons.length > 0);
+        expect(plan.hotReasons).toContain("gateway.http.endpoints");
+        expect(plan.hotReasons).toContain("gateway.controlUi.environment");
+      }
+    },
+  );
 
   it.each([
     {
@@ -586,37 +710,72 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it.each([
-    [{}, { agents: { defaults: { mediaMaxMb: 4 } } }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, {}],
-    [{ agents: {} }, { agents: { defaults: { mediaMaxMb: 4 } } }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
-  ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
-    const paths = diffGatewayReloadPaths(prev, next);
-    expect(paths).toContain("agents.defaults.mediaMaxMb");
+  const sharedChannelSettings = [
+    {
+      path: "agents.defaults.mediaMaxMb",
+      before: { agents: { defaults: { mediaMaxMb: 4 } } },
+      after: { agents: { defaults: { mediaMaxMb: 1 } } },
+      empty: { agents: {} },
+    },
+    {
+      path: "channels.defaults",
+      before: { channels: { defaults: { groupPolicy: "allowlist" } } },
+      after: { channels: { defaults: { groupPolicy: "open" } } },
+      empty: { channels: {} },
+    },
+    {
+      path: "channels.modelByChannel",
+      before: { channels: { modelByChannel: { telegram: { "123": "openai/before" } } } },
+      after: { channels: { modelByChannel: { telegram: { "123": "openai/after" } } } },
+      empty: { channels: {} },
+    },
+  ] satisfies Array<{
+    path: string;
+    before: OpenClawConfig;
+    after: OpenClawConfig;
+    empty: OpenClawConfig;
+  }>;
+
+  it.each(
+    sharedChannelSettings.flatMap(({ path, before, after, empty }) =>
+      (
+        [
+          [{}, before],
+          [before, {}],
+          [empty, before],
+          [before, empty],
+          [before, after],
+        ] as const
+      ).map(([prev, next]) => ({ path, prev, next })),
+    ),
+  )("refreshes every loaded channel for $path: $prev → $next", ({ path, prev, next }) => {
+    const paths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
+    expect(paths.some((changed) => changed === path || changed.startsWith(`${path}.`))).toBe(true);
     const plan = buildGatewayReloadPlan(paths);
     expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
     expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
-  it("global media refresh subsumes scoped restarts without affecting other agent settings", () => {
-    const plan = buildGatewayReloadPlan([
-      "channels.mattermost.accounts.alpha.enabled",
-      "agents.defaults.mediaMaxMb",
-    ]);
+  it.each(sharedChannelSettings)("$path refresh subsumes scoped restarts", ({ path }) => {
+    const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.alpha.enabled", path]);
     expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
     expect(plan.restartChannelAccounts).toEqual(new Map());
     expect(buildGatewayReloadPlan(["agents.defaults.model"]).restartChannels).toEqual(new Set());
   });
 
-  it.each([
-    { registration: { restartPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "restart" },
-    { registration: { hotPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "hot" },
-    { registration: { noopPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "none" },
-  ])("preserves an explicit plugin media reload policy: $kind", ({ registration, kind }) => {
-    const path = "agents.defaults.mediaMaxMb";
+  it.each(
+    [
+      ...sharedChannelSettings.map(({ path }) => path),
+      "channels.defaults.groupPolicy",
+      "channels.modelByChannel.telegram",
+    ].flatMap((path) => [
+      { path, registration: { restartPrefixes: [path] }, kind: "restart" },
+      { path, registration: { hotPrefixes: [path] }, kind: "hot" },
+      { path, registration: { noopPrefixes: [path] }, kind: "none" },
+    ]),
+  )("preserves explicit plugin $kind policy for $path", ({ path, registration, kind }) => {
     setActivePluginRegistry({
       ...registry,
       reloads: [
@@ -630,19 +789,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set());
   });
 
-  it.each([
-    {
-      reload: { configPrefixes: ["agents.defaults.mediaMaxMb"] },
-      kind: "hot",
-      channels: ["telegram"],
-    },
-    {
-      reload: { configPrefixes: [], noopPrefixes: ["agents.defaults.mediaMaxMb"] },
-      kind: "none",
-      channels: [],
-    },
-  ])("preserves an explicit channel media reload policy: $kind", ({ reload, kind, channels }) => {
-    const path = "agents.defaults.mediaMaxMb";
+  it.each(
+    sharedChannelSettings.flatMap(({ path }) => [
+      { path, reload: { configPrefixes: [path] }, kind: "hot", channels: ["telegram"] },
+      { path, reload: { configPrefixes: [], noopPrefixes: [path] }, kind: "none", channels: [] },
+    ]),
+  )("preserves explicit channel $kind policy for $path", ({ path, reload, kind, channels }) => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
@@ -764,29 +916,34 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([path]);
   });
 
-  it("refreshes channel rules when the tracked channel registry changes", () => {
-    const channelOnlyRegistry = createTestRegistry([
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-    ]);
+  it.each(sharedChannelSettings)(
+    "refreshes $path fanout when the channel registry changes",
+    ({ path }) => {
+      const channelOnlyRegistry = createTestRegistry([
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]);
 
-    setActivePluginRegistry(emptyRegistry);
-    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
-      new Set(),
-    );
-    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
-      restartGateway: true,
-      restartChannels: new Set(),
-    });
+      setActivePluginRegistry(emptyRegistry);
+      expect(buildGatewayReloadPlan([path])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(),
+      });
+      expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+        restartGateway: true,
+        restartChannels: new Set(),
+      });
 
-    setActivePluginRegistry(channelOnlyRegistry);
-    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
-      new Set(["telegram"]),
-    );
-    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
-      restartGateway: false,
-      restartChannels: new Set(["telegram"]),
-    });
-  });
+      setActivePluginRegistry(channelOnlyRegistry);
+      expect(buildGatewayReloadPlan([path])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(["telegram"]),
+      });
+      expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(["telegram"]),
+      });
+    },
+  );
 
   it("reloads loaded channel plugins when plugin entry state changes", () => {
     const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
@@ -804,6 +961,111 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
+
+  const codexEntryConfig = (config?: Record<string, unknown>) => ({
+    plugins: {
+      entries: {
+        codex: config ? { config } : {},
+      },
+    },
+  });
+
+  it.each([
+    {
+      name: "plugin restart",
+      config: { plugins: { entries: { canvas: { enabled: true } } } },
+      paths: ["plugins.entries.canvas"],
+      kind: "restart",
+      channels: [],
+    },
+    {
+      name: "plugin hot",
+      config: { browser: { profiles: { qa: { cdpUrl: "http://127.0.0.1:9222" } } } },
+      paths: ["browser.profiles"],
+      kind: "hot",
+      channels: [],
+    },
+    {
+      name: "plugin none",
+      config: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      paths: ["plugins.entries.codex.config.codexPlugins"],
+      kind: "none",
+      channels: [],
+    },
+    {
+      name: "channel hot",
+      config: { channels: { telegram: { enabled: true } } },
+      paths: ["channels.telegram"],
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      name: "channel noop",
+      config: { channels: { whatsapp: { replyToMode: "all" } } },
+      paths: ["channels.whatsapp.replyToMode"],
+      kind: "none",
+      channels: [],
+    },
+  ] as const)(
+    "preserves registered $name boundaries through parent creation and removal",
+    ({ config, paths, kind, channels }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(changedPaths).toEqual(paths);
+        expect(changedPaths.map((path) => resolveConfigReloadMetadata(path).kind)).toEqual([kind]);
+        expect(plan.restartGateway).toBe(kind === "restart");
+        expect(plan.restartChannels).toEqual(new Set(channels));
+        expect(plan.noopPaths).toEqual(kind === "none" ? paths : []);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "creates config on first install",
+      previous: {},
+      next: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      expectedPaths: ["plugins.entries.codex.config.codexPlugins"],
+    },
+    {
+      name: "changes existing sub-plugin policy",
+      previous: codexEntryConfig({ codexPlugins: { enabled: false } }),
+      next: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      expectedPaths: ["plugins.entries.codex.config.codexPlugins.enabled"],
+    },
+    {
+      name: "keeps a mixed first-install write reloadable",
+      previous: {},
+      next: codexEntryConfig({
+        codexPlugins: { enabled: true },
+        appServer: { transport: "websocket" },
+      }),
+      expectedPaths: [
+        "plugins.entries.codex.config.codexPlugins",
+        "plugins.entries.codex.config.appServer",
+      ],
+      reloadPlugins: true,
+    },
+  ])(
+    "classifies Codex config when it $name",
+    ({ previous, next, expectedPaths, reloadPlugins }) => {
+      const paths = diffGatewayReloadPaths(previous, next, listConfigReloadRefinementPrefixes());
+      const plan = buildGatewayReloadPlan(paths);
+
+      expect(paths).toEqual(expectedPaths);
+      expect(plan.reloadPlugins).toBe(reloadPlugins ?? false);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(reloadPlugins !== true);
+    },
+  );
 
   it("uses default reload settings when config is unset", () => {
     expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
@@ -3140,28 +3402,39 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("notifies lifecycle owners before queuing a terminal disable restart", async () => {
-    const initialConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: true } },
-    };
-    const nextConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: false } },
-    };
-    const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "terminal" }));
-    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+  it.each([false, true])(
+    "hot-applies terminal enabled=%s through lifecycle commit",
+    async (enabled) => {
+      const initialConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled: !enabled } },
+      };
+      const nextConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled } },
+      };
+      const readSnapshot = vi.fn(async () =>
+        makeSnapshot({ config: nextConfig, hash: "terminal" }),
+      );
+      const harness = createReloaderHarness(readSnapshot, { initialConfig });
 
-    await flushWatcherChange(harness);
-    await Promise.resolve();
+      await flushWatcherChange(harness);
+      await Promise.resolve();
 
-    expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
-    expect(harness.onConfigApplied).not.toHaveBeenCalled();
-    expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
-    expect(harness.onRestart).toHaveBeenCalledTimes(1);
-    expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.onRestart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    await harness.reloader.stop();
-  });
+      expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(harness.onConfigApplied).toHaveBeenCalledOnce();
+      expect(harness.onConfigRevisionApplied).toHaveBeenCalledWith(
+        hashRuntimeConfigValue(nextConfig),
+      );
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.onHotReload.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(harness.onHotReload.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      await harness.reloader.stop();
+    },
+  );
 
   it("keeps restart preparation inside the accepted config root", async () => {
     let releaseRestart = () => {};
@@ -3173,10 +3446,10 @@ describe("startGatewayConfigReloader", () => {
       releaseRestart = resolve;
     });
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: true } },
+      gateway: { reload: {}, port: 18789 },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: false } },
+      gateway: { reload: {}, port: 18790 },
     };
     const harness = createReloaderHarness(
       async () => makeSnapshot({ config: nextConfig, hash: "restart-root" }),
@@ -3220,10 +3493,10 @@ describe("startGatewayConfigReloader", () => {
 
   it("notifies lifecycle owners when hybrid mode applies a restart-only change", async () => {
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: true } },
+      gateway: { reload: { mode: "hybrid" }, port: 18789 },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: false } },
+      gateway: { reload: { mode: "hybrid" }, port: 18790 },
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "hot" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
@@ -5070,7 +5343,10 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual(["plugins.entries", "plugins.installs.lossless-claw"]);
+    expect(plan.changedPaths).toEqual([
+      "plugins.entries.lossless-claw",
+      "plugins.installs.lossless-claw",
+    ]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
     expect(restartedConfig).toBe(nextConfig);
@@ -5600,7 +5876,9 @@ describe("startGatewayConfigReloader skills invalidation", () => {
 
     const after = getSkillsSnapshotVersion();
     expect(after).toBeGreaterThan(before);
-    expect(log.info).toHaveBeenCalledWith("skills snapshot invalidated by config change (skills)");
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("skills snapshot invalidated by config change"),
+    );
 
     await reloader.stop();
   });

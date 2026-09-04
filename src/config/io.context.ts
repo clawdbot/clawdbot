@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
@@ -85,7 +84,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       loadShellEnvFallback({
         enabled: true,
         env: deps.env,
-        expectedKeys: resolveShellEnvExpectedKeys(deps.env),
+        expectedKeys: resolveShellEnvExpectedKeys(deps.env, cfg),
         logger: deps.logger,
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });
@@ -135,7 +134,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const contextBudgetConfig = migrateLegacyContextBudgetConfig(
       resolution.resolvedConfigRaw,
     ).config;
-    return coerceConfig(migratePersistedImplicitMainRoster(contextBudgetConfig).config);
+    return coerceConfig(
+      migratePersistedImplicitMainRoster(contextBudgetConfig, { env, homedir: deps.homedir })
+        .config,
+    );
   }
 
   function prepareRecoveryBackupCandidate(
@@ -234,8 +236,4 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     resolveRuntimePreflightSourceConfig,
     prepareRecoveryBackupCandidate,
   };
-}
-
-export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnapshot | undefined) {
-  return snapshot ? collectManifestModelIdNormalizationPolicies(snapshot.plugins) : undefined;
 }

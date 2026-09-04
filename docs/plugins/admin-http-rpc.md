@@ -48,7 +48,9 @@ Enable the bundled plugin:
   </Tab>
 </Tabs>
 
-The route is registered during plugin startup, so restart the Gateway after changing plugin config.
+The route is registered during plugin startup. With the default hybrid reload
+mode, changes to its existing plugin entry hot-reload the plugin runtime;
+restart after plugin code, metadata, or discovery-root changes.
 
 Disable it when you no longer need the HTTP surface:
 
@@ -184,11 +186,6 @@ HTTP status follows the error code:
 
 Other Gateway methods are blocked until they are intentionally added.
 
-`models.authOrderSet` is intentionally not exposed through this HTTP plugin. An
-`operator.admin` WebSocket client can use it to save a provider's complete
-account order; omit `profileIds` to clear the saved override and return to
-automatic selection.
-
 ## WebSocket comparison
 
 The normal Gateway WebSocket RPC path remains the preferred control-plane API for OpenClaw clients. Use admin HTTP RPC only for host tooling that needs a request/response HTTP surface.
@@ -199,7 +196,7 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 
 `404 Not Found`
 
-: The plugin is disabled, the Gateway has not restarted since enabling it, or the request is going to a different Gateway process.
+: The plugin is disabled, the Gateway has not reloaded it since enablement, or the request is going to a different Gateway process.
 
 `401 Unauthorized`
 

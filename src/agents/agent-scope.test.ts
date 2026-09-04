@@ -25,9 +25,11 @@ import {
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
+  resolveAgentRunCwd,
   resolveAgentWorkspaceProvisioning,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
+  resolveAgentModelPrimaryWriteTarget,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
@@ -531,6 +533,27 @@ describe("resolveAgentConfig", () => {
       primary: "google/gemini-3-pro",
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
+  });
+
+  it("resolves the model write target without mutating config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.4" },
+        list: [
+          { id: "main", default: true },
+          { id: "work", model: "anthropic/claude-sonnet-4-6" },
+        ],
+      },
+    };
+    const before = structuredClone(cfg);
+
+    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main")).toBe("defaults");
+    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work")).toBe("agent");
+    expect(resolveAgentModelPrimaryWriteTarget(cfg, "main", { target: "agent" })).toBe("agent");
+    expect(resolveAgentModelPrimaryWriteTarget(cfg, "work", { target: "defaults" })).toBe(
+      "defaults",
+    );
+    expect(cfg).toEqual(before);
   });
 
   it("resolves run fallback overrides via shared helper", () => {
@@ -1192,6 +1215,25 @@ describe("resolveAgentConfig", () => {
       resolveAgentWorkspaceDir(cfg, "main"),
     );
     expect(workspace).toBe(path.resolve(stateDir, "workspace-main"));
+  });
+});
+
+describe("resolveAgentRunCwd", () => {
+  it.each([
+    { cwd: " ~/projects/repo ", expected: path.resolve("/srv/openclaw-home/projects/repo") },
+    { cwd: "./projects/repo", expected: path.resolve("projects/repo") },
+    { cwd: " ", expected: path.resolve("/default-repo") },
+  ])("resolves configured path $cwd without relocating workspace", ({ cwd, expected }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { cwd: "/default-repo" },
+        list: [{ id: "work", cwd, workspace: "/agent-workspace" }],
+      },
+    };
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home" }, () => {
+      expect(resolveAgentRunCwd(cfg, "WORK")).toBe(expected);
+      expect(resolveAgentWorkspaceDir(cfg, "work")).toBe(path.resolve("/agent-workspace"));
+    });
   });
 });
 

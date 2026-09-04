@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OSLog
 
 private let gatewayCronLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
@@ -60,5 +61,57 @@ extension GatewayConnection {
             gatewayCronLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
         }
         return entries
+    }
+
+    // MARK: - Cron
+
+    struct CronSchedulerStatus: Decodable {
+        let enabled: Bool
+        let storePath: String
+        let sqlitePath: String?
+        let jobs: Int
+        let nextWakeAtMs: Int?
+    }
+
+    func cronStatus() async throws -> CronSchedulerStatus {
+        try await self.requestDecoded(method: .cronStatus)
+    }
+
+    func cronList(includeDisabled: Bool = true) async throws -> [CronJob] {
+        let data = try await requestRaw(
+            method: .cronList,
+            params: ["includeDisabled": AnyCodable(includeDisabled)])
+        return try Self.decodeCronListResponse(data)
+    }
+
+    func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
+        let data = try await requestRaw(
+            method: .cronRuns,
+            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
+        return try Self.decodeCronRunsResponse(data)
+    }
+
+    func cronRun(jobId: String, force: Bool = true) async throws {
+        try await self.requestVoid(
+            method: .cronRun,
+            params: [
+                "id": AnyCodable(jobId),
+                "mode": AnyCodable(force ? "force" : "due"),
+            ],
+            timeoutMs: 20000)
+    }
+
+    func cronRemove(jobId: String) async throws {
+        try await self.requestVoid(method: .cronRemove, params: ["id": AnyCodable(jobId)])
+    }
+
+    func cronUpdate(jobId: String, patch: [String: AnyCodable]) async throws {
+        try await self.requestVoid(
+            method: .cronUpdate,
+            params: ["id": AnyCodable(jobId), "patch": AnyCodable(patch)])
+    }
+
+    func cronAdd(payload: [String: AnyCodable]) async throws {
+        try await self.requestVoid(method: .cronAdd, params: payload)
     }
 }

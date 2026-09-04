@@ -9,7 +9,6 @@ import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
 } from "./current-plugin-metadata-snapshot.js";
-import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
@@ -30,6 +29,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
@@ -45,41 +45,13 @@ import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalize
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
-const PLUGIN_METADATA_ENV_KEYS = [
-  "APPDATA",
-  "HOME",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_COMPATIBILITY_HOST_VERSION",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  "OPENCLAW_HOME",
-  "OPENCLAW_NIX_MODE",
-  "OPENCLAW_STATE_DIR",
-  "USERPROFILE",
-  "XDG_CONFIG_HOME",
-] as const;
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.types.js";
 
-function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    PLUGIN_METADATA_ENV_KEYS.flatMap((key) => {
-      const value = env[key];
-      return value === undefined ? [] : [[key, value]];
-    }),
-  );
-}
-
-export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson({
-    env: pickPluginMetadataEnv(env),
-    installRoots: resolveActivePluginInstallRoots(env),
-  });
-}
+export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
 function throwReadonlyPluginMetadataMutation(): never {
   throw new TypeError("Plugin metadata snapshots are immutable");
@@ -135,18 +107,25 @@ function indexesMatch(
   );
 }
 
+/** Freezes prepared process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
+export function finalizePluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+): PluginMetadataSnapshot {
+  freezeSnapshotValue(snapshot);
+  bindPluginMetadataSnapshotCache(snapshot);
+  return snapshot;
+}
+
 /** Restores process-local behavior and immutability after a snapshot crosses a worker boundary. */
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
-  const restored = freezeSnapshotValue({
+  return finalizePluginMetadataSnapshot({
     ...snapshot,
     normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, {
       manifestRegistry: snapshot.manifestRegistry,
     }),
   });
-  bindPluginMetadataSnapshotCache(restored);
-  return restored;
 }
 
 export function isPluginMetadataSnapshotCompatible(params: {
@@ -202,9 +181,9 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
 }
 
 function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, readonly string[]> {
-  return new Map(
-    [...owners.entries()].map(([ownedId, pluginIds]) => [ownedId, Object.freeze([...pluginIds])]),
-  );
+  // These maps and arrays are private until this transfer to the snapshot.
+  owners.forEach((pluginIds) => Object.freeze(pluginIds));
+  return owners;
 }
 
 function buildPluginMetadataOwnerMaps(
@@ -288,7 +267,10 @@ export function listPluginOriginsFromMetadataSnapshot(
 
 /** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
 export function rebasePluginMetadataSnapshotManifestRegistry(
-  snapshot: PluginMetadataSnapshot,
+  snapshot: Omit<
+    PluginMetadataSnapshot,
+    "manifestRegistry" | "plugins" | "diagnostics" | "byPluginId" | "owners"
+  >,
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
@@ -355,7 +337,7 @@ export function resolvePluginMetadataSnapshotCacheKey(
 ): string {
   return hashJson({
     env: resolvePluginMetadataEnvFingerprint(params.env ?? process.env),
-    policy: resolveInstalledPluginIndexPolicyHash(params.config),
+    policy: resolveInstalledPluginIndexPolicyHash(params.config, params.env),
     loadPaths: params.config?.plugins?.load?.paths,
     workspaceDir: params.workspaceDir,
     stateDir: params.stateDir,
@@ -471,53 +453,45 @@ export function completePluginMetadataSnapshot(params: {
     return completed;
   }
   return withPluginCache(cache, () => {
-    const completed = completePluginMetadataSnapshotImpl({ ...params, snapshot });
+    const inputs = { ...params, snapshot };
+    const workspaceDir = inputs.workspaceDir ?? inputs.snapshot.workspaceDir;
+    const manifestStartedAt = performance.now();
+    const manifestRegistry =
+      inputs.snapshot.pluginIds === undefined
+        ? inputs.snapshot.manifestRegistry
+        : loadPluginManifestRegistryForInstalledIndex({
+            index: inputs.snapshot.index,
+            config: inputs.config,
+            env: inputs.env ?? process.env,
+            ...(workspaceDir ? { workspaceDir } : {}),
+            includeDisabled: true,
+          });
+    // Bundled fallback contracts cannot come from a same-id external winner.
+    // Capture their separately validated roots before runtime readers lose discovery access.
+    const bundledManifestRegistry =
+      inputs.snapshot.bundledManifestRegistry ??
+      loadBundledPluginManifestRegistry({ env: inputs.env });
+    const manifestRegistryMs = performance.now() - manifestStartedAt;
+    const rebased = rebasePluginMetadataSnapshotManifestRegistry(inputs.snapshot, manifestRegistry);
+    const { pluginIds: _pluginIds, ...unscoped } = rebased;
+    const completed = finalizePluginMetadataSnapshot({
+      ...unscoped,
+      bundledManifestRegistry,
+      configFingerprint: resolvePluginControlPlaneFingerprint({
+        config: inputs.config,
+        env: inputs.env,
+        index: rebased.index,
+        policyHash: rebased.policyHash,
+        workspaceDir,
+      }),
+      metrics: {
+        ...rebased.metrics,
+        manifestRegistryMs,
+        totalMs: rebased.metrics.totalMs + manifestRegistryMs,
+      },
+    });
     cache.metadata.completions.set(snapshot, completed);
     return completed;
-  });
-}
-
-function completePluginMetadataSnapshotImpl(params: {
-  snapshot: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot {
-  const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  const manifestStartedAt = performance.now();
-  const manifestRegistry =
-    params.snapshot.pluginIds === undefined
-      ? params.snapshot.manifestRegistry
-      : loadPluginManifestRegistryForInstalledIndex({
-          index: params.snapshot.index,
-          config: params.config,
-          env: params.env ?? process.env,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          includeDisabled: true,
-        });
-  // Bundled fallback contracts cannot come from a same-id external winner.
-  // Capture their separately validated roots before runtime readers lose discovery access.
-  const bundledManifestRegistry =
-    params.snapshot.bundledManifestRegistry ??
-    loadBundledPluginManifestRegistry({ env: params.env });
-  const manifestRegistryMs = performance.now() - manifestStartedAt;
-  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
-  const { pluginIds: _pluginIds, ...unscoped } = completed;
-  return restorePluginMetadataSnapshot({
-    ...unscoped,
-    bundledManifestRegistry,
-    configFingerprint: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      env: params.env,
-      index: completed.index,
-      policyHash: completed.policyHash,
-      workspaceDir,
-    }),
-    metrics: {
-      ...completed.metrics,
-      manifestRegistryMs,
-      totalMs: completed.metrics.totalMs + manifestRegistryMs,
-    },
   });
 }
 

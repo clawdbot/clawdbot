@@ -1,4 +1,5 @@
 import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import type { PreparedModelRuntimeAuthScope } from "../agents/prepared-model-runtime-auth.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -7,7 +8,12 @@ import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.j
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
   Pick<
     ResolvedPublishedModelCatalogOwner,
-    "authModes" | "authStore" | "inheritedAuthDir" | "metadataSnapshot"
+    | "authModes"
+    | "authStore"
+    | "metadataSnapshot"
+    | "pluginRegistry"
+    | "isCurrent"
+    | "observationConfig"
   > & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };
@@ -18,7 +24,7 @@ type GatewayModelCatalogReadParams = {
   authScope?: PreparedModelRuntimeAuthScope;
   readOnly?: boolean;
   refreshAuth?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 };
 
@@ -36,7 +42,7 @@ const privateAccessByLoader = new WeakMap<
   GatewayModelCatalogPrivateAccess
 >();
 
-/** Keeps prepared auth and metadata behind the Gateway-owned loader boundary. */
+/** Keeps prepared auth, metadata, and registry ownership behind the Gateway loader boundary. */
 export function registerGatewayModelCatalogPrivateAccess(
   loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"],
   access: GatewayModelCatalogPrivateAccess,

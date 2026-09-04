@@ -107,7 +107,7 @@ vi.mock("./recommended-tool-installs.js", () => ({
 const {
   clearManagedPluginOfficialCatalogCache,
   listManagedPlugins,
-  resolveManagedPluginIconUrl,
+  resolveManagedPluginIconSource,
   resolveManagedSetupCatalogIconUrl,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
@@ -267,7 +267,41 @@ describe("plugin management service", () => {
     expect(catalog.mutationAllowed).toBe(true);
   });
 
-  it("projects and resolves installed manifest icons by plugin identity", async () => {
+  it.each([
+    {
+      name: "reports missing dependencies for a bundled plugin distributed outside the root package",
+      packageBuild: { bundledDist: false },
+      expectsError: true,
+    },
+    {
+      name: "keeps plain bundled plugins free of package-local dependency health",
+      packageBuild: undefined,
+      expectsError: false,
+    },
+  ])("$name", async ({ packageBuild, expectsError }) => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        packageBuild,
+        packageDependencies: { "missing-runtime": "1.0.0" },
+      }),
+    );
+
+    const catalog = await listManagedPlugins({
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+
+    const entry = expectDefined(catalog.plugins[0], "catalog entry");
+    if (expectsError) {
+      expect(entry.error).toContain("required dependencies are missing: missing-runtime");
+    } else {
+      expect(entry.error).toBeUndefined();
+    }
+  });
+
+  it("does not project or resolve installed manifest icon URLs", async () => {
     const icon = "https://cdn.example.test/workboard.svg";
     const config = {
       agents: {
@@ -279,22 +313,29 @@ describe("plugin management service", () => {
       },
     };
     const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false, icon }));
+    const metadata = metadataSnapshot({ enabled: false });
+    const manifest = metadata.byPluginId.get("workboard");
+    expect(manifest).toBeDefined();
+    if (!manifest) {
+      throw new Error("missing workboard manifest fixture");
+    }
+    metadata.byPluginId.set("workboard", Object.assign(manifest, { icon }));
+    mocks.metadata.mockReturnValue(metadata);
 
     const catalog = await listManagedPlugins({
       config,
       env,
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconUrl({
+    const resolved = await resolveManagedPluginIconSource({
       config,
       env,
       pluginId: "workboard",
-      officialCatalog: { entries: [] },
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
-    expect(resolved).toBe(icon);
+    expect(catalog.plugins[0]).toMatchObject({ id: "workboard" });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolved).toBeUndefined();
     expect(mocks.metadata).toHaveBeenNthCalledWith(1, {
       config,
       env,
@@ -307,7 +348,7 @@ describe("plugin management service", () => {
     });
   });
 
-  it("projects and resolves official catalog icons without exposing their URL", async () => {
+  it("does not project or resolve official catalog icon URLs", async () => {
     const icon = "https://cdn.example.test/firecrawl.svg";
     const officialCatalog = {
       entries: [
@@ -325,19 +366,42 @@ describe("plugin management service", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
 
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const resolved = await resolveManagedPluginIconUrl({
+    const resolved = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "firecrawl",
-      officialCatalog,
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl", hasIcon: true });
+    expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl" });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("icon");
-    expect(resolved).toBe(icon);
+    expect(resolved).toBeUndefined();
   });
 
-  it("allows only manifest and bundled setup catalog icon URLs", async () => {
+  it("resolves the portable package icon", async () => {
+    const iconPath = "/tmp/workboard/assets/icon.png";
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: false,
+        iconPath,
+      }),
+    );
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+    });
+    const resolved = await resolveManagedPluginIconSource({
+      config: {},
+      env: {},
+      pluginId: "workboard",
+    });
+
+    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
+    expect(resolved).toEqual({ kind: "file", path: iconPath, rootPath: "/tmp/workboard" });
+  });
+
+  it("allows only provider-choice and bundled setup catalog icon URLs", async () => {
     const providerIcon = "https://cdn.example.test/provider.svg";
     const recommendedIcon = "https://cdn.example.test/tool.png";
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
@@ -357,7 +421,7 @@ describe("plugin management service", () => {
     });
   });
 
-  it("omits icon capability when neither manifest nor catalog has one", async () => {
+  it("omits icon capability when the package has no local icon", async () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
 
     const catalog = await listManagedPlugins({
@@ -365,11 +429,10 @@ describe("plugin management service", () => {
       env: {},
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconUrl({
+    const resolved = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "workboard",
-      officialCatalog: { entries: [] },
     });
 
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
@@ -676,7 +739,7 @@ describe("plugin management service", () => {
     );
     expect(result).toMatchObject({
       pluginId: "diffs",
-      removed: ["config entry", "install record", "directory"],
+      removed: ["plugin settings", "install record", "directory"],
       warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
     });
   });

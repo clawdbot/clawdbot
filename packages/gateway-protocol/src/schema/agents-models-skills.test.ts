@@ -285,6 +285,7 @@ describe("Models auth params schemas", () => {
       ModelsAuthOrderSetParamsSchema,
       { provider: "openai", profileIds: [] },
       { provider: "openai", profileIds: null },
+      { provider: "openai", profileIds: ["openai:writer", "openai:writer"] },
     );
   });
 });

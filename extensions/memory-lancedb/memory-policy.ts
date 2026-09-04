@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
@@ -10,11 +11,6 @@ import {
 } from "./config.js";
 import type { MemorySearchResult } from "./lancedb-store.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
-
-export type AutoCaptureCursor = {
-  nextIndex: number;
-  lastMessageFingerprint?: string;
-};
 
 export function extractUserTextContent(message: unknown): string[] {
   const msgObj = asOptionalRecord(message);
@@ -66,44 +62,99 @@ function normalizeMaxChars(value: number | undefined, fallback: number): number 
     : fallback;
 }
 
-export function messageFingerprint(message: unknown): string | undefined {
-  const msgObj = asOptionalRecord(message);
-  // Hook-only display facts disappear between turns and cannot anchor a conversation cursor.
-  if (msgObj?.excludeFromContext === true) {
-    return undefined;
-  }
-  if (!msgObj) {
-    return `${typeof message}:${String(message)}`;
-  }
-  try {
-    return JSON.stringify({
-      role: msgObj.role,
-      content: msgObj.content,
-    });
-  } catch {
-    return `${String(msgObj.role)}:${String(msgObj.content)}`;
-  }
+export type AutoCaptureMessageProgress = {
+  fingerprint: string;
+  visited: boolean;
+};
+
+export function captureFingerprint(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
-export function resolveAutoCaptureStartIndex(
-  messages: unknown[],
-  cursor: AutoCaptureCursor | undefined,
-): number {
-  if (!cursor) {
-    return 0;
-  }
-  if (cursor.lastMessageFingerprint && cursor.nextIndex > 0) {
-    for (let index = messages.length - 1; index >= 0; index--) {
-      if (messageFingerprint(messages[index]) === cursor.lastMessageFingerprint) {
-        return index + 1;
-      }
+function autoCaptureMessageFingerprint(message: Record<string, unknown>): string {
+  const identity = { ...message };
+  if (message.role === "assistant") {
+    // Compaction invalidates provider replay annotations, not the retained message payload.
+    // Keep those changing annotations out of occurrence identity on both sides of a cut.
+    delete identity.usage;
+    delete identity.providerReplay;
+    if (Array.isArray(message.content)) {
+      identity.content = message.content.map((block: unknown) => {
+        const record = asOptionalRecord(block);
+        if (record?.type !== "thinking" && record?.type !== "redacted_thinking") {
+          return block;
+        }
+        return Object.fromEntries(
+          Object.entries(record).filter(
+            ([key]) =>
+              !["thinkingSignature", "signature", "thought_signature"].includes(key) &&
+              (record.type !== "redacted_thinking" || key !== "data"),
+          ),
+        );
+      });
     }
-    return 0;
   }
-  if (cursor.nextIndex <= messages.length) {
-    return cursor.nextIndex;
+  return captureFingerprint(
+    JSON.stringify(identity, (_key, value: unknown) => {
+      const record = asOptionalRecord(value);
+      return record
+        ? Object.fromEntries(
+            Object.keys(record)
+              .toSorted()
+              .map((key) => [key, record[key]]),
+          )
+        : value;
+    }),
+  );
+}
+
+export function prepareAutoCaptureMessages(
+  messages: unknown[],
+  previous: AutoCaptureMessageProgress[],
+): Array<AutoCaptureMessageProgress | undefined> {
+  const progress: Array<AutoCaptureMessageProgress | undefined> = messages.map((message, index) => {
+    const msgObj = asOptionalRecord(message);
+    if (
+      !msgObj ||
+      msgObj.excludeFromContext === true ||
+      (index === 0 && msgObj.role === "compactionSummary")
+    ) {
+      return undefined;
+    }
+    return { fingerprint: autoCaptureMessageFingerprint(msgObj), visited: false };
+  });
+  const current = progress.filter((entry) => entry !== undefined);
+  if (current.length === 0) {
+    return progress;
   }
-  return 0;
+  // Compaction retains a tail; branching can retain an earlier contiguous window.
+  // A new message ends that window, so later equal text cannot inherit an old quota visit.
+  const prefixLengths = [0];
+  const advance = (matchedLength: number, fingerprint: string): number => {
+    let length = matchedLength;
+    while (length > 0 && fingerprint !== current[length]?.fingerprint) {
+      length = prefixLengths[length - 1]!;
+    }
+    return fingerprint === current[length]?.fingerprint ? length + 1 : 0;
+  };
+  for (let index = 1; index < current.length; index++) {
+    prefixLengths[index] = advance(prefixLengths[index - 1]!, current[index]!.fingerprint);
+  }
+  let retainedLength = 0;
+  let retainedStart = 0;
+  for (let index = 0, length = 0; index < previous.length; index++) {
+    length = advance(length, previous[index]!.fingerprint);
+    // Capture stops at its first failure. Prefer the later equal window so an unfinished
+    // occurrence is not replaced by an earlier quota-only visit when context is ambiguous.
+    if (length >= retainedLength) {
+      retainedLength = length;
+      retainedStart = index - length + 1;
+    }
+  }
+  for (let index = 0; index < retainedLength; index++) {
+    current[index]!.visited = previous[retainedStart + index]!.visited;
+  }
+  return progress;
 }
 
 // LanceDB Provider

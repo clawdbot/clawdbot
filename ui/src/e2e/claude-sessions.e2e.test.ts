@@ -102,14 +102,20 @@ async function catalogHeaderAffordances(header: Locator) {
     const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
     const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
     const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
-    if (!toggle || !providerIcon || !chevron || !grip || !actions) {
+    const toolbarButton = element.ownerDocument.querySelector<HTMLElement>(
+      ".sidebar-session-toolbar__button",
+    );
+    if (!toggle || !providerIcon || !chevron || !grip || !actions || !toolbarButton) {
       throw new Error("expected complete branded catalog header affordances");
     }
+    const actionsStyle = getComputedStyle(actions);
+    const toolbarButtonStyle = getComputedStyle(toolbarButton);
     return {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
-      actionsOpacity: getComputedStyle(actions).opacity,
-      actionsPointerEvents: getComputedStyle(actions).pointerEvents,
+      actionsColor: actionsStyle.color,
+      actionsOpacity: actionsStyle.opacity,
+      actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(chevron).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
       focusWithin: element.matches(":focus-within"),
@@ -117,6 +123,8 @@ async function catalogHeaderAffordances(header: Locator) {
       hoverCapable: matchMedia("(hover: hover)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(providerIcon).opacity,
+      toolbarButtonColor: toolbarButtonStyle.color,
+      toolbarButtonOpacity: toolbarButtonStyle.opacity,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
     };
@@ -148,7 +156,7 @@ async function navigateToClaudeCatalog(page: Page) {
 }
 
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
-  const row = page.locator('[data-session-key^="catalog:"]').filter({
+  const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
@@ -181,11 +189,21 @@ suite.define(() => {
           '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
         );
         const toggle = header.locator(".sidebar-session-group-toggle");
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+          : undefined;
         await header.hover();
+        if (artifactDir) {
+          await page.locator(".sidebar-sessions").screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "sessions-sidebar-hover.png"),
+          });
+        }
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "1",
+            actionsOpacity: "0.55",
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             finePointer: true,
@@ -193,7 +211,10 @@ suite.define(() => {
             hoverCapable: true,
             hovered: true,
             providerOpacity: "0",
+            toolbarButtonOpacity: "0.55",
           });
+        const hoverAffordances = await catalogHeaderAffordances(header);
+        expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
 
         await toggle.click();
         await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
@@ -218,10 +239,6 @@ suite.define(() => {
             toggleFocused: true,
           });
 
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const artifactDir = artifactRoot
-          ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-          : undefined;
         if (artifactDir) {
           await header.screenshot({
             animations: "disabled",
@@ -292,30 +309,39 @@ suite.define(() => {
       }
 
       const touchAffordance = await page
-        .locator(
-          '[data-session-section="catalog:claude"] .sidebar-session-group-toggle__lead--branded',
-        )
-        .evaluate((lead) => {
-          const providerIcon = lead.querySelector<HTMLElement>(
+        .locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head')
+        .evaluate((header) => {
+          const providerIcon = header.querySelector<HTMLElement>(
             ".sidebar-session-catalog-provider-icon",
           );
-          const chevron = lead.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
-          if (!providerIcon || !chevron) {
-            throw new Error("expected branded catalog provider icon and chevron");
+          const chevron = header.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+          const actions = header.querySelector<HTMLElement>(".sidebar-session-group-actions");
+          const toolbarButton = header.ownerDocument.querySelector<HTMLElement>(
+            ".sidebar-session-toolbar__button",
+          );
+          if (!providerIcon || !chevron || !actions || !toolbarButton) {
+            throw new Error("expected complete touch catalog header affordances");
           }
           return {
+            actionsColor: getComputedStyle(actions).color,
+            actionsOpacity: getComputedStyle(actions).opacity,
             coarsePointer: matchMedia("(pointer: coarse)").matches,
             noHover: matchMedia("(hover: none)").matches,
             providerOpacity: getComputedStyle(providerIcon).opacity,
             chevronOpacity: getComputedStyle(chevron).opacity,
+            toolbarButtonColor: getComputedStyle(toolbarButton).color,
+            toolbarButtonOpacity: getComputedStyle(toolbarButton).opacity,
           };
         });
-      expect(touchAffordance).toEqual({
+      expect(touchAffordance).toMatchObject({
+        actionsOpacity: "0.55",
         coarsePointer: true,
         noHover: true,
         providerOpacity: "0",
         chevronOpacity: "0.75",
+        toolbarButtonOpacity: "0.55",
       });
+      expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
 
       const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       const artifactDir = artifactRoot
@@ -397,6 +423,10 @@ suite.define(() => {
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-ready.png") });
+      }
     });
   });
 
@@ -583,10 +613,10 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    // Reader input cancels pending restoration; a direct scrollTop write can
+    // be overwritten before the history sentinel observes the top boundary.
+    await thread.hover();
+    await page.mouse.wheel(0, -10_000);
     await page.clock.runFor(100);
     await catalogPane.locator(".chat-virtual-row").first().waitFor();
     await expect

@@ -849,7 +849,8 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
-    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
       order.push("provider-local-services");
     });
     closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
@@ -2621,7 +2622,7 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["worker", { observe: false, pluginValidation: "core-only" }],
-    ["run", { skipPluginValidation: true }],
+    ["run", { observe: false, skipPluginValidation: true }],
   ])(
     "preserves node %s config ownership when startup tracing is enabled",
     async (subcommand, readOptions) => {

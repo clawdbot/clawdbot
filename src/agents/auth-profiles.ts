@@ -35,7 +35,6 @@ export {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles/paths.js";
 export {
-  AuthProfileOrderChangedError,
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
@@ -48,8 +47,6 @@ export {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
-export { getRuntimeLocalProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
-export { getRuntimeLocalOrderProviders } from "./auth-profiles/runtime-snapshot-owner.js";
 export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 export {
   repairOAuthProfileIdMismatch,
@@ -97,6 +94,7 @@ export type {
   AuthProfileStore,
   OAuthCredential,
   ProfileUsageStats,
+  RuntimeAuthProfileStore,
   TokenCredential,
 } from "./auth-profiles/types.js";
 export {

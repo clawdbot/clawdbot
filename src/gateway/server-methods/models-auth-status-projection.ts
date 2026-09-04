@@ -1,4 +1,7 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   AuthProfileHealthStatus,
@@ -8,8 +11,7 @@ import type {
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
-  getRuntimeLocalOrderProviders,
-  getRuntimeLocalProfileIds,
+  type RuntimeAuthProfileStore,
   resolveAuthProfileMetadata,
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles.js";
@@ -17,7 +19,6 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
-import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth.js";
 import {
   type ProviderAuthAliasLookupParams,
   resolveProviderIdForAuth,
@@ -33,6 +34,8 @@ import type {
   ModelAuthUsage,
 } from "./models-auth-status.types.js";
 
+// UI expiry fields are emitted only when both timestamp and remaining duration
+// are valid, keeping profile/provider expiry shapes all-or-nothing.
 function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
@@ -175,7 +178,6 @@ export function mapAuthStatusProvider(params: {
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>;
   logoutProfileIds: ReadonlySet<string>;
   configBoundProfileIds: ReadonlySet<string>;
-  configBoundAuthProviders: ReadonlySet<string>;
   externalProfileIds: ReadonlySet<string>;
   externalCliProfileIds: ReadonlySet<string>;
   includeProfileDetails: boolean;
@@ -189,13 +191,20 @@ export function mapAuthStatusProvider(params: {
     providerKey,
     providerAuthKey: authProviderKey,
   });
-  const localOrderProviders = new Set(
-    getRuntimeLocalOrderProviders(store).map((providerId) =>
-      resolveProviderIdForAuth(providerId, params.authAliasLookupParams),
-    ),
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  const storedOrderKey =
+    findNormalizedProviderKey(store.order, authProviderKey) ??
+    findNormalizedProviderKey(store.order, providerKey);
+  const localOrderStored =
+    storedOrderKey !== undefined &&
+    runtimeStore.runtimeLocalOrderProviderIds?.includes(storedOrderKey);
+  const localProfileIds = new Set(
+    runtimeStore.runtimeLocalProfileIds ??
+      Object.keys(store.profiles).filter((profileId) => !params.externalProfileIds.has(profileId)),
   );
-  const localProfileIds = new Set(getRuntimeLocalProfileIds(store));
-  const providerOrderLocked = params.configBoundAuthProviders.has(authProviderKey);
+  const providerOrderLocked = provider.profiles.some((profile) =>
+    params.configBoundProfileIds.has(profile.profileId),
+  );
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const effectiveProfiles = provider.effectiveProfiles ?? provider.profiles;
   const usageProfile =
@@ -256,9 +265,7 @@ export function mapAuthStatusProvider(params: {
       }),
     ),
     ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
-    ...(profileOrder.fromStore && localOrderProviders.has(authProviderKey)
-      ? { profileOrderStored: true }
-      : {}),
+    ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
     ...(providerOrderLocked
       ? { profileOrderLocked: "provider-config" as const }
       : configuredOrderLocked
@@ -268,26 +275,6 @@ export function mapAuthStatusProvider(params: {
     usage: usage && usageKey ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
     ...(usageScope ? { usageScope } : {}),
   };
-}
-
-export function resolveConfigBoundProfileIds(
-  config: OpenClawConfig,
-  store: AuthProfileStore,
-  authAliasLookupParams?: ProviderAuthAliasLookupParams,
-): Set<string> {
-  const profileIds = new Set<string>();
-  for (const provider of Object.keys(config.models?.providers ?? {})) {
-    const reference = resolveProviderEntryApiKeyProfileReference({
-      cfg: config,
-      authAliasLookupParams,
-      provider,
-      store,
-    });
-    if (reference.kind === "profile" || reference.kind === "profile-incompatible") {
-      profileIds.add(reference.profileId);
-    }
-  }
-  return profileIds;
 }
 
 export function resolveConfiguredProviders(

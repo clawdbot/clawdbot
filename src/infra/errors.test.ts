@@ -1,5 +1,6 @@
 // Tests shared infra error formatting helpers.
 import { describe, expect, it } from "vitest";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "./error-diagnostics.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import {
   collectErrorGraphCandidates,
@@ -21,6 +22,33 @@ function createCircularObject() {
 }
 
 describe("error helpers", () => {
+  it("keeps bounded redacted diagnostics off frozen errors and follows wrapper graphs", () => {
+    const error = Object.freeze(new Error("native failure"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const before = Object.getOwnPropertyDescriptors(error);
+    expect(
+      attachErrorDiagnostic(error, `Authorization: Bearer ${secret}\n${"x".repeat(4_000)}`),
+    ).toBe(error);
+    const wrapper = new AggregateError([{ cause: error }], "outer failure");
+    const display = formatErrorMessageForDisplay(wrapper);
+    expect(display).toContain("Authorization: Bearer");
+    expect(display).not.toContain(secret);
+    expect(display.length).toBeLessThanOrEqual("outer failure\n".length + 2_048);
+    expect(formatErrorMessage(wrapper)).toBe("outer failure");
+    expect(Object.getOwnPropertyDescriptors(error)).toEqual(before);
+    expect(formatErrorMessageForDisplay(new Error("unrelated failure"))).toBe("unrelated failure");
+  });
+
+  it("renders one nearest diagnostic even through cyclic aggregate causes", () => {
+    const first = attachErrorDiagnostic(new Error("first"), "first diagnostic");
+    const second = attachErrorDiagnostic(new Error("second"), "second diagnostic");
+    const aggregate = new AggregateError([first, second], "outer");
+    first.cause = aggregate;
+    expect(formatErrorMessageForDisplay(aggregate)).toBe("outer\nfirst diagnostic");
+    attachErrorDiagnostic(aggregate, "outer diagnostic");
+    expect(formatErrorMessageForDisplay(aggregate)).toBe("outer\nouter diagnostic");
+  });
+
   it.each([
     { value: { code: "EADDRINUSE" }, expected: "EADDRINUSE" },
     { value: { code: 429 }, expected: "429" },

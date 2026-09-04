@@ -8,12 +8,15 @@ import type {
   ActiveEmbeddedRunOwner,
   EmbeddedAgentQueueMessageOutcome,
 } from "../agents/embedded-agent-runner/runs.js";
+import { isAbortError } from "../infra/abort-signal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentFollowupSteeringText,
   formatRealtimeVoiceAgentQueueRejection,
   formatRealtimeVoiceAgentStatus,
   resolveRealtimeVoiceAgentControlIntent,
+  type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
   type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control-shared.js";
@@ -35,6 +38,15 @@ export {
   type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
 } from "./agent-run-control-shared.js";
+
+/** Host error projection needs server-side redaction, outside browser-shared contracts. */
+export function buildRealtimeVoiceAgentErrorProviderResult(
+  error: unknown,
+): RealtimeVoiceAgentControlProviderResult | { error: string } {
+  return isAbortError(error)
+    ? buildRealtimeVoiceAgentCancelProviderResult()
+    : { error: formatErrorMessage(error) };
+}
 
 type RealtimeVoiceAgentControlDeps = {
   abortEmbeddedAgentRun: (sessionId: string) => boolean;

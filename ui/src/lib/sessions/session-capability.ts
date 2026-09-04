@@ -62,6 +62,7 @@ export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";
+  hasBoard?: boolean;
   activeMinutes?: number;
   search?: string;
   ownerId?: string;

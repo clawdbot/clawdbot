@@ -14,6 +14,7 @@ import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   prepareRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
@@ -36,37 +37,6 @@ const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedR
   createAuthOwnerTestFixtures();
 
 describe("explicit auth state ownership", () => {
-  it("preflights the shared owner selected for an explicit main-agent write", async () => {
-    const stateDir = tempDirs.make("openclaw-auth-owner-shared-preflight-");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    await persistAuthProfileBatch({
-      stateDir,
-      profiles: [{ profileId: "shared", credential: apiKey("initial") }],
-    });
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"retired"}}\n');
-
-    await updateAuthProfileStoreWithLock({
-      stateDir,
-      agentDir,
-      sharedStoreWrite: true,
-      saveOptions,
-      updater: (current) => {
-        current.profiles.shared = apiKey("updated");
-        return true;
-      },
-    });
-
-    expect(
-      loadPersistedSharedAuthProfileStore({
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_AGENT_DIR: undefined,
-      })?.profiles.shared,
-    ).toEqual(apiKey("updated"));
-    expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-  });
-
   it.each(["shared", "local", "mixed", "mixed-live", "cleared-local"] as const)(
     "preserves $0 bookkeeping ownership across shared-root activation",
     async (bookkeepingOwner) => {
@@ -355,6 +325,7 @@ describe("explicit auth state ownership", () => {
             config: {},
             authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores),
             authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+            authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
             warnings: [],
             webTools: {
               search: { providerSource: "none", diagnostics: [] },

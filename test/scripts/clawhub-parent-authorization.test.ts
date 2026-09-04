@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   clawHubIdentityFromEnvironment,
   createClawHubParentAuthorization,
@@ -44,6 +46,26 @@ function transactions(count = 1) {
 }
 
 describe("ClawHub parent publication authorization", () => {
+  it("publishes source metadata for the exact candidate sealed into authorization", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"),
+    ) as {
+      jobs: Record<
+        string,
+        { steps?: { env?: Record<string, string> }[]; with?: Record<string, string> }
+      >;
+    };
+    const candidate = workflow.jobs.seal_clawhub_transactions?.steps?.find(
+      (step) => step.env?.TARGET_SHA,
+    )?.env?.TARGET_SHA;
+    expect(candidate).toBe("${{ needs.preview_plugins_clawhub.outputs.ref_revision }}");
+    // ClawHub compares both source fields with the candidate SHA in the publish token.
+    expect(workflow.jobs.publish_plugins_clawhub?.with).toMatchObject({
+      source_commit: candidate,
+      source_ref: candidate,
+    });
+  });
+
   it("binds the full release roster beyond 8 KiB without mixing parent and child refs", () => {
     const sealed = transactions(89);
     const receipt = createClawHubParentAuthorization(sealed, "automated-awaited");

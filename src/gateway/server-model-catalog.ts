@@ -1,4 +1,5 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
@@ -27,7 +28,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   agentDir?: string;
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
@@ -36,7 +37,7 @@ type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
@@ -80,7 +81,9 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config: (params?.getConfig ?? getRuntimeConfig)(),
     readOnly: params?.readOnly !== false,
-    ...(params?.refreshFullCatalog ? { refreshFullCatalog: true } : {}),
+    ...(params?.refreshFullCatalog !== undefined
+      ? { refreshFullCatalog: params.refreshFullCatalog }
+      : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const owner = resolvePublishedModelCatalogOwner(candidate);
@@ -143,11 +146,13 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
     }
     return {
       ...projectGatewayModelCatalogSnapshot(owner),
-      ...(owner.inheritedAuthDir ? { inheritedAuthDir: owner.inheritedAuthDir } : {}),
       authModes: refreshedAuth?.authModes ?? owner.authModes,
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
       authMaterializations: owner.authMaterializations,
+      pluginRegistry: owner.pluginRegistry,
+      isCurrent: owner.isCurrent,
+      observationConfig: owner.observationConfig,
     };
   }
 }
@@ -158,9 +163,11 @@ export async function loadGatewayModelCatalogSnapshot(
   const {
     authModes: _authModes,
     authStore: _authStore,
-    inheritedAuthDir: _inheritedAuthDir,
     metadataSnapshot: _metadataSnapshot,
     authMaterializations: _authMaterializations,
+    pluginRegistry: _pluginRegistry,
+    isCurrent: _isCurrent,
+    observationConfig: _observationConfig,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;
@@ -214,10 +221,12 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   const owner = resolvePublishedModelCatalogOwner(candidate);
   return {
     ...projectGatewayModelCatalogSnapshot(owner),
-    ...(owner.inheritedAuthDir ? { inheritedAuthDir: owner.inheritedAuthDir } : {}),
     authModes: owner.authModes,
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
+    pluginRegistry: owner.pluginRegistry,
+    isCurrent: owner.isCurrent,
+    observationConfig: owner.observationConfig,
   };
 }

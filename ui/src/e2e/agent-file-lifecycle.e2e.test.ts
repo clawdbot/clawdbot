@@ -2,7 +2,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  captureAgentFileProof,
   agentFileProofDir,
   captureAgentFileScreenshot,
   selectAgentFileWorkspace,
@@ -72,7 +71,7 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureAgentFileProof
+        ...(agentFileProofDir
           ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },
@@ -178,7 +177,7 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureAgentFileProof
+        ...(agentFileProofDir
           ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },

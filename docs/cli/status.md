@@ -31,6 +31,11 @@ Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
 
+`--deep` and `--all` also show delivery queue warnings for dead-lettered messages
+and pressured inbound lanes. These warnings include pending, claimed, and blocked
+message counts even when a channel connection is healthy. See
+[Queue warnings](/gateway/health#queue-warnings).
+
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
 security audit, plugin compatibility, and memory-vector probes are left to
@@ -62,6 +67,9 @@ and `openclaw memory status --deep`.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Fleet status works without a System Agent owner. Pending events include each
+  agent's main queue; a shared global queue is counted once. `--agent` selects
+  credentials only for `--usage`.
 
 ## Usage and quota
 

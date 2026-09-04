@@ -57,20 +57,22 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
           )}
         </div>
         <div class="workboard-widget-mini__cards">
-          ${topCards.length > 0
-            ? topCards.map(
-                (card) => html`
-                  <div class="workboard-widget-mini__card">
-                    <span
-                      class=${`workboard-widget__status workboard-widget__status--${card.status}`}
-                    >
-                      ${t(`workboard.status.${card.status}`)}
-                    </span>
-                    <strong>${card.title}</strong>
-                  </div>
-                `,
-              )
-            : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`}
+          ${
+            topCards.length > 0
+              ? topCards.map(
+                  (card) => html`
+                    <div class="workboard-widget-mini__card">
+                      <span
+                        class=${`workboard-widget__status workboard-widget__status--${card.status}`}
+                      >
+                        ${t(`workboard.status.${card.status}`)}
+                      </span>
+                      <strong>${card.title}</strong>
+                    </div>
+                  `,
+                )
+              : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`
+          }
         </div>
       </section>
     `;

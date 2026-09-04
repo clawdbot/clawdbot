@@ -5,7 +5,10 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import {
+  resolveCollapsedSessionAuthPinSource,
+  resolveSessionAuthProfileOverrideSource,
+} from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -44,6 +47,7 @@ export {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,
+  resolveAgentRunCwd,
   resolveAgentWorkspaceDir,
   resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,
@@ -203,7 +207,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
+  const fallbackAuthProfileIdSource = resolveCollapsedSessionAuthPinSource(entry);
   return {
     provider: originProvider,
     model: originModel,
@@ -420,6 +424,18 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
+export function resolveAgentModelPrimaryWriteTarget(
+  cfg: OpenClawConfig,
+  agentId: string,
+  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
+    ? "agent"
+    : "defaults";
+}
+
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -428,9 +444,10 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
+  if (resolvedTarget === "agent") {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);

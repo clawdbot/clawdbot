@@ -163,6 +163,8 @@ const gatewayLog = {
   error: vi.fn(),
 };
 const flushLogger = vi.fn(async () => {});
+const hasManagedProviderLocalServices = vi.fn(() => false);
+const stopManagedProviderLocalServices = vi.fn(async () => {});
 const cancelShutdownHardExitWatchdog = vi.fn();
 const armShutdownHardExitWatchdog = vi.fn(
   (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
@@ -273,6 +275,14 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 vi.mock("../../logging/logger.js", () => ({
   flushLogger: () => flushLogger(),
+}));
+
+vi.mock("../../agents/provider-runtime-lifecycle.js", () => ({
+  hasManagedProviderLocalServices: () => hasManagedProviderLocalServices(),
+}));
+
+vi.mock("../../agents/provider-local-service.js", () => ({
+  stopManagedProviderLocalServices: () => stopManagedProviderLocalServices(),
 }));
 
 vi.mock("../../gateway/server-reload-contracts.js", () => ({
@@ -506,6 +516,10 @@ beforeEach(async () => {
     mode: "disabled",
     detail: "OPENCLAW_NO_RESPAWN",
   });
+  hasManagedProviderLocalServices.mockReset();
+  hasManagedProviderLocalServices.mockReturnValue(false);
+  stopManagedProviderLocalServices.mockReset();
+  stopManagedProviderLocalServices.mockResolvedValue(undefined);
 
   gatewayWorkAdmissionActual = await vi.importActual("../../process/gateway-work-admission.js");
   gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
@@ -687,6 +701,17 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness();
+      let finishLocalServiceStop: (() => void) | undefined;
+      const localServiceStopStarted = new Promise<void>((resolveStarted) => {
+        stopManagedProviderLocalServices.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolveStop) => {
+              finishLocalServiceStop = resolveStop;
+              resolveStarted();
+            }),
+        );
+      });
+      hasManagedProviderLocalServices.mockReturnValueOnce(true);
       const sigterm = captureSignal("SIGTERM");
       const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
         await import("../../infra/diagnostics-timeline.js");
@@ -713,17 +738,27 @@ describe("runGatewayLoop", () => {
 
       try {
         sigterm();
+        await localServiceStopStarted;
 
-        await expect(exited).resolves.toBe(0);
         expect(close).toHaveBeenCalledWith({
           reason: "gateway stopping",
           restartExpectedMs: null,
         });
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(flushLogger).not.toHaveBeenCalled();
+        if (!finishLocalServiceStop) {
+          throw new Error("managed local service stop did not start");
+        }
+        finishLocalServiceStop();
+
+        await expect(exited).resolves.toBe(0);
         expect(start).toHaveBeenCalledWith({
+          processStartedAt: expect.any(Number),
           startupStartedAt: expect.any(Number),
           requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
         });
         expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
         expect(flushLogger).toHaveBeenCalledOnce();
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
@@ -731,6 +766,44 @@ describe("runGatewayLoop", () => {
         flushDiagnosticsTimeline();
         tempDirs.cleanup();
       }
+    });
+  });
+
+  it("passes the process origin to the initial startup only", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
+        .mockResolvedValueOnce(createGatewayServer(closeSecond));
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 1,
+        "expected initial gateway start",
+      );
+
+      expect(start.mock.calls[0]?.[0]).toMatchObject({
+        processStartedAt: expect.any(Number),
+        startupStartedAt: expect.any(Number),
+      });
+
+      captureSignal("SIGUSR1")();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "expected restart gateway start",
+      );
+      expect(start.mock.calls[1]?.[0]).not.toHaveProperty("processStartedAt");
+
+      captureSignal("SIGINT")();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

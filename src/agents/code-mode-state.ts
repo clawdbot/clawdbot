@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Snapshot } from "quickjs-wasi";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -44,7 +45,7 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
@@ -354,22 +355,25 @@ function isPendingBridgeRequestReplaySafe(
   return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
-export function createPendingBridgeStates(params: {
-  pendingRequests: PendingBridgeRequest[];
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  parentToolCallId: string;
-  codeModeRunId: string;
-  remainingMs: number;
-  activeRunId?: string;
-  ctx: ToolSearchToolContext;
-  signal: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}): PendingBridgeState[] {
-  return params.pendingRequests.map((request) => {
+export function createPendingBridgeStates(
+  pendingRequests: PendingBridgeRequest[],
+  params: {
+    config: CodeModeConfig;
+    runtime: ToolSearchRuntime;
+    catalogProjection: CodeModeCatalogProjection;
+    namespaceRuntime: CodeModeNamespaceRuntime;
+    parentToolCallId: string;
+    codeModeRunId: string;
+    remainingMs: number;
+    activeRunId?: string;
+    ctx: ToolSearchToolContext;
+    signal: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+    bridgeDispatch: CodeModeBridgeDispatchState;
+  },
+): PendingBridgeState[] {
+  // Pending siblings retain dispatch context, never the original request batch.
+  return pendingRequests.map((request) => {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
@@ -404,13 +408,11 @@ export function createPendingBridgeStates(params: {
       signal,
       onUpdate: params.onUpdate,
     });
-    const completion = raceWithAbortSignal(bridgeCall, signal).catch(
-      (): SettledBridgeRequest => ({
-        id: request.id,
-        ok: false,
-        error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
-      }),
-    );
+    const completion = raceWithAbortSignal(bridgeCall, signal).catch((): SettledBridgeRequest => ({
+      id: request.id,
+      ok: false,
+      error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
+    }));
     const state: PendingBridgeState = {
       ...request,
       promise: completion.then((settled) => {
@@ -428,6 +430,9 @@ export function createPendingBridgeStates(params: {
         }
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
+        // Only the response is needed until guest replay; live calls keep their own request.
+        state.args = [];
+        state.cancel = undefined;
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {
@@ -455,7 +460,7 @@ export function storeSnapshotState(params: {
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -490,7 +495,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshotBytes: params.snapshotBytes,
+    snapshot: params.snapshot,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,

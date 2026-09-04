@@ -7,6 +7,26 @@ const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
+// Count embedding HTTP requests without replacing the real client or database.
+class OpenAIEmbeddingCallCounter {
+  count = 0;
+  private readonly realFetch = globalThis.fetch;
+
+  install(): void {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.openai.com") && url.includes("/embeddings")) {
+        this.count += 1;
+      }
+      return this.realFetch(input, init);
+    }) as typeof fetch;
+  }
+
+  restore(): void {
+    globalThis.fetch = this.realFetch;
+  }
+}
+
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-live-" });
@@ -130,4 +150,78 @@ describeLive("memory plugin live tests", () => {
 
     expect(recallAfterForget.details?.count).toBe(0);
   }, 60000); // 60s timeout for live API calls
+
+  test("skips retained user messages with real embeddings and LanceDB", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const registeredHooks: Record<string, ((...args: unknown[]) => unknown)[]> = {};
+    const services: Array<{ stop?: () => Promise<void> }> = [];
+    const logs: string[] = [];
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+        dbPath: getDbPath(),
+        autoCapture: true,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      registerTool: () => {},
+      registerCli: () => {},
+      registerService: (service: { stop?: () => Promise<void> }) => services.push(service),
+      on: (hookName: string, handler: (...args: unknown[]) => unknown) => {
+        (registeredHooks[hookName] ??= []).push(handler);
+      },
+      resolvePath: (p: string) => p,
+    };
+
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
+    const agentEnd = registeredHooks.agent_end?.[0];
+    expect(agentEnd).toBeTypeOf("function");
+
+    const counter = new OpenAIEmbeddingCallCounter();
+    counter.install();
+    try {
+      const sessionKey = "live-auto-capture-compaction";
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Fish for shell commands every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+      expect(counter.count).toBe(2);
+
+      // Model a compacted transcript retaining one already processed message.
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: "I prefer Helix for editing code every day." },
+            { role: "user", content: "I prefer Zed for editing code every day." },
+          ],
+        },
+        { agentId: "main", sessionKey },
+      );
+
+      expect(counter.count).toBe(3);
+    } finally {
+      counter.restore();
+      for (const service of services) {
+        await service.stop?.();
+      }
+    }
+  }, 60000);
 });

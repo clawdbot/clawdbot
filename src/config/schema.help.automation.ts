@@ -93,6 +93,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.skipMissedJobs":
+    "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.webhookSsrfPolicy":
@@ -101,6 +103,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows automation webhooks to private and internal network targets. Keep disabled unless every configured webhook destination is trusted.",
   "cron.webhookSsrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed for automation webhook delivery, including otherwise blocked targets. Keep the list minimal.",
+  "cron.webhookSsrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules for automation webhook delivery. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
     "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
@@ -112,11 +116,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.enabled":
     "Enables durable automatic meeting notes, the transcripts agent tool, and configured auto-start sources. Default: true. Set false to disable persistence and the tool; explicit meeting transcribe mode retains its bounded live tail.",
   "transcripts.autoStart":
-    "Live transcript sources started automatically when the gateway starts. Each entry is enabled by being present; remove an entry to disable that source.",
+    "Live transcript sources managed automatically from gateway startup. Each entry is enabled by being present; remove an entry to disable that source. Sources capture continuously unless whenOccupied is enabled.",
   "transcripts.autoStart[].providerId":
     "Transcript source provider id, such as a Discord voice or future Slack huddle provider. Use the exact id exposed by the provider plugin.",
   "transcripts.autoStart[].sessionId":
-    "Optional fixed transcript session id for this auto-start source. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+    "Optional fixed transcript session id for this auto-start source. Ignored when whenOccupied is true. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+  "transcripts.autoStart[].whenOccupied":
+    "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
     "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
   "transcripts.autoStart[].accountId":

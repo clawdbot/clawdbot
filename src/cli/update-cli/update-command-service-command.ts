@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -9,7 +10,10 @@ export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*
 
 function formatCommandFailure(stdout: string, stderr: string): string {
   // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
-  const detail = `${stderr}\n${stdout}`.match(DEFINITION_DENIAL)?.[0] ?? (stderr || stdout).trim();
+  const error = safeParseJsonRecord(stdout)?.error;
+  const detail =
+    `${stderr}\n${stdout}`.match(DEFINITION_DENIAL)?.[0] ??
+    (typeof error === "string" ? error : stderr || stdout).trim();
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 

@@ -5,6 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -401,7 +402,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   );
   for (const row of rows) {
     update.run(
-      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
+      JSON.stringify({ ts: sqliteNumber(row.ts), jobId: row.job_id, action: "finished" }),
       row.store_key,
       row.job_id,
       row.seq,
@@ -488,7 +489,7 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       job.enabled === false ? 0 : 1,
       textField(job, "agentId"),
       payloadKind,
-      numberField(job, "updatedAtMs") ?? (Number(row.updated_at) || 0),
+      numberField(job, "updatedAtMs") ?? (sqliteNumber(row.updated_at) || 0),
       row.store_key,
       row.job_id,
     );

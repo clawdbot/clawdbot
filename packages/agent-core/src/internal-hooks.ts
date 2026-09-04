@@ -5,6 +5,7 @@ import type {
   AgentToolUpdateCallback,
   InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
+  ToolLoopWarning,
 } from "./types.js";
 
 export type InternalBeforeToolBatchHook = (
@@ -168,6 +169,24 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
     toolResultProvenanceByValue.set(target, provenance);
   }
   return target;
+}
+
+/** Call only after raw outcome recording: feedback must not change no-progress hashes. */
+export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
+  result: T,
+  warning: ToolLoopWarning,
+): T {
+  return copyInternalToolResultState(result, {
+    ...result,
+    content: [
+      // Match transcript normalization for tools that omit display content.
+      ...(result.content ?? []),
+      {
+        type: "text",
+        text: `[System note: Tool-loop warning after ${warning.count} repeated calls. Change your approach or stop if you are not making progress.]`,
+      },
+    ],
+  });
 }
 
 /** Commit one tool result after its owning message has attached. */

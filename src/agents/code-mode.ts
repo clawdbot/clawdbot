@@ -20,10 +20,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
-import {
-  createCodeModeNamespaceRuntime,
-  describeCodeModeNamespacesForPrompt,
-} from "./code-mode-namespaces.js";
+import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import { markCodeModePermissionChangeResult } from "./code-mode-repair-provenance.js";
 import {
   isCodeModeEngagedForModel,
@@ -168,15 +165,9 @@ function createCodeModeExecDescription(
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
   const { maxOutputBytes } = config;
+  // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const projection = catalog
-    ? createCodeModeCatalogProjection(
-        catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
-        {
-          reservedNames: createCodeModeNamespaceRuntime(catalog).descriptors.map(
-            (descriptor) => descriptor.globalName,
-          ),
-        },
-      )
+    ? createCodeModeCatalogProjection(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
     : undefined;
   const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
   return (

@@ -20,7 +20,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private var statusItem: NSStatusItem?
     private var clickMonitor: Any?
-    private var hostingView: NSHostingView<StatusMenuIconView>?
     private var renderer: StatusMenuRenderer?
     private var refreshTask: Task<Void, Never>?
     private var observationGeneration: UInt64 = 0
@@ -91,9 +90,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // Cache projection must precede network work: AppKit begins tracking immediately.
         self.renderCachedMenu()
         self.isMenuOpen = true
+        let previousTask = self.refreshTask
         self.refreshTask?.cancel()
         self.refreshTask = Task { [weak self] in
-            guard let self else { return }
+            // Reopening must wait for canceled store refreshes to release their loading state.
+            await previousTask?.value
+            guard let self, !Task.isCancelled else { return }
             async let sessionRefresh: Void = self.sessions.refresh(force: true)
             async let approvalRefresh: Void = self.approvals.refresh()
             async let healthRefresh: Void = HealthStore.shared.refresh(onDemand: true)
@@ -109,6 +111,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard menu === self.menu else { return }
         StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: nil)
         self.isMenuOpen = false
+        self.refreshTask?.cancel()
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         // Leaving the menu attached makes subsequent left clicks open AppKit's menu.
@@ -129,7 +132,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func installButton(in item: NSStatusItem) {
         guard let button = item.button else { return }
-        let host = NSHostingView(rootView: self.makeIconView())
+        let host = NSHostingView(rootView: StatusMenuIconView(state: self.state))
+        // The constraints below own sizing; animation must not remeasure the status item.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
@@ -138,7 +143,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             host.widthAnchor.constraint(equalToConstant: 18),
             host.heightAnchor.constraint(equalToConstant: 18),
         ])
-        self.hostingView = host
         button.target = self
         button.action = #selector(self.handleStatusClick(_:))
         self.installClickMonitor()
@@ -191,23 +195,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func makeIconView() -> StatusMenuIconView {
-        let sleeping = self.isGatewaySleeping
-        return StatusMenuIconView(label: CritterStatusLabel(
-            isPaused: self.state.isPaused,
-            isSleeping: sleeping,
-            isWorking: self.state.isWorking,
-            earBoostActive: self.state.earBoostActive,
-            blinkTick: self.state.blinkTick,
-            sendCelebrationTick: self.state.sendCelebrationTick,
-            gatewayStatus: self.gatewayManager.status,
-            connectionMode: self.state.connectionMode,
-            controlChannelState: self.controlChannel.state,
-            animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
-            iconState: self.effectiveIconState,
-            voiceWakeMeterActive: self.state.voiceWakeMeterActive))
-    }
-
     private func renderCachedMenu() {
         let connection: StatusMenuDescriptor.Connection = if self.state.connectionMode == .unconfigured {
             .unconfigured
@@ -233,14 +220,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
             gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
-        self.renderer?.isSleeping = self.isGatewaySleeping
+        self.renderer?.isSleeping = statusMenuGatewayIsSleeping(state: self.state)
         self.renderer?.reconcile(StatusMenuDescriptor.build(from: snapshot))
     }
 
     private func observeChanges() {
         let generation = self.observationGeneration
         withObservationTracking {
-            _ = self.makeIconView()
+            _ = self.state.isPaused
+            _ = self.state.connectionMode
+            _ = self.gatewayManager.status
+            _ = self.controlChannel.state
+            _ = self.state.voiceWakeMeterActive
             _ = self.state.voicePushToTalkEnabled
             _ = self.state.quickChatEnabled
             _ = self.state.canvasEnabled
@@ -269,7 +260,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             Task { @MainActor [weak self] in
                 guard let self, self.observationGeneration == generation else { return }
                 self.applyStateSideEffects()
-                self.hostingView?.rootView = self.makeIconView()
                 self.updateStatusAppearance()
                 if self.isMenuOpen {
                     self.renderCachedMenu()
@@ -317,34 +307,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             : String(localized: "OpenClaw")
     }
 
-    private var isGatewaySleeping: Bool {
-        guard !self.state.isPaused else { return false }
-        return switch self.state.connectionMode {
-        case .unconfigured:
-            true
-        case .remote:
-            self.controlChannel.state != .connected
-        case .local:
-            switch self.gatewayManager.status {
-            case .running, .starting, .attachedExisting:
-                self.controlChannel.state != .connected
-            case .failed, .stopped:
-                true
-            }
-        }
-    }
-
-    private var effectiveIconState: IconState {
-        let selection = self.state.iconOverride
-        guard selection != .system else { return self.activityStore.iconState }
-        return switch selection.toIconState() {
-        case let .workingMain(kind), let .workingOther(kind), let .overridden(kind):
-            .overridden(kind)
-        case .idle:
-            .idle
-        }
-    }
-
     private func scheduleDebugMenuOpen() {
         #if DEBUG
         // launchctl setenv races `open`; arguments are reliable for captures.
@@ -389,10 +351,55 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 }
 
+@MainActor
+private func statusMenuGatewayIsSleeping(state: AppState) -> Bool {
+    guard !state.isPaused else { return false }
+    return switch state.connectionMode {
+    case .unconfigured:
+        true
+    case .remote:
+        ControlChannel.shared.state != .connected
+    case .local:
+        switch GatewayProcessManager.shared.status {
+        case .running, .starting, .attachedExisting:
+            ControlChannel.shared.state != .connected
+        case .failed, .stopped:
+            true
+        }
+    }
+}
+
+@MainActor
 private struct StatusMenuIconView: View {
-    let label: CritterStatusLabel
+    let state: AppState
 
     var body: some View {
-        self.label.background(SettingsWindowOpenRegistrar())
+        // SwiftUI tracks icon inputs here, independently of menu-only updates.
+        let sleeping = statusMenuGatewayIsSleeping(state: self.state)
+        CritterStatusLabel(
+            isPaused: self.state.isPaused,
+            isSleeping: sleeping,
+            isWorking: self.state.isWorking,
+            earBoostActive: self.state.earBoostActive,
+            blinkTick: self.state.blinkTick,
+            sendCelebrationTick: self.state.sendCelebrationTick,
+            gatewayStatus: GatewayProcessManager.shared.status,
+            connectionMode: self.state.connectionMode,
+            controlChannelState: ControlChannel.shared.state,
+            animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
+            iconState: self.effectiveIconState,
+            voiceWakeMeterActive: self.state.voiceWakeMeterActive)
+            .background(SettingsWindowOpenRegistrar())
+    }
+
+    private var effectiveIconState: IconState {
+        let selection = self.state.iconOverride
+        guard selection != .system else { return WorkActivityStore.shared.iconState }
+        return switch selection.toIconState() {
+        case let .workingMain(kind), let .workingOther(kind), let .overridden(kind):
+            .overridden(kind)
+        case .idle:
+            .idle
+        }
     }
 }

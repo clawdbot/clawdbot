@@ -1,32 +1,22 @@
 // Model auth status methods report provider credential health, profile expiry,
 // usage windows, cleanup actions, and auth-state refreshes.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  ErrorCodes,
-  errorShape,
-  validateModelsAuthLogoutParams,
-  validateModelsAuthOrderSetParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { type AuthHealthSummary, buildAuthHealthSummary } from "../../agents/auth-health.js";
 import {
-  AuthProfileOrderChangedError,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
-  getRuntimeLocalProfileIds,
   listProfilesForProvider,
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
-  setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
-import { resolveInheritedAuthProfileWriteAgentDir } from "../../agents/legacy-inherited-auth-dir.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import {
   type ProviderAuthAliasLookupParams,
   resolveProviderIdForAuth,
@@ -44,9 +34,9 @@ import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
+import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import {
   mapAuthStatusProvider,
-  resolveConfigBoundProfileIds,
   resolveConfiguredProviders,
 } from "./models-auth-status-projection.js";
 import {
@@ -57,13 +47,11 @@ import {
 } from "./models-auth-status-usage-cache.js";
 import type {
   ModelAuthLogoutResult,
-  ModelAuthOrderSetResult,
   ModelAuthStatusResult,
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
 
 export type {
   ModelAuthExpiry,
@@ -165,30 +153,6 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
   return { ok: true, profileIds };
 }
 
-type OrderProfileSelection =
-  | { ok: true; profileIds: string[] | null }
-  | { ok: false; message: string };
-
-function readOrderProfileSelection(params: Record<string, unknown>): OrderProfileSelection {
-  if (params.profileIds === undefined) {
-    return { ok: true, profileIds: null };
-  }
-  if (!Array.isArray(params.profileIds) || params.profileIds.length === 0) {
-    return { ok: false, message: "profileIds must be a non-empty string array when provided" };
-  }
-  const profileIds: string[] = [];
-  for (const value of params.profileIds) {
-    if (typeof value !== "string" || !value.trim()) {
-      return { ok: false, message: "profileIds must be a non-empty string array when provided" };
-    }
-    const profileId = value.trim();
-    if (!profileIds.includes(profileId)) {
-      profileIds.push(profileId);
-    }
-  }
-  return { ok: true, profileIds };
-}
-
 function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
@@ -230,154 +194,7 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
-  "models.authOrderSet": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateModelsAuthOrderSetParams, "models.authOrderSet", respond)
-    ) {
-      return;
-    }
-    const provider = readProviderParam(params);
-    if (!provider) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
-      return;
-    }
-    const selection = readOrderProfileSelection(params);
-    if (!selection.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
-      return;
-    }
-    try {
-      const cfg = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(cfg, params.agentId);
-      if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
-        return;
-      }
-      const preparedSnapshot = await readPreparedCatalog(context, scope.agentId);
-      if (!preparedSnapshot) {
-        throw new Error(`prepared model auth owner is unavailable (${scope.agentId})`);
-      }
-      const authAliasLookupParams: PreparedAuthMetadataLookupParams = {
-        config: preparedSnapshot.config,
-        workspaceDir: preparedSnapshot.workspaceDir,
-        metadataSnapshot: preparedSnapshot.metadataSnapshot,
-        includeUntrustedWorkspacePlugins: false,
-      };
-      const authProvider = resolveProviderIdForAuth(provider, authAliasLookupParams);
-      const availableProfileIds = Object.entries(preparedSnapshot.authStore.profiles)
-        .filter(
-          ([, credential]) =>
-            resolveProviderIdForAuth(credential.provider, authAliasLookupParams) === authProvider,
-        )
-        .map(([profileId]) => profileId);
-      const configBoundProfileIds = resolveConfigBoundProfileIds(
-        preparedSnapshot.config,
-        preparedSnapshot.authStore,
-        authAliasLookupParams,
-      );
-      if (
-        selection.profileIds &&
-        availableProfileIds.some((profileId) => configBoundProfileIds.has(profileId))
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `profile priority for provider ${provider} is controlled by provider configuration`,
-          ),
-        );
-        return;
-      }
-      const invalidProfile = selection.profileIds?.find((profileId) => {
-        const credential = preparedSnapshot.authStore.profiles[profileId];
-        return (
-          !credential ||
-          resolveProviderIdForAuth(credential.provider, authAliasLookupParams) !== authProvider
-        );
-      });
-      if (invalidProfile) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `profileId ${invalidProfile} is unavailable for provider ${provider}`,
-          ),
-        );
-        return;
-      }
-      if (selection.profileIds && selection.profileIds.length !== availableProfileIds.length) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `profileIds must include every available profile for provider ${provider}`,
-          ),
-        );
-        return;
-      }
-      if (!preparedModelRuntimeConfigsMatch(preparedSnapshot.config, context.getRuntimeConfig())) {
-        throw new AuthProfileOrderChangedError();
-      }
-      const updated = await setAuthProfileOrder({
-        agentDir: resolveInheritedAuthProfileWriteAgentDir(
-          preparedSnapshot.config,
-          scope.agentId,
-          preparedSnapshot.agentDir,
-        ),
-        ...(preparedSnapshot.inheritedAuthDir
-          ? { inheritedAuthDir: preparedSnapshot.inheritedAuthDir }
-          : {}),
-        provider: authProvider,
-        order: selection.profileIds,
-        authAliasLookupParams,
-        expectedProviderProfileIds: availableProfileIds,
-        expectedLocalProviderProfileIds: availableProfileIds.filter((profileId) =>
-          getRuntimeLocalProfileIds(preparedSnapshot.authStore).includes(profileId),
-        ),
-      });
-      if (!updated) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "auth profile order is temporarily unavailable"),
-        );
-        return;
-      }
-      invalidateModelAuthStatusCache();
-      await refreshActiveProviderAuthRuntimeSnapshot();
-      await loadDeferredCatalog(context, scope.agentId, { readOnly: true });
-      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
-        (err: unknown) => {
-          log.warn(`provider auth state rewarm after priority update failed: ${formatForLog(err)}`);
-        },
-      );
-      const result: ModelAuthOrderSetResult = {
-        provider,
-        profileIds: selection.profileIds,
-      };
-      respond(true, result, undefined);
-    } catch (err) {
-      if (err instanceof AuthProfileOrderChangedError) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "provider accounts changed while priority was being saved; refresh and try again",
-          ),
-        );
-        return;
-      }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  },
   "models.authLogout": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateModelsAuthLogoutParams, "models.authLogout", respond)) {
-      return;
-    }
     const provider = readProviderParam(params);
     if (!provider) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
@@ -513,6 +330,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             readOnly: true,
             authScope: resolveAuthRefreshScope(cfg),
             refreshAuth: true,
+            refreshFullCatalog: false,
           })
         : await readPreparedCatalog(context, scope.agentId);
       if (!preparedSnapshot) {
@@ -663,12 +481,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
-      const configBoundAuthProviders = new Set(
-        [...configBoundProfileIds].flatMap((profileId) => {
-          const profile = store.profiles[profileId];
-          return profile ? [resolveProviderIdForAuth(profile.provider, authAliasLookupParams)] : [];
-        }),
-      );
       const providers = authHealth.providers.map((provider) =>
         mapAuthStatusProvider({
           provider,
@@ -682,7 +494,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
-          configBoundAuthProviders,
           externalProfileIds,
           externalCliProfileIds,
           includeProfileDetails,

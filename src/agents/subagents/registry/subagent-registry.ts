@@ -184,7 +184,7 @@ function scheduleSubagentDeliveryResumeRetry(
       }
       resumedRuns.delete(runId);
       resumeSubagentRun(runId);
-    }).catch((error: unknown) => {
+    }, "subagents:resume-retry").catch((error: unknown) => {
       log.warn("failed to resume subagent delivery retry", { runId, error });
       if (
         isGatewayRestartDraining() &&
@@ -212,7 +212,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
 ) {
   void runWithGatewayIndependentRootWorkAdmission(async () => {
     await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
-  }).catch((error: unknown) => {
+  }, "subagents:delivery-finalize").catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     if (
       isGatewayRestartDraining() &&
@@ -225,7 +225,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
   });
 }
 
-export function resumeSubagentRun(runId: string) {
+export function resumeSubagentRun(runId: string, source: "live" | "restore" = "live") {
   if (!runId || resumedRuns.has(runId)) {
     return;
   }
@@ -249,7 +249,7 @@ export function resumeSubagentRun(runId: string) {
     typeof entry.execution.endedAt === "number" &&
     !yieldedWakeWaitingForDelivery
   ) {
-    resumeRequesterSettleWake(runId, entry);
+    resumeRequesterSettleWake(runId, entry, source);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -337,7 +337,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
-  resumeRun: (runId) => resumeSubagentRun(runId),
+  resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
   startQueuedSubagentRun: (runId, gatewayRunId, lifecycleGeneration) =>

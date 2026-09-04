@@ -139,6 +139,10 @@ describe("OpenClaw shell dock suppression", () => {
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
     expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("appearance");
+    expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
           agentId: string | null;
@@ -172,6 +176,10 @@ describe("OpenClaw shell dock suppression", () => {
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("chat");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {

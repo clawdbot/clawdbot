@@ -207,52 +207,62 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
   });
 
-  it("remaps compaction keep markers when rewritten entries change ids", () => {
-    // Re-appending entries changes ids; compaction records must follow the new
-    // first-kept entry or future branch reconstruction points at stale ids.
-    const {
-      sessionManager,
-      toolResultEntryId,
-      tailAssistantEntryId: keptAssistantEntryId,
-    } = createReadRewriteSession({ tailAssistantText: "keep me" });
-    sessionManager.appendCompaction(
-      "summary",
-      expectDefined(keptAssistantEntryId, "keptAssistantEntryId test invariant"),
-      123,
-    );
-
-    const result = expectDefined(
-      rewriteTranscriptEntriesInSessionManager({
+  it.each([undefined, { runId: "run-original", itemId: "compaction-original" }])(
+    "preserves compaction identity %j when rewriting keep markers",
+    (identity) => {
+      // Re-appending entries changes ids; compaction records must follow the new
+      // first-kept entry or future branch reconstruction points at stale ids.
+      const {
         sessionManager,
-        replacements: [
-          {
-            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-            message: createToolResultReplacement("read", "[externalized file_123]", 3),
-          },
-        ],
-      }),
-      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
-    );
+        toolResultEntryId,
+        tailAssistantEntryId: keptAssistantEntryId,
+      } = createReadRewriteSession({ tailAssistantText: "keep me" });
+      const originalCompactionId = sessionManager.appendCompaction(
+        "summary",
+        expectDefined(keptAssistantEntryId, "keptAssistantEntryId test invariant"),
+        123,
+        undefined,
+        undefined,
+        identity,
+      );
+      installSessionToolResultGuard(sessionManager, { runId: "run-rewrite" });
 
-    expect(result.changed).toBe(true);
-    const branch = sessionManager.getBranch();
-    const keptAssistantEntry = branch.find(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message.role === "assistant" &&
-        Array.isArray(entry.message.content) &&
-        entry.message.content.some((part) => part.type === "text" && part.text === "keep me"),
-    );
-    const compactionEntry = branch.find((entry) => entry.type === "compaction");
+      const result = expectDefined(
+        rewriteTranscriptEntriesInSessionManager({
+          sessionManager,
+          replacements: [
+            {
+              entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+              message: createToolResultReplacement("read", "[externalized file_123]", 3),
+            },
+          ],
+        }),
+        "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+      );
 
-    const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
-    const compaction = requireValue(compactionEntry, "compaction entry");
-    if (compaction.type !== "compaction") {
-      throw new Error("expected compaction entry");
-    }
-    expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
-    expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
-  });
+      expect(result.changed).toBe(true);
+      const branch = sessionManager.getBranch();
+      const keptAssistantEntry = branch.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          Array.isArray(entry.message.content) &&
+          entry.message.content.some((part) => part.type === "text" && part.text === "keep me"),
+      );
+      const compactionEntry = branch.find((entry) => entry.type === "compaction");
+
+      const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
+      const compaction = requireValue(compactionEntry, "compaction entry");
+      if (compaction.type !== "compaction") {
+        throw new Error("expected compaction entry");
+      }
+      expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
+      expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
+      expect(compaction.id).not.toBe(originalCompactionId);
+      const { __openclaw: rewrittenIdentity } = compaction;
+      expect(rewrittenIdentity).toEqual(identity);
+    },
+  );
 
   it("bypasses persistence hooks when replaying rewritten messages", () => {
     const { sessionManager, toolResultEntryId } = createExecRewriteSession();

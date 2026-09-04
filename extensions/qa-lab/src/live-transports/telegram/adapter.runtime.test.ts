@@ -60,6 +60,32 @@ const credential = {
   tdlibVersion: "1.8.67",
 } as const;
 
+async function prepareMessageReader(
+  adapter: Awaited<ReturnType<typeof createTelegramQaTransportAdapter>>,
+) {
+  const stateRoot = mocks.createStateRoot.mock.results.at(-1)?.value;
+  const prepared = await adapter.prepareFlow?.({
+    config: {},
+    scenarioId: "telegram-entities",
+    scenarioTitle: "Telegram native entities",
+    gateway: {
+      baseUrl: "http://127.0.0.1:1234",
+      tempRoot: stateRoot,
+      workspaceDir: stateRoot,
+      runtimeEnv: {},
+      call: vi.fn(),
+    },
+    waitForConfigRestartSettle: vi.fn(),
+    outputDir: stateRoot,
+    timeoutMs: 30_000,
+  });
+  const read = prepared?.readTelegramMessages;
+  if (typeof read !== "function") {
+    throw new Error("Telegram flow did not expose native message observations");
+  }
+  return read;
+}
+
 describe("Telegram QA transport adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,11 +117,72 @@ describe("Telegram QA transport adapter", () => {
     });
     mocks.userbotStart.mockResolvedValue({
       assertHealthy: mocks.userbotAssertHealthy,
+      chatId: -100123,
       close: mocks.userbotClose,
       send: mocks.userbotSend,
     });
     mocks.proxyDrainUpdates.mockResolvedValue(undefined);
     mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValue(false);
+  });
+
+  it("targets the SUT DM for direct-message-only scenarios", async () => {
+    let onUpdate: ((update: unknown) => Promise<void>) | undefined;
+    mocks.userbotStart.mockImplementationOnce(async (params) => {
+      onUpdate = params.onUpdate;
+      return {
+        assertHealthy: mocks.userbotAssertHealthy,
+        chatId: 200,
+        close: mocks.userbotClose,
+        send: mocks.userbotSend,
+      };
+    });
+    mocks.userbotSend.mockResolvedValueOnce({ messageId: 10 });
+    const addInboundMessage = vi.fn().mockResolvedValue({ id: "in-1" });
+    const addOutboundMessage = vi.fn().mockResolvedValue({ id: "out-1" });
+    const adapter = await createTelegramQaTransportAdapter({
+      adapterOptions: { transportPolicy: { directMessageOnly: true } },
+      messages: { addInboundMessage, addOutboundMessage },
+    } as never);
+
+    expect(mocks.userbotStart).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "@sut_bot" }),
+    );
+    expect(adapter.createGatewayConfig?.({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
+      channels: {
+        telegram: {
+          accounts: {
+            sut: { allowFrom: ["100"], dmPolicy: "allowlist" },
+          },
+        },
+      },
+    });
+    expect(adapter.buildAgentDelivery({ target: "dm:qa-operator" })).toEqual({
+      channel: "telegram",
+      to: "100",
+      replyChannel: "telegram",
+      replyTo: "100",
+    });
+
+    await adapter.sendInbound?.({
+      conversation: { id: "logical-dm", kind: "direct" },
+      senderId: "driver",
+      text: "ping",
+    });
+    await onUpdate?.({
+      kind: "message",
+      chatId: 200,
+      messageId: 11,
+      senderId: 200,
+      timestamp: 100_000,
+      text: "pong",
+      entities: [],
+    });
+    expect(addOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "dm:logical-dm", text: "pong" }),
+    );
+
+    await adapter.cleanup?.();
+    await adapter.cleanupAfterGatewayStop?.();
   });
 
   it("leases a Test Server userbot and isolates its shared group by default", async () => {
@@ -136,6 +223,12 @@ describe("Telegram QA transport adapter", () => {
         },
       },
     });
+    expect(adapter.buildAgentDelivery({ target: "group:qa-channel" })).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      replyChannel: "telegram",
+      replyTo: "-100123",
+    });
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
@@ -158,28 +251,32 @@ describe("Telegram QA transport adapter", () => {
     await adapter.cleanupAfterGatewayStop?.();
   });
 
-  it("maps sends, replies, messages, and edits through one userbot process", async () => {
+  it("maps sends, replies, messages, and formatting edits through one userbot process", async () => {
     let onUpdate: ((update: unknown) => Promise<void>) | undefined;
     mocks.userbotStart.mockImplementation(async (params) => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
+        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };
     });
+    const preview = {
+      kind: "message",
+      chatId: -100123,
+      messageId: 11,
+      botApiMessageId: 11,
+      senderId: 200,
+      senderUsername: "sut_bot",
+      replyToMessageId: 10,
+      timestamp: 100_000,
+      text: "😀 a   b",
+      entities: [{ offset: 3, length: 5, type: { "@type": "textEntityTypeCode" } }],
+    };
     mocks.userbotSend
       .mockImplementationOnce(async () => {
-        await onUpdate?.({
-          kind: "message",
-          chatId: -100123,
-          messageId: 11,
-          senderId: 200,
-          senderUsername: "sut_bot",
-          replyToMessageId: 10,
-          timestamp: 100_000,
-          text: "preview",
-        });
+        await onUpdate?.(preview);
         return { messageId: 10 };
       })
       .mockResolvedValueOnce({ messageId: 12 });
@@ -190,61 +287,77 @@ describe("Telegram QA transport adapter", () => {
       adapterOptions: {},
       messages: { addInboundMessage, addOutboundMessage, editMessage },
     } as never);
+    try {
+      await adapter.sendInbound?.({
+        conversation: { id: "logical-room", kind: "group" },
+        senderId: "driver",
+        text: "@openclaw reply exactly: QA-MARKER",
+      });
+      expect(mocks.userbotSend).toHaveBeenCalledWith({
+        text: "@sut_bot reply exactly: QA-MARKER",
+        replyToMessageId: undefined,
+      });
+      expect(addInboundMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "sut", senderId: "100" }),
+      );
+      expect(addOutboundMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "group:logical-room",
+          text: preview.text,
+          replyToId: "in-1",
+        }),
+      );
+      const readMessages = await prepareMessageReader(adapter);
+      const firstSnapshot = readMessages();
+      expect(firstSnapshot).toEqual([preview]);
+      firstSnapshot[0].entities[0].type["@type"] = "textEntityTypeBold";
+      expect(readMessages()).toEqual([preview]);
 
-    await adapter.sendInbound?.({
-      conversation: { id: "logical-room", kind: "group" },
-      senderId: "driver",
-      text: "@openclaw reply exactly: QA-MARKER",
-    });
-    expect(mocks.userbotSend).toHaveBeenCalledWith({
-      text: "@sut_bot reply exactly: QA-MARKER",
-      replyToMessageId: undefined,
-    });
-    expect(addInboundMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "sut", senderId: "100" }),
-    );
+      await adapter.sendInbound?.({
+        conversation: { id: "logical-room", kind: "group" },
+        senderId: "driver",
+        text: "follow-up",
+        replyToId: "out-1",
+      });
+      expect(mocks.userbotSend).toHaveBeenLastCalledWith({
+        text: "follow-up",
+        replyToMessageId: 11,
+      });
+      const edited = {
+        ...preview,
+        kind: "edit",
+        timestamp: 101_000,
+        entities: [{ offset: 3, length: 5, type: { "@type": "textEntityTypeBold" } }],
+      };
+      await onUpdate?.(edited);
+      expect(editMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "out-1", text: preview.text, timestamp: 101_000 }),
+      );
+      expect(readMessages()).toEqual([edited]);
+      await onUpdate?.({ ...edited, text: "final", entities: [] });
+      expect(readMessages()).toEqual([{ ...edited, text: "final", entities: [] }]);
 
-    expect(addOutboundMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "group:logical-room",
-        text: "preview",
-        replyToId: "in-1",
-      }),
-    );
-
-    await adapter.sendInbound?.({
-      conversation: { id: "logical-room", kind: "group" },
-      senderId: "driver",
-      text: "follow-up",
-      replyToId: "out-1",
-    });
-    expect(mocks.userbotSend).toHaveBeenLastCalledWith({
-      text: "follow-up",
-      replyToMessageId: 11,
-    });
-
-    await onUpdate?.({
-      kind: "edit",
-      chatId: -100123,
-      messageId: 11,
-      senderId: 200,
-      timestamp: 101_000,
-      text: "final",
-    });
-    expect(editMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "out-1", text: "final", timestamp: 101_000 }),
-    );
-
-    await adapter.cleanup?.();
-    await adapter.cleanupAfterGatewayStop?.();
+      mocks.heartbeatThrowIfFailed.mockImplementationOnce(() => {
+        throw new Error("lease revoked");
+      });
+      expect(() => readMessages()).toThrow("lease revoked");
+      mocks.userbotAssertHealthy.mockImplementationOnce(() => {
+        throw new Error("Telegram userbot is closed.");
+      });
+      expect(() => readMessages()).toThrow("Telegram userbot is closed.");
+    } finally {
+      await adapter.cleanup?.();
+      await adapter.cleanupAfterGatewayStop?.();
+    }
   });
 
-  it("filters other updates and resets diagnostics without native values", async () => {
+  it("filters other updates and resets diagnostics and native observations", async () => {
     let onUpdate: ((update: unknown) => Promise<void>) | undefined;
     mocks.userbotStart.mockImplementation(async (params) => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
+        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };
@@ -254,35 +367,36 @@ describe("Telegram QA transport adapter", () => {
       adapterOptions: {},
       messages: { addOutboundMessage },
     } as never);
+    try {
+      const matched = {
+        kind: "edit",
+        chatId: -100123,
+        messageId: 78,
+        senderId: 200,
+        timestamp: 101_000,
+        text: "matched",
+        entities: [{ offset: 0, length: 7, type: { "@type": "textEntityTypeBold" } }],
+      };
+      await onUpdate?.({ ...matched, kind: "message", chatId: -100999, messageId: 77 });
+      await onUpdate?.({ ...matched, kind: "message", senderId: 201, messageId: 79 });
+      await onUpdate?.(matched);
 
-    await onUpdate?.({
-      kind: "message",
-      chatId: -100999,
-      messageId: 77,
-      senderId: 200,
-      timestamp: 100_000,
-      text: "wrong chat",
-    });
-    await onUpdate?.({
-      kind: "edit",
-      chatId: -100123,
-      messageId: 78,
-      senderId: 200,
-      timestamp: 101_000,
-      text: "matched",
-    });
+      const diagnostics = adapter.describeTransportState?.() ?? "";
+      expect(diagnostics).toContain("updates=3");
+      expect(diagnostics).toContain("filtered=2");
+      expect(diagnostics).toContain("matched=1");
+      expect(diagnostics).toContain("update kinds=[message,edit]");
+      expect(diagnostics).not.toMatch(/-100123|77|78|79/u);
+      const readMessages = await prepareMessageReader(adapter);
+      expect(readMessages()).toEqual([matched]);
 
-    const diagnostics = adapter.describeTransportState?.() ?? "";
-    expect(diagnostics).toContain("updates=2");
-    expect(diagnostics).toContain("filtered=1");
-    expect(diagnostics).toContain("matched=1");
-    expect(diagnostics).toContain("update kinds=[message,edit]");
-    expect(diagnostics).not.toMatch(/-100123|77|78|wrong chat/u);
-
-    await adapter.resetTransport?.();
-    expect(adapter.describeTransportState?.()).toContain("updates=0");
-    await adapter.cleanup?.();
-    await adapter.cleanupAfterGatewayStop?.();
+      await adapter.resetTransport?.();
+      expect(adapter.describeTransportState?.()).toContain("updates=0");
+      expect(readMessages()).toEqual([]);
+    } finally {
+      await adapter.cleanup?.();
+      await adapter.cleanupAfterGatewayStop?.();
+    }
   });
 
   it("releases the lease when userbot startup fails", async () => {

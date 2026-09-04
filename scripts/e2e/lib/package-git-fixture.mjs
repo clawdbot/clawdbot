@@ -2,6 +2,7 @@
 // Prepares package-derived Docker E2E fixtures for git-style npm installs.
 import fs from "node:fs";
 import path from "node:path";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../lib/package-lifecycle-marker.mjs";
 
 const [command, rootArg] = process.argv.slice(2);
 
@@ -30,7 +31,12 @@ function ensureDependencyIgnores(root) {
   const gitignorePath = path.join(root, ".gitignore");
   const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   const lines = new Set(existing.split(/\r?\n/u));
-  const required = ["node_modules", "**/node_modules/", "pnpm-lock.yaml"];
+  const required = [
+    "node_modules",
+    "**/node_modules/",
+    "pnpm-lock.yaml",
+    PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+  ];
   const missing = required.filter((entry) => !lines.has(entry));
   if (missing.length === 0) {
     return;

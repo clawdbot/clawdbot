@@ -69,6 +69,7 @@ export type ShortTermStoreMeta = {
 export type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
+  ownerStartTime?: number;
 };
 
 type PromotionComponents = {
@@ -188,7 +189,7 @@ export type ApplyShortTermPromotionsOptions = {
   maxPromotedSnippetTokens?: number;
   maxPriorEntryLossFraction?: number;
   consolidation?: {
-    subagent?: import("./dreaming-narrative.js").SubagentSurface;
+    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
     model?: string;
     logger: {
       info: (message: string) => void;

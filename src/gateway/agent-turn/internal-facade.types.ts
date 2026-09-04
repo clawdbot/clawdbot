@@ -12,6 +12,7 @@ export type InternalAgentTurnPrincipalOptions = {
 };
 
 export type InternalAgentTurnDispatchOptions = {
+  cancelOnDeadline?: boolean;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;

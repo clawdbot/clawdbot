@@ -5,6 +5,7 @@ import {
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions.js";
 import {
@@ -115,6 +116,11 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     }
     const nextKey = buildDashboardSessionKey(target.agentId);
     const creation = resolveOperatorSessionCreation(client);
+    // Owner attribution keeps the source isolation inherited by identityless branches.
+    const sandbox =
+      creation.actor?.id === GATEWAY_OWNER_PROFILE_ID
+        ? entry.sandbox
+        : resolveCreatorSandbox(cfg, creation);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
       agentId: target.agentId,
       expectedState: {
@@ -126,9 +132,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
       sourceStoreKey: sessionStoreKey,
       nextKey,
       checkpointId,
-      ...(creation.actor
-        ? { creation: { ...creation, sandbox: resolveCreatorSandbox(cfg, creation) } }
-        : {}),
+      ...(creation.actor ? { creation: { ...creation, sandbox } } : {}),
     });
     if (
       branchedSession.status === "missing-checkpoint" ||

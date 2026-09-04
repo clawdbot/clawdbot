@@ -1,4 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  adaptMessagePresentationForChannel,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
@@ -6,10 +10,17 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { LINE_PRESENTATION_CAPABILITIES, prepareLineReplyPayload } from "./rich-messages.js";
 import { setLineRuntime } from "./runtime.js";
-import { pushMessagesLine } from "./send.js";
+import { createFlexMessage, pushMessagesLine, replyMessageLine } from "./send.js";
+import type { LineChannelData } from "./types.js";
 
-type WireMessage = { type: string; text?: string; altText?: string };
+type WireMessage = {
+  type: string;
+  text?: string;
+  altText?: string;
+  quickReply?: { items: Array<{ action: { label: string; text?: string; data?: string } }> };
+};
 
 type RecordedLineApiRequest = {
   method: string;
@@ -235,6 +246,103 @@ describe("Row-overflow table delivery through production outbound adapter over l
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
+  });
+
+  it.each([
+    { delivery: "reply", card: false },
+    { delivery: "reply", card: true },
+    { delivery: "push", card: false },
+    { delivery: "push", card: true },
+  ])("carries every select through $delivery requests (card=$card)", async ({ delivery, card }) => {
+    const selects = ["environment", "region", "version"].map((kind) => ({
+      type: "select" as const,
+      placeholder: `Which ${kind} should receive this deployment?`,
+      options: Array.from({ length: 8 }, (_, index) => ({
+        label: `${kind}-${index + 1} full deployment name`,
+        action: { type: "command" as const, command: `/${kind} ${index + 1}` },
+      })),
+    }));
+    const presentation: MessagePresentation = {
+      title: "Deployment choices",
+      blocks: [
+        { type: "context", text: "Review all three choices." },
+        ...(card
+          ? [
+              {
+                type: "buttons" as const,
+                buttons: [
+                  { label: "Help", action: { type: "command" as const, command: "/help" } },
+                ],
+              },
+            ]
+          : []),
+        ...selects,
+      ],
+    };
+    const payload = { text: "Deployment details. ".repeat(1_500), presentation };
+    const prepared =
+      delivery === "reply"
+        ? prepareLineReplyPayload(payload)
+        : await lineOutboundAdapter.renderPresentation!({
+            payload,
+            presentation: adaptMessagePresentationForChannel({
+              presentation,
+              capabilities: LINE_PRESENTATION_CAPABILITIES,
+            }),
+            ctx: {} as never,
+          });
+    if (!prepared) {
+      throw new Error("LINE presentation did not render");
+    }
+    if (delivery === "reply") {
+      const { deps } = createDeps({
+        processLineMessage,
+        chunkMarkdownText,
+        createFlexMessage,
+        pushMessagesLine,
+        replyMessageLine,
+      });
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        cfg: LINE_TEST_CFG,
+        accountId: "default",
+        payload: prepared,
+        lineData: prepared.channelData?.line as LineChannelData,
+        deps,
+      });
+    } else {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:Uselect",
+        text: prepared.text ?? "",
+        payload: prepared,
+        cfg: LINE_TEST_CFG,
+      });
+    }
+
+    const messages = collectAllWireMessages(requests);
+    const text = messages
+      .filter((message) => message.type === "text")
+      .map((message) => message.text)
+      .join("\n");
+    const options = selects.flatMap((select) => select.options);
+    const controls = messages.flatMap((message) => message.quickReply?.items ?? []);
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
+    expect(requests[0]?.path).toBe(`/v2/bot/message/${delivery}`);
+    expect(controls).toHaveLength(13);
+    expect(controls.map(({ action }) => action.text)).toEqual(
+      options.slice(0, 13).map((option) => option.action.command),
+    );
+    expect(controls.every(({ action }) => Array.from(action.label).length <= 20)).toBe(true);
+    expect(messages.filter((message) => message.quickReply)).toEqual([messages.at(-1)]);
+    for (const select of selects) {
+      expect(text).toContain(select.placeholder);
+    }
+    for (const option of options.slice(13)) {
+      expect(text).toContain(`${option.label}: ${option.action.command}`);
+    }
+    expect(messages.filter((message) => message.type === "flex")).toHaveLength(card ? 1 : 0);
+    expect(text.includes(presentation.title!)).toBe(!card);
   });
 
   it("delivers all 15 rows of a 2-column overflow table through the production outbound adapter", async () => {

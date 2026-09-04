@@ -18,7 +18,10 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
+import {
+  assertCodexSessionRuntimeOwnership,
+  resolveCodexBindingAppServerConnection,
+} from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -72,9 +75,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
-    enabled: profilerEnabled,
-  });
+  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -137,7 +138,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
-        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+        ...(sandbox?.enabled || remoteExec ? undefined : preparedEnvironment.localIdentityEnv),
         ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
@@ -178,13 +179,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
-  // The public runner carries a resolved store target. Its durable row must
-  // authorize a stable-key fence before an old generation can read its binding.
-  if (
-    bindingIdentity.kind === "session" &&
-    bindingIdentity.sessionKey &&
-    (params.sessionTarget?.storePath || params.config?.session?.store)
-  ) {
+  // Only a durable session row authorizes stable-key ownership. Caller-owned
+  // transcripts omit a store target, so classify them against the default store too.
+  if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const authority = resolveCodexRunSessionBindingAuthority({
       identity: bindingIdentity,
       config: params.config,
@@ -210,7 +207,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = await bindingStore.read(bindingIdentity);
+  let startupBinding = bindingStore.read(bindingIdentity);
+  assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
       bindingStore,
@@ -221,7 +219,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     if (!reclaimed) {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
-    startupBinding = await bindingStore.read(bindingIdentity);
+    startupBinding = bindingStore.read(bindingIdentity);
   }
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -432,6 +430,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
     contextEngineActive: Boolean(activeContextEngine),
+    expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
   });
   startupBinding = startupBindingResolution.binding;
   const initialInactiveThreadBootstrapBindingForcedFreshStart =

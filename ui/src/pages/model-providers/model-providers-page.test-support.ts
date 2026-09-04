@@ -7,7 +7,8 @@ import type {
   ModelProviderLogoutTarget,
   ModelProviderPendingLogout,
 } from "./data.ts";
-import type { ModelProvidersData } from "./load.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
+import type { ModelBehaviorConfig } from "./model-behavior.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -20,7 +21,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   addProviderId: string;
   addProviderKey: string;
   addProviderOpen: boolean;
-  defaultsDraft: DefaultModelSelection | null;
+  defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
   logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
@@ -32,7 +33,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
-  saveDefaultModels: () => Promise<void>;
+  saveDefaults: () => Promise<void>;
   saveKey: (provider: string, configKey: string) => Promise<void>;
   setProfileOrder: (cardId: string, provider: string, profileIds: string[] | null) => void;
   selectedAgentId: string;
@@ -122,6 +123,7 @@ export function createHarness(initialScopeId: string) {
   let runtimeConfigListener: (() => void) | undefined;
   const subscribe = () => () => undefined;
   const runtimeConfig = {
+    canPatch: true,
     state: {
       connected: true,
       configSnapshot: { config: {} },
@@ -239,11 +241,25 @@ export function focusDocument(): void {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 }
 
+export function createEmptyModelProvidersRouteData(
+  context: ApplicationContext,
+): ModelProvidersRouteData {
+  // A loader completed before connection; the connected page now owns recovery.
+  return {
+    gateway: context.gateway,
+    gatewaySnapshot: { ...context.gateway.snapshot, phase: "stopped", client: null },
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
+    agentId: context.agentSelection.state.selectedId,
+  };
+}
+
 export function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
   ) as ModelProvidersPageTestElement;
   page.context = context;
+  page.routeData = createEmptyModelProvidersRouteData(context);
   document.body.append(page);
   return page;
 }

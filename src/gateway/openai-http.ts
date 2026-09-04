@@ -969,8 +969,8 @@ export async function handleOpenAiHttpRequest(
   }
   const creationAuth = authorizeGatewaySessionCreation({
     cfg: getRuntimeConfig(),
-    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
-      ? { actor: { kind: "system" as const } }
+    ...(handled.requestAuth.operatorRoleActor
+      ? { actor: handled.requestAuth.operatorRoleActor }
       : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
     agentId,
   });

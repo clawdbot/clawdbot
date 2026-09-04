@@ -27,7 +27,7 @@ export async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
-export function createGatewayStartupTrace(log: GatewayLogger) {
+export function createGatewayStartupTrace(log: GatewayLogger, startedAt = performance.now()) {
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
@@ -46,7 +46,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
-  const started = performance.now();
+  const started = startedAt;
   let last = started;
   let spanSequence = 0;
   const formatMetric = (key: string, value: number | string) =>

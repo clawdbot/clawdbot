@@ -79,6 +79,10 @@ describe("buildSlackBlocksFallbackText", () => {
                   { type: "text", text: "Ada" },
                   { type: "text", text: " " },
                   { type: "user", user_id: "U123" },
+                  {
+                    type: "future_container",
+                    elements: [{ type: "future_leaf", text: " preserved " }],
+                  },
                 ],
               },
             ],
@@ -90,10 +94,10 @@ describe("buildSlackBlocksFallbackText", () => {
     };
 
     expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
-      ["Name\t42\tNote", "Ada <@U123>\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+      ["Name\t42\tNote", "Ada <@U123> preserved \tseven\tA\\tB\\nC\\\\D"].join("\n"),
     );
     expect(renderSlackBlockFallbackText(table)).toBe(
-      ["Name\t42\tNote", "Ada &lt;@U123&gt;\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+      ["Name\t42\tNote", "Ada &lt;@U123&gt; preserved \tseven\tA\\tB\\nC\\\\D"].join("\n"),
     );
   });
 
@@ -193,6 +197,10 @@ describe("buildSlackBlocksFallbackText", () => {
             },
           ],
         },
+        {
+          type: "future_container",
+          elements: [{ type: "text", text: "hidden-future-text" }],
+        },
       ],
     };
     const richText = renderSlackBlockFallbackText(richTextBlock);
@@ -215,6 +223,7 @@ describe("buildSlackBlocksFallbackText", () => {
     );
     expect(richText).not.toContain("private-block-id");
     expect(richText).not.toContain("private-target");
+    expect(richText).not.toContain("hidden-future-text");
     expect(context).toBe("Updated now Green status");
     expect(context).not.toContain("secret");
   });

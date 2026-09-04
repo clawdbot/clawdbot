@@ -191,7 +191,6 @@ async function postOpenAIResponsesCompaction(params: {
   const response = await params.client.post<unknown>("/responses/compact", {
     ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
       timeoutMs: params.options?.timeoutMs,
-      maxRetries: params.options?.maxRetries,
     }),
     body: { model: params.request.model, input: compactInput },
   });
@@ -265,9 +264,6 @@ type ResponsesTransportExecutorOptions = {
     metadata?: Record<string, string>,
     replayMode?: OpenAIResponsesReplayMode,
   ) => ReturnType<typeof buildOpenAIResponsesParams>;
-  createResponseStream: (
-    params: ResponsesStreamParams,
-  ) => ReturnType<typeof createResponsesStreamWithEncryptedContentRetry>;
   pricingOptions?: (
     options: OpenAIResponsesOptions | undefined,
     model: Model,
@@ -416,7 +412,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
-          maxRetries: options?.maxRetries,
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,
@@ -436,7 +431,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
           initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
-          const { stream: responseStream } = await config.createResponseStream({
+          const { stream: responseStream } = await createResponsesStreamWithEncryptedContentRetry({
             client,
             request: initialRequest,
             requestOptions,
@@ -640,7 +635,6 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     httpContinuation: true,
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
     pricingOptions: (options, model) => ({
       serviceTier: options?.serviceTier,
       // One canonical service-tier pricing table; a transport-local copy drifted
@@ -665,7 +659,6 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         metadata,
         replayMode,
       ),
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
   });
 }
 
