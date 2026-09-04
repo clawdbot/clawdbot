@@ -122,6 +122,7 @@ export const agentHarnessAttemptTerminal = {
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
+export { resolveHumanApprovalToolTimeoutMs } from "../plugins/runtime.js";
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,

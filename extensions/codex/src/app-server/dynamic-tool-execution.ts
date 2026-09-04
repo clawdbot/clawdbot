@@ -6,6 +6,7 @@ import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
   normalizeQuestionTimeoutSeconds,
+  resolveHumanApprovalToolTimeoutMs,
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -554,6 +555,12 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
+      // A tool a plugin declared human-approval-gated may legitimately block on
+      // a person for far longer than the default per-call deadline. Give it the
+      // declared human budget (clamped to the codex max) instead of killing the
+      // call at 90s and forcing the harness to retry — mirrors how ask_user is
+      // exempt, but driven by the plugin's declaration rather than a tool name.
+      resolveHumanApprovalToolTimeoutMs(params.call.tool) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   );
 }

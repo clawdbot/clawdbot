@@ -6,6 +6,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     plugins: [],
     tools: [],
     hooks: [],
+    humanApprovalToolTimeouts: new Map(),
     typedHooks: [],
     channels: [],
     channelSetups: [],

@@ -260,6 +260,16 @@ export function getActivePluginRegistry(): PluginRegistry | null {
   return asPluginRegistry(state.activeRegistry);
 }
 
+/**
+ * The longest human-approval wait (ms) any active plugin declared for `toolName`
+ * via `declareHumanApprovalTools`, or undefined when none did. Agent harnesses
+ * consult this so a per-tool-call watchdog gives an approval-blocked tool the
+ * human budget instead of its default deadline, without hardcoding tool names.
+ */
+export function resolveHumanApprovalToolTimeoutMs(toolName: string): number | undefined {
+  return getActivePluginRegistry()?.humanApprovalToolTimeouts.get(toolName);
+}
+
 export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }

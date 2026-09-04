@@ -22,6 +22,7 @@ type BuildPluginApiParams = {
 
 const noops = {
   registerTool: () => {},
+  declareHumanApprovalTools: () => {},
   registerHook: () => {},
   registerHttpRoute: () => {},
   registerHostedMediaResolver: () => {},
@@ -138,6 +139,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     runtime: params.runtime,
     logger: params.logger,
     registerTool: handlers.registerTool ?? noops.registerTool,
+    declareHumanApprovalTools:
+      handlers.declareHumanApprovalTools ?? noops.declareHumanApprovalTools,
     registerHook: handlers.registerHook ?? noops.registerHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noops.registerHttpRoute,
     registerHostedMediaResolver:

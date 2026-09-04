@@ -349,7 +349,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: explicit native page history and query preservation options.
       // +4: observed session query, result, snapshot, and subscription contracts.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      4428,
+      // +1: human-approval tool timeout accessor so harness watchdogs allow human waits.
+      4429,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -470,7 +471,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: final callable-tool availability projection for native harnesses.
       // +4: defineFeatureContract, createFeatureClient, defineFeaturePlugin, defineControlUiPlugin.
       // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      2616,
+      // +1: human-approval tool timeout accessor so harness watchdogs allow human waits.
+      2617,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

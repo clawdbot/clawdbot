@@ -531,6 +531,12 @@ export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
+  // Tools a plugin declared may block on a human approval, mapped to the
+  // longest declared wait budget (ms). Agent harnesses consult this so a
+  // per-tool-call watchdog does not kill a call that is legitimately waiting
+  // on a human, instead of hardcoding tool names. Keyed by tool name; the max
+  // across declaring plugins wins.
+  humanApprovalToolTimeouts: Map<string, number>;
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];

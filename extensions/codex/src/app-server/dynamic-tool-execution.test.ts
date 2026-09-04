@@ -13,6 +13,16 @@ import {
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
+// Override only the human-approval budget accessor; the module under test pulls
+// several other bindings from this barrel, so importActual keeps them real.
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    resolveHumanApprovalToolTimeoutMs: (tool: string) => (tool === "exec" ? 600_000 : undefined),
+  };
+});
+
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
@@ -81,6 +91,36 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(timeoutMs);
+  });
+
+  it("gives a plugin-declared human-approval tool the human budget instead of the default", () => {
+    // `exec` is declared human-approval-gated (600s) via the mocked accessor; a
+    // call blocked on a human scan gets that budget instead of the 90s default.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...dynamicCallContext, callId: "hw-1", tool: "exec", arguments: {} },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+    // A tool no plugin declared keeps the default per-call deadline.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...dynamicCallContext, callId: "hw-2", tool: "ungated_tool", arguments: {} },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    // An explicit per-call timeout still wins over the human budget.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          ...dynamicCallContext,
+          callId: "hw-3",
+          tool: "exec",
+          arguments: { timeoutMs: 5_000 },
+        },
+        config: undefined,
+      }),
+    ).toBe(5_000);
   });
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {

@@ -209,6 +209,15 @@ export type OpenClawPluginApi = {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
   ) => void;
+  /**
+   * Declare that the named tools may block on a human approval this plugin
+   * gates, so agent-harness per-tool-call watchdogs allow up to `timeoutMs`
+   * for those calls instead of killing them at the default deadline. The
+   * plugin owns this declaration (typically driven by its own config); the
+   * host only aggregates it. `timeoutMs` is the plugin's expected human wait
+   * and is clamped by each harness to its own maximum.
+   */
+  declareHumanApprovalTools: (declaration: { tools: readonly string[]; timeoutMs: number }) => void;
   registerHook: (
     events: string | string[],
     handler: InternalHookHandler,

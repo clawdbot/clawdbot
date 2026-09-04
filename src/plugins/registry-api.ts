@@ -181,6 +181,29 @@ export function createPluginApiFactory(
         ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
+              declareHumanApprovalTools: (declaration) => {
+                // Record which tools this plugin gates behind a human approval,
+                // and the longest wait it expects, so harness watchdogs give
+                // those calls the human budget instead of the default per-call
+                // deadline. Like registerTool this writes into the current
+                // registry generation only; a discovery/retired generation
+                // writes to its own registry, which is never the active one a
+                // harness reads, so no per-call guard is needed here.
+                const timeoutMs = Math.floor(declaration.timeoutMs);
+                if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+                  return;
+                }
+                for (const tool of declaration.tools) {
+                  const name = tool.trim();
+                  if (!name) {
+                    continue;
+                  }
+                  const existing = registry.humanApprovalToolTimeouts.get(name) ?? 0;
+                  if (timeoutMs > existing) {
+                    registry.humanApprovalToolTimeouts.set(name, timeoutMs);
+                  }
+                }
+              },
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),

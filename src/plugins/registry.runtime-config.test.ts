@@ -56,6 +56,40 @@ describe("plugin registry runtime config scope", () => {
     );
   });
 
+  it("aggregates human-approval tool declarations at the longest declared budget", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const recordA = createPluginRecord({
+      id: "gater-a",
+      source: "/plugins/gater-a/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    pluginRegistry
+      .createApi(recordA, { config: {} as OpenClawConfig })
+      .declareHumanApprovalTools({ tools: ["exec", "shell"], timeoutMs: 120_000 });
+
+    const recordB = createPluginRecord({
+      id: "gater-b",
+      source: "/plugins/gater-b/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const apiB = pluginRegistry.createApi(recordB, { config: {} as OpenClawConfig });
+    apiB.declareHumanApprovalTools({ tools: ["exec"], timeoutMs: 600_000 });
+    apiB.declareHumanApprovalTools({ tools: [" "], timeoutMs: 600_000 });
+    apiB.declareHumanApprovalTools({ tools: ["deploy"], timeoutMs: 0 });
+
+    const map = pluginRegistry.registry.humanApprovalToolTimeouts;
+    // Longest budget across declaring plugins wins for a shared tool.
+    expect(map.get("exec")).toBe(600_000);
+    expect(map.get("shell")).toBe(120_000);
+    // Blank tool names and non-positive budgets are ignored.
+    expect(map.has("deploy")).toBe(false);
+    expect(map.has(" ")).toBe(false);
+  });
+
   it.each([
     {
       label: "bundled",
