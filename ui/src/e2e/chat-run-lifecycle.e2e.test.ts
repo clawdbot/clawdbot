@@ -1,7 +1,9 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -314,10 +316,10 @@ suite.define(() => {
     expect(await stream.textContent()).not.toContain("Saved opening.");
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     if (captureProof) {
-      await currentPage.screenshot({
-        path: path.join(artifactDir, "restored-inflight-tail.png"),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, "restored-inflight-tail.png"),
+        await takeControlUiViewportScreenshot(currentPage, currentPage.locator(".shell"), [stream]),
+      );
     }
   });
 

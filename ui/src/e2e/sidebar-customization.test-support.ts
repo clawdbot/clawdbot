@@ -1,5 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,8 +21,17 @@ export async function captureSidebarUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  surface: Locator = page.locator(".shell"),
+  content: readonly Locator[] = [surface],
 ): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  if (page.video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
     return;
   }
   await page.screenshot({
@@ -33,6 +47,15 @@ export async function captureSettingsSidebarUiProof(
   fileName: string,
 ): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  if (sidebar.page().video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiElementScreenshot(sidebar.page(), sidebar, [
+        sidebar.getByRole("searchbox", { name: "Search settings" }),
+      ]),
+    );
     return;
   }
   await sidebar.screenshot({
