@@ -7481,9 +7481,11 @@ server.listen(0, "127.0.0.1", () => {
       for (const scenario of [
         { failed: "", missing: "", missingFile: false },
         ...commands.map((failed) => ({ failed, missing: "", missingFile: false })),
-        ...commands.map((missing) => ({ failed: "", missing, missingFile: false })),
-        ...(commands.some((command) => command === "lint:tmp:export-name-collisions")
-          ? [{ failed: "", missing: "", missingFile: true }]
+        ...(group === "source-contracts"
+          ? [
+              ...commands.map((missing) => ({ failed: "", missing, missingFile: false })),
+              { failed: "", missing: "", missingFile: true },
+            ]
           : []),
       ]) {
         const present = commands.filter(
@@ -10024,38 +10026,38 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }
     }
     expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
-    expect(hostedCoreLint.strategy).toEqual({
-      "fail-fast": false,
-      "max-parallel": 5,
-      matrix: { stripe: [1, 2, 3, 4, 5] },
-    });
+    expect(hostedCoreLint.strategy["fail-fast"]).toBe(false);
+    expect(hostedCoreLint.strategy["max-parallel"]).toBe(5);
     const coreLintStep = hostedCoreLint.steps.find(
       (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
     );
-    expect(coreLintStep.run).toContain(
-      "--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1",
-    );
-
+    expect(coreLintStep.env.CORE_STRIPE).toBe("${{ matrix.stripe }}");
     type GoEnv = Partial<Pick<NodeJS.ProcessEnv, "GOMAXPROCS" | "GOGC" | "GOMEMLIMIT">>;
     const goEnvKeys = ["GOMAXPROCS", "GOGC", "GOMEMLIMIT"] as const;
     const runLintOwner = ({
       capability,
       cpuCount = 32,
+      eventName = "workflow_dispatch",
+      failStripe,
       frozenTarget = !capability,
       goEnv = {},
       expectedGoEnv = goEnv,
       lane,
       profile,
       releaseGate = false,
+      stripe = 1,
     }: {
       capability: boolean;
       cpuCount?: number;
+      eventName?: "pull_request" | "push" | "workflow_dispatch";
+      failStripe?: number;
       frozenTarget?: boolean;
       goEnv?: GoEnv;
       expectedGoEnv?: GoEnv;
       lane: "check" | "core";
       profile: "blacksmith" | "github" | "hybrid";
       releaseGate?: boolean;
+      stripe?: number;
     }) => {
       const root = tempDirs.make("openclaw-hosted-lint-owner-");
       const binDir = path.join(root, "bin");
@@ -10073,13 +10075,28 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           "set -euo pipefail",
           `printf '${command} %s\\n' "$*" >> "$LINT_CALLS"`,
           'printf \'%s\\t%s\\t%s\\n\' "${GOMAXPROCS-}" "${GOGC-}" "${GOMEMLIMIT-}" >> "$LINT_GO_ENV"',
+          ...(failStripe === undefined
+            ? []
+            : [`if [[ " $* " == *" --core-stripe=${failStripe}/5 "* ]]; then exit 23; fi`]),
         ]);
       }
       writeExecutable(path.join(binDir, "nproc"), [
         "#!/usr/bin/env bash",
         `printf '${cpuCount}\\n'`,
       ]);
-      const coreRun = coreLintStep.run.replaceAll("${{ matrix.stripe }}", "1");
+      const coreRun = coreLintStep.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+        String(
+          evaluateWorkflowExpression(expression, {
+            eventName,
+            frozenTarget,
+            matrix: { stripe },
+            releaseGate,
+            repository: "openclaw/openclaw",
+            runnerProfile: profile,
+            runAttempt: 1,
+          }),
+        ),
+      );
       const stepEnv = lane === "check" ? checkShardStep.env : coreLintStep.env;
       const result = spawnSync("bash", ["-c", lane === "check" ? checkShardRun : coreRun], {
         cwd: root,
@@ -10094,6 +10111,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             goEnvKeys.flatMap((key) => (stepEnv[key] === undefined ? [] : [[key, stepEnv[key]]])),
           ),
           FORMAT_CHECK: "false",
+          CORE_STRIPE: String(stripe),
           FROZEN_TARGET: frozenTarget ? "true" : "false",
           HISTORICAL_TARGET: capability ? "false" : "true",
           HOSTED_RUNNER_STRIPES: profile === "blacksmith" ? "false" : "true",
@@ -10108,7 +10126,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           TASK: "lint",
         },
       });
-      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(
+        failStripe === undefined ? 0 : 23,
+      );
       const calls = existsSync(callsPath)
         ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
         : [];
@@ -10119,11 +10139,66 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       return calls;
     };
 
+    const coreLintRows = (
+      context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>,
+    ): number[] => {
+      const stripes = hostedCoreLint.strategy.matrix.stripe;
+      return Array.isArray(stripes)
+        ? stripes
+        : evaluateWorkflowExpression(stripes, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runnerProfile: "hybrid",
+            runAttempt: 1,
+            ...context,
+          });
+    };
+    for (const eventName of ["pull_request", "push"] as const) {
+      const rows = coreLintRows({ eventName });
+      expect(rows).toEqual([1, 2, 3]);
+      expect(
+        rows.flatMap((stripe) =>
+          runLintOwner({ capability: true, eventName, lane: "core", profile: "hybrid", stripe }),
+        ),
+      ).toEqual(
+        [1, 2, 3, 4, 5].map(
+          (stripe) =>
+            `node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=${stripe}/5 --threads=1`,
+        ),
+      );
+    }
+    for (const context of [
+      { runnerProfile: "github" as const },
+      { eventName: "workflow_dispatch" as const },
+      { frozenTarget: true },
+      { releaseGate: true },
+    ]) {
+      expect(coreLintRows(context)).toEqual([1, 2, 3, 4, 5]);
+    }
+    expect(
+      runLintOwner({
+        capability: true,
+        eventName: "pull_request",
+        failStripe: 1,
+        lane: "core",
+        profile: "hybrid",
+      }),
+    ).toEqual([
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
+    ]);
+
     expect(runLintOwner({ capability: true, lane: "check", profile: "github" })).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=6/6 --threads=1",
       "node --import tsx scripts/run-oxlint-shards.mts --only=scripts --threads=1",
     ]);
-    expect(runLintOwner({ capability: true, lane: "core", profile: "github" })).toEqual([
+    expect(
+      runLintOwner({
+        capability: true,
+        eventName: "pull_request",
+        lane: "core",
+        profile: "github",
+      }),
+    ).toEqual([
       "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core --core-stripe=1/5 --threads=1",
       "node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=1/6 --threads=1",
     ]);
@@ -11688,6 +11763,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
         "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+        "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
       ],
       { encoding: "utf8" },
     )
@@ -11796,6 +11872,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+      "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",

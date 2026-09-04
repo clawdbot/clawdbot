@@ -158,6 +158,8 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
+A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then restart the Gateway to load the repaired plugin.
+
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown still joins pending cleanup during its separate five-second grace, without invoking the service's stop handler again.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.

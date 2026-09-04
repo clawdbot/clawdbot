@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
 import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
@@ -98,6 +99,38 @@ describe("SOCKS proxy protocol boundaries", () => {
     },
   );
 
+  it.each(["fixed", "environment"])(
+    "authenticates decoded SOCKS URL credentials through the %s helper",
+    async (mode) => {
+      const credentials = { username: "fixture@user:space %", password: "fixture:p@ss/%" };
+      await withProxyFixture(async ({ socksProxy, certificate, connections, originRoutes }) => {
+        const url = new URL(socksProxy);
+        url.username = encodeURIComponent(credentials.username);
+        const create = () => {
+          const options = { requestTls: { ca: certificate } };
+          return mode === "environment"
+            ? createHttp1EnvHttpProxyAgent({ ...options, httpsProxy: url.href, noProxy: "" })
+            : createHttp1ProxyAgent({ ...options, uri: url.href });
+        };
+        url.password = encodeURIComponent(`${credentials.password}-wrong`);
+        const rejected = create();
+        try {
+          await expect(
+            undiciFetch(TARGET_URL, { dispatcher: rejected, signal: AbortSignal.timeout(5_000) }),
+          ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKS5_AUTH_FAILED" } });
+          expect(connections).toEqual([]);
+          expect(originRoutes).toEqual([]);
+        } finally {
+          await rejected.destroy();
+        }
+        url.password = encodeURIComponent(credentials.password);
+        await fetchPayload(create());
+        expect(connections).toEqual([`socks:${TARGET_HOST}`]);
+        expect(originRoutes).toEqual(["proxy"]);
+      }, credentials);
+    },
+  );
+
   it.each(["explicit", "environment", "custom-http", "forward-http"])(
     "preserves address-family policy on the actual %s proxy connection",
     async (mode) => {
@@ -168,6 +201,94 @@ describe("SOCKS proxy protocol boundaries", () => {
         connect.mockRestore();
         family.mockRestore();
         connector.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { name: "fixed target", mode: "fixed", stall: "target", target: 100, proxy: 0 },
+    { name: "environment target", mode: "environment", stall: "target", target: 100, proxy: 0 },
+    {
+      name: "target despite wrapper budget",
+      mode: "fixed",
+      stall: "target",
+      target: 100,
+      proxy: 0,
+      budget: 5_000,
+    },
+    {
+      name: "request TLS override",
+      mode: "fixed",
+      stall: "target",
+      target: 0,
+      proxy: 0,
+      request: 100,
+      budget: 5_000,
+    },
+    { name: "proxy TLS override", mode: "fixed", stall: "proxy", target: 0, proxy: 100 },
+    {
+      name: "wrapper proxy budget",
+      mode: "fixed",
+      stall: "proxy",
+      target: 0,
+      proxy: 0,
+      budget: 100,
+    },
+  ])(
+    "preserves the independent $name deadline",
+    async ({ mode, stall, target, proxy, request, budget }) => {
+      const server = stall === "proxy" ? net.createServer() : http.createServer();
+      const sockets = new Set<net.Socket>();
+      let sawTlsHandshake = false;
+      const observeTls = (chunk: Buffer) => {
+        sawTlsHandshake = chunk[0] === 22;
+      };
+      server.on("connection", (socket: net.Socket) => {
+        sockets.add(socket);
+        socket.on("error", () => {});
+        socket.once("close", () => sockets.delete(socket));
+        if (stall === "proxy") {
+          socket.once("data", observeTls);
+        }
+      });
+      if (server instanceof http.Server) {
+        server.on("connect", (_request, socket) => {
+          socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+          socket.once("data", observeTls);
+        });
+      }
+      let dispatcher: ReturnType<typeof createHttp1ProxyAgent> | undefined;
+      try {
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected a listening loopback proxy");
+        }
+        const uri = `${stall === "proxy" ? "https" : "http"}://127.0.0.1:${address.port}`;
+        const options = {
+          connectTimeout: target,
+          proxyTls: { timeout: proxy },
+          ...(request === undefined ? {} : { requestTls: { timeout: request } }),
+        };
+        dispatcher =
+          mode === "environment"
+            ? createHttp1EnvHttpProxyAgent(
+                { ...options, httpProxy: uri, httpsProxy: uri, noProxy: "" },
+                budget,
+              )
+            : createHttp1ProxyAgent({ ...options, uri }, budget);
+        const outcome = await undiciFetch(TARGET_URL, {
+          dispatcher,
+          signal: AbortSignal.timeout(2_000),
+        }).catch((error: unknown) => error);
+        expect(sawTlsHandshake).toBe(true);
+        expect(outcome).toMatchObject({ cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await dispatcher?.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     },
   );

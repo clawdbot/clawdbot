@@ -56,7 +56,10 @@ function createHttp1ProxyClientFactory(): UndiciProxyClientFactory {
 }
 
 /** Prepare proxy transport without transferring direct-origin TLS or DNS policy. */
-export function buildProxyConnectOptions(options: Omit<UndiciProxyAgentOptionsRecord, "uri">) {
+export function buildProxyConnectOptions(
+  options: Omit<UndiciProxyAgentOptionsRecord, "uri">,
+  timeoutMs?: number,
+) {
   const connect = {
     ...resolveUndiciAutoSelectFamilyConnectOptions(),
     ...(typeof options.connect === "object" ? options.connect : {}),
@@ -65,9 +68,11 @@ export function buildProxyConnectOptions(options: Omit<UndiciProxyAgentOptionsRe
     autoSelectFamily: connect.autoSelectFamily,
     autoSelectFamilyAttemptTimeout: connect.autoSelectFamilyAttemptTimeout,
     ...options.proxyTls,
+    // Proxy-hop overrides must not replace the tunneled target's connectTimeout.
     timeout:
-      options.connectTimeout ??
+      normalizedTimeout(timeoutMs) ??
       options.proxyTls?.timeout ??
+      options.connectTimeout ??
       (typeof options.connect === "object" ? options.connect.timeout : undefined),
     ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   };
@@ -127,36 +132,23 @@ export function buildHttp1AgentOptions(
   };
 }
 
-function buildHttp1ProxyOptions<T extends Omit<UndiciProxyAgentOptionsRecord, "uri">>(
-  options: T,
-  timeoutMs?: number,
-  managedTlsEnv?: NodeJS.ProcessEnv,
-): T & NonNullable<UndiciAgentOptions> {
-  const timeout = normalizedTimeout(timeoutMs);
-  const managed = addActiveManagedProxyTlsOptions(options, { env: managedTlsEnv });
-  const prepared = {
-    proxyTunnel: true,
-    ...managed,
-    ...buildHttp1AgentOptions(managed, timeout),
-    connectTimeout: timeout ?? options.proxyTls?.timeout ?? options.connectTimeout,
-  };
-  // Generic connector hints are not TLS opt-in: Undici interprets proxyTls
-  // presence as SOCKS-over-TLS. Only explicitly supplied/managed TLS belongs there.
-  return {
-    ...prepared,
-    clientFactory:
-      options.clientFactory === undefined ? createHttp1ProxyClientFactory() : options.clientFactory,
-  };
-}
-
 export function buildHttp1ProxyAgentOptions(
   options: UndiciProxyAgentOptions,
   timeoutMs?: number,
   managedTlsEnv?: NodeJS.ProcessEnv,
 ): Exclude<UndiciProxyAgentOptions, string> {
-  return buildHttp1ProxyOptions(
-    typeof options === "string" || options instanceof URL ? { uri: options.toString() } : options,
-    timeoutMs,
-    managedTlsEnv,
-  );
+  const normalized =
+    typeof options === "string" || options instanceof URL ? { uri: options.toString() } : options;
+  const managed = addActiveManagedProxyTlsOptions(normalized, { env: managedTlsEnv });
+  // Generic connector hints are not TLS opt-in: Undici interprets proxyTls
+  // presence as SOCKS-over-TLS. Only explicitly supplied/managed TLS belongs there.
+  return {
+    proxyTunnel: true,
+    ...managed,
+    ...buildHttp1AgentOptions(managed, timeoutMs),
+    clientFactory:
+      normalized.clientFactory === undefined
+        ? createHttp1ProxyClientFactory()
+        : normalized.clientFactory,
+  };
 }

@@ -1,7 +1,8 @@
 // Pnpm Audit Prod tests cover pnpm audit prod script behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -16,6 +17,8 @@ import {
   runPnpmAuditProd,
   stripVersionDecorators,
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
+
+vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
 
 describe("pnpm-audit-prod", () => {
   it("keeps toolchain snapshots separate from production while auditing both documents", () => {
@@ -64,6 +67,7 @@ snapshots:
   it("parses explicit audit severity flags", () => {
     expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
     expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
+    expect(parseArgs(["--ci"])).toEqual({ minSeverity: "high", budgetMs: 30_000 });
   });
 
   it("rejects missing audit severity flag values", () => {
@@ -73,6 +77,10 @@ snapshots:
     );
     expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
+  });
+
+  it.each(["constructor", "toString", "unknown"])("rejects unsupported audit level %s", (level) => {
+    expect(() => filterFindingsBySeverity({}, level)).toThrow("Unsupported audit level");
   });
 
   it("parses scoped snapshot keys with peer suffixes", () => {
@@ -346,7 +354,8 @@ snapshots:
     expect(signals[1]?.aborted).toBe(false);
   });
 
-  it("stops after two timed-out bulk advisory requests", async () => {
+  it("fails closed after three timed-out bulk advisory requests", async () => {
+    vi.mocked(delay).mockClear();
     const signals: AbortSignal[] = [];
     const fetchImpl = vi.fn(((_url, init) => {
       const signal = init?.signal;
@@ -367,11 +376,50 @@ snapshots:
       fetchImpl,
     });
 
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(signals).toHaveLength(2);
+    await expect(request).rejects.toThrow(
+      /failed after 3 attempts.*Check npm registry availability/u,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(signals).toHaveLength(3);
     expect(signals[0]).not.toBe(signals[1]);
     expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(delay).toHaveBeenCalledTimes(2);
+    const secondWaitMs = vi.mocked(delay).mock.calls[1]?.[0];
+    expect(secondWaitMs).toBeGreaterThanOrEqual(2000);
+    expect(secondWaitMs).toBeLessThan(4000);
+  });
+
+  it.each(["network error", "HTTP 503"])("recovers %s with bounded backoff", async (failure) => {
+    vi.mocked(delay).mockClear();
+    const fetchImpl = vi.fn(async () => new Response("{}"));
+    fetchImpl.mockImplementationOnce(async () => {
+      if (failure === "network error") {
+        throw new TypeError("fetch failed", { cause: new Error("ECONNRESET") });
+      }
+      return new Response("temporarily unavailable", { status: 503 });
+    });
+
+    await expect(
+      fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl }),
+    ).resolves.toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledOnce();
+    const waitMs = vi.mocked(delay).mock.calls[0]?.[0];
+    expect(waitMs).toBeGreaterThanOrEqual(1000);
+    expect(waitMs).toBeLessThan(2000);
+  });
+
+  it.each(["network error", "HTTP 503"])("fails closed after repeated %s", async (failure) => {
+    const fetchImpl = vi.fn(async () => {
+      if (failure === "network error") {
+        throw new TypeError("fetch failed");
+      }
+      return new Response("temporarily unavailable", { status: 503 });
+    });
+    await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
+      /failed after 3 attempts.*Check npm registry availability/u,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it("does not retry an untagged error with the timeout message", async () => {
@@ -391,11 +439,10 @@ snapshots:
 
   it.each([
     {
-      caseName: "HTTP failures",
+      caseName: "HTTP client failures",
       responseBodyMaxBytes: undefined,
-      response: () =>
-        new Response("registry failure", { status: 500, statusText: "Internal Error" }),
-      expectedError: /Bulk advisory request failed \(500 Internal Error\)/u,
+      response: () => new Response("registry failure", { status: 403, statusText: "Forbidden" }),
+      expectedError: /Bulk advisory request failed \(403 Forbidden\)/u,
     },
     {
       caseName: "invalid JSON",
@@ -454,51 +501,39 @@ snapshots:
     expect(signal?.aborted).toBe(false);
   });
 
-  it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
-    let cancellations = 0;
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      timeoutMs: 5,
-      fetchImpl: async () =>
-        new Response(
-          new ReadableStream({
-            pull() {
-              return new Promise(() => {});
-            },
-            cancel() {
-              cancellations += 1;
-            },
-          }),
-          { status: 200 },
-        ),
-    });
-
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancellations).toBe(2);
-  });
-
-  it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
-    let cancellations = 0;
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
-      timeoutMs: 5,
-      fetchImpl: async () =>
-        new Response(
-          new ReadableStream({
-            pull() {
-              return new Promise(() => {});
-            },
-            cancel() {
-              cancellations += 1;
-            },
-          }),
-          { status: 500, statusText: "Internal Error" },
-        ),
-    });
-
-    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancellations).toBe(2);
-  });
+  it.each([
+    { status: 200, attempts: 3 },
+    { status: 503, attempts: 3 },
+    { status: 403, attempts: 1 },
+  ])(
+    "cancels stalled HTTP $status bodies without retrying client failures",
+    async ({ status, attempts }) => {
+      let cancellations = 0;
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise(() => {});
+              },
+              cancel() {
+                cancellations += 1;
+              },
+            }),
+            { status },
+          ),
+      );
+      await expect(
+        fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, timeoutMs: 5, fetchImpl }),
+      ).rejects.toThrow(
+        status === 403
+          ? /Bulk advisory request failed \(403/u
+          : /Bulk advisory request exceeded timeout/u,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(attempts);
+      expect(cancellations).toBe(attempts);
+    },
+  );
 
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
@@ -560,10 +595,209 @@ snapshots:
     await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
   });
 
+  it.each(
+    [
+      null,
+      [],
+      { axios: {} },
+      { axios: [null] },
+      { axios: [[]] },
+      { axios: [{ id: 1, vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "unknown", vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "constructor", vulnerable_versions: "<2" }] },
+      { axios: [{ id: {}, severity: "high", vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "high", vulnerable_versions: null }] },
+    ].map((body) => ({ body })),
+  )("rejects malformed advisory data without retry: $body", async ({ body }) => {
+    const fetchImpl = vi.fn(async () => Response.json(body));
+    await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
+      "Invalid bulk advisory response",
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 503, 403])("bounds stalled HTTP %s bodies by the total budget", async (status) => {
+    const timers =
+      await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
+    // Real backoff consumes the remaining budget; the suite's instant mock does not.
+    vi.mocked(delay).mockImplementation(timers.setTimeout);
+    let cancelled = false;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull: () => new Promise(() => {}),
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status },
+        ),
+    );
+    try {
+      await expect(
+        fetchBulkAdvisories({
+          payload: { axios: ["1.0.0"] },
+          fetchImpl,
+          timeoutMs: 1000,
+          budgetMs: 20,
+        }),
+      ).rejects.toThrow(status === 403 ? "failed (403" : "timeout");
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.mocked(delay).mockImplementation(async () => {});
+    }
+  });
+
+  it("includes retry backoff in the total budget", async () => {
+    const fetchImpl = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    vi.mocked(delay).mockImplementationOnce(async (ms) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Number(ms) + 2);
+      });
+    });
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        fetchImpl,
+        timeoutMs: 1000,
+        budgetMs: 20,
+      }),
+    ).rejects.toThrow("failed (503");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "HTTP 503",
+      response: () => new Response("unavailable", { status: 503 }),
+      exit: 2,
+      attempts: 3,
+    },
+    { name: "HTTP 429", response: () => new Response("rate limited", { status: 429 }), exit: 2 },
+    { name: "HTTP 408", response: () => new Response("timeout", { status: 408 }), exit: 2 },
+    {
+      name: "connection reset",
+      attempts: 3,
+      response: () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+        });
+      },
+      exit: 2,
+    },
+    { name: "timeout", response: () => new Promise<Response>(() => {}), exit: 2, attempts: 3 },
+    { name: "HTTP 403", response: () => new Response("forbidden", { status: 403 }), exit: null },
+    {
+      name: "HTTP 403 with a stalled error body",
+      response: () =>
+        new Response(new ReadableStream({ pull: () => new Promise(() => {}) }), { status: 403 }),
+      exit: null,
+    },
+    {
+      name: "invalid registry URL",
+      attempts: 3,
+      response: () => {
+        throw new TypeError("invalid URL", {
+          cause: Object.assign(new Error(), { code: "ERR_INVALID_URL" }),
+        });
+      },
+      exit: null,
+    },
+    {
+      name: "connection lost while reading a response",
+      attempts: 3,
+      response: () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                new TypeError("terminated", {
+                  cause: Object.assign(new Error(), { code: "UND_ERR_SOCKET" }),
+                }),
+              );
+            },
+          }),
+        ),
+      exit: 2,
+    },
+    { name: "invalid JSON", response: () => new Response("{"), exit: null },
+  ])(
+    "preserves whole-graph audit failure outcomes: $name",
+    async ({ response, exit, attempts = 1 }) => {
+      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-partial-"));
+      const packages = Array.from({ length: 401 }, (_, index) => `pkg-${index}`);
+      await writeFile(
+        path.join(tempDir, "pnpm-lock.yaml"),
+        [
+          "lockfileVersion: '9.0'",
+          "importers:",
+          "  .:",
+          "    dependencies:",
+          ...packages.map((pkg) => `      ${pkg}: {version: 1.0.0}`),
+          "snapshots:",
+          ...packages.map((pkg) => `  ${pkg}@1.0.0: {}`),
+        ].join("\n"),
+      );
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const summaryPath = path.join(tempDir, "summary.md");
+      let requests = 0;
+      vi.stubEnv("OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS", "10");
+      vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
+      try {
+        const audit = runPnpmAuditProd({
+          rootDir: tempDir,
+          fetchImpl: async (_input, init) => {
+            requests++;
+            if (typeof init?.body !== "string") {
+              throw new Error("Expected a JSON request body");
+            }
+            expect(Object.keys(JSON.parse(init.body))).toHaveLength(401);
+            return await response();
+          },
+          stdout: {
+            write: (chunk: string) => {
+              stdout.push(chunk);
+              return true;
+            },
+          },
+          stderr: {
+            write: (chunk: string) => {
+              stderr.push(chunk);
+              return true;
+            },
+          },
+        });
+        if (exit === null) {
+          await expect(audit).rejects.toThrow();
+        } else {
+          await expect(audit).resolves.toBe(exit);
+          expect(stderr.join("")).toContain("incomplete");
+        }
+        expect(stdout).toEqual([]);
+        expect(requests).toBe(attempts);
+        const summary = await readFile(summaryPath, "utf8");
+        expect(summary).toContain(`Outcome: **${exit === null ? "error" : "unavailable"}**`);
+        expect(summary).toContain("Packages: 401");
+        expect(summary).toContain("Duration:");
+        expect(summary).toContain("no clearance");
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([false, true])(
-    "reports npm-only coverage with the audit outcome (blocked %s)",
+    "submits one complete graph and reports npm-only coverage (blocked %s)",
     async (blocked) => {
       const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
+      const packageNames = [
+        "axios",
+        ...Array.from({ length: 400 }, (_, index) => `fixture-${index}`),
+      ];
       await writeFile(
         path.join(tempDir, "pnpm-lock.yaml"),
         `lockfileVersion: '9.0'
@@ -571,21 +805,27 @@ snapshots:
 importers:
   .:
     dependencies:
-      axios:
-        version: 1.0.0
+${packageNames.map((name) => `      ${name}: {version: 1.0.0}`).join("\n")}
 
 snapshots:
-  axios@1.0.0: {}
+${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
 `,
         "utf8",
       );
 
       try {
+        const summaryPath = path.join(tempDir, "summary.md");
+        vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
         const stdoutChunks: string[] = [];
         const stderrChunks: string[] = [];
+        const payloads: unknown[] = [];
         const exitCode = await runPnpmAuditProd({
           rootDir: tempDir,
-          fetchImpl: async (input) => {
+          fetchImpl: async (input, init) => {
+            if (typeof init?.body !== "string") {
+              throw new Error("Expected a JSON request body");
+            }
+            payloads.push(JSON.parse(init.body));
             const url =
               input instanceof URL ? input.href : input instanceof Request ? input.url : input;
             expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
@@ -628,6 +868,12 @@ snapshots:
         });
 
         expect(exitCode).toBe(blocked ? 1 : 0);
+        const summary = await readFile(summaryPath, "utf8");
+        expect(summary).toContain(`Outcome: **${blocked ? "findings" : "complete"}**`);
+        expect(summary).toContain("Packages: 401");
+        expect(payloads).toEqual([
+          Object.fromEntries(packageNames.map((name) => [name, ["1.0.0"]])),
+        ]);
         if (blocked) {
           expect(stdoutChunks).toStrictEqual([]);
           expect(stderrChunks.join("")).toContain(
@@ -645,6 +891,7 @@ snapshots:
           expect(stdoutChunks.join("")).toContain("not comprehensive vulnerability clearance");
         }
       } finally {
+        vi.unstubAllEnvs();
         await rm(tempDir, { recursive: true, force: true });
       }
     },

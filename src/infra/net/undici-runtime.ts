@@ -61,6 +61,7 @@ function isSocksProxy(uri: string | undefined): boolean {
 
 function createSocksProxyAgent(
   options: Exclude<UndiciProxyAgentOptions, string | URL>,
+  timeoutMs?: number,
 ): import("undici").Dispatcher {
   const { Agent, Socks5ProxyAgent, buildConnector, errors } = loadUndiciModule([
     "Agent",
@@ -76,7 +77,7 @@ function createSocksProxyAgent(
       "opts.auth cannot be used in combination with opts.token",
     );
   }
-  const connect = buildConnector(buildProxyConnectOptions(options));
+  const connect = buildConnector(buildProxyConnectOptions(options, timeoutMs));
   // Preserve explicit-proxy classification while native Agent owns origin admission/retirement.
   class SocksProxyAgent extends Agent {}
   const agent = withUndiciErrorDiagnostics(
@@ -227,10 +228,10 @@ export function createHttp1ProxyAgent(
 ): import("undici").Dispatcher {
   const prepared = buildHttp1ProxyAgentOptions(options, timeoutMs, managedTlsEnv);
   if (isSocksProxy(prepared.uri)) {
-    return createSocksProxyAgent(prepared);
+    return createSocksProxyAgent(prepared, timeoutMs);
   }
   const { ProxyAgent } = loadUndiciRuntimeDeps();
   return withUndiciErrorDiagnostics(
-    new ProxyAgent({ ...prepared, proxyTls: buildProxyConnectOptions(prepared) }),
+    new ProxyAgent({ ...prepared, proxyTls: buildProxyConnectOptions(prepared, timeoutMs) }),
   );
 }

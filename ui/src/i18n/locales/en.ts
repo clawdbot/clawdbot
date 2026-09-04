@@ -154,6 +154,7 @@ export const en: TranslationMap & {
       terminalPanel: "Toggle terminal panel",
       homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
+      sideChat: "Toggle side chat",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
       denyApproval: "Deny approval",
@@ -5042,9 +5043,7 @@ export const en: TranslationMap & {
       label: "Account for this chat",
       automatic: "Automatic (new-chat default)",
       manage: "Manage saved accounts…",
-      hint: "This is the chat's saved account choice, not a billing receipt. Gateway fallback rules still apply.",
-      draftHint:
-        "Applies only to this session. Your new-chat default is unchanged; Gateway fallback rules still apply.",
+      draftHint: "Applies only to this session. Your new-chat default is unchanged.",
     },
     mentions: {
       menu: "Mention a person",
@@ -5080,7 +5079,7 @@ export const en: TranslationMap & {
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
-        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+        "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
       outboxPayloadMissing:
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",

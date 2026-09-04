@@ -114,6 +114,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.nodes.allowSkills", kind: "hot" },
   { prefix: "gateway.push.apns.relay", kind: "hot" },
   { prefix: "gateway.terminal", kind: "hot" },
+  { prefix: "gateway.auth.rateLimit", kind: "hot" },
+  { prefix: "discovery.mdns.mode", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -255,21 +257,13 @@ function listReloadRules(): ReloadRule[] {
     },
   ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (entry.registration.restartPrefixes ?? [])
-      .map((prefix): ReloadRule => ({
-        prefix,
-        kind: "restart",
-      }))
-      .concat(
-        (entry.registration.hotPrefixes ?? []).map((prefix): ReloadRule => ({
-          prefix,
-          kind: "hot",
-        })),
-        (entry.registration.noopPrefixes ?? []).map((prefix): ReloadRule => ({
-          prefix,
-          kind: "none",
-        })),
-      ),
+    (
+      [
+        ["restart", entry.registration.restartPrefixes],
+        ["hot", entry.registration.hotPrefixes],
+        ["none", entry.registration.noopPrefixes],
+      ] as const
+    ).flatMap(([kind, prefixes]) => (prefixes ?? []).map((prefix) => ({ prefix, kind }))),
   );
   const rules: ReloadRule[] = [
     ...BASE_RELOAD_RULES,

@@ -9,11 +9,10 @@ extensions/acpx/src/process-lease.ts	3
 extensions/acpx/src/runtime.ts	15
 extensions/acpx/src/service.ts	2
 extensions/acpx/src/state.ts	1
-extensions/active-memory/config.ts	4
+extensions/active-memory/config.ts	2
 extensions/active-memory/doctor-contract-api.ts	3
-extensions/active-memory/index.ts	6
+extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
-extensions/active-memory/session.ts	4
 extensions/active-memory/transcript-result.ts	2
 extensions/admin-http-rpc/src/handler.ts	1
 extensions/amazon-bedrock-mantle/discovery.ts	3
@@ -737,7 +736,6 @@ extensions/memory-core/src/dreaming-phases.ts	2
 extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/embeddings.ts	2
 extensions/memory-core/src/memory/hybrid.ts	1
-extensions/memory-core/src/memory/manager-cache.ts	4
 extensions/memory-core/src/memory/manager-db.ts	5
 extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
@@ -761,7 +759,6 @@ extensions/memory-core/src/session-backfill-lifecycle.ts	2
 extensions/memory-core/src/session-backfill.ts	1
 extensions/memory-core/src/session-ingestion.ts	2
 extensions/memory-core/src/session-reset-recall-metadata.ts	3
-extensions/memory-core/src/session-search-visibility.ts	2
 extensions/memory-core/src/short-term-promotion-apply.ts	4
 extensions/memory-core/src/short-term-promotion-memory-write.ts	4
 extensions/memory-core/src/short-term-promotion-record.ts	1
@@ -907,7 +904,6 @@ extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
 extensions/openai/realtime-quicksilver-delegation-controller.ts	1
-extensions/openai/realtime-quicksilver-gateway-bridge.ts	1
 extensions/openai/realtime-quicksilver-wire.ts	4
 extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
@@ -1478,7 +1474,7 @@ packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
-packages/ai/src/providers/openai-tool-schema-compat.ts	7
+packages/ai/src/providers/openai-tool-schema-compat.ts	6
 packages/ai/src/providers/openai-tool-schema.ts	7
 packages/ai/src/providers/schema-keyword-strip.ts	2
 packages/ai/src/providers/simple-options.ts	1
@@ -2033,7 +2029,7 @@ src/agents/tools/conversation-tools.ts	3
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	13
+src/agents/tools/cron-tool.ts	10
 src/agents/tools/dashboard-tool.ts	3
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5
@@ -2891,7 +2887,7 @@ src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	3
 src/gateway/server-methods/plugin-host-hooks.ts	1
-src/gateway/server-methods/question.ts	4
+src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/send.ts	5
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
@@ -2929,7 +2925,7 @@ src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
 src/gateway/server-reload-utils.ts	1
 src/gateway/server-restart-sentinel-agent-delivery.ts	2
-src/gateway/server-runtime-handles.ts	9
+src/gateway/server-runtime-handles.ts	8
 src/gateway/server-runtime-state-prepare.ts	2
 src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1

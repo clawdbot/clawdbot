@@ -78,7 +78,8 @@ export function handleNavDrawerKeydown(
   } else if (
     isCommandPaletteShortcut(event) ||
     isTerminalPanelShortcut(event) ||
-    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
   ) {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -144,7 +145,7 @@ export function renderFloatingUpdateCard(params: {
   canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
   onNavigate?: (routeId: NavigationRouteId) => void;

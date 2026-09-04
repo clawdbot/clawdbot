@@ -2,6 +2,11 @@
 // Opens authenticated gateway sockets and reads config snapshots in tests.
 import { expect } from "vitest";
 import { WebSocket } from "ws";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "../../test/helpers/gateway-websocket.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { connectOk, rpcReq, trackConnectChallengeNonce } from "./test-helpers.js";
 
 export async function openAuthenticatedGatewayWs(
@@ -11,36 +16,31 @@ export async function openAuthenticatedGatewayWs(
 ): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-      ws.off("close", onClose);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: unknown) => {
-      cleanup();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    const onClose = (code: number, reason: Buffer) => {
-      cleanup();
-      reject(new Error(`gateway websocket closed before open (${code}: ${reason.toString()})`));
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      ws.close();
-      reject(new Error(`gateway websocket did not open within ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-    ws.once("close", onClose);
-  });
-  await connectOk(ws, { token });
+  await acquireGatewayTestWebSocket(ws, timeoutMs);
+  // Authentication waiters observe close, not error; retain the transport failure
+  // until they settle so an unreturned socket cannot raise an unhandled error.
+  let transportError: Error | undefined;
+  const onError = (error: Error) => {
+    transportError ??= error;
+  };
+  ws.on("error", onError);
+  try {
+    await connectOk(ws, { token });
+    // A coalesced hello/error can fulfill connectOk after the socket has already failed.
+    if (transportError) {
+      throw transportError;
+    }
+  } catch (error) {
+    await runQaGatewayFixture(
+      async () => {
+        throw transportError ?? error;
+      },
+      () => closeGatewayTestWebSocket(ws),
+    );
+    throw error;
+  } finally {
+    ws.off("error", onError);
+  }
   return ws;
 }
 

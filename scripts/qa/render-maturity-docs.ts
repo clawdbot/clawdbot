@@ -1023,8 +1023,6 @@ function renderMaturityScorecard({
   lines.push(
     "## Surface explorer",
     "",
-    '<a id="surface-explorer" />',
-    "",
     "Surfaces are ordered by maturity level, completeness, and quality. LTS support is shown alongside each row so release-ready options are easy to compare.",
     "",
     ...renderSurfaceTabs({ coverage, levels, scoreSurfaces, surfaces }),
@@ -1078,8 +1076,6 @@ function renderTaxonomy({
     "</div>",
     "",
     "## Product areas",
-    "",
-    '<a id="product-areas" />',
     "",
   ];
 

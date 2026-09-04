@@ -1463,7 +1463,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     } satisfies OpenClawConfig;
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
@@ -1514,7 +1514,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedCfg).not.toBe(overrideCfg);
     expect(receivedCfg).toMatchObject({
       agents: { defaults: { userTimezone: "America/New_York" } },
-      messages: { suppressToolErrors: true },
+      messages: { responsePrefix: "[test]" },
     });
     expect(receivedPreparedRuntime).toBeUndefined();
   });

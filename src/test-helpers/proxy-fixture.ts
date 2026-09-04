@@ -27,6 +27,7 @@ export async function withProxyFixture(
     waitForProxyProtocol: () => Promise<string>;
     waitForSocketsClosed: () => Promise<void>;
   }) => Promise<void>,
+  socksCredentials?: { username: string; password: string },
 ): Promise<void> {
   const sockets = new Set<net.Socket>();
   const servers: net.Server[] = [];
@@ -149,11 +150,11 @@ export async function withProxyFixture(
     return server;
   };
   const acceptSocks = (client: net.Socket) => {
-    let greeting = true;
+    let phase: "greeting" | "auth" | "connect" = "greeting";
     let buffer = Buffer.alloc(0);
     const receive = (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
-      if (greeting) {
+      if (phase === "greeting") {
         if (buffer.readUInt8(0) !== 5) {
           connections.push(`unexpected-proxy-protocol:${buffer.readUInt8(0)}`);
           client.destroy();
@@ -162,9 +163,38 @@ export async function withProxyFixture(
         if (buffer.length < 2 || buffer.length < 2 + buffer.readUInt8(1)) {
           return;
         }
+        const method = socksCredentials ? 2 : 0;
+        if (!buffer.subarray(2, 2 + buffer.readUInt8(1)).includes(method)) {
+          client.end(Buffer.from([5, 255]));
+          return;
+        }
         buffer = buffer.subarray(2 + buffer.readUInt8(1));
-        greeting = false;
-        client.write(Buffer.from([5, 0]));
+        phase = socksCredentials ? "auth" : "connect";
+        client.write(Buffer.from([5, method]));
+      }
+      if (phase === "auth") {
+        if (buffer.length < 2) {
+          return;
+        }
+        const usernameLength = buffer.readUInt8(1);
+        if (buffer.length < 3 + usernameLength) {
+          return;
+        }
+        const frameLength = 3 + usernameLength + buffer.readUInt8(2 + usernameLength);
+        if (buffer.length < frameLength) {
+          return;
+        }
+        if (
+          buffer.readUInt8(0) !== 1 ||
+          buffer.subarray(2, 2 + usernameLength).toString() !== socksCredentials?.username ||
+          buffer.subarray(3 + usernameLength, frameLength).toString() !== socksCredentials?.password
+        ) {
+          client.end(Buffer.from([1, 1]));
+          return;
+        }
+        buffer = buffer.subarray(frameLength);
+        phase = "connect";
+        client.write(Buffer.from([1, 0]));
       }
       if (buffer.length < 5) {
         return;
