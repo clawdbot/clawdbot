@@ -143,7 +143,11 @@ describe("broadcast dispatch", () => {
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
   });
+  let activeBroadcastCfg: ClawdbotConfig | undefined;
   const runtimeStub = {
+    config: {
+      current: vi.fn(() => activeBroadcastCfg),
+    },
     system: {
       enqueueSystemEvent: vi.fn(),
     },
@@ -228,7 +232,7 @@ describe("broadcast dispatch", () => {
   });
 
   function createBroadcastConfig(): ClawdbotConfig {
-    return {
+    const cfg: ClawdbotConfig = {
       broadcast: { "oc-broadcast-group": ["susan", "main"] },
       agents: { list: [{ id: "main" }, { id: "susan" }] },
       channels: {
@@ -243,6 +247,8 @@ describe("broadcast dispatch", () => {
         },
       },
     };
+    activeBroadcastCfg = cfg;
+    return cfg;
   }
 
   function createBroadcastEvent(options: {

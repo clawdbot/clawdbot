@@ -800,6 +800,17 @@ export async function handleFeishuMessage(params: {
         effectiveShouldComputeCommandAuthorized =
           currentAuthorization.shouldComputeCommandAuthorized;
       }
+    } else if (isGroup) {
+      // A bindings reload does not restart the monitor, so group events would
+      // otherwise keep resolving routes from the account-start snapshot
+      // (#133757). Group admission (groupPolicy/allowFrom, resolved above) is
+      // intentionally still checked against the snapshot the account started
+      // with; only route resolution needs the live config here.
+      // SAFETY: the live runtime config is the same plugin-owned ClawdbotConfig the snapshot came from.
+      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
+      if (currentCfg !== effectiveCfg) {
+        effectiveCfg = currentCfg;
+      }
     }
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.

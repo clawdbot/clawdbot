@@ -1030,6 +1030,47 @@ describe("handleFeishuMessage ACP routing", () => {
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
+
+  it("resolves group routes with the refreshed runtime config after a bindings reload", async () => {
+    const cfg = createFeishuTestConfig(
+      { enabled: true, allowFrom: ["*"], dmPolicy: "open", groupPolicy: "open" },
+      { session: { mainKey: "main", scope: "per-group" } },
+    );
+    const refreshedCfg = createFeishuTestConfig(
+      {
+        enabled: true,
+        allowFrom: ["*"],
+        dmPolicy: "open",
+        groupPolicy: "open",
+        bindings: [
+          {
+            agentId: "oc1",
+            match: {
+              channel: "feishu",
+              accountId: "default",
+              peer: { kind: "group", id: "oc_group_chat" },
+            },
+          },
+        ],
+      },
+      { session: { mainKey: "main", scope: "per-group" } },
+    );
+
+    await dispatchMessage({
+      cfg,
+      currentCfg: refreshedCfg,
+      event: createFeishuTestEvent({
+        messageId: "msg-group-reloaded-binding",
+        senderOpenId: "ou_sender_1",
+        chatId: "oc_group_chat",
+        chatType: "group",
+        text: "hello group",
+      }),
+    });
+
+    const routeRequest = mockCallArg<{ cfg: ClawdbotConfig }>(mockResolveAgentRoute, 0, 0);
+    expect(routeRequest.cfg).toBe(refreshedCfg);
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
