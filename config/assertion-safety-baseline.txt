@@ -2776,7 +2776,7 @@ src/gateway/chat-sanitize.ts	3
 src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
 src/gateway/cli-session-history.claude.ts	15
-src/gateway/cli-session-history.merge.ts	6
+src/gateway/cli-session-history.merge.ts	1
 src/gateway/config-reload-plan.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2

@@ -9,9 +9,12 @@ import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
+import { persistCliAssistantTranscript } from "../agents/cli-runner/cli-run-transcript.js";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
@@ -20,6 +23,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
@@ -1930,6 +1934,245 @@ describe("cli session history", () => {
   });
 });
 
+describe("harness rows inside a CLI turn", () => {
+  const TURN_START = Date.parse("2026-03-26T16:29:55.000Z");
+  const NATIVE_SESSION_ID = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+  const at = (offsetMs: number) => new Date(TURN_START + offsetMs).toISOString();
+
+  // One CLI turn whose mid-turn user row is written by the harness. A skill
+  // instruction body is an isMeta row the importer drops entirely, so it cannot
+  // split the turn; a compaction summary stays visible and remains a boundary.
+  function turnLines(midTurnRow: Record<string, unknown>): string {
+    return [
+      { uuid: "u-1", timestamp: at(0), type: "user", message: { role: "user", content: "run it" } },
+      {
+        uuid: "a-1",
+        timestamp: at(1000),
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "part one" }] },
+      },
+      {
+        uuid: "a-2",
+        timestamp: at(2000),
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Skill", input: { skill: "demo" } }],
+        },
+      },
+      midTurnRow,
+      {
+        uuid: "a-3",
+        timestamp: at(4000),
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "part two" }] },
+      },
+    ]
+      .map((row) => JSON.stringify({ ...row, sessionId: NATIVE_SESSION_ID, cwd: "/demo" }))
+      .join("\n");
+  }
+
+  const boundEntry = () => ({
+    sessionId: "openclaw-session",
+    updatedAt: Date.now(),
+    cliSessionBindings: { "claude-cli": { sessionId: NATIVE_SESSION_ID } },
+  });
+
+  async function withTurnFixture<T>(
+    lines: string,
+    read: (homeDir: string) => Promise<T>,
+  ): Promise<T> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-turn-"));
+    const homeDir = path.join(root, "home");
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(path.join(projectsDir, `${NATIVE_SESSION_ID}.jsonl`), lines, "utf-8");
+    try {
+      return await withEnvAsync({ HOME: homeDir }, async () => await read(homeDir));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  /** Synchronous decoder: every line is parsed on the loop, whatever its size. */
+  async function importTurn(lines: string): Promise<unknown[]> {
+    return await withTurnFixture(lines, async (homeDir) =>
+      readClaudeCliSessionMessages({ cliSessionId: NATIVE_SESSION_ID, homeDir }),
+    );
+  }
+
+  /** Async snapshot: lines past 1 MiB go through the bounded worker projection. */
+  async function importTurnAsync(lines: string): Promise<unknown[]> {
+    return await withTurnFixture(lines, async (homeDir) =>
+      readChatHistoryCliSessionImportSnapshot({
+        entry: boundEntry(),
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      }),
+    );
+  }
+
+  /** Drives the production resolver, not the merge helper, over one import. */
+  function resolveAgainstAggregate(importedMessages: unknown[]) {
+    return resolveChatHistoryWithCliSessionImports({
+      entry: boundEntry(),
+      provider: "claude-cli",
+      localMessages: localAggregate(),
+      preparedImportedMessages: importedMessages,
+    });
+  }
+
+  function localAggregate(): Record<string, unknown>[] {
+    return [
+      {
+        role: "assistant",
+        api: "cli",
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        stopReason: "stop",
+        idempotencyKey: "cli-assistant:run-1",
+        // The producer names the turn's terminal assistant record. Whether the
+        // harness row splits that turn decides whether `a-3` still terminates it.
+        cliNativeTurn: { cliSessionId: NATIVE_SESSION_ID, terminalRecordId: "a-3" },
+        content: [{ type: "text", text: "part one\n\npart two" }],
+        timestamp: TURN_START + 5000,
+      },
+    ];
+  }
+
+  function countAggregates(messages: unknown[]): number {
+    return messages.filter((message) => readRecord(message).api === "cli").length;
+  }
+
+  function assistantTexts(messages: unknown[]): string[] {
+    return messages.flatMap((message) => {
+      const record = readRecord(message);
+      if (record.role !== "assistant") {
+        return [];
+      }
+      const content = Array.isArray(record.content) ? record.content : [];
+      return content.flatMap((block) => {
+        const blockRecord = readRecord(block);
+        return blockRecord.type === "text" && typeof blockRecord.text === "string"
+          ? [blockRecord.text]
+          : [];
+      });
+    });
+  }
+
+  it("keeps a skill instruction row inside the turn it belongs to", async () => {
+    const importedMessages = await importTurn(
+      turnLines({
+        uuid: "u-2",
+        timestamp: at(3000),
+        type: "user",
+        isMeta: true,
+        sourceToolUseID: "toolu_1",
+        message: { role: "user", content: [{ type: "text", text: "SKILL INSTRUCTIONS: demo" }] },
+      }),
+    );
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: localAggregate(),
+      importedMessages,
+    });
+
+    // The isMeta row never reaches the projection, so the turn still covers
+    // `part one\n\npart two` and the flat aggregate goes.
+    expect(countAggregates(merged)).toBe(0);
+  });
+
+  it("keeps a compaction summary as a turn boundary", async () => {
+    const importedMessages = await importTurn(
+      turnLines({
+        uuid: "u-2",
+        timestamp: at(3000),
+        type: "user",
+        isCompactSummary: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "SUMMARY OF PRIOR CONVERSATION" }],
+        },
+      }),
+    );
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: localAggregate(),
+      importedMessages,
+    });
+
+    // A summary really does end the turn, so no turn covers the aggregate and
+    // it survives as the durable fallback.
+    expect(countAggregates(merged)).toBe(1);
+  });
+
+  // The async snapshot routes any JSONL line past 1 MiB through a bounded
+  // worker projection instead of the synchronous decoder. That projection
+  // rebuilds the entry from a fixed field list, so the turn-boundary facts the
+  // grouping reads have to survive it: a harness row that is dropped on one
+  // path and kept on the other would split the turn on that path alone.
+  const OVERSIZED_TEXT = "s".repeat(1024 * 1024 + 1);
+
+  function expectOversizedMidTurnRow(lines: string): void {
+    const midTurnRow = lines.split("\n")[3] ?? "";
+    expect(midTurnRow.length).toBeGreaterThan(1024 * 1024);
+  }
+
+  it("projects an oversized skill instruction row exactly as the sync reader does", async () => {
+    const lines = turnLines({
+      uuid: "u-2",
+      timestamp: at(3000),
+      type: "user",
+      isMeta: true,
+      sourceToolUseID: "toolu_1",
+      message: { role: "user", content: [{ type: "text", text: OVERSIZED_TEXT }] },
+    });
+    expectOversizedMidTurnRow(lines);
+
+    const [asyncMessages, syncMessages] = await Promise.all([
+      importTurnAsync(lines),
+      importTurn(lines),
+    ]);
+
+    // `isMeta` survives the bounded projection and still drops the row, so the
+    // two readers agree message for message.
+    expect(asyncMessages).toEqual(syncMessages);
+
+    const resolved = resolveAgainstAggregate(asyncMessages);
+    expect(resolved.imported).toBe(true);
+    expect(countAggregates(resolved.messages)).toBe(0);
+    expect(assistantTexts(resolved.messages)).toEqual(["part one", "part two"]);
+  });
+
+  it("keeps an oversized compaction summary a turn boundary through the async projection", async () => {
+    const lines = turnLines({
+      uuid: "u-2",
+      timestamp: at(3000),
+      type: "user",
+      isCompactSummary: true,
+      message: { role: "user", content: [{ type: "text", text: OVERSIZED_TEXT }] },
+    });
+    expectOversizedMidTurnRow(lines);
+
+    const asyncMessages = await importTurnAsync(lines);
+
+    // The summary is retained as a bounded placeholder, not as its megabyte of
+    // text, and it still ends the turn.
+    const summaries = asyncMessages
+      .map(readRecord)
+      .filter(
+        (message) => typeof message.content === "string" && message.content.includes("1 MiB"),
+      );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.role).toBe("user");
+    expect(JSON.stringify(asyncMessages)).not.toContain(OVERSIZED_TEXT);
+
+    const resolved = resolveAgainstAggregate(asyncMessages);
+    expect(countAggregates(resolved.messages)).toBe(1);
+  });
+});
+
 describe("readClaudeCliFallbackSeed", () => {
   let tmpRoot: string;
   let homeDir: string;
@@ -2214,4 +2457,617 @@ describe("readClaudeCliFallbackSeed", () => {
     expect(seed?.summaryText).toBe("trailing summary without boundary");
   });
 });
+
+describe("persisted CLI aggregate suppression", () => {
+  const TURN_START = Date.parse("2026-03-26T16:29:55.000Z");
+  const NATIVE_SESSION_ID = "session-1";
+
+  // The producer records which native turn an aggregate flattens. A turn is
+  // named by its terminal assistant record, which for `importedMultiBlockTurn`
+  // is the final text block.
+  function nativeTurnRef(
+    terminalRecordId: string,
+    cliSessionId: string = NATIVE_SESSION_ID,
+  ): Record<string, unknown> {
+    return { cliSessionId, terminalRecordId };
+  }
+
+  // Mirrors what `persistCliAssistantTranscript` stores: the synthetic aggregate
+  // carries `idempotencyKey: "cli-assistant:<runId>"`, ordinary CLI replies do
+  // not, and `cliNativeTurn` names the native turn it flattens. Passing null for
+  // either models a record written before that field existed.
+  function buildCliAggregate(params: {
+    text: string;
+    timestamp?: number;
+    provider?: string;
+    idempotencyKey?: string | null;
+    runId?: string;
+    nativeTurn?: Record<string, unknown> | null;
+  }): Record<string, unknown> {
+    const idempotencyKey =
+      params.idempotencyKey === null
+        ? undefined
+        : (params.idempotencyKey ?? `cli-assistant:${params.runId ?? "run-1"}`);
+    const nativeTurn =
+      params.nativeTurn === null ? undefined : (params.nativeTurn ?? nativeTurnRef("assistant-3"));
+    return {
+      role: "assistant",
+      api: "cli",
+      provider: params.provider ?? "claude-cli",
+      model: "claude-opus-5",
+      stopReason: "stop",
+      content: [{ type: "text", text: params.text }],
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      ...(nativeTurn === undefined ? {} : { cliNativeTurn: nativeTurn }),
+      ...(params.timestamp === undefined ? {} : { timestamp: params.timestamp }),
+    };
+  }
+
+  function importedTurnMessage(params: {
+    content: unknown;
+    offsetMs: number;
+    externalId?: string;
+    role?: "assistant" | "user";
+    cliSessionId?: string;
+  }): Record<string, unknown> {
+    const cliSessionId = params.cliSessionId ?? NATIVE_SESSION_ID;
+    return {
+      role: params.role ?? "assistant",
+      provider: "claude-cli",
+      content: params.content,
+      timestamp: TURN_START + params.offsetMs,
+      __openclaw: {
+        id: params.externalId ?? `claude-cli:${cliSessionId}:line:9`,
+        importedFrom: "claude-cli",
+        cliSessionId,
+        ...(params.externalId ? { externalId: params.externalId } : {}),
+      },
+    };
+  }
+
+  function importedMultiBlockTurn(
+    params: { offsetMs?: number; idPrefix?: string; cliSessionId?: string } = {},
+  ): Record<string, unknown>[] {
+    const base = params.offsetMs ?? 0;
+    const prefix = params.idPrefix ?? "";
+    const session = params.cliSessionId ?? NATIVE_SESSION_ID;
+    return [
+      importedTurnMessage({
+        content: [{ type: "text", text: "part one" }],
+        offsetMs: base,
+        externalId: `${prefix}assistant-1`,
+        cliSessionId: session,
+      }),
+      importedTurnMessage({
+        content: [
+          {
+            type: "toolcall",
+            id: `${prefix}toolu_1`,
+            name: "Bash",
+            arguments: { command: "pwd" },
+          },
+        ],
+        offsetMs: base + 1000,
+        externalId: `${prefix}assistant-2`,
+        cliSessionId: session,
+      }),
+      importedTurnMessage({
+        content: [{ type: "text", text: "part two" }],
+        offsetMs: base + 2000,
+        externalId: `${prefix}assistant-3`,
+        cliSessionId: session,
+      }),
+    ];
+  }
+
+  function isCliAggregate(message: unknown): boolean {
+    return readRecord(message).api === "cli";
+  }
+
+  function assistantTexts(messages: unknown[]): string[] {
+    return messages.flatMap((message) => {
+      const record = readRecord(message);
+      if (record.role !== "assistant") {
+        return [];
+      }
+      const content = Array.isArray(record.content) ? record.content : [];
+      return content.flatMap((block) => {
+        const blockRecord = readRecord(block);
+        return blockRecord.type === "text" && typeof blockRecord.text === "string"
+          ? [blockRecord.text]
+          : [];
+      });
+    });
+  }
+
+  it("replaces a persisted aggregate with the imported native turn blocks", () => {
+    const localMessages = [
+      { role: "user", content: "hi", timestamp: TURN_START - 1000 },
+      buildCliAggregate({ text: "part one\n\npart two", timestamp: TURN_START + 3000 }),
+    ];
+    const importedMessages = [
+      importedTurnMessage({
+        content: "hi",
+        offsetMs: -1100,
+        externalId: "user-1",
+        role: "user",
+      }),
+      ...importedMultiBlockTurn(),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(merged).toHaveLength(4);
+    expect(merged.some(isCliAggregate)).toBe(false);
+    expect(assistantTexts(merged)).toEqual(["part one", "part two"]);
+  });
+
+  it("keeps the turn together across an unmatched tool-result user row", () => {
+    // An unpaired tool result stays a user-role record. It continues the turn,
+    // so the turn's terminal record is still its final text block.
+    const localMessages = [
+      buildCliAggregate({ text: "part one\n\npart two", timestamp: TURN_START + 3000 }),
+    ];
+    const [first, toolCall, last] = importedMultiBlockTurn();
+    const importedMessages = [
+      first,
+      toolCall,
+      importedTurnMessage({
+        content: [{ type: "tool_result", tool_use_id: "toolu_orphan", content: "ok" }],
+        offsetMs: 1500,
+        externalId: "tool-result-1",
+        role: "user",
+      }),
+      last,
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMessages as Record<string, unknown>[],
+    });
+
+    expect(merged.some(isCliAggregate)).toBe(false);
+    expect(assistantTexts(merged)).toEqual(["part one", "part two"]);
+  });
+
+  it("replaces a lone text turn with the native record it names", () => {
+    // The base case of openclaw/openclaw#123792. Text alone could never tell a
+    // one-block turn from an unrelated reply; the recorded identity can.
+    const localMessages = [
+      buildCliAggregate({
+        text: "hello there",
+        timestamp: TURN_START + 2000,
+        nativeTurn: nativeTurnRef("assistant-solo"),
+      }),
+    ];
+    const importedMessages = [
+      importedTurnMessage({
+        content: [{ type: "text", text: "hello there" }],
+        offsetMs: 1000,
+        externalId: "assistant-solo",
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(merged).toHaveLength(1);
+    expect(merged.some(isCliAggregate)).toBe(false);
+    expect(assistantTexts(merged)).toEqual(["hello there"]);
+  });
+
+  it("keeps a covered turn's blocks when an unrelated aggregate repeats one", () => {
+    // The covered turn is the only remaining copy of its text, so weak role/text
+    // dedupe must not drop its first block against an unrelated aggregate that
+    // happens to carry the same text.
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one",
+        timestamp: TURN_START,
+        runId: "run-0",
+        nativeTurn: null,
+      }),
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 64_000,
+        runId: "run-1",
+        nativeTurn: nativeTurnRef("later-assistant-3"),
+      }),
+    ];
+    const importedMessages = [
+      importedTurnMessage({
+        content: "second prompt",
+        offsetMs: 60_000,
+        externalId: "user-2",
+        role: "user",
+      }),
+      ...importedMultiBlockTurn({ offsetMs: 61_000, idPrefix: "later-" }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    // The earlier aggregate names no native turn, so it is never touched.
+    expect(merged).toContain(localMessages[0]);
+    expect(merged).not.toContain(localMessages[1]);
+    const texts = assistantTexts(merged);
+    expect(texts).toContain("part two");
+    expect(texts.filter((text) => text === "part one")).toHaveLength(2);
+  });
+
+  it("keeps the only local aggregate when the import holds a different turn with the same text", () => {
+    // The crossed partial-history case. Local history holds one aggregate whose
+    // own native turn is missing from the import, while the import holds an
+    // earlier turn with identical text whose aggregate is missing locally.
+    // Text, provider and time all match; the recorded identity does not, and it
+    // is the identity that decides.
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        runId: "run-later",
+        nativeTurn: nativeTurnRef("later-assistant-3"),
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged).toContain(localMessages[0]);
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+  });
+
+  it("keeps an aggregate whose named turn was rebound to another native session", () => {
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        nativeTurn: nativeTurnRef("assistant-3", "session-before-rebind"),
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged).toContain(localMessages[0]);
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+  });
+
+  it("keeps an aggregate whose named turn is only partially imported", () => {
+    // The turn is identified, but the import no longer carries all of its text.
+    // The aggregate stays as the durable copy of what was trimmed away.
+    const [, toolCall, last] = importedMultiBlockTurn();
+    const localMessages = [
+      buildCliAggregate({ text: "part one\n\npart two", timestamp: TURN_START + 3000 }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: [toolCall, last] as Record<string, unknown>[],
+    });
+
+    expect(merged).toContain(localMessages[0]);
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+  });
+
+  it.each([
+    ["names no native turn", { nativeTurn: null }],
+    ["names a record the import does not hold", { nativeTurn: nativeTurnRef("assistant-absent") }],
+    ["names a non-terminal record of the turn", { nativeTurn: nativeTurnRef("assistant-1") }],
+  ])("keeps an aggregate that %s", (_label, refParams) => {
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        ...refParams,
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged).toContain(localMessages[0]);
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+  });
+
+  it("replaces only the aggregate whose turn the import holds when replies repeat verbatim", () => {
+    // Two genuine repeated replies with identical text. Only the first turn is
+    // in the import, and identity — not proximity — decides which is covered.
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        runId: "run-a",
+        nativeTurn: nativeTurnRef("assistant-3"),
+      }),
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 4000,
+        runId: "run-b",
+        nativeTurn: nativeTurnRef("repeat-assistant-3"),
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+    expect(merged).toContain(localMessages[1]);
+  });
+
+  it("replaces both aggregates when the import holds both repeated turns", () => {
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        runId: "run-a",
+        nativeTurn: nativeTurnRef("assistant-3"),
+      }),
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 30_000,
+        runId: "run-b",
+        nativeTurn: nativeTurnRef("repeat-assistant-3"),
+      }),
+    ];
+    const repeatedPrompt = importedTurnMessage({
+      content: "say it again",
+      offsetMs: 25_000,
+      externalId: "user-repeat",
+      role: "user",
+    });
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: [
+        ...importedMultiBlockTurn(),
+        repeatedPrompt,
+        ...importedMultiBlockTurn({ offsetMs: 27_000, idPrefix: "repeat-" }),
+      ],
+    });
+
+    expect(merged.some(isCliAggregate)).toBe(false);
+  });
+
+  it("consumes each named turn once when two aggregates name the same record", () => {
+    // A duplicated stamp is a producer bug, not two turns. The import holds one
+    // turn, so at most one aggregate may be replaced by it.
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        runId: "run-a",
+      }),
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 4000,
+        runId: "run-b",
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+    expect(merged).toContain(localMessages[1]);
+  });
+
+  it.each([
+    ["carries no idempotency key", { idempotencyKey: null }],
+    ["carries a non-aggregate idempotency key", { idempotencyKey: "cli-hook:run-1" }],
+  ])("retains a CLI assistant record that %s", (_label, keyParams) => {
+    // `api: "cli"` is not unique to the synthetic aggregate; only records
+    // stamped `cli-assistant:<runId>` may be suppressed.
+    const localMessages = [
+      buildCliAggregate({
+        text: "part one\n\npart two",
+        timestamp: TURN_START + 3000,
+        ...keyParams,
+      }),
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages: importedMultiBlockTurn(),
+    });
+
+    expect(merged).toContain(localMessages[0]);
+    expect(merged.filter(isCliAggregate)).toHaveLength(1);
+  });
+
+  it("reports a one-for-one aggregate replacement as an import to the resolver", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "user-1",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "hi" },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-terminal",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: {
+              role: "assistant",
+              model: "claude-opus-5",
+              content: [
+                { type: "text", text: "hello from Claude" },
+                { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } },
+              ],
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+      const localMessages = [
+        { role: "user", content: "hi", timestamp: Date.parse("2026-03-26T16:29:54.900Z") },
+        buildCliAggregate({
+          text: "hello from Claude",
+          timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+          nativeTurn: nativeTurnRef("assistant-terminal", sessionId),
+        }),
+      ];
+
+      const result = resolveChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages,
+        homeDir,
+      });
+
+      expect(result.imported).toBe(true);
+      expect(result.messages).toHaveLength(2);
+      expect(result.messages.some(isCliAggregate)).toBe(false);
+      expect(readRecord(result.messages[1]).content).toEqual([
+        { type: "text", text: "hello from Claude" },
+        {
+          type: "toolcall",
+          id: "toolu_1",
+          name: "Bash",
+          arguments: { command: "pwd" },
+        },
+      ]);
+    });
+  });
+});
+
+describe("persisted CLI aggregate suppression end to end", () => {
+  // The producer stamps the native turn, the store keeps it, the reader
+  // projects it, and only then does the merge decide. A field lost at any of
+  // those seams turns the fix into a silent no-op, so this drives all four.
+  it("carries the recorded native turn from the CLI producer through to the merge", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-native-turn-e2e-"));
+    const homeDir = path.join(root, "home");
+    const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      [
+        {
+          type: "user",
+          uuid: "u-1",
+          timestamp: "2026-03-26T16:29:54.000Z",
+          message: { role: "user", content: "run it" },
+        },
+        {
+          type: "assistant",
+          uuid: "a-1",
+          timestamp: "2026-03-26T16:29:55.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "part one" }] },
+        },
+        {
+          type: "assistant",
+          uuid: "a-2",
+          timestamp: "2026-03-26T16:29:56.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } }],
+          },
+        },
+        {
+          type: "assistant",
+          uuid: "a-3",
+          timestamp: "2026-03-26T16:29:57.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "part two" }] },
+        },
+      ]
+        .map((row) => JSON.stringify({ ...row, sessionId: cliSessionId, cwd: "/demo" }))
+        .join("\n"),
+      "utf-8",
+    );
+
+    const target = {
+      agentId: "main",
+      sessionId: "cli-native-turn-e2e",
+      sessionKey: "agent:main:cli-native-turn-e2e",
+      storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    };
+    try {
+      await upsertSessionEntry({
+        ...target,
+        entry: {
+          sessionId: target.sessionId,
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+        },
+      });
+      const persisted = await persistCliAssistantTranscript({
+        runParams: {
+          ...target,
+          sessionFile: `sqlite://agents/main/${target.sessionId}`,
+          workspaceDir: root,
+          prompt: "run it",
+          provider: "claude-cli",
+          runId: "cli-native-turn-e2e-run",
+          timeoutMs: 1_000,
+          persistAssistantTranscript: true,
+        },
+        text: "part one\n\npart two",
+        modelId: "claude-opus-5",
+        stopReason: "stop",
+        nativeTurn: { cliSessionId, terminalRecordId: "a-3" },
+      });
+      expect(persisted.owned).toBe(true);
+
+      const localMessages = await readSessionMessagesAsync(target, {
+        mode: "full",
+        reason: "cli native turn end-to-end proof",
+      });
+      // The seam that would silently break the fix: the stamp has to survive
+      // storage and display projection, not just the producer call.
+      expect(
+        localMessages.filter((message) => readRecord(message).cliNativeTurn !== undefined),
+      ).toHaveLength(1);
+
+      const resolved = await withEnvAsync({ HOME: homeDir }, async () =>
+        resolveChatHistoryWithCliSessionImports({
+          entry: {
+            sessionId: target.sessionId,
+            updatedAt: Date.now(),
+            cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+          },
+          provider: "claude-cli",
+          localMessages,
+          homeDir,
+        }),
+      );
+
+      expect(resolved.imported).toBe(true);
+      expect(resolved.messages.some((message) => readRecord(message).api === "cli")).toBe(false);
+      const blocks = resolved.messages.flatMap((message) => {
+        const content = readRecord(message).content;
+        return Array.isArray(content) ? content.map((block) => readRecord(block)) : [];
+      });
+      expect(blocks.filter((block) => block.type === "text").map((block) => block.text)).toEqual([
+        "part one",
+        "part two",
+      ]);
+      expect(blocks.filter((block) => block.type === "toolcall")).toEqual([
+        { type: "toolcall", id: "toolu_1", name: "Bash", arguments: { command: "pwd" } },
+      ]);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

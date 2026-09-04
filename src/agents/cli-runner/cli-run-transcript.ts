@@ -1,7 +1,10 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import {
+  appendExactAssistantMessageToSessionTranscript,
+  type CliNativeTurnRef,
+} from "../../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
@@ -138,6 +141,11 @@ export async function persistCliAssistantTranscript(params: {
   };
   stopReason: StopReason;
   yielded?: true;
+  // The native turn this aggregate flattens, when the backend reported one.
+  // Absent for backends that write no native transcript, and for runs whose
+  // terminal native record could not be identified; readers then keep the
+  // aggregate rather than guess which imported turn it duplicates.
+  nativeTurn?: CliNativeTurnRef;
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -209,6 +217,7 @@ export async function persistCliAssistantTranscript(params: {
               },
             }
           : {}),
+        ...(params.nativeTurn ? { cliNativeTurn: params.nativeTurn } : {}),
       },
     });
     if (!result.ok) {

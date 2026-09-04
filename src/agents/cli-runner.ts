@@ -545,6 +545,17 @@ export async function runPreparedCliAgent(
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
+          // This is the one point that sees both the flattened aggregate and the
+          // native records it came from, so it is where the relation is recorded.
+          // A backend that reported no terminal record leaves it unset.
+          ...(effectiveCliSessionId && output.resumeCheckpointId
+            ? {
+                nativeTurn: {
+                  cliSessionId: effectiveCliSessionId,
+                  terminalRecordId: output.resumeCheckpointId,
+                },
+              }
+            : {}),
         });
         await finalizeCliContextEngineTurn({
           context,
