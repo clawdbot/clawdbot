@@ -264,7 +264,7 @@ describe("OpenRouter usage", () => {
 
   it("rechecks profile authority after configured transport preparation", async () => {
     let current = true;
-    const transport = vi.fn(async () => Response.json({ data: { usage: 1 } }));
+    const transport = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
     const guardedFetch = vi
       .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
       .mockImplementation(async (params) => {
