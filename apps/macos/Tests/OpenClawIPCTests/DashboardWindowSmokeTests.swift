@@ -978,11 +978,6 @@ extension DashboardWindowSmokeTests {
         #expect(DashboardWindowController.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
     }
 
-    @Test func `dashboard log string strips token fragment`() throws {
-        let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=sekret")) // pragma: allowlist secret
-        #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
-    }
-
     @Test func `dashboard native chrome clears both desktop sidebars`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }

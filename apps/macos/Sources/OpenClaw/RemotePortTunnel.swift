@@ -258,7 +258,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             root: root)
     }
 
-    private static func resolveRemotePortOverride(
+    static func resolveRemotePortOverride(
         defaultRemotePort: Int,
         for sshHost: String,
         root: [String: Any]) -> Int?
