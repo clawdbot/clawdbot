@@ -38,10 +38,12 @@ import {
   getOptionalReefRuntime,
   getReefRuntime,
 } from "./runtime.js";
+import { channelSecrets } from "./secret-contract.js";
 import { reefSetupContract, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
 import {
   ReefInboxConnection,
+  ReefInboxEntryParkedError,
   ReefTransportClient,
   createReefWebSocket,
   isRetryableReefRelayFailure,
@@ -108,6 +110,7 @@ function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToo
 
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
   id: "reef",
+  secrets: channelSecrets,
   meta: {
     id: "reef",
     label: "Reef",
@@ -127,7 +130,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.reef"] },
-  configSchema: buildChannelConfigSchema(ReefChannelConfigSchema),
+  configSchema: buildChannelConfigSchema(ReefChannelConfigSchema, {
+    uiHints: {
+      "guard.apiKey": { label: "Guard credential", sensitive: true },
+      "guard.baseUrl": { label: "Guard API base URL" },
+      "guard.reasoningEffort": { label: "Guard reasoning effort" },
+    },
+  }),
   setupContract: reefSetupContract,
   setupWizard: reefSetupWizard as never,
   config: {
@@ -290,6 +299,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         const loop = recordChannelBotPairLoopAndCheckSuppression({
           scopeId: "reef:default",
           conversationId: message.thread ?? message.id,
+          eventId: message.id,
           senderId: message.peer,
           receiverId: ctx.account.config.handle!,
           config: budget.botLoopProtection,
@@ -301,7 +311,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             peer: message.peer,
             contextKey: `reef:budget:${message.peer}`,
           });
-          return;
+          throw new ReefInboxEntryParkedError("Reef auto-reply budget exhausted; message remains pending");
         }
         await dispatchInboundDirectDm({
           channelIngress: "unsupported",
@@ -345,7 +355,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         trust,
         keys,
         transport,
-        guard: createConfiguredGuard(ctx.account.config),
+        guard: await createConfiguredGuard(ctx.account.config, fetch, ctx.cfg),
         audit: stores.audit,
         replay: stores.replay,
         reviews,

@@ -32,10 +32,10 @@ afterEach(() => {
 });
 
 describe("createConfiguredGuard", () => {
-  it("rejects a whitespace-only guard credential", () => {
+  it("rejects a whitespace-only guard credential", async () => {
     vi.stubEnv("REEF_TEST_KEY", "   ");
 
-    expect(() => createConfiguredGuard(config())).toThrow(
+    await expect(createConfiguredGuard(config())).rejects.toThrow(
       "Reef guard credential environment variable REEF_TEST_KEY is unset",
     );
   });
@@ -43,7 +43,7 @@ describe("createConfiguredGuard", () => {
   it("trims a configured guard credential before requests", async () => {
     vi.stubEnv("REEF_TEST_KEY", "  guard-key  ");
     const fetcher = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
-    const classifier = createConfiguredGuard(config(), fetcher);
+    const classifier = await createConfiguredGuard(config(), fetcher);
 
     await classifier.classify({
       direction: "outbound",

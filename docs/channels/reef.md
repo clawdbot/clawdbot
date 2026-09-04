@@ -85,7 +85,98 @@ Reef lives under `channels.reef`:
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
 - `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
-- `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error fails the send immediately, and inbound messages wait un-delivered at the relay and retry until the guard is back — a provider outage never rejects a peer's message.
+- Configure exactly one credential source: `apiKeyEnv` names an environment variable visible to the Gateway process; `apiKey` accepts a literal credential or a [SecretRef](/gateway/secrets). Unresolved references never fall back to another key. A missing credential makes Reef unavailable. Provider failures fail outbound sends; inbound messages remain pending at the relay until the guard recovers.
+
+### Guard broker and file credentials
+
+The guard can use an operator-owned API broker. Set `baseUrl` to the API prefix; Reef appends `/responses` for OpenAI or `/messages` for Anthropic. Omitting it preserves the provider's normal `/v1` endpoint. HTTPS is required except for numeric loopback HTTP addresses such as `127.0.0.1` or `[::1]`. URL credentials, queries, fragments, and redirects are rejected.
+
+For OpenAI, `reasoningEffort` accepts `low`, `medium`, or `high`. Omit it to retain the provider default. Anthropic guard configuration rejects this option. The broker must return the exact configured model ID and the normal provider response envelope; routing through a broker does not relax verdict validation or owner review.
+
+This example reads the broker credential from a protected file. If the broker authenticates using a non-secret marker instead, put that marker directly in `apiKey`; keep the actual upstream key in the broker's own credential store.
+
+```json5
+{
+  secrets: {
+    providers: {
+      "reef-guard": {
+        source: "file",
+        path: "/etc/openclaw/reef-guard-credential",
+        mode: "singleValue",
+      },
+    },
+  },
+  channels: {
+    reef: {
+      guard: {
+        provider: "openai",
+        pinnedModel: "gpt-5.6-terra",
+        baseUrl: "http://127.0.0.1:8790/v1",
+        apiKey: { source: "file", provider: "reef-guard", id: "value" },
+        reasoningEffort: "medium",
+        policyVersion: "reef-v1",
+        timeoutMs: 30000,
+      },
+    },
+  },
+}
+```
+
+The Gateway user must be able to read the credential file, and its ownership and permissions must satisfy the standard file-secret provider checks. Remove `apiKeyEnv` when switching to `apiKey`; configuring both is an error. Restart the Gateway after changing guard configuration, then inspect `openclaw channels status` and the standard secrets diagnostics. Disabled Reef channels do not resolve their guard SecretRefs.
+
+## Plugin workflow inboxes
+
+Plugins can opt in to a guarded workflow inbox for one protocol and one approved,
+cryptographically pinned peer. Load Reef's `runtime-api.js` public surface through
+`loadActivatedBundledPluginPublicSurfaceModuleSync` from
+`openclaw/plugin-sdk/facade-runtime`, with `dirName: "reef"` and
+`artifactBasename: "runtime-api.js"`. Check `REEF_WORKFLOW_API_VERSION === 1`
+before enabling the integration. A missing capability must leave the integration
+disabled.
+
+The surface exports:
+
+- `registerReefWorkflowInbox({ protocol, peer, expectedPeer, accept })` returns a
+  disposer. `expectedPeer` contains the approved `ed25519PublicKey`,
+  `x25519PublicKey`, and `keyEpoch`. A duplicate registration is rejected. Call the
+  disposer when the consuming plugin stops.
+- `accept({ protocol, peer, messageId, transportMessageId, payload })` returns
+  `Promise<{ accepted: boolean }>`. Return `accepted: true` only after committing
+  the payload to durable, idempotent storage. Return false when the queue is full;
+  throwing also defers delivery. Admission should finish promptly; run expensive
+  work in a separate worker with bounded concurrency.
+- `sendReefWorkflowMessage({ protocol, peer, expectedPeer, messageId, payload,
+transportMessageId? })` returns `{ transportMessageId, status: "queued" }`.
+  Queued means the relay accepted ciphertext, not that the remote application
+  accepted or completed the work. Send application acknowledgements and results
+  as separate workflow messages.
+- `prepareReefMessageId()` reserves a transport ULID. Persist it before sending
+  when a workflow must resume a guard review. Reuse that transport ID only while
+  its proposal has not reached the relay. After an uncertain relay write, make a
+  new transport attempt with the same application `messageId`; the receiving
+  inbox must deduplicate application operations. Never retry or rephrase a policy
+  denial automatically.
+
+`protocol` is a lowercase identifier of at most 128 characters using letters,
+digits, dots, underscores, or hyphens. `messageId` is a nonempty application
+operation ID of at most 200 characters. `payload` must be JSON. The complete
+encoded workflow message, including its wrapper, must fit within 32 KiB; split
+larger evidence into application-level parts.
+
+Workflow envelopes still pass peer authentication, encryption, replay checks,
+deterministic checks, and model guard/review. Only the registered workflow handler
+bypasses ordinary automatic chat and its reply budget. Ordinary messages retain
+their autonomy rules. Missing handlers, changed pins, rejected admission, and
+failed commits leave the relay cursor and delivery acknowledgement pending;
+reserved workflow messages never fall through to chat. Deferred workflows use
+Reef's parked-entry retry path: periodic polls retry admission without blocking
+unrelated messages or reconnecting the socket. Restore handler or queue capacity
+promptly and monitor delivery-delay notices.
+
+Transport acknowledgement follows the plugin commit and Reef's delivery record.
+A crash between those steps can call `accept` again. Persist application dedupe
+and acceptance receipts together, and retain them across restarts. Workflow sends
+disable automatic model rephrasing of rejected messages.
 
 ## Adding a friend
 
