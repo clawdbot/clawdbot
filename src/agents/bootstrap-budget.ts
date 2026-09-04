@@ -73,25 +73,24 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   return single ? [single] : [];
 }
 
-/** Compares raw bootstrap files with the injected context files the agent received. */
+/**
+ * Compares raw bootstrap files with the injected context files the agent received.
+ *
+ * Identity is the source path both sides were resolved from: basenames repeat
+ * across a workspace (nested `AGENTS.md` added by bootstrap-extra-files), so a
+ * looser match would hand a file the budget dropped the bytes of the sibling
+ * that consumed that budget. Callers that rewrite injected paths (the sandbox
+ * workspace remap) build these stats before rewriting.
+ */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): BootstrapInjectionStat[] {
   const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
+    if (pathValue && !injectedByPath.has(pathValue)) {
       injectedByPath.set(pathValue, file.content);
-    }
-    const normalizedPath = pathValue.replace(/\\/g, "/");
-    const baseName = path.posix.basename(normalizedPath);
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
     }
   }
   return params.bootstrapFiles.map((file) => {
@@ -104,10 +103,7 @@ export function buildBootstrapInjectionStats(params: {
       normalizeOptionalString(file.name) ??
       (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(name) ??
-      injectedByBaseName.get(name);
+    const injected = pathValue ? injectedByPath.get(pathValue) : undefined;
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {

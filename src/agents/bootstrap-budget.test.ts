@@ -85,6 +85,48 @@ describe("buildBootstrapInjectionStats", () => {
     expect(stats[1]?.truncated).toBe(true);
   });
 
+  it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
+    // Extra bootstrap files can repeat a root basename (packages/*/AGENTS.md).
+    // Injection identity is the source path, so a file the total budget dropped
+    // must not inherit the bytes of the sibling that consumed that budget.
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/AGENTS.md",
+        content: "a".repeat(1_000),
+        missing: false,
+      },
+      {
+        name: "AGENTS.md",
+        path: "/tmp/workspace/packages/core/AGENTS.md",
+        content: "b".repeat(500),
+        missing: false,
+      },
+    ];
+
+    const stats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: stats,
+      bootstrapMaxChars: 20_000,
+      bootstrapTotalMaxChars: 1_000,
+    });
+
+    expect(stats[1]).toMatchObject({
+      path: "/tmp/workspace/packages/core/AGENTS.md",
+      rawChars: 500,
+      injectedChars: 0,
+      truncated: true,
+    });
+    expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(analysis.truncatedFiles.map((file) => file.path)).toEqual([
+      "/tmp/workspace/packages/core/AGENTS.md",
+    ]);
+    expect(analysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+  });
+
   it("derives names for path-only files supplied by bootstrap hooks", () => {
     const pathOnlyFile = {
       path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
