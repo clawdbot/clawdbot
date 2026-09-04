@@ -83,6 +83,19 @@ async function admitted<T>(
   }
 }
 
+function publishPreparedHandle(
+  toolAuthorityFingerprint: string | undefined,
+  queueMessage: ReturnType<typeof createEmbeddedRunHandle>["queueMessage"],
+) {
+  const handle = createEmbeddedRunHandle({
+    runId: attempt.runId,
+    toolAuthorityFingerprint,
+    queueMessage,
+  });
+  setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+  return handle;
+}
+
 async function published<T>(
   run: (owner: {
     handle: ReturnType<typeof createEmbeddedRunHandle>;
@@ -99,12 +112,7 @@ async function published<T>(
         const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
           async () => {},
         );
-        const handle = createEmbeddedRunHandle({
-          runId: attempt.runId,
-          toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-          queueMessage: queue,
-        });
-        setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+        const handle = publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
         try {
           return await run({ handle, queue });
         } finally {
@@ -432,12 +440,7 @@ describe("host-prepared embedded tool authority", () => {
               undefined,
               async (prepared) => {
                 const queue = vi.fn(async () => {});
-                const handle = createEmbeddedRunHandle({
-                  runId: attempt.runId,
-                  toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                  queueMessage: queue,
-                });
-                setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+                publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
                 await expect(
                   steer({
                     ...own,
@@ -487,12 +490,7 @@ describe("host-prepared embedded tool authority", () => {
           undefined,
           async (prepared) => {
             retained = getGatewayToolCallerIdentity();
-            const handle = createEmbeddedRunHandle({
-              runId: attempt.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-              queueMessage: queue,
-            });
-            setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+            publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
             if (reason === "claim") {
               close();
             }
@@ -580,12 +578,7 @@ describe("host-prepared embedded tool authority", () => {
           undefined,
           async (prepared) => {
             const queue = vi.fn(async () => {});
-            const handle = createEmbeddedRunHandle({
-              runId: attempt.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-              queueMessage: queue,
-            });
-            setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
+            publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
             await expect(steer(own)).resolves.toMatchObject({
               queued: false,
               reason: "tool_authority_mismatch",

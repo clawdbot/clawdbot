@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createTalkClientGatewayControlOwner,
   createTalkRealtimeRunControlOwner,
@@ -6,7 +7,6 @@ import {
 import {
   controlBridge,
   controlContext,
-  deferred,
   sessionTarget,
 } from "./talk-client-gateway-control.test-support.js";
 
@@ -53,7 +53,7 @@ describe("native Talk control admission", () => {
   );
 
   it("does not acquire readiness for task fallthrough or saturated controls and does not retry a throwing result sink", async () => {
-    const release = deferred<void>();
+    const release = createDeferred();
     const ready = vi.fn(() => release.promise);
     const execute = vi.fn(async () => statusResult);
     const warn = vi.fn();
@@ -94,7 +94,7 @@ describe("native Talk control admission", () => {
   it.each(["close", "replace", "disconnect"] as const)(
     "fences retained native input and awaited replies after %s",
     async (ending) => {
-      const result = deferred<typeof statusResult>();
+      const result = createDeferred<typeof statusResult>();
       const controlAgentRun = vi.fn(async () => await result.promise);
       let connected = true;
       const common = {

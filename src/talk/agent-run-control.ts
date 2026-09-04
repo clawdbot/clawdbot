@@ -41,6 +41,8 @@ export {
   type RealtimeVoiceAgentControlResult,
 } from "./agent-run-control-shared.js";
 
+const controlResultPresentation = { speak: true, show: true, suppress: false };
+
 /** Host error projection needs server-side redaction, outside browser-shared contracts. */
 export function buildRealtimeVoiceAgentErrorProviderResult(
   error: unknown,
@@ -95,6 +97,7 @@ export async function controlRealtimeVoiceAgentRun(
   const sessionKey = params.sessionKey.trim();
   const text = params.text.trim();
   const mode = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode }).mode;
+  const controlResultContext = { mode, sessionKey };
   const target = params.runTarget;
   let commands = providedDeps;
   // Exact registered runs need their owner-bound selector, never a key-only lookup.
@@ -143,8 +146,7 @@ export async function controlRealtimeVoiceAgentRun(
   if (mode === "status") {
     return {
       ok: true,
-      mode,
-      sessionKey,
+      ...controlResultContext,
       ...(current.sessionId ? { sessionId: current.sessionId } : {}),
       active,
       message: formatRealtimeVoiceAgentStatus({
@@ -152,23 +154,18 @@ export async function controlRealtimeVoiceAgentRun(
         recentEvents: params.recentEvents,
         activity,
       }),
-      speak: true,
-      show: true,
-      suppress: false,
+      ...controlResultPresentation,
     };
   }
 
   const noActiveRun = (): RealtimeVoiceAgentControlResult => ({
     ok: false,
-    mode,
-    sessionKey,
+    ...controlResultContext,
     active: false,
     ...(mode === "cancel" ? { aborted: false } : { queued: false }),
     reason: "no_active_run",
     message: `There is no active OpenClaw run to ${mode === "cancel" ? "cancel" : "steer"}.`,
-    speak: true,
-    show: true,
-    suppress: false,
+    ...controlResultPresentation,
   });
   if (!current.sessionId) {
     return noActiveRun();
@@ -193,16 +190,13 @@ export async function controlRealtimeVoiceAgentRun(
       : "OpenClaw could not cancel the active run.";
     return {
       ok: aborted,
-      mode,
-      sessionKey,
+      ...controlResultContext,
       sessionId,
       active: true,
       aborted,
       ...(aborted ? {} : { reason: "abort_rejected" }),
       message,
-      speak: true,
-      show: true,
-      suppress: false,
+      ...controlResultPresentation,
       ...(aborted ? { providerResult: buildRealtimeVoiceAgentCancelProviderResult(message) } : {}),
     };
   }
@@ -243,16 +237,13 @@ export async function controlRealtimeVoiceAgentRun(
   if (!outcome.queued) {
     return {
       ok: false,
-      mode,
-      sessionKey,
+      ...controlResultContext,
       sessionId: outcome.sessionId,
       active: true,
       queued: false,
       reason: outcome.reason,
       message: formatRealtimeVoiceAgentQueueRejection(mode, outcome.reason),
-      speak: true,
-      show: true,
-      suppress: false,
+      ...controlResultPresentation,
     };
   }
 
@@ -264,17 +255,14 @@ export async function controlRealtimeVoiceAgentRun(
       : "Got it. I steered the active run.";
   return {
     ok: !unconfirmed,
-    mode,
-    sessionKey,
+    ...controlResultContext,
     sessionId: outcome.sessionId,
     active: true,
     queued: true,
     target: outcome.target,
     ...(unconfirmed ? { reason: "delivery_unconfirmed" } : {}),
     message,
-    speak: true,
-    show: true,
-    suppress: false,
+    ...controlResultPresentation,
     ...(outcome.enqueuedAtMs !== undefined ? { enqueuedAtMs: outcome.enqueuedAtMs } : {}),
     ...(outcome.deliveredAtMs !== undefined ? { deliveredAtMs: outcome.deliveredAtMs } : {}),
   };

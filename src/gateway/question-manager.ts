@@ -212,12 +212,8 @@ export class QuestionManager {
     timeoutMs?: number,
     includeResolutionId = false,
   ): Promise<QuestionWaitAnswerResult> {
-    const record = this.requireRecord(id);
-    const entry = this.entries.get(id);
-    if (!entry) {
-      throw this.notFound(id);
-    }
-    if (record.status !== "pending") {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
       return Promise.resolve(waitResult(entry, includeResolutionId));
     }
     return new Promise<QuestionWaitAnswerResult>((resolve) => {
@@ -294,25 +290,23 @@ export class QuestionManager {
     this.entries.clear();
   }
 
-  private requireRecord(id: string): QuestionRecord {
-    const record = this.get(id);
-    if (!record) {
-      throw this.notFound(id);
-    }
-    return record;
-  }
-
-  private requirePendingEntry(id: string): QuestionEntry {
-    const record = this.requireRecord(id);
-    if (record.status !== "pending") {
-      throw new QuestionManagerError(
-        QuestionManagerErrorCodes.ALREADY_TERMINAL,
-        `question '${id}' is already ${record.status}`,
-      );
-    }
+  private requireEntry(id: string): QuestionEntry {
+    // get() settles expiry/requester loss; its callbacks can replace the entry.
+    this.get(id);
     const entry = this.entries.get(id);
     if (!entry) {
       throw this.notFound(id);
+    }
+    return entry;
+  }
+
+  private requirePendingEntry(id: string): QuestionEntry {
+    const entry = this.requireEntry(id);
+    if (entry.record.status !== "pending") {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.ALREADY_TERMINAL,
+        `question '${id}' is already ${entry.record.status}`,
+      );
     }
     return entry;
   }

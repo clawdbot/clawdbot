@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatch.js";
 import {
@@ -8,16 +9,6 @@ import {
   runAgentHarnessGatewayQuestion,
 } from "./gateway-question.js";
 import { withQuestionGateway } from "./gateway-question.test-support.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 const questions = [
   {
@@ -55,7 +46,7 @@ describe("gateway harness questions", () => {
         };
         const questionId = "ask_66666666666666666666666666666666";
         const sessionKey = "agent:main:dispatch-authority";
-        const promptDelivered = deferred<void>();
+        const promptDelivered = createDeferred();
         const run = runAgentHarnessGatewayQuestion({
           questionId,
           sessionKey,
@@ -166,7 +157,7 @@ describe("gateway harness questions", () => {
   });
 
   it("reserves the session and suppresses a prompt cancelled during registration", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const calls: Array<{ method: string; params: unknown }> = [];
     let resolveCount = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
@@ -240,7 +231,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns an answer that wins a registration cancellation race", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const answers = { answers: { answer: ["Continue"] } };
     let resolveCount = 0;
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
@@ -315,8 +306,8 @@ describe("gateway harness questions", () => {
   });
 
   it("accepts a plain-text reply waiting for gateway registration", async () => {
-    const registration = deferred<{ id: string }>();
-    const answer = deferred<{
+    const registration = createDeferred<{ id: string }>();
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();
@@ -366,7 +357,7 @@ describe("gateway harness questions", () => {
   });
 
   it("releases a claimed reply when gateway registration fails", async () => {
-    const registration = deferred<{ id: string }>();
+    const registration = createDeferred<{ id: string }>();
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
       if (method === "question.request") {
         return await registration.promise;
@@ -395,7 +386,7 @@ describe("gateway harness questions", () => {
   });
 
   it("accepts a later text answer after cancellation fails", async () => {
-    const answer = deferred<{
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();
@@ -458,7 +449,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
-    const answer = deferred<{
+    const answer = createDeferred<{
       status: "answered";
       answers: { answers: Record<string, string[]> };
     }>();

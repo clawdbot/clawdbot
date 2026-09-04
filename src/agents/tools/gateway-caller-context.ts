@@ -197,10 +197,7 @@ export async function withGatewayToolCallerIdentity<T>(
   const operationalRunInstance =
     inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
   const embeddedRunToolAuthorityBinding =
-    identity.embeddedRunToolAuthorityBinding ??
-    (!suppliedRun || suppliedRun === inheritedRun
-      ? inherited?.embeddedRunToolAuthorityBinding
-      : undefined);
+    identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding;
   // Same-run wrappers can narrow a prepared posture, never erase a restriction.
   const fullPermission =
     inheritedOwner?.fullPermission === false || identity.fullPermission === false

@@ -1,5 +1,6 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -8,7 +9,6 @@ import {
 } from "./talk-client-gateway-control.js";
 import {
   sessionTarget,
-  deferred,
   controlContext,
   controlBridge,
 } from "./talk-client-gateway-control.test-support.js";
@@ -134,7 +134,7 @@ describe("Talk client Gateway control owner", () => {
   it.each(["completed", "cancelled"] as const)(
     "persists sideband transcripts, settles a %s consult, and closes idempotently",
     async (outcome) => {
-      const consultResult = deferred<{ text: string }>();
+      const consultResult = createDeferred<{ text: string }>();
       const cancelled = {
         ok: true,
         mode: "cancel" as const,
@@ -301,7 +301,7 @@ describe("Talk client Gateway control owner", () => {
         show: true,
         suppress: false,
       }));
-      const runStarted = deferred<void>();
+      const runStarted = createDeferred();
       const runAgentConsult = vi.fn(
         async (_args: unknown, signal: AbortSignal) =>
           await new Promise<{ text: string }>((_resolve, reject) => {
@@ -395,7 +395,7 @@ describe("Talk client Gateway control owner", () => {
   ] as const)(
     "fences $entry admission when $transition occurs during transcript flush",
     async ({ entry, transition }) => {
-      const flush = deferred<void>();
+      const flush = createDeferred();
       const flushTranscript = vi.fn(() => flush.promise);
       const runAgentConsult = vi.fn(async () => ({ text: "must not run" }));
       const common = {
@@ -454,8 +454,8 @@ describe("Talk client Gateway control owner", () => {
   it.each(["tool", "delegation"] as const)(
     "never admits a %s consult after flush completion schedules closure",
     async (entry) => {
-      const flush = deferred<void>();
-      const transitioned = deferred<void>();
+      const flush = createDeferred();
+      const transitioned = createDeferred();
       const admissionsAfterClose: boolean[] = [];
       let closed = false;
       const flushTranscript = vi.fn(() => flush.promise);
@@ -510,8 +510,8 @@ describe("Talk client Gateway control owner", () => {
   );
 
   it("detaches accepted provider consultations without extending admission", async () => {
-    const result = deferred<{ text: string }>();
-    const started = deferred<void>();
+    const result = createDeferred<{ text: string }>();
+    const started = createDeferred();
     const providerController = new AbortController();
     let acceptedSignal: AbortSignal | undefined;
     const runAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
@@ -594,8 +594,8 @@ describe("Talk client Gateway control owner", () => {
   });
 
   it("replaces only the physical transport while preserving the logical owner and run", async () => {
-    const consult = deferred<{ text: string }>();
-    const runStarted = deferred<void>();
+    const consult = createDeferred<{ text: string }>();
+    const runStarted = createDeferred();
     let runSignal: AbortSignal | undefined;
     const runAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
       runSignal = signal;
