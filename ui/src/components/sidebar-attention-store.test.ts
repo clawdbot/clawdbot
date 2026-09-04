@@ -192,6 +192,105 @@ describe("sidebar attention source publication", () => {
     }
   });
 
+  it("queues explicit auth freshness while publishing progress during repeated refreshes", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let now = 120_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const auth = Array.from({ length: 3 }, () => deferred<ModelAuthStatusResult>());
+    let authCalls = 0;
+    const harness = createGatewayHarness(
+      mockClient(async (method) => {
+        if (method === "cron.list") {
+          return cronPage("failed-cron");
+        }
+        if (method === "cron.status") {
+          return { enabled: true, triggersEnabled: true, jobs: 1 };
+        }
+        return auth[authCalls++]!.promise;
+      }),
+    );
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    await waitForFast(() => expect(store?.entries).toHaveLength(1));
+
+    try {
+      for (const index of [0, 1]) {
+        now += 60_001;
+        for (let event = 0; event < 20; event++) {
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+        expect(authCalls).toBe(index + 1);
+        auth[index]!.resolve({
+          ts: now,
+          providers: [
+            {
+              provider: "openai",
+              displayName: `Current ${index}`,
+              status: "missing",
+              profiles: [],
+            },
+          ],
+        });
+        await waitForFast(() => expect(authCalls).toBe(index + 2));
+        expect(store.entries).toEqual(
+          expect.arrayContaining([expect.objectContaining({ label: `Current ${index}` })]),
+        );
+      }
+      for (let event = 0; event < 20; event++) {
+        harness.emitEvent("cron", {});
+      }
+      auth[2]!.resolve({ ts: now, providers: [] });
+      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "failed-cron" }]));
+      expect(authCalls).toBe(3);
+    } finally {
+      store.dispose();
+      for (const pending of auth) {
+        pending.resolve({ ts: now, providers: [] });
+      }
+    }
+  });
+
+  it("does not let current cron inventory postpone stale auth", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let now = 120_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let authCalls = 0;
+    const harness = createGatewayHarness(
+      mockClient(async (method) => {
+        if (method === "cron.list") {
+          return cronPage(`cron-${now}`);
+        }
+        if (method === "cron.status") {
+          return { enabled: true, triggersEnabled: true, jobs: 1 };
+        }
+        authCalls += 1;
+        return {
+          ts: now,
+          providers:
+            authCalls === 1
+              ? [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }]
+              : [],
+        };
+      }),
+    );
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    await waitForFast(() => expect(store?.entries).toHaveLength(2));
+    for (let index = 0; index < 2; index++) {
+      now += 30_001;
+      harness.emitEvent("cron", {});
+      await waitForFast(() =>
+        expect(store?.entries).toEqual(
+          expect.arrayContaining([expect.objectContaining({ label: `cron-${now}` })]),
+        ),
+      );
+      expect(authCalls).toBe(1);
+    }
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForFast(() => expect(store?.entries).toMatchObject([{ label: `cron-${now}` }]));
+    expect(authCalls).toBe(2);
+  });
+
   it("preserves loaded attention and dismissals when cron.list fails", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const page = cronPage("overdue");
@@ -267,10 +366,12 @@ describe("sidebar attention source publication", () => {
   });
 
   it.each(["disconnect", "replace", "dispose"] as const)(
-    "retires queued cron refreshes on %s",
+    "retires queued inventory and auth refreshes on %s",
     async (boundary) => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
       const pendingList = deferred<CronJobsListResult>();
       const pendingStatus = deferred<CronStatus>();
+      const pendingAuth = deferred<ModelAuthStatusResult>();
       const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
       const request = vi.fn((method: string) => {
         if (method === "cron.list") {
@@ -280,7 +381,7 @@ describe("sidebar attention source publication", () => {
           return pendingStatus.promise;
         }
         if (method === "models.authStatus") {
-          return Promise.resolve({ ts: 1, providers: [] });
+          return pendingAuth.promise;
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -290,6 +391,7 @@ describe("sidebar attention source publication", () => {
       store.subscribe(publish);
       store.activate(SidebarAttentionStoreController);
       harness.emitEvent("cron", {});
+      document.dispatchEvent(new Event("visibilitychange"));
 
       try {
         if (boundary === "disconnect") {
@@ -311,16 +413,21 @@ describe("sidebar attention source publication", () => {
         publish.mockClear();
         pendingList.resolve(cronPage("retired"));
         pendingStatus.resolve(cronStatus);
+        pendingAuth.resolve({ ts: 1, providers: [] });
         await new Promise<void>((resolve) => {
           globalThis.setTimeout(resolve, 0);
         });
 
         expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
         expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(1);
+        expect(
+          request.mock.calls.filter(([method]) => method === "models.authStatus"),
+        ).toHaveLength(1);
         expect(publish).not.toHaveBeenCalled();
       } finally {
         pendingList.resolve(cronPage());
         pendingStatus.resolve(cronStatus);
+        pendingAuth.resolve({ ts: 1, providers: [] });
       }
     },
   );

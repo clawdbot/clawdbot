@@ -46,12 +46,13 @@ export class SidebarAttentionStoreController implements StoreController {
   private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedClient = this.sources.gateway.snapshot.client;
   private loadedAgentScope = { ...this.sources.agentSelection.state };
-  private loadedAtMs = 0;
+  private cronLoadedAtMs = 0;
+  private modelAuthLoadedAtMs = 0;
   private dismissedScope: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
   private loadGeneration = 0;
   private cronRefresh: { generation: number; requested: boolean } | null = null;
-  private modelAuthLoadingGeneration: number | null = null;
+  private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
   private readonly stopGateway: () => void;
   private readonly stopEvents: () => void;
   private readonly stopSelection: () => void;
@@ -205,7 +206,11 @@ export class SidebarAttentionStoreController implements StoreController {
       if (!current()) {
         return;
       }
-      this.loadedAtMs = Date.now();
+      if (scope.modelAuthAgentId) {
+        this.modelAuthLoadedAtMs = Date.now();
+      } else {
+        this.cronLoadedAtMs = Date.now();
+      }
       this.reconcileDismissals(scope);
       this.onChange();
     };
@@ -252,27 +257,34 @@ export class SidebarAttentionStoreController implements StoreController {
     }
     if (
       (refreshModelAuth || agentScope.selectedId !== this.modelAuthAgentId) &&
-      agentScope.selectedId &&
-      this.modelAuthLoadingGeneration !== generation
+      agentScope.selectedId
     ) {
-      this.modelAuthLoadingGeneration = generation;
-      void loadModelAuthStatus(client, { agentId: agentScope.selectedId })
-        .catch(() => null)
-        .then((status) => {
-          if (current()) {
-            this.modelAuthStatus = status;
-            this.modelAuthAgentId = agentScope.selectedId;
-            publishSource({
-              cronInventoryComplete: false,
-              modelAuthAgentId: agentScope.selectedId,
-            });
+      if (this.modelAuthRefresh?.generation === generation) {
+        // Only explicit freshness loads queue auth work; cron events cannot
+        // invalidate a pending auth response or schedule another auth request.
+        this.modelAuthRefresh.requested ||= refreshModelAuth;
+      } else {
+        const refresh = { generation, requested: true };
+        const agentId = agentScope.selectedId;
+        this.modelAuthRefresh = refresh;
+        void (async () => {
+          try {
+            while (refresh.requested && current()) {
+              refresh.requested = false;
+              const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
+              if (current()) {
+                this.modelAuthStatus = status;
+                this.modelAuthAgentId = agentId;
+                publishSource({ cronInventoryComplete: false, modelAuthAgentId: agentId });
+              }
+            }
+          } finally {
+            if (this.modelAuthRefresh === refresh) {
+              this.modelAuthRefresh = null;
+            }
           }
-        })
-        .finally(() => {
-          if (this.modelAuthLoadingGeneration === generation) {
-            this.modelAuthLoadingGeneration = null;
-          }
-        });
+        })();
+      }
     } else if (!agentScope.selectedId) {
       this.modelAuthStatus = null;
       this.modelAuthAgentId = null;
@@ -327,9 +339,13 @@ export class SidebarAttentionStoreController implements StoreController {
   }
 
   private readonly refreshIfStale = () => {
+    // Recent cron events cannot postpone an overdue auth refresh.
+    const loadedAtMs = this.sources.agentSelection.state.selectedId
+      ? Math.min(this.cronLoadedAtMs, this.modelAuthLoadedAtMs)
+      : this.cronLoadedAtMs;
     if (
       document.visibilityState === "visible" &&
-      Date.now() - this.loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
+      Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
     ) {
       this.load();
     }
