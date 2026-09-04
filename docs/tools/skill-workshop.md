@@ -430,9 +430,10 @@ are stored in the shared OpenClaw state database; transcript content is not copi
 into scan state.
 
 In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
-after the agent system becomes idle. The review continues the foreground request
-prefix, so the provider can reuse its prompt cache. Review transcript and session
-metadata changes stay detached. It can draft one pending create, patch, or update.
+after the agent system becomes idle. The review uses the finished turn's model
+context with the same provider and model. It omits the general skill catalog
+whose read prerequisite cannot execute in this restricted run. Review transcript
+and session metadata changes stay detached. It can draft one pending create, patch, or update.
 In `auto` mode, creates and Workshop-generated updates use the scanner-gated
 apply path. A failed review is logged and dropped after one attempt.
 
@@ -561,20 +562,35 @@ Proposals created by older releases can still reference the earlier root-level
 next successful revision moves the proposal onto the generation layout and
 retires the previous bundle.
 
-`openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
-`rollback.json` metadata into SQLite after verifying each proposal, then removes
-the migrated JSON files. It also moves applied legacy Workshop creates into
-`workshop-skills`, retargets eligible pending creates, and marks outside updates
-stale. Doctor infers each legacy proposal's owner from its row, origin metadata,
+Startup and `openclaw doctor --fix` use the same Workshop migration. It imports
+the previous `proposals.json`, `proposal.json`, and `rollback.json` metadata into
+SQLite after verifying each proposal, then removes the migrated JSON files.
+It moves applied legacy Workshop creates into `workshop-skills`, retargets
+eligible pending creates, and marks outside updates stale before normal use.
+Pending updates follow their relocated skill in the same database commit.
+Interrupted moves resume without discarding those pending updates.
+If older workspace setup files remain, run `openclaw doctor --fix`.
+Startup defers the affected skill moves and backup conversion until Doctor
+has imported that workspace state.
+The migration infers each legacy proposal's owner from its row, origin metadata,
 or a unique workspace owner. Ambiguous ownership, or an owner that is no
 longer in the agent roster, stays in place and becomes stale.
 Legacy collection backups move under the owner agent's backup root together
-with their post-cleanup snapshot, so `restore_collection` keeps working. A
-backup whose snapshot lists skills that were never Workshop-owned is kept as
-history only, its legacy root stays in place, and restore reports that reason
-instead of writing user-owned skills into the Workshop directory.
+with their post-cleanup snapshot. A dropped skill remains restorable when its
+saved review and create proposal prove its owner, original path, and backup.
+Backups without enough ownership evidence remain history-only; their legacy
+files stay in place, and restore reports why it cannot use them. Completed
+history archives do not block migration of the remaining backups.
+If cleanup stops after publishing a restorable backup, the next migration
+verifies the saved manifest and all copied files before removing the old copy.
 Skills that were symlinked into a workspace stay where they are as workspace
-skills; Doctor marks their proposals stale instead of moving them.
+skills; the migration marks their proposals stale instead of moving them.
+
+If moving the skills empties a workspace, migration retires obsolete
+workspace-survival evidence only when saved pre-move facts prove that the same
+directory contained only those skills and every moved file is intact.
+Missing or replaced workspaces, ordinary project files, and newer workspace
+attestations keep their protection.
 
 ## Limits
 

@@ -68,14 +68,16 @@ Experience review starts only when all of these conditions hold:
 - no agent or reply run is still active.
 
 A later foreground completion in the same session restarts the quiet period.
+It does not replace the saved evidence unless that turn also qualifies for review.
 Pending reviews belong to an agent and session together, so agents using `global`
 retain separate candidates. Experience, history, and collection reviews share
 one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
-The foreground answer is never delayed.
+The foreground answer never waits for the model's review.
 
-The reviewer continues the finished turn from the same transcript prefix, but
-runs under a private detached session identity. This keeps the foreground session
-available while the provider reuses its prompt cache. The review message and tool
+OpenClaw captures the completed turn's full model context before another turn can
+change it. The reviewer uses that captured context under a private detached
+session identity. Later messages cannot change what it reviews. This keeps the
+foreground session available. The review message and tool
 results never enter the foreground transcript or session record. Reviews retain
 the foreground session's sandbox policy, including during compaction.
 
@@ -93,8 +95,10 @@ review's single mutation. Both update forms bind the proposal to the current
 content hash. An oversized skill can be rewritten only when the result is
 shorter. Autonomous `SKILL.md` results stay at or below 10,000 characters.
 Longer reference and examples move into bundled files. The reviewer sees the
-foreground tool schemas, but only `skill_workshop` can execute. The reviewed
-transcript is evidence, not instructions.
+foreground tool schemas, but only `skill_workshop` can execute. The general
+skill catalog is omitted because its file-read prerequisite cannot execute in
+this review. Workshop-generated skills remain readable through `skill_workshop`.
+The reviewed transcript is evidence, not instructions.
 
 Workshop-generated skills can apply automatically. Each review gets one
 attempt. A failure is logged and dropped instead of retrying the turn.
@@ -217,9 +221,10 @@ The review creates a detached view of the foreground model context and appends
 one small user message. Storage-only native prompt payloads stay in the original
 transcript, whose stored bytes the review does not change. It uses a private
 detached session identity while preserving the
-foreground provider, model, auth profile, bootstrap context, skills prompt, tool
-schemas, and prompt-cache affinity. The provider can reuse the finished turn's
-cached request prefix without making the review part of the foreground session.
+foreground provider, model, auth profile, bootstrap context, tool schemas, and
+prompt-cache affinity. Removing unavailable skill guidance changes the prompt,
+so only compatible prefixes can be reused. The review never becomes part of
+the foreground session.
 
 The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to

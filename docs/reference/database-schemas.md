@@ -387,18 +387,27 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 Schema 16 removes `workspace_dir` and `claim_released_time` from
 `skill_workshop_proposals`. It also removes `workspace_dir` and
 `idx_skill_workshop_collection_reviews_workspace_time` from collection review
-history and adds `owner_agent_id` plus its owner/time index. Proposal and review rows remain intact. A proposal whose claim a
+history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
 collection review had released becomes `stale` with a status reason, so the
 skill path it once created stays user-owned and Doctor never relocates it.
 
 Skill Workshop ownership is now the physical
 `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
-drop the retired columns and index in the shared schema transaction. Doctor
-then relocates applied legacy Workshop creates to the inferred owner agent and
-rewrites their stored target paths. Conflicts and ambiguous ownership become
+drop the retired columns and index in the shared schema transaction. Both then
+run the same migration to relocate applied legacy Workshop creates to the
+inferred owner agent and retarget eligible pending creates. Conflicts and ambiguous ownership become
 stale proposals and leave the legacy directories unchanged. Review history rows
-map to a unique owner agent when possible; otherwise Doctor deletes them as
+map to a unique owner agent when possible; otherwise the schema migration discards them as
 cache-class state.
+
+Skill-only workspace relocation uses the existing `migration_runs` and
+`migration_sources` tables to save pre-move directory identity, file hashes,
+and the workspace attestation timestamp. After relocation, only matching
+attestation-only state is retired; setup state, path aliases, and newer
+attestations remain intact. Interrupted migrations reuse the saved pre-move
+facts rather than inferring them from an empty directory. Workspace reset
+removes pending workspace-scoped receipts. No additional schema version or
+table is required.
 
 ### State schema 15
 
