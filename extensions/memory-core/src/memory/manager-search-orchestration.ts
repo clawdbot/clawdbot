@@ -214,8 +214,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
+      // No watcher can observe later edits after kernel capacity exhaustion.
+      // Record a fresh generation at the search boundary so detached maintenance
+      // receives the fact instead of starting from a clean transient manager.
+      if (this.memoryWatchCapacityDegraded) {
+        this.dirty = true;
+      }
+      const capacitySyncInFlight =
+        this.memoryWatchCapacityDegraded && this.activeBackgroundSearchSyncs.size > 0;
       const backgroundSearchSync = startAsyncSearchSync({
-        enabled: searchSyncEnabled,
+        enabled: searchSyncEnabled && !capacitySyncInFlight,
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),
