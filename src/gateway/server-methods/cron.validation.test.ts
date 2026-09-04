@@ -10,7 +10,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
-import { CronService, type CronEvent } from "../../cron/service.js";
+import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import {
@@ -1702,7 +1702,6 @@ describe("cron method validation", () => {
     ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
   ] as const)("revalidates caller scope at the %s commit owner", async (method, params, owner) => {
     const { storePath } = await makeStorePath();
-    const runFinished = createDeferred<CronEvent>();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
       storePath,
@@ -1712,11 +1711,6 @@ describe("cron method validation", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      onEvent: (event) => {
-        if (event.jobId === "cron-1" && event.action === "finished") {
-          runFinished.resolve(event);
-        }
-      },
     });
     await cron.start();
     const releaseReplacement = createDeferred();
@@ -1798,7 +1792,6 @@ describe("cron method validation", () => {
       releaseReplacement.resolve();
       await replacement;
       const { respond } = await invocation;
-      const finishedEvent = owner === "enqueueRun" ? await runFinished.promise : undefined;
 
       expect(context.cron[owner]).toHaveBeenCalledOnce();
       if (owner === "writeScratch") {
@@ -1810,21 +1803,6 @@ describe("cron method validation", () => {
         });
       } else {
         expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-        expect(finishedEvent).toMatchObject({
-          status: "error",
-          error: "unknown cron job id: cron-1",
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          {
-            ok: true,
-            enqueued: true,
-            runId: expect.stringMatching(/^manual:cron-1:/),
-            processInstanceId: getGatewayProcessInstanceId(),
-          },
-          undefined,
-        );
-        return;
       }
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
