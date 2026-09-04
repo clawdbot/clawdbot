@@ -244,7 +244,6 @@ export function createSubagentRegistrySweeper(params: {
     try {
       const now = Date.now();
       const storeCache: SubagentSessionStoreCache = new Map();
-      let mutated = false;
       const mutatedRunIds = new Set<string>();
       const collectorArchiveCandidates = new Map<
         string,
@@ -314,7 +313,6 @@ export function createSubagentRegistrySweeper(params: {
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
               warn: params.warn,
             });
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -332,7 +330,6 @@ export function createSubagentRegistrySweeper(params: {
               warn: params.warn,
             })
           ) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -351,7 +348,6 @@ export function createSubagentRegistrySweeper(params: {
             warn: params.warn,
           });
           if (reconciled) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -381,7 +377,6 @@ export function createSubagentRegistrySweeper(params: {
                   resumedRuns,
                 })
               ) {
-                mutated = true;
                 mutatedRunIds.add(runId);
               }
               continue;
@@ -480,7 +475,6 @@ export function createSubagentRegistrySweeper(params: {
             }
             entry.collectorLaunchCleanupPending = false;
             entry.cleanupCompletedAt = now;
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           const groupId = entry.groupId?.trim();
@@ -524,7 +518,6 @@ export function createSubagentRegistrySweeper(params: {
               });
             }
             runs.delete(runId);
-            mutated = true;
             mutatedRunIds.add(runId);
             if (!entry.retainAttachmentsOnKeep) {
               await safeRemoveAttachmentsDir(entry);
@@ -560,7 +553,6 @@ export function createSubagentRegistrySweeper(params: {
           }
         }
         runs.delete(runId);
-        mutated = true;
         mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
         if (!suppressSessionEffects && !sessionOwnershipChanged) {
@@ -695,11 +687,10 @@ export function createSubagentRegistrySweeper(params: {
           runs.delete(candidateRunId);
           mutatedRunIds.add(candidateRunId);
         }
-        mutated = true;
       }
       params.sweepPendingLifecycle(now);
 
-      if (mutated) {
+      if (mutatedRunIds.size > 0) {
         params.persist(...mutatedRunIds);
       }
       if (runs.size === 0) {

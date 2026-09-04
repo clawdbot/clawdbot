@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import {
@@ -376,7 +377,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(results).toMatchObject([{ status: "accepted" }, { status: "accepted" }]);
       await waitForAssertion(() =>
         expect(launched.toSorted()).toEqual(
-          results.map((result) => result.childSessionKey).toSorted(),
+          results
+            .map((result) => expectDefined(result.childSessionKey, "accepted child session key"))
+            .toSorted(),
         ),
       );
     } finally {
