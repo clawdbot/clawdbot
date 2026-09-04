@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPublishedRepositoryAdvisories } from "../../scripts/lib/upstream-repository-advisories.mts";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 const REGISTRY = "https://registry.npmjs.org";
 const REPOSITORY = "fixture/packages";
@@ -713,14 +714,25 @@ describe("published upstream repository advisories", () => {
   it("keeps metadata and repository requests within four concurrent operations", async () => {
     let active = 0;
     let peak = 0;
+    const waves = [REGISTRY, "https://api.github.com"].map((origin) => ({
+      origin,
+      started: createDeferred(),
+      release: createDeferred(),
+    }));
     const source = createSourceFetch({
       manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
     });
     const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const wave = expectDefined(
+        waves.find(({ origin }) => origin === url.origin),
+        "request phase",
+      );
       active += 1;
       peak = Math.max(peak, active);
+      if (active === 4) wave.started.resolve();
       try {
-        await Promise.resolve();
+        await wave.release.promise;
         return await source.fetchImpl(input, init);
       } finally {
         active -= 1;
@@ -729,11 +741,30 @@ describe("published upstream repository advisories", () => {
     const payload = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
     );
-    const report = await scan(fetchImpl, payload);
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect(report.coverage.status).toBe("checked");
-    expect(report.coverage.checkedRepositories).toBe(8);
+    const scanning = scan(fetchImpl, payload);
+    try {
+      for (const wave of waves) {
+        await withTestTimeout(
+          wave.started.promise,
+          1_000,
+          `expected four requests to ${wave.origin}`,
+        );
+        // Let admission finish while requests stay blocked so excess fanout is observable.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(active).toBe(4);
+        wave.release.resolve();
+      }
+      const report = await scanning;
+      expect(peak).toBe(4);
+      expect(active).toBe(0);
+      expect(report.coverage.status).toBe("checked");
+      expect(report.coverage.checkedRepositories).toBe(8);
+    } finally {
+      for (const wave of waves) wave.release.resolve();
+      await scanning;
+    }
   });
 
   it.each([

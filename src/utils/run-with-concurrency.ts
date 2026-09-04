@@ -58,13 +58,15 @@ export async function runTasksWithConcurrency<T>(
           firstError = error;
           hasError = true;
         }
+        let rejectionError = error;
         try {
           onTaskError?.(error, index);
         } catch (callbackError) {
-          error = callbackError;
+          rejectionError = callbackError;
         }
         if (throwOnError) {
-          reject(error);
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the public runner's original task or error-hook rejection value.
+          reject(rejectionError);
         }
       }
     };

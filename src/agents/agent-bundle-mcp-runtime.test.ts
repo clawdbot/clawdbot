@@ -1894,12 +1894,19 @@ describe("session MCP runtime", () => {
 
       await waitForPredicate(
         () =>
-          runtime.peekCatalog()?.diagnostics?.some((entry) => entry.serverName === "child") ===
-          true,
+          runtime
+            .peekCatalog()
+            ?.diagnostics?.some(
+              (entry) => entry.serverName === "child" && entry.message === "mcp transport closed",
+            ) === true,
         "closed transport to schedule a catalog retry",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
-      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow("is not connected");
+      // Background recovery may still hold the closed session or already have retired it.
+      // Both states must reject while the replacement catalog remains blocked.
+      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow(
+        /^bundle-mcp server "child" is (?:not connected|disconnected: mcp transport closed)$/,
+      );
       await waitForFileTextCount(logPath, "recv tools/list", 2, LIST_TOOLS_TEST_DEADLINE_MS);
       await expect(
         withTestTimeout(
