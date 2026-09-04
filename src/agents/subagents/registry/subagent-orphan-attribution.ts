@@ -21,7 +21,7 @@ import {
 } from "../../../infra/gateway-boot-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type SubagentOrphanCause =
+type SubagentOrphanCause =
   /** Host boot id changed across the gap: the machine went down under us. */
   | "host_reboot"
   /** Host boot id held across the gap: the gateway process alone died. */
@@ -29,15 +29,13 @@ export type SubagentOrphanCause =
   /** The boot ended abruptly, but host continuity cannot be established. */
   | "gateway_restart";
 
-export type SubagentOrphanDeathEvidence =
-  /** The owning boot recorded when it stopped. Exact. */
-  | "boot_completed"
+type SubagentOrphanDeathEvidence =
   /** The run's own last recorded activity. A lower bound on the death. */
   | "last_activity"
   /** The successor boot's start. An upper bound on the death. */
   | "successor_boot_start";
 
-export type SubagentOrphanElapsedBound = "exact" | "at_least" | "at_most";
+type SubagentOrphanElapsedBound = "at_least" | "at_most";
 
 export type SubagentOrphanAttribution = {
   cause: SubagentOrphanCause;
@@ -63,7 +61,7 @@ export type SubagentOrphanAttribution = {
  * outcome. Every deliberate stop — clean, forced, planned, safe-mode — writes
  * at least one of the two, so a clean shutdown can never be misattributed here.
  */
-export function isAbruptGatewayBootEnd(segment: GatewayBootLifecycleSegment): boolean {
+function isAbruptGatewayBootEnd(segment: GatewayBootLifecycleSegment): boolean {
   return segment.completedAtMs === null && segment.outcome === null;
 }
 
@@ -87,18 +85,10 @@ function resolveHostContinuity(
  * Preference order is by how tightly each bounds the death, not by convenience.
  */
 function resolveDeathEvidence(params: {
-  prior: GatewayBootLifecycleSegment;
   successor: GatewayBootLifecycleSegment;
   runStartedAtMs: number;
   lastActivityAtMs?: number;
 }): { diedAtMs: number; evidence: SubagentOrphanDeathEvidence; bound: SubagentOrphanElapsedBound } {
-  if (typeof params.prior.completedAtMs === "number") {
-    return {
-      diedAtMs: params.prior.completedAtMs,
-      evidence: "boot_completed",
-      bound: "exact",
-    };
-  }
   const lastActivityAtMs = params.lastActivityAtMs;
   // Strictly after the start: the start itself says nothing about how long the
   // run survived, and treating it as evidence would report a 0s lifetime — a
@@ -171,7 +161,6 @@ export function resolveSubagentOrphanAttribution(params: {
   }
 
   const death = resolveDeathEvidence({
-    prior,
     successor,
     runStartedAtMs: params.runStartedAtMs,
     lastActivityAtMs: params.lastActivityAtMs,
@@ -220,8 +209,6 @@ function describeElapsed(attribution: SubagentOrphanAttribution): string {
 
 function describeEvidence(attribution: SubagentOrphanAttribution): string {
   switch (attribution.diedAtEvidence) {
-    case "boot_completed":
-      return "from the recorded boot end";
     case "last_activity":
       return "from the run's last recorded activity";
     default:
@@ -269,8 +256,13 @@ let cachedBootSegments: { loadedAtMs: number; segments: GatewayBootLifecycleSegm
 
 export function loadGatewayBootSegmentsForAttribution(
   nowMs = Date.now(),
+  options?: { forceRefresh?: boolean },
 ): GatewayBootLifecycleSegment[] {
-  if (cachedBootSegments && nowMs - cachedBootSegments.loadedAtMs < BOOT_SEGMENT_CACHE_TTL_MS) {
+  if (
+    !options?.forceRefresh &&
+    cachedBootSegments &&
+    nowMs - cachedBootSegments.loadedAtMs < BOOT_SEGMENT_CACHE_TTL_MS
+  ) {
     return cachedBootSegments.segments;
   }
   const segments = readGatewayBootLifecycleSegments({
@@ -279,10 +271,6 @@ export function loadGatewayBootSegmentsForAttribution(
   });
   cachedBootSegments = { loadedAtMs: nowMs, segments };
   return segments;
-}
-
-export function resetGatewayBootSegmentCacheForTests(): void {
-  cachedBootSegments = undefined;
 }
 
 /**

@@ -73,7 +73,7 @@ export function isInferredHostBootId(hostBootId: string | null | undefined): boo
   return typeof hostBootId === "string" && hostBootId.startsWith(HOST_BOOT_ID_UPTIME_PREFIX);
 }
 
-export function resolveHostBootId(nowMs = Date.now()): string {
+function resolveHostBootId(nowMs = Date.now()): string {
   if (cachedHostBootId) {
     return cachedHostBootId;
   }
@@ -90,11 +90,6 @@ export function resolveHostBootId(nowMs = Date.now()): string {
   const bucket = Math.floor(hostStartedAtMs / HOST_BOOT_ID_UPTIME_BUCKET_MS);
   cachedHostBootId = `${HOST_BOOT_ID_UPTIME_PREFIX}${bucket}`;
   return cachedHostBootId;
-}
-
-/** Test seam: the host boot id is process-stable, so it is resolved once. */
-export function resetHostBootIdCacheForTests(): void {
-  cachedHostBootId = undefined;
 }
 
 /** One persisted gateway lifetime, as needed to attribute orphaned work. */

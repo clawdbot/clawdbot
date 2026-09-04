@@ -3,7 +3,6 @@ import type { GatewayBootLifecycleSegment } from "../../../infra/gateway-boot-li
 import {
   countRecordedSubagentAssistantMessages,
   formatSubagentOrphanErrorMessage,
-  isAbruptGatewayBootEnd,
   resolveSubagentOrphanAttribution,
   resolveSubagentRunLastActivityMs,
 } from "./subagent-orphan-attribution.js";
@@ -37,38 +36,27 @@ const RUN_DIED_AT = Date.parse("2026-08-26T22:54:52.000Z");
 const GATEWAY_RESTARTED_AT = Date.parse("2026-08-26T23:28:30.000Z");
 const RUN_REAPED_AT = Date.parse("2026-08-26T23:29:51.000Z");
 
-describe("isAbruptGatewayBootEnd", () => {
-  it("treats a boot with neither completion time nor outcome as abrupt", () => {
-    expect(isAbruptGatewayBootEnd(bootSegment({}))).toBe(true);
-  });
-
-  it("treats any recorded stop as deliberate", () => {
-    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: "clean_stop" }))).toBe(
-      false,
-    );
-    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: null }))).toBe(false);
-    expect(
-      isAbruptGatewayBootEnd(bootSegment({ completedAtMs: null, outcome: "forced_stop" })),
-    ).toBe(false);
-  });
-});
-
 describe("resolveSubagentOrphanAttribution", () => {
   it("does not attribute anything to a boot that stopped cleanly", () => {
-    const attribution = resolveSubagentOrphanAttribution({
-      runStartedAtMs: RUN_STARTED_AT,
-      lastActivityAtMs: RUN_DIED_AT,
-      boots: [
-        bootSegment({
-          bootId: "boot-clean",
-          startedAtMs: RUN_STARTED_AT - 60_000,
-          completedAtMs: RUN_DIED_AT,
-          outcome: "clean_stop",
-        }),
-        bootSegment({ bootId: "boot-next", startedAtMs: GATEWAY_RESTARTED_AT }),
-      ],
-    });
-    expect(attribution).toBeNull();
+    for (const stop of [
+      { completedAtMs: RUN_DIED_AT, outcome: "clean_stop" },
+      { completedAtMs: RUN_DIED_AT, outcome: null },
+      { completedAtMs: null, outcome: "forced_stop" },
+    ]) {
+      const attribution = resolveSubagentOrphanAttribution({
+        runStartedAtMs: RUN_STARTED_AT,
+        lastActivityAtMs: RUN_DIED_AT,
+        boots: [
+          bootSegment({
+            bootId: "boot-clean",
+            startedAtMs: RUN_STARTED_AT - 60_000,
+            ...stop,
+          }),
+          bootSegment({ bootId: "boot-next", startedAtMs: GATEWAY_RESTARTED_AT }),
+        ],
+      });
+      expect(attribution).toBeNull();
+    }
   });
 
   it("attributes a run whose owning boot ended abruptly", () => {

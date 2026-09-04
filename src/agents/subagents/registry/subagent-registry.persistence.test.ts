@@ -15,7 +15,7 @@ import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-adm
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
-import { resetGatewayBootSegmentCacheForTests } from "./subagent-orphan-attribution.js";
+import { loadGatewayBootSegmentsForAttribution } from "./subagent-orphan-attribution.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
@@ -849,7 +849,9 @@ describe("subagent registry persistence", () => {
     });
     expect(recordGatewayBootStart(process.env, now - 4 * 60 * 60 * 1_000)).toBeDefined();
     expect(recordGatewayBootStart(process.env, now - 2 * 60 * 60 * 1_000)).toBeDefined();
-    resetGatewayBootSegmentCacheForTests();
+    // Refresh the process-level boot snapshot after writing the two lifecycle
+    // rows so the production sweeper observes this test's persisted state.
+    loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
     restartRegistry();
     await flushQueuedRegistryWork();
