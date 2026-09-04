@@ -481,17 +481,17 @@ loading failures are logged and do not abort sub-agent cleanup.
 
 ## Nested sub-agents
 
-By default, every sub-agent can spawn its own descendants because
-`maxSpawnDepth` is omitted. Global concurrency, per-session child limits,
-inherited tool policy, sandbox inheritance, and target-agent allowlists still
-apply. Set a finite depth to create leaf workers at that boundary.
+By default, sub-agents can recursively delegate through depth `5`. Global
+concurrency, per-session child limits, inherited tool policy, sandbox
+inheritance, and target-agent allowlists still apply. Set a lower depth to
+create leaf workers sooner.
 
 ```json5
 {
   agents: {
     defaults: {
       subagents: {
-        maxSpawnDepth: 2, // stop nesting after depth 2 (omit for unlimited; finite range 1-5)
+        maxSpawnDepth: 2, // stop nesting after depth 2 (default: 5, range 1-5)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
@@ -504,11 +504,12 @@ apply. Set a finite depth to create leaf workers at that boundary.
 
 ### Depth levels
 
-| Depth | Session key shape                          | Default role | Can spawn?                                     |
-| ----- | ------------------------------------------ | ------------ | ---------------------------------------------- |
-| 0     | `agent:<id>:main`                          | Main agent   | Always                                         |
-| 1     | `agent:<id>:subagent:<uuid>`               | Orchestrator | Yes, unless `maxSpawnDepth: 1`                 |
-| 2+    | Persisted flat sub-agent keys with lineage | Orchestrator | Yes, until an explicitly configured finite cap |
+| Depth | Session key shape                          | Default role | Can spawn?                     |
+| ----- | ------------------------------------------ | ------------ | ------------------------------ |
+| 0     | `agent:<id>:main`                          | Main agent   | Always                         |
+| 1     | `agent:<id>:subagent:<uuid>`               | Orchestrator | Yes, unless `maxSpawnDepth: 1` |
+| 2-4   | Persisted flat sub-agent keys with lineage | Orchestrator | Yes, by default                |
+| 5     | Persisted flat sub-agent key with lineage  | Leaf         | No, at the default boundary    |
 
 ### Announce chain
 
@@ -538,8 +539,8 @@ final answer, the correct follow-up is the exact silent token
 
 - A child captures the requester's effective sender policy when it is spawned. Senderless child runs and authenticated operator resumes keep that snapshot even if `toolsBySender` changes later; current global, agent, provider, sandbox, and sub-agent restrictions still apply. A new external channel turn targeting the child re-resolves current sender policy instead.
 - Role and control scope are written into session metadata at spawn time for provenance. The current depth policy is authoritative, so existing sessions gain or lose recursive orchestration tools when the configured cap changes.
-- **Orchestrator (default at every sub-agent depth):** gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can spawn children and inspect their status. Other session/system tools remain denied.
-- **Leaf (at a configured finite `maxSpawnDepth`):** no recursive orchestration tools.
+- **Orchestrator (below `maxSpawnDepth`):** gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can spawn children and inspect their status. Other session/system tools remain denied.
+- **Leaf (at `maxSpawnDepth`):** no recursive orchestration tools.
 
 ### Per-agent spawn limit
 
@@ -644,15 +645,15 @@ tools the main agent should coordinate). This hard-deny layer is derived from
 the persisted sub-agent session envelope on every turn, including resumed and
 visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
 it. Hidden launches also disable `message` before tool construction as defense in
-depth. Sub-agents at an explicitly configured finite depth cap additionally
+depth. Sub-agents at the configured depth cap additionally
 lose `subagents`, `sessions_list`, `sessions_history`, and `sessions_spawn`, so
 their communication stays on the announce chain.
 
 `sessions_history` remains a bounded, redacted recall view here too — it
 is neither a raw transcript dump nor a prose-only rendering.
 
-By default, sub-agents receive `sessions_spawn`, `subagents`, `sessions_list`,
-and `sessions_history` so they can manage their children.
+By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,
+`sessions_list`, and `sessions_history` so they can manage their children.
 
 ### Override via config
 
@@ -779,7 +780,7 @@ timeout. Those events do not automatically cancel them.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
-- Recursive spawning is unlimited by default. Omit `maxSpawnDepth` for unlimited nesting or set a finite cap from `1` through `5`.
+- Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
 
 ## Related

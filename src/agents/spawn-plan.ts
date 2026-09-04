@@ -12,7 +12,10 @@ import {
   formatThreadBindingSpawnDisabledError,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
-import { DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT } from "../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+} from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -288,7 +291,8 @@ export function resolveSpawnAdmission(params: {
     cfg: params.cfg,
     agentId: params.requesterAgentId,
   });
-  const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth;
+  const maxSpawnDepth =
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const collector = params.collector;
   // Build each mode's params in its own branch so collector counts can never
   // pair with the announce cap (or vice versa) through fallback chaining.
@@ -350,7 +354,7 @@ export function resolveSpawnAdmission(params: {
   });
   return {
     ok: true,
-    ...(maxSpawnDepth === undefined ? {} : { maxSpawnDepth }),
+    maxSpawnDepth,
     childSessionPatch: {
       spawnDepth: capabilities.depth,
       subagentRole: capabilities.role === "main" ? null : capabilities.role,

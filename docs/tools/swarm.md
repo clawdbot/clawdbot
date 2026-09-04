@@ -298,8 +298,8 @@ return await Promise.all(plan.tasks.map((task) => agents.run(task)));
 ```
 
 Nested collectors are discouraged for Swarm. Group caps, budgets, and
-observability all assume flat collector groups. Set a finite
-`agents.defaults.subagents.maxSpawnDepth` when a workflow must enforce that
+observability all assume flat collector groups. Set
+`agents.defaults.subagents.maxSpawnDepth: 1` when a workflow must enforce that
 shape.
 
 Every child has one admission owner. Announce and interactive children use

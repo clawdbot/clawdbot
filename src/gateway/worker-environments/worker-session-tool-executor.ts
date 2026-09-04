@@ -16,6 +16,7 @@ import {
 } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
@@ -360,7 +361,9 @@ export function createWorkerSessionToolExecutor(params: {
               requesterRef: operation.source.sessionKey,
               controllerRef: operation.source.sessionKey,
               depth: (operation.source.entry.spawnDepth ?? 0) + 1,
-              maxDepth: config.agents?.defaults?.subagents?.maxSpawnDepth,
+              maxDepth:
+                config.agents?.defaults?.subagents?.maxSpawnDepth ??
+                DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
               targetAgentId,
               sandbox: "inherit",
               inheritedToolAllowlist: authorizedTools,

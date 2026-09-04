@@ -285,8 +285,8 @@ describe("resolveSubagentToolPolicyForSession", () => {
     agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
   } as unknown as OpenClawConfig;
 
-  it("recomputes a persisted leaf as an orchestrator under the unlimited default", async () => {
-    const storePath = createSessionStorePath("openclaw-subagent-policy-unlimited");
+  it("recomputes a persisted leaf as an orchestrator under the recursive default", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-policy-recursive");
     const sessionKey = "agent:main:subagent:formerly-leaf";
     await writeSessionEntries(storePath, {
       [sessionKey]: {

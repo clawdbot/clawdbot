@@ -1,9 +1,9 @@
 /** Pending native spawn must transfer only live invocation authority to the child owner. */
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -60,6 +60,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
+  readSubagentSessionStore,
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
@@ -72,26 +73,46 @@ import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-suppo
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-const parentSessionKey = "agent:main:main";
+const parentSessionKey = "agent:main:subagent:pending-spawn-parent";
 const parentRunId = "pending-spawn-parent";
 const groupId = "pending-spawn";
 const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir = "";
 
-beforeEach(async () => {
-  stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+async function writeTestConfig(params?: { maxSpawnDepth?: number; allowAgents?: string[] }) {
+  const subagents = {
+    ...(params?.maxSpawnDepth !== undefined ? { maxSpawnDepth: params.maxSpawnDepth } : {}),
+    ...(params?.allowAgents ? { allowAgents: params.allowAgents } : {}),
+  };
   await writeFile(
     path.join(stateDir, "openclaw.json"),
     JSON.stringify({
       logging: { audit: { enabled: false } },
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-      agents: { defaults: { workspace: stateDir }, entries: { main: { workspace: stateDir } } },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          workspace: stateDir,
+          systemAgent: { agentId: "main" },
+          ...(Object.keys(subagents).length > 0 ? { subagents } : {}),
+        },
+        entries: {
+          main: { workspace: stateDir },
+          worker: { workspace: stateDir },
+        },
+      },
     }),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+}
+
+beforeEach(async () => {
+  stateDir = tempDirs.make("openclaw-spawn-authority-");
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  await writeTestConfig();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -122,7 +143,6 @@ afterEach(async () => {
   clearConfigCache();
   await flushLogger();
   resetLogger();
-  await rm(stateDir, { recursive: true, force: true });
   env.restore();
 });
 
@@ -170,7 +190,111 @@ async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embed
   return { cfg, storePath, context, admission, parent, admitted, authority };
 }
 
+function createBoundSpawnInvocation(bound: Awaited<ReturnType<typeof createBoundParent>>) {
+  const source = createSessionsSpawnTool({
+    config: bound.cfg,
+    agentSessionKey: parentSessionKey,
+    requesterRunId: parentRunId,
+    requesterTurnRunId: parentRunId,
+  });
+  const caller = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: bound.admitted,
+    agentId: "main",
+    sessionKey: parentSessionKey,
+  });
+  return (args: Record<string, unknown> = {}) =>
+    withPluginRuntimeGatewayRequestScope(
+      {
+        context: bound.context as unknown as GatewayRequestContext,
+        isWebchatConnect: () => false,
+      },
+      () =>
+        withGatewayToolCallerIdentity(caller, () =>
+          source.execute!("spawn-authority-boundary", { task: "bounded child", ...args }),
+        ),
+    );
+}
+
 describe("pending spawn invocation authority", () => {
+  it.each([
+    {
+      label: "finite depth cap",
+      configure: () => writeTestConfig({ maxSpawnDepth: 1 }),
+      args: {},
+    },
+    {
+      label: "target-agent policy denial",
+      configure: () => writeTestConfig({ allowAgents: ["main"] }),
+      args: { agentId: "worker" },
+    },
+  ])(
+    "rejects descendant spawn before persistence or dispatch: $label",
+    async ({ configure, args }) => {
+      await configure();
+      const bound = await createBoundParent();
+      const agentDispatch = vi.fn();
+      spawnTesting.setDepsForTest({
+        dispatchGatewayMethodInProcess: async <T>(
+          method: string,
+          params: Record<string, unknown>,
+        ) => {
+          agentDispatch(method, params);
+          return { runId: params.idempotencyKey, status: "accepted" } as T;
+        },
+      });
+      try {
+        const before = await readSubagentSessionStore(bound.storePath);
+        const result = await createBoundSpawnInvocation(bound)(args);
+        expect(result).toMatchObject({ details: { status: "forbidden" } });
+        expect(await readSubagentSessionStore(bound.storePath)).toEqual(before);
+        expect(agentDispatch).not.toHaveBeenCalled();
+        expect(subagentRuns.size).toBe(0);
+      } finally {
+        bound.admission.close();
+        bound.parent.cleanup();
+      }
+    },
+  );
+
+  it.each(["delegated authority revoked", "admission closed"])(
+    "rejects descendant spawn before persistence or dispatch when %s",
+    async (closure) => {
+      const bound = await createBoundParent();
+      const invoke = createBoundSpawnInvocation(bound);
+      const agentDispatch = vi.fn();
+      spawnTesting.setDepsForTest({
+        dispatchGatewayMethodInProcess: async <T>(
+          method: string,
+          params: Record<string, unknown>,
+        ) => {
+          agentDispatch(method, params);
+          return { runId: params.idempotencyKey, status: "accepted" } as T;
+        },
+      });
+      try {
+        const before = await readSubagentSessionStore(bound.storePath);
+        if (closure === "delegated authority revoked") {
+          releaseAgentRunDelegatedAuthority(bound.authority);
+        } else {
+          bound.admission.close();
+        }
+        // The provider wrapper may reject or serialize the same stale-authority error.
+        const outcome = await invoke().then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+        const outcomeText = outcome instanceof Error ? outcome.message : JSON.stringify(outcome);
+        expect(outcomeText).toContain("tool invocation authority is no longer active");
+        expect(await readSubagentSessionStore(bound.storePath)).toEqual(before);
+        expect(agentDispatch).not.toHaveBeenCalled();
+        expect(subagentRuns.size).toBe(0);
+      } finally {
+        bound.admission.close();
+        bound.parent.cleanup();
+      }
+    },
+  );
+
   it.each([
     "native abort",
     "native acceptance",

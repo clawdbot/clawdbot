@@ -84,14 +84,6 @@ describe("resolveChildAdmission", () => {
     }
   });
 
-  it("allows unlimited nesting when maxSpawnDepth is omitted", () => {
-    expect(
-      resolveChildAdmission(announce({ callerDepth: 1_000, maxSpawnDepth: undefined })),
-    ).toEqual({
-      ok: true,
-    });
-  });
-
   it("shares pending capacity by controller and releases reservations exactly once", () => {
     let registeredChildren = 0;
     const reserve = (controllerSessionKey = "agent:main:controller") =>

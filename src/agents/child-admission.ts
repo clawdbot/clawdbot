@@ -13,7 +13,7 @@ type ChildAdmissionResult =
 
 type ChildAdmissionParams = {
   callerDepth: number;
-  maxSpawnDepth?: number;
+  maxSpawnDepth: number;
   activeChildren: number;
   maxActiveChildren: number;
 } & ({ collect: false } | { collect: true; totalChildren: number; maxTotalChildren: number });

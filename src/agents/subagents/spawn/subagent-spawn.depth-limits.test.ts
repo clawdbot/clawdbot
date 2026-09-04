@@ -150,11 +150,11 @@ describe("subagent spawn depth + child limits", () => {
     expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
   });
 
-  it("allows descendant callers at arbitrary depth when maxSpawnDepth is omitted", async () => {
+  it("allows recursive callers below the default depth boundary", async () => {
     hoisted.configOverride = createSubagentSpawnTestConfig("/tmp/workspace-main", {
       agents: { defaults: { workspace: "/tmp/workspace-main" } },
     });
-    hoisted.depthBySession.set("agent:main:subagent:deep-parent", 42);
+    hoisted.depthBySession.set("agent:main:subagent:deep-parent", 3);
 
     const result = await spawnFrom("agent:main:subagent:deep-parent");
 
@@ -163,7 +163,7 @@ describe("subagent spawn depth + child limits", () => {
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
-    expect(childSession.spawnDepth).toBe(43);
+    expect(childSession.spawnDepth).toBe(4);
     expect(childSession.subagentRole).toBe("orchestrator");
     expect(childSession.subagentControlScope).toBe("children");
   });

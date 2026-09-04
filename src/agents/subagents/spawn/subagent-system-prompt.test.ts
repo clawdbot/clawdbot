@@ -57,10 +57,10 @@ describe("subagent spawn envelope", () => {
     },
   );
 
-  it("describes the default recursive depth as unlimited", () => {
+  it("describes the bounded default recursive depth", () => {
     const envelope = buildEnvelope();
 
-    expect(envelope.message).toContain("depth 1/unlimited");
+    expect(envelope.message).toContain("depth 1/5");
     expect(envelope.systemPrompt).toContain("May delegate descendants");
   });
 

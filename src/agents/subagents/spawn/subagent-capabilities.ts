@@ -11,7 +11,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isSubagentSpawnDepthAllowed } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -174,10 +177,11 @@ function resolveSubagentRoleForDepth(params: {
   maxSpawnDepth?: number;
 }): SubagentSessionRole {
   const depth = resolveNonNegativeIntegerOption(params.depth, 0);
-  const maxSpawnDepth =
-    params.maxSpawnDepth === undefined
-      ? undefined
-      : resolveIntegerOption(params.maxSpawnDepth, 1, { min: 1 });
+  const maxSpawnDepth = resolveIntegerOption(
+    params.maxSpawnDepth,
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+    { min: 1 },
+  );
   if (depth <= 0) {
     return "main";
   }
@@ -362,7 +366,8 @@ export function resolveStoredSubagentCapabilities(
   },
 ) {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  const maxSpawnDepth = opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth;
+  const maxSpawnDepth =
+    opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (!normalizedSessionKey) {
     return resolveSubagentCapabilities({ depth: 0, maxSpawnDepth });
   }
