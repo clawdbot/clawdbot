@@ -410,6 +410,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "config/sessions/session-model-context.worker":
       "src/config/sessions/session-model-context.worker.ts",
+    "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     ...runtimeProcessBuildEntries,
