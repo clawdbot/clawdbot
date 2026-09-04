@@ -1332,7 +1332,7 @@ Create a canvas attached to a channel:
 }
 ```
 
-The response returns the new `canvas_id` (F-prefixed). List its sections, edit a section, then delete:
+The response returns the new canvas under `canvas.canvasId` (F-prefixed). List its sections, edit a section, then delete:
 
 ```json
 {
