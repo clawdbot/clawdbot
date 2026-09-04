@@ -13,6 +13,7 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import {
   clearSessionStoreCacheForTest,
   getSessionEntry,
+  patchSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -828,12 +829,20 @@ describe("codex command", () => {
   ])(
     "cleans up a rejected same-client resume only when no native owner remains (retained: $retainedBeforeResume, failure: $failure)",
     async ({ retainedBeforeResume, failure }) => {
+      const context = await createCodexRuntimeContextOverrides(
+        "agent:main:test:same-client-resume",
+      );
       const { codexControlRequest } = await import("./command-rpc.js");
       const sharedClientRuntime = await import("./app-server/shared-client.js");
       const harness = createClientHarness();
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
       const threadId = "thread-same-client-resume";
-      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: context.sessionKey,
+      };
       const release = vi.fn(async () => undefined);
       if (retainedBeforeResume) {
         await retainCodexAppServerLiveThread(harness.client, threadId, release);
@@ -891,8 +900,8 @@ describe("codex command", () => {
               },
             },
           },
-          {},
-          { pluginConfig: { appServer: { requestTimeoutMs: 1_000 } } },
+          context,
+          { pluginConfig: { appServer: { requestTimeoutMs: 1_000, homeScope: "user" } } },
         );
 
         const keepsExistingOwner = retainedBeforeResume && failure !== "resume";
@@ -1403,6 +1412,12 @@ describe("codex command", () => {
         `Attached this OpenClaw session to Codex thread ${threadId}.${threadId === "thread-existing" ? "" : " The next turn will validate its tools and apply this session's configuration before continuing."}`,
       );
       expect(codexControlRequest).toHaveBeenCalledTimes(1);
+      expect(codexControlRequest).toHaveBeenCalledWith(
+        undefined,
+        CODEX_CONTROL_METHODS.resumeThread,
+        expect.anything(),
+        expect.objectContaining({ storePath }),
+      );
       expect(
         testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-new" }),
       ).toMatchObject({
@@ -1500,6 +1515,100 @@ describe("codex command", () => {
     expect(
       testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
     ).toMatchObject({ threadId: "thread-existing" });
+  });
+
+  it("rolls back replacement ownership when the host advances during displaced release", async () => {
+    const context = await createCodexRuntimeContextOverrides("agent:main:test:release-rollover");
+    const scope = {
+      storePath: context.sessionTarget.storePath,
+      sessionKey: context.sessionKey,
+    };
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: context.sessionKey,
+    };
+    const predecessor = { ...identity, sessionId: "session-before-compaction" };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: predecessor.sessionId, updatedAt: Date.now(), agentHarnessId: "codex" },
+    });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: identity.sessionId }) });
+    const previous = createClientHarness();
+    const replacement = createClientHarness();
+    ensureCodexAppServerClientRuntime(previous.client, { agentDir: tempDir });
+    ensureCodexAppServerClientRuntime(replacement.client, { agentDir: tempDir });
+    await writeTestBinding(predecessor, {
+      threadId: "thread-release-rollover",
+      clientId: previous.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    let releaseOld!: () => void;
+    const oldReleaseBlocked = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const oldReleaseStarted = vi.fn();
+    const oldUnsubscribe = vi.fn();
+    await retainCodexAppServerLiveThread(
+      previous.client,
+      "thread-release-rollover",
+      async (_threadId, assertCurrent) => {
+        oldReleaseStarted();
+        await oldReleaseBlocked;
+        assertCurrent?.();
+        oldUnsubscribe();
+      },
+    );
+    const replacementRequest = vi
+      .spyOn(replacement.client, "request")
+      .mockResolvedValue({} as never);
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainPreviousClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockImplementation((clientId) =>
+        clientId === previous.client.getInstanceId()
+          ? { client: previous.client, release: vi.fn() }
+          : undefined,
+      );
+    const codexControlRequest = createResumeControlRequest(
+      createThreadResumeResponse({ threadId: "thread-release-rollover" }),
+      { client: replacement.client },
+    );
+
+    try {
+      const command = runCommand(
+        "resume thread-release-rollover",
+        { codexControlRequest },
+        context,
+      );
+      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce());
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: "session-2" }) });
+      releaseOld();
+
+      expect((await command).text).toContain("Codex session generation is no longer current");
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+        threadId: "thread-release-rollover",
+        clientId: previous.client.getInstanceId(),
+      });
+      expect(oldUnsubscribe).not.toHaveBeenCalled();
+      expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
+        "thread/unsubscribe",
+        { threadId: "thread-release-rollover" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      await expect(
+        consumeCodexAppServerLiveThread(previous.client, "thread-release-rollover"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      await expect(
+        consumeCodexAppServerLiveThread(replacement.client, "thread-release-rollover"),
+      ).resolves.toBeUndefined();
+    } finally {
+      releaseOld();
+      retainPreviousClient.mockRestore();
+      previous.client.close();
+      replacement.client.close();
+    }
   });
 
   it("does not report a resumed thread as attached after a generation conflict", async () => {

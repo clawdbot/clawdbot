@@ -1710,99 +1710,110 @@ describe("maybeCompactCodexAppServerSession", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("preserves a recovered binding when the host rotates during unconfirmed remote retirement", async () => {
-    const current = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionKey: "agent:main:recovered-retirement",
-      sessionId: "after-compaction",
-    };
-    const previous = { ...current, sessionId: "before-compaction" };
-    const next = { ...current, sessionId: "next-compaction" };
-    const scope = {
-      agentId: current.agentId,
-      sessionKey: current.sessionKey,
-      storePath: path.join(tempDir, "admitted", "sessions.json"),
-    };
-    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
-    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-    const bindingStore = createCodexTestBindingStore();
-    const binding = { threadId: "thread-1", cwd: tempDir };
-    await bindingStore.mutate(previous, { kind: "set", binding });
-    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
-    fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    const closeEntered = createDeferred<void>();
-    const closeGate = createDeferred<boolean>();
-    fake.closeAndWait.mockImplementationOnce(async () => {
-      closeEntered.resolve();
-      return await closeGate.promise;
-    });
-    const retirementOutcome = createDeferred<"retained" | "settled">();
-    const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
-      if (message === "failed to retire unconfirmed codex app-server compaction") {
-        retirementOutcome.resolve("retained");
-      }
-    });
-    const pending = maybeCompactCodexAppServerSessionImpl(
-      {
-        sessionId: current.sessionId,
-        sessionKey: current.sessionKey,
+  it.each(["unconfirmed-start", "accepted-start-timeout"] as const)(
+    "preserves a recovered binding when the host rotates during unconfirmed remote retirement (%s)",
+    async (retirementTrigger) => {
+      const current = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionKey: "agent:main:recovered-retirement",
+        sessionId: "after-compaction",
+      };
+      const previous = { ...current, sessionId: "before-compaction" };
+      const next = { ...current, sessionId: "next-compaction" };
+      const scope = {
         agentId: current.agentId,
-        sessionTarget: { ...scope, sessionId: current.sessionId },
-        sessionFile: path.join(tempDir, "recovered.jsonl"),
-        workspaceDir: tempDir,
-        trigger: "manual",
-      },
-      {
-        bindingStore,
-        clientFactory: async () => fake.client,
-        pluginConfig: {
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
-        },
-      },
-    ).finally(() => retirementOutcome.resolve("settled"));
-    const nextMutation = vi.fn(async () => {});
-    let queued: Promise<void> | undefined;
-    try {
-      await closeEntered.promise;
-      expect(bindingStore.read(current)).toEqual(binding);
-      fake.emit({
-        method: "turn/started",
-        params: {
-          threadId: binding.threadId,
-          turn: { id: "compact-turn-retired", threadId: binding.threadId, status: "inProgress" },
-        },
+        sessionKey: current.sessionKey,
+        storePath: path.join(tempDir, "admitted", "sessions.json"),
+      };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: previous.sessionId, updatedAt: 1 },
       });
-      queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
-      closeGate.resolve(false);
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+      const bindingStore = createCodexTestBindingStore();
+      const binding = { threadId: "thread-1", cwd: tempDir };
+      await bindingStore.mutate(previous, { kind: "set", binding });
+      const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+      if (retirementTrigger === "unconfirmed-start") {
+        fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
+      }
+      const closeEntered = createDeferred<void>();
+      const closeGate = createDeferred<boolean>();
+      fake.closeAndWait.mockImplementationOnce(async () => {
+        closeEntered.resolve();
+        return await closeGate.promise;
+      });
+      const retirementOutcome = createDeferred<"retained" | "settled">();
+      const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
+        if (message === "failed to retire unconfirmed codex app-server compaction") {
+          retirementOutcome.resolve("retained");
+        }
+      });
+      const pending = maybeCompactCodexAppServerSessionImpl(
+        {
+          sessionId: current.sessionId,
+          sessionKey: current.sessionKey,
+          agentId: current.agentId,
+          sessionTarget: { ...scope, sessionId: current.sessionId },
+          sessionFile: path.join(tempDir, "recovered.jsonl"),
+          workspaceDir: tempDir,
+          trigger: "manual",
+        },
+        {
+          bindingStore,
+          clientFactory: async () => fake.client,
+          pluginConfig: {
+            appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
+          },
+          ...(retirementTrigger === "accepted-start-timeout"
+            ? { nativeCompletionTimeoutMs: 10, nativeInterruptGraceMs: 10 }
+            : {}),
+        },
+      ).finally(() => retirementOutcome.resolve("settled"));
+      const nextMutation = vi.fn(async () => {});
+      let queued: Promise<void> | undefined;
+      try {
+        await closeEntered.promise;
+        expect(bindingStore.read(current)).toEqual(binding);
+        fake.emit({
+          method: "turn/started",
+          params: {
+            threadId: binding.threadId,
+            turn: { id: "compact-turn-retired", threadId: binding.threadId, status: "inProgress" },
+          },
+        });
+        queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
+        await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
+        closeGate.resolve(false);
 
-      const outcome = await retirementOutcome.promise;
-      expect(bindingStore.read(current)).toEqual(binding);
-      expect(outcome).toBe("retained");
-      expect(nextMutation).not.toHaveBeenCalled();
-    } finally {
-      closeGate.resolve(false);
-      fake.emit({
-        method: "turn/completed",
-        params: {
-          threadId: binding.threadId,
-          turn: { id: "compact-turn-retired", threadId: binding.threadId, status: "interrupted" },
-        },
+        const outcome = await retirementOutcome.promise;
+        expect(bindingStore.read(current)).toEqual(binding);
+        expect(outcome).toBe("retained");
+        expect(nextMutation).not.toHaveBeenCalled();
+      } finally {
+        closeGate.resolve(false);
+        fake.emit({
+          method: "turn/completed",
+          params: {
+            threadId: binding.threadId,
+            turn: { id: "compact-turn-retired", threadId: binding.threadId, status: "interrupted" },
+          },
+        });
+        await pending;
+        await queued;
+        errorSpy.mockRestore();
+      }
+      expect(nextMutation).toHaveBeenCalledOnce();
+      const recovered = await resolveCodexSessionBinding({
+        bindingStore,
+        identity: next,
+        storePath: scope.storePath,
       });
-      await pending;
-      await queued;
-      errorSpy.mockRestore();
-    }
-    expect(nextMutation).toHaveBeenCalledOnce();
-    const recovered = await resolveCodexSessionBinding({
-      bindingStore,
-      identity: next,
-      storePath: scope.storePath,
-    });
-    expect(recovered.binding).toEqual(binding);
-    expect(bindingStore.read(next)).toEqual(binding);
-  });
+      expect(recovered.binding).toEqual(binding);
+      expect(bindingStore.read(next)).toEqual(binding);
+    },
+  );
 
   it.each(["generation", "deadline"] as const)(
     "settles a compaction retry rejected before write (%s)",
