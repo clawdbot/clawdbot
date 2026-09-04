@@ -67,7 +67,7 @@ function readContextVersion(database: Pick<OpenClawAgentDatabase, "db">, session
   )!;
 }
 
-/** Full native evidence must still describe this session when an async read returns. */
+/** Unadmitted context must still describe this session when an async read returns. */
 export function validateSessionTranscriptContextVersion(
   scope: SessionTranscriptReadScope,
   version: SessionTranscriptContextVersion | undefined,
@@ -108,13 +108,14 @@ export function validateSessionTranscriptContextAdmission(
 }
 
 /** Read a transient context without opening the writer lifecycle or copying native evidence. */
-export function readSessionTranscriptModelContext(
-  scope: SessionTranscriptReadScope,
-): TranscriptEvent[] {
+export function readSessionTranscriptModelContext(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  version?: SessionTranscriptContextVersion;
+} {
   const result = withTranscriptContextSnapshot(
     scope,
     "model-context",
-    ({ header, entries, readEntry }) => {
+    ({ header, entries, readEntry, version }) => {
       const payloads = new Map<ContextEntry, SessionTreeEntry>();
       for (const { entry, context } of iterateSessionContextEntries(entries)) {
         const omitCheckpoint =
@@ -124,10 +125,16 @@ export function readSessionTranscriptModelContext(
           isCompactionReplayCheckpoint(entry.message.providerReplay);
         payloads.set(entry, readEntry(entry, omitCheckpoint));
       }
-      return [...(header ? [header] : []), ...entries.map((entry) => payloads.get(entry) ?? entry)];
+      return {
+        events: [
+          ...(header ? [header] : []),
+          ...entries.map((entry) => payloads.get(entry) ?? entry),
+        ],
+        version,
+      };
     },
   );
-  return result.found ? result.value : [];
+  return result.found ? result.value : { events: [] };
 }
 
 /** Consume full-fidelity context lazily inside one read snapshot, never retaining raw history. */

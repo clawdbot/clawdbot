@@ -15,6 +15,7 @@ import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
   validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
@@ -140,10 +141,10 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
     } = {},
   ): SessionManager {
-    const contextEntries = withSessionContextAdmission(target, options.admission, () =>
+    const context = withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptModelContext(target),
     );
-    return SessionManager.fromModelContextEntries(contextEntries, options.cwd);
+    return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }
 
   /** The same detached model view, with durable transcript scanning off the event loop. */
@@ -158,13 +159,18 @@ export class SessionManager extends SessionManagerBranching {
     const readTarget = { ...target };
     const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
     const admission = receipt ? { ...receipt } : undefined;
-    const entries = await withSessionContextAdmission(readTarget, admission, () =>
+    const context = await withSessionContextAdmission(readTarget, admission, () =>
       readSessionTranscriptModelContextAsync(readTarget, admission, options.signal),
     );
     options.signal?.throwIfAborted();
-    // Even process-local reads yield here; accept only the still-current admission.
-    validateSessionTranscriptContextAdmission(readTarget, admission);
-    return SessionManager.fromModelContextEntries(entries, options.cwd);
+    // Even process-local reads yield here. Admitted history may exclude later
+    // appends; unadmitted context must still match the snapshot being accepted.
+    if (admission) {
+      validateSessionTranscriptContextAdmission(readTarget, admission);
+    } else {
+      validateSessionTranscriptContextVersion(readTarget, context.version);
+    }
+    return SessionManager.fromModelContextEntries(context.events, options.cwd);
   }
 
   private static fromModelContextEntries(contextEntries: unknown[], cwd?: string): SessionManager {

@@ -471,9 +471,13 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "rejects an admission rewritten before accepting context (incognito=%s)",
-  async (incognito) => {
+it.each(
+  [false, true].flatMap((incognito) =>
+    (["rewrite", "append"] as const).map((mutation) => ({ incognito, mutation })),
+  ),
+)(
+  "validates admission before accepting context (incognito=$incognito mutation=$mutation)",
+  async ({ incognito, mutation }) => {
     await withOpenClawTestState({ label: "context-worker-fence" }, async (state) => {
       const scope = {
         agentId: "main",
@@ -500,15 +504,18 @@ it.each([false, true])(
         role: "user" as const,
         logicalTurnId: "worker-fence",
       };
-      const rewrite = () => {
-        expect(
-          source.removeTrailingEntries(
-            (entry) =>
-              entry.type === "message" &&
-              entry.message.role === "user" &&
-              entry.message.content === "current",
-          ),
-        ).toBe(1);
+      const expected = SessionManager.openModelContext(scope, { admission }).buildSessionContext();
+      const mutate = () => {
+        if (mutation === "rewrite") {
+          expect(
+            source.removeTrailingEntries(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "user" &&
+                entry.message.content === "current",
+            ),
+          ).toBe(1);
+        }
         source.appendMessage({ role: "user", content: "replacement", timestamp: 3 });
       };
       const spy = incognito
@@ -519,15 +526,93 @@ it.each([false, true])(
           ) {
             spy!.mockRestore();
             const result = await this.run(...args);
-            rewrite();
+            mutate();
             return result;
           });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
         if (incognito) {
-          rewrite();
+          mutate();
         }
-        await expect(pending).rejects.toThrow("Current-turn transcript admission");
+        if (mutation === "rewrite") {
+          await expect(pending).rejects.toThrow("Current-turn transcript admission");
+        } else {
+          expect((await pending).buildSessionContext()).toEqual(expected);
+        }
+      } finally {
+        spy?.mockRestore();
+      }
+    });
+  },
+);
+
+it.each(
+  [false, true].flatMap((incognito) =>
+    (["append", "rewrite", "other-session"] as const).map((mutation) => ({ incognito, mutation })),
+  ),
+)(
+  "validates unadmitted context before acceptance (incognito=$incognito mutation=$mutation)",
+  async ({ incognito, mutation }) => {
+    await withOpenClawTestState({ label: "unadmitted-context-fence" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "unadmitted-context",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-unadmitted-context"
+          : "agent:main:unadmitted-context",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      const expected = source.buildSessionContext();
+      let mutationSource = source;
+      if (mutation === "other-session") {
+        const otherScope = {
+          ...scope,
+          sessionId: "other-context",
+          sessionKey: `${scope.sessionKey}-other`,
+        };
+        await upsertSessionEntryCore(otherScope, {
+          sessionId: otherScope.sessionId,
+          updatedAt: 1,
+        });
+        mutationSource = SessionManager.open(otherScope);
+      }
+      const mutate = () => {
+        if (mutation === "rewrite") {
+          expect(
+            source.removeTrailingEntries(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "user" &&
+                entry.message.content === "before",
+            ),
+          ).toBe(1);
+        }
+        mutationSource.appendMessage({ role: "user", content: "after", timestamp: 2 });
+      };
+      const spy = incognito
+        ? undefined
+        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
+            this: WorkerTaskPool<unknown, unknown>,
+            ...args
+          ) {
+            spy!.mockRestore();
+            const result = await this.run(...args);
+            mutate();
+            return result;
+          });
+      try {
+        const pending = SessionManager.openModelContextAsync(scope);
+        if (incognito) {
+          mutate();
+        }
+        if (mutation === "other-session") {
+          expect((await pending).buildSessionContext()).toEqual(expected);
+        } else {
+          await expect(pending).rejects.toThrow("Session transcript changed during context read");
+        }
       } finally {
         spy?.mockRestore();
       }

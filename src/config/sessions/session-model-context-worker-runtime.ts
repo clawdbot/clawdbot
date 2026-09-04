@@ -2,10 +2,13 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
-import type { SessionTranscriptRuntimeTarget, TranscriptEvent } from "./session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionModelContextWorkerInput } from "./session-model-context.worker.js";
 
-const modelContextReads = new WorkerTaskPool<SessionModelContextWorkerInput, TranscriptEvent[]>({
+const modelContextReads = new WorkerTaskPool<
+  SessionModelContextWorkerInput,
+  ReturnType<typeof readSessionTranscriptModelContext>
+>({
   workerUrl: resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "session-model-context.worker",
@@ -19,7 +22,7 @@ export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionModelContextWorkerInput["admission"],
   signal?: AbortSignal,
-): Promise<TranscriptEvent[]> {
+): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   // Incognito SQLite is process memory; another isolate cannot read that database.
   if (isIncognitoSessionKey(target.sessionKey)) {
