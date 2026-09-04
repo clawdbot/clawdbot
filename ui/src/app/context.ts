@@ -1,8 +1,7 @@
 import { createContext } from "@lit/context";
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationRouter } from "../app-routes.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
@@ -97,7 +96,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
-  readonly router: Pick<ApplicationRouter, "getState" | "subscribe">;
+  readonly router: Pick<Router<RouteId, unknown, unknown, unknown>, "getState" | "subscribe">;
   readonly gateway: ApplicationGateway;
   /** App-owned queue for automatic Gateway reconnect bootstrap work. */
   readonly connectionBootstrap: ConnectionBootstrapCoordinator;

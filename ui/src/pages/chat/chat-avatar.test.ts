@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
@@ -13,6 +13,7 @@ import {
   renderChatAvatar,
 } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { renderWelcomeState } from "./components/chat-welcome.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
@@ -75,17 +76,45 @@ describe("renderChatAvatar", () => {
     expect(localAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
   });
 
-  it("uses the assistant fallback while authenticated avatar routes are loading", () => {
-    const avatar = renderAvatar([
-      "assistant",
-      { avatar: "/avatar/main", name: "OpenClaw" },
-      undefined,
-      "",
-      "session-token",
-    ]);
-
-    expect(avatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
-    expect(avatar?.classList.contains("chat-avatar--logo")).toBe(true);
+  it("shares authenticated welcome and transcript avatars without an explicit token", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["device-token"]);
+    const response = createDeferred<Response>();
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-agent");
+    const container = document.createElement("div");
+    const avatar = "/avatar/main?v=1";
+    const welcome = (assistantAvatar: string | null, assistantAvatarUrl?: string) =>
+      renderWelcomeState({
+        assistantName: "Main",
+        assistantAvatar,
+        assistantAvatarUrl,
+        onDraftChange: () => undefined,
+        onSend: () => undefined,
+      });
+    const part = render(
+      html`${welcome(avatar)}${welcome(null, avatar)}${renderChatAvatar("assistant", {
+        avatar,
+        name: "Main",
+      })}`,
+      container,
+    );
+    const sources = () =>
+      [...container.querySelectorAll("img")].map((image) => image.getAttribute("src"));
+    expect(sources()).toEqual([null, null, null]);
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      `https://gateway.example.test${avatar}`,
+      expect.objectContaining({ headers: { Authorization: "Bearer device-token" } }),
+    );
+    response.resolve(
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
+    await vi.waitFor(() => expect(sources()).toEqual(Array(3).fill("blob:shared-agent")));
+    part.setConnected(false);
+    part.setConnected(true);
+    expect(sources()).toEqual(Array(3).fill("blob:shared-agent"));
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    render(nothing, container);
   });
 
   it("renders local user image and text avatars", () => {
@@ -557,6 +586,47 @@ describe("refreshSenderAgentAvatars", () => {
     invalidateChatAvatarCache(host);
   });
 
+  it("retires a forwarded batch across invalidation without releasing its replacement", async () => {
+    const host = senderHost();
+    const identities = createAgentIdentityCapability({
+      snapshot: { client: host.client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
+    const oldResponse = createDeferred<Response>();
+    const imageResponse = () =>
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => oldResponse.promise)
+      .mockResolvedValueOnce(imageResponse())
+      .mockImplementation(async () => new Response(null, { status: 404 }));
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:new-forward")
+      .mockReturnValueOnce("blob:old-forward");
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    host.chatMessages = forwardedMessages("research");
+    const older = refreshSenderAgentAvatars(host);
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+
+    identities.invalidate(["research"]);
+    invalidateChatAvatarCache(host);
+    host.request.mockResolvedValue({ agentId: "research", avatar: "/avatar/research?v=2" });
+    await refreshSenderAgentAvatars(host);
+    expect(host.senderAgentAvatars?.get("research")).toBe("blob:new-forward");
+    oldResponse.resolve(imageResponse());
+    await older;
+    expect(host.senderAgentAvatars?.get("research")).toBe("blob:new-forward");
+
+    for (let index = 0; index < 128; index += 1) {
+      await resolveAvatarImageUrl(`/avatar/pressure-${index}`);
+    }
+    expect(revoke).toHaveBeenCalledWith("blob:old-forward");
+    expect(revoke).not.toHaveBeenCalledWith("blob:new-forward");
+    invalidateChatAvatarCache(host);
+    await resolveAvatarImageUrl("/avatar/after-release");
+    expect(revoke).toHaveBeenCalledWith("blob:new-forward");
+  });
+
   it.each(["session", "request", "connection", "roster", "invalidation"])(
     "does not publish a sender avatar after its %s changes",
     async (change) => {
@@ -639,7 +709,7 @@ describe("attributed sender avatars", () => {
       profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
     };
 
-    render(renderChatAvatar("user", undefined, undefined, "", null, firstSender), container);
+    render(renderChatAvatar("user", undefined, undefined, "", firstSender), container);
     const firstImage = await vi.waitFor(() => {
       const image = container.querySelector<HTMLImageElement>(".chat-avatar-slot img");
       expect(image?.getAttribute("src")).toBe("blob:first-sender");
@@ -651,7 +721,7 @@ describe("attributed sender avatars", () => {
     );
 
     render(
-      renderChatAvatar("user", undefined, undefined, "", null, {
+      renderChatAvatar("user", undefined, undefined, "", {
         ...firstSender,
         profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
       }),
@@ -678,7 +748,6 @@ describe("attributed sender avatars", () => {
       undefined,
       { name: "Viewer", avatar: null },
       "",
-      null,
       {
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
         identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
@@ -700,7 +769,6 @@ describe("attributed sender avatars", () => {
         undefined,
         { name: "Viewer", avatar: null },
         "",
-        null,
         { id, name: "Alice Lovelace" },
       ]);
       expect(avatar?.tagName).toBe("DIV");
@@ -717,7 +785,7 @@ describe("attributed sender avatars", () => {
   it("swaps to identity initials when the derived avatar route errors", () => {
     const container = document.createElement("div");
     render(
-      renderChatAvatar("user", undefined, undefined, "", null, {
+      renderChatAvatar("user", undefined, undefined, "", {
         id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
         identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
         name: "steipete",
@@ -751,7 +819,7 @@ describe("attributed sender avatars", () => {
       name: "hrudolph",
     };
     const renderSender = () =>
-      render(renderChatAvatar("user", undefined, undefined, "", null, sender), container);
+      render(renderChatAvatar("user", undefined, undefined, "", sender), container);
 
     renderSender();
     expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(

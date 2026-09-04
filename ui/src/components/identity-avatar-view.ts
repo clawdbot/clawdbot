@@ -60,9 +60,11 @@ class IdentityAvatarImageDirective extends UntilDirective<unknown> {
     return nothing;
   }
 
-  override update(part: Part, [imageUrl, sourceUrl]: [IdentityAvatarView["imageUrl"], string?]) {
+  override update(part: Part, [value, sourceUrl]: [IdentityAvatarView["imageUrl"], string?]) {
+    const localUrl = typeof value === "string" && value.startsWith("/") ? value : undefined;
+    const imageUrl = localUrl ? resolveAvatarImageUrl(localUrl) : value;
     this.part = part;
-    this.sourceUrl = sourceUrl;
+    this.sourceUrl = localUrl ?? sourceUrl;
     if (imageUrl !== this.imageUrl || !this.release) {
       const release = this.isConnected ? retainAvatarImageUrl(imageUrl) : undefined;
       this.release?.();
@@ -91,7 +93,8 @@ class IdentityAvatarImageDirective extends UntilDirective<unknown> {
   }
 }
 
-const identityAvatarImage = directive(IdentityAvatarImageDirective);
+/** Local agent and profile routes share the same authenticated image lease. */
+export const identityAvatarImage = directive(IdentityAvatarImageDirective);
 
 /** Render the shared authenticated user image with its canonical event lifecycle. */
 export function renderIdentityAvatarImage({

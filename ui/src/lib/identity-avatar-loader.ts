@@ -130,20 +130,6 @@ export function resolveAvatarImageUrl(value: string): string | Promise<string | 
   return origin || authTokens.length ? loadIdentityAvatar(trusted) : trusted;
 }
 
-/** A blob stays live until its image has finished loading or definitively failed. */
-export function settleAvatarImageUrl(value: string | null): void {
-  if (!value?.startsWith("blob:")) {
-    return;
-  }
-  for (const entry of identityAvatarCache.values()) {
-    if (entry.blobUrl === value) {
-      entry.settled = true;
-      trimIdentityAvatarCache();
-      return;
-    }
-  }
-}
-
 /** Acquire before awaiting: each pending or displayed consumer owns its own release. */
 export function retainAvatarImageUrl(value: string | Promise<string | null> | null): () => void {
   const entry = value

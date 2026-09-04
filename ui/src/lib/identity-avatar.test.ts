@@ -2,11 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
-import {
-  resolveAvatarImageUrl,
-  retainAvatarImageUrl,
-  settleAvatarImageUrl,
-} from "./identity-avatar-loader.ts";
+import { resolveAvatarImageUrl, retainAvatarImageUrl } from "./identity-avatar-loader.ts";
 import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
 
 function avatarResponse(mime = "image/png") {
@@ -357,6 +353,7 @@ describe("authenticated profile avatar cache", () => {
     const pending = Array.from({ length: 130 }, (_, index) =>
       Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar?v=1`)),
     );
+    const releases = pending.map((request) => retainAvatarImageUrl(request));
     expect(fetchAvatar).toHaveBeenCalledTimes(130);
     for (const finishRequest of finishRequests) {
       finishRequest(avatarResponse());
@@ -368,8 +365,8 @@ describe("authenticated profile avatar cache", () => {
     expect(new Set(imageUrls).size).toBe(130);
     expect(revokeObjectURL).not.toHaveBeenCalled();
 
-    settleAvatarImageUrl(imageUrls[0] ?? null);
-    settleAvatarImageUrl(imageUrls[1] ?? null);
+    releases[0]?.();
+    releases[1]?.();
 
     expect(revokeObjectURL).toHaveBeenCalledTimes(2);
     expect(revokeObjectURL).toHaveBeenNthCalledWith(1, imageUrls[0]);
@@ -382,14 +379,16 @@ describe("authenticated profile avatar cache", () => {
     let sequence = 0;
     vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:retained-${sequence++}`);
     const revoke = vi.spyOn(URL, "revokeObjectURL");
-    const first = await resolveAvatarImageUrl("/avatar/main?v=1");
-    const releaseMain = retainAvatarImageUrl(first);
-    const releaseSidebar = retainAvatarImageUrl(first);
-    settleAvatarImageUrl(first);
+    const pending = resolveAvatarImageUrl("/avatar/main?v=1");
+    const releaseMain = retainAvatarImageUrl(pending);
+    const releaseSidebar = retainAvatarImageUrl(pending);
+    const first = await pending;
     const fill = async (start: number) => {
       for (let index = start; index < start + 128; index += 1) {
-        const url = await resolveAvatarImageUrl(`/avatar/agent-${index}?v=1`);
-        settleAvatarImageUrl(url);
+        const imageRequest = resolveAvatarImageUrl(`/avatar/agent-${index}?v=1`);
+        const release = retainAvatarImageUrl(imageRequest);
+        await imageRequest;
+        release();
       }
     };
     await fill(0);

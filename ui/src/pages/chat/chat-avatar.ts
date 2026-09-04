@@ -12,6 +12,7 @@ import {
 import { icons } from "../../components/icons.ts";
 import {
   identityAvatarClass,
+  identityAvatarImage,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
   type IdentityAvatarView,
@@ -29,11 +30,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import {
-  resolveAvatarImageUrl,
-  retainAvatarImageUrl,
-  settleAvatarImageUrl,
-} from "../../lib/identity-avatar-loader.ts";
+import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -47,7 +44,6 @@ export function renderChatAvatar(
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
   resourceBasePath?: string,
-  authToken?: string | null,
   sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
@@ -66,7 +62,6 @@ export function renderChatAvatar(
         src=${assistantAvatarFallbackUrl(resourceBasePath ?? "")}
         alt=${name}
       />`,
-      authToken,
     );
   }
   const userName = resolveLocalUserName(user);
@@ -131,20 +126,14 @@ function renderAgentAvatar(
   name: string,
   avatar: string | null | undefined,
   fallback: TemplateResult,
-  authToken?: string | null,
 ) {
   const value = avatar?.trim() || "";
   if (isAvatarUrl(value)) {
-    // Authenticated local routes must finish the blob fetch before becoming an img src.
-    return authToken?.trim() && value.startsWith("/")
-      ? fallback
-      : html`<img
-          class="chat-avatar assistant"
-          src=${value}
-          alt=${name}
-          @load=${() => settleAvatarImageUrl(value)}
-          @error=${() => settleAvatarImageUrl(value)}
-        />`;
+    return html`<img
+      class="chat-avatar assistant"
+      src=${identityAvatarImage(value)}
+      alt=${name}
+    />`;
   }
   const text = resolveAssistantTextAvatar(value);
   return text
@@ -159,7 +148,6 @@ type ForwardedAvatarOptions = {
   assistantName?: string;
   assistantAvatar?: string | null;
   resourceBasePath?: string;
-  assistantAttachmentAuthToken?: string | null;
 };
 
 export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
@@ -173,7 +161,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       { name: opts.assistantName ?? "Assistant", avatar: opts.assistantAvatar ?? null },
       undefined,
       opts.resourceBasePath,
-      opts.assistantAttachmentAuthToken,
     );
   }
   const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
@@ -191,7 +178,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       name,
       "assistant",
     ),
-    opts.assistantAttachmentAuthToken,
   );
 }
 
@@ -248,7 +234,7 @@ type ChatAvatarHost = {
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
 const chatAvatarDisplayedAgents = new WeakMap<object, string>();
-const senderAvatarRequestVersions = new WeakMap<object, number>();
+const senderAvatarRequests = new WeakMap<object, object>();
 const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
 type ChatAvatarSnapshot = {
@@ -349,7 +335,7 @@ export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
   }
   chatAvatarReferences.delete(host);
   chatAvatarDisplayedAgents.delete(host);
-  senderAvatarRequestVersions.delete(host);
+  senderAvatarRequests.delete(host);
   senderAvatarInputs.delete(host);
   host.senderAgentAvatars = undefined;
   clearChatAvatarState(host);
@@ -435,8 +421,9 @@ export async function refreshSenderAgentAvatars(
 }
 
 async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly string[]) {
-  const version = (senderAvatarRequestVersions.get(host) ?? 0) + 1;
-  senderAvatarRequestVersions.set(host, version);
+  // A unique token keeps a batch retired by invalidation from becoming current again.
+  const request = {};
+  senderAvatarRequests.set(host, request);
   const sessionKey = host.sessionKey;
   const agentId = resolveAgentIdForSession(host);
   const client = host.client;
@@ -470,7 +457,7 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
     host.agentsList?.agents !== agents ||
     host.sessionKey !== sessionKey ||
     resolveAgentIdForSession(host) !== agentId ||
-    senderAvatarRequestVersions.get(host) !== version
+    senderAvatarRequests.get(host) !== request
   ) {
     for (const snapshot of snapshots) {
       snapshot?.release();

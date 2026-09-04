@@ -107,10 +107,22 @@ suite.define(() => {
             viewId: "release-tools-view",
             expiresAtMs: now + 60_000,
           },
-          "sessions.resolve": {
-            ok: true,
-            key: selectedSessionKey,
-            boardFace: "dashboard",
+          "chat.startup": {
+            cases: [
+              {
+                match: { shortId: "12345678", agentId: "main" },
+                response: {
+                  resolution: {
+                    ok: true,
+                    key: selectedSessionKey,
+                    agentId: "main",
+                    boardFace: "dashboard",
+                  },
+                  messages: [],
+                  sessionInfo: dashboardRows[0],
+                },
+              },
+            ],
           },
           "sessions.list": {
             cases: [

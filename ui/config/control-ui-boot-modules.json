@@ -1011,6 +1011,7 @@
   "ui/src/app/custom-theme.ts",
   "ui/src/app/device-scope-upgrade-availability.ts",
   "ui/src/app/device-scope-upgrade.ts",
+  "ui/src/app/document-reload-guard.ts",
   "ui/src/app/exec-approval.ts",
   "ui/src/app/gateway-page-activation.ts",
   "ui/src/app/gateway-readiness.ts",
