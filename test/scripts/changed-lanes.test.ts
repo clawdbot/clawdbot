@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
+  detectChangedLanesForPaths,
   hasDeadcodeScannedSource,
   isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
@@ -237,7 +238,10 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
 }
 
 // Keep the real gate and managed children; only the external check commands are synthetic.
-function runChangedCheckWithRecordedCommands(failingCommand: string | null) {
+function runChangedCheckWithRecordedCommands(
+  failingCommand: string | null,
+  paths = ["src/gateway/server-runtime-state.ts"],
+) {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-check-order-");
   const binDir = path.join(dir, "bin");
   const eventsPath = path.join(dir, "events.jsonl");
@@ -275,7 +279,6 @@ if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
       `@echo off\r\n"${process.execPath}" "${childPath}" ${bin} %*\r\n`,
     );
   }
-  const paths = ["src/gateway/server-runtime-state.ts"];
   const result = runRepoScript("scripts/check-changed.mjs", ["--", ...paths], {
     ...createNestedGitEnv(),
     CI: "",
@@ -494,10 +497,18 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
-  it.each(["tsgo:core:test", "lint:tmp:tsgo-core-boundary", null])(
-    "runs types before broad audits while retaining serial gate execution (%s)",
-    (failingCommand) => {
-      const { events, paths, result } = runChangedCheckWithRecordedCommands(failingCommand);
+  it.each([
+    { failingCommand: "tsgo:core:test" },
+    { failingCommand: "lint:tmp:tsgo-core-boundary" },
+    { failingCommand: "config:docs:check", paths: ["src/config/schema.help.automation.ts"] },
+    { failingCommand: null },
+  ])(
+    "retains serial gate execution and stops on $failingCommand before broad audits",
+    ({ failingCommand, paths: changedPaths }) => {
+      const { events, paths, result } = runChangedCheckWithRecordedCommands(
+        failingCommand,
+        changedPaths,
+      );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.signal, result.stderr).toBeNull();
       expect(result.status, result.stderr).toBe(failingCommand === null ? 0 : 23);
@@ -1027,9 +1038,12 @@ describe("scripts/changed-lanes", () => {
     "src/channels/plugins/config-schema.ts",
     "scripts/load-channel-config-surface.ts",
   ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
-    const result = detectChangedLanes([changedPath]);
+    const result = detectChangedLanesForPaths({ paths: [changedPath], base: "HEAD", staged: true });
     const plan = createChangedCheckPlan(result);
 
+    expect(plan.commands.filter((command) => command.args[0] === "config:docs:check")).toEqual([
+      { name: "config docs baseline", args: ["config:docs:check"] },
+    ]);
     expect(result.lanes.bundledChannelConfigMetadata).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:bundled-channel-config-metadata",
@@ -1054,6 +1068,57 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:bundled-channel-config-metadata",
     );
+  });
+
+  it.each([
+    ...[
+      "src/config/config.ts",
+      "src/config/schema.ts",
+      "src/config/schema.help.automation.ts",
+      "src/config/doc-baseline.ts",
+      "src/config/doc-baseline.runtime.ts",
+      "src/config/channel-config-metadata.ts",
+      "src/plugins/manifest-registry.ts",
+      "src/plugins/bundled-channel-config-metadata.ts",
+      "extensions/discord/channel-config-api.ts",
+      "scripts/generate-config-doc-baseline.ts",
+      "vitest.config.ts",
+      "CHANGELOG.md",
+    ].map((file) => ({ paths: [file], selected: true })),
+    ...[
+      "docs/.generated/config-baseline.sha256",
+      "docs/.generated/config-baseline.counts.json",
+    ].flatMap((file) => [
+      { paths: [file], selected: true },
+      { paths: [file, "docs/ci.md"], selected: true },
+    ]),
+    {
+      paths: [
+        "./src/config/schema.ts",
+        "src\\config\\schema.ts",
+        "vitest.config.ts",
+        "CHANGELOG.md",
+      ],
+      selected: true,
+    },
+    ...[
+      "src/config/schema.test.ts",
+      "src/plugins/manifest-registry.test.ts",
+      "extensions/whatsapp/src/monitor.ts",
+      "src/gateway/server-runtime-state.ts",
+      "scripts/docs-list.js",
+      "docs/ci.md",
+    ].map((file) => ({ paths: [file], selected: false })),
+    { paths: [], selected: false },
+  ])("selects the canonical config-doc command=$selected for $paths", ({ paths, selected }) => {
+    const result = detectChangedLanesForPaths({ paths, base: "HEAD", staged: true });
+    const plan = createChangedCheckPlan(result);
+    const commands = plan.commands
+      .filter((command) => command.args[0] === "config:docs:check")
+      .map((command) => createPnpmManagedCommand(command, { PATH: "/usr/bin" }))
+      .map(({ bin, args }) => ({ bin, args }));
+
+    expect(commands).toEqual(selected ? [{ bin: "pnpm", args: ["config:docs:check"] }] : []);
   });
 
   it("exposes the shared changed-lane test path classifier", () => {
@@ -2164,6 +2229,7 @@ describe("scripts/changed-lanes", () => {
       "deps:pins:check",
       "format:check",
       "--import",
+      "config:docs:check",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
       "check:wrapper-shadowing",
@@ -2171,7 +2237,6 @@ describe("scripts/changed-lanes", () => {
       "release-metadata:check",
       "android:version:check",
       "config:schema:check",
-      "config:docs:check",
       "deps:root-ownership:check",
     ]);
     expect(commands).not.toContain("ios:version:check");

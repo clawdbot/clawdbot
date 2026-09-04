@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  hasConfigDocInput,
   hasDeadcodeScannedSource,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
@@ -710,6 +711,10 @@ export function createChangedCheckPlan(
   if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
     add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
   }
+  // Generated baselines can share a docs-only diff; select before any lane returns.
+  if (result.lanes.all || result.lanes.releaseMetadata || hasConfigDocInput(result.paths)) {
+    add("config docs baseline", ["config:docs:check"]);
+  }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
@@ -804,7 +809,6 @@ export function createChangedCheckPlan(
     ]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
-    add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return finishPlan("release metadata");
   }

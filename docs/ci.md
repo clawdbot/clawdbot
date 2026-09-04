@@ -1361,6 +1361,7 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 - extension production changes run extension prod and extension test typecheck plus extension lint;
 - extension test-only changes run extension test typecheck plus extension lint;
 - bundled channel manifests, package metadata, config schemas, UI hints, and generator owners also run the bundled channel config metadata drift check;
+- config schema/help, bundled plugin metadata, generator/selector owners, and tracked config baseline changes run `pnpm config:docs:check`, including baseline files mixed with ordinary docs; all-lane and release metadata plans include it once;
 - public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts (Vitest extension sweeps stay explicit test work);
 - release metadata-only version bumps run targeted version/config/root-dependency checks;
 - unknown root/config changes fail safe to all check lanes.
