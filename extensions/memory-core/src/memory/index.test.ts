@@ -2419,6 +2419,13 @@ describe("memory index", () => {
       await diagnostic.sync({ reason: "cli", force: true });
 
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
+      db.prepare(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+      expect(diagnostic.status().storage).toMatchObject({
+        embeddingCacheEntries: 1,
+        embeddingCacheBytes: 5,
+      });
       const storedBytes = db
         .prepare(
           "SELECT SUM(length(CAST(text AS BLOB)) + length(CAST(embedding AS BLOB))) AS bytes FROM memory_index_chunks WHERE source = 'memory'",
@@ -2432,6 +2439,7 @@ describe("memory index", () => {
     }
     expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
     expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
+    expect(serving.status().storage).toBeUndefined();
   });
 
   it("reports vector availability after probe", async () => {
