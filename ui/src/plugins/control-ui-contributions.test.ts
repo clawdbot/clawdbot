@@ -19,6 +19,7 @@ import { createApplicationContextProvider } from "../test-helpers/application-co
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import "./control-ui-contributions.ts";
+import "./control-ui-view.runtime.ts";
 
 type ContributionsElement = LitElement & {
   kind: "header" | "composer";

@@ -3,6 +3,139 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  modelProviders: {
+    title: "Configured providers",
+    configureModels: "Configure Models",
+    subtitle: "Model providers with auth, plan, quota, and cost data.",
+    updated: "Updated {time}",
+    refreshing: "Refreshing…",
+    disconnected: "Connect to the gateway to see configured model providers.",
+    emptyTitle: "No model providers configured",
+    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
+    status: {
+      ok: "Signed in",
+      ready: "Ready",
+      expiring: "Expiring",
+      expired: "Expired",
+      missing: "Not signed in",
+      apiKey: "API key",
+      denied: "Credentials rejected",
+      configured: "Credentials configured",
+    },
+    expiresIn: "Credential expires in {time}",
+    models: "{count} models",
+    modelOne: "1 model",
+    modelsAvailable: "{available} of {count} models available",
+    globalUsage: "Global usage and cost",
+    noStats: "No live usage data reported by this provider.",
+    localCost: "Global session spend · {days}d",
+    localCostDetail: "{tokens} tokens · {sessions} sessions",
+    saving: "Saving…",
+    requestFailed: "Request failed.",
+    configUnavailable: "Configuration is unavailable. Refresh and try again.",
+    credentials: {
+      label: "Credentials for {agent}",
+      oauth: "OAuth profiles: {count}",
+      tokenProfiles: "Token profiles: {count}",
+      configKey: "API key set in config",
+      envKey: "API key from environment",
+      envKeyNamed: "API key from environment ({name})",
+      profileKey: "API key profiles: {count}",
+      none: "Not configured",
+    },
+    apiKey: {
+      label: "API key",
+      placeholder: "Enter provider API key",
+      replacePlaceholder: "Secret saved. Enter a new key to replace it.",
+      set: "Set API key",
+      replace: "Replace key",
+      remove: "Remove key",
+      saved: "Secret saved.",
+      removed: "API key removed.",
+      authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
+    },
+    probe: {
+      test: "Test connection",
+      testing: "Testing…",
+      unavailable: "Connection testing requires a newer gateway.",
+      latency: "{ms} ms",
+      status: {
+        ok: "Connected",
+        auth: "Authentication failed",
+        rate_limit: "Rate limited",
+        billing: "Billing problem",
+        timeout: "Timed out",
+        format: "Invalid response",
+        unknown: "Connection failed",
+        no_model: "No models available",
+        partial: "Connected with warnings",
+      },
+    },
+    readiness: {
+      title: "AI setup",
+      heading: "Connect a verified AI model",
+      signedInNoModels:
+        "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
+      notConfigured: "Choose a provider and verify the model OpenClaw will use.",
+      noModels: "No models available",
+      modelRequired: "Model required",
+      chooseProvider: "Choose another provider",
+    },
+    logout: {
+      action: "Log out",
+      confirm: "Log out of {provider}? Saved OAuth and token profiles will be removed.",
+      loggingOut: "Logging out…",
+      done: "Logged out.",
+    },
+    add: {
+      title: "Add provider",
+      subtitle: "Choose a known model provider and save its API key.",
+      action: "Add provider",
+      none: "All known providers are already configured.",
+      provider: "Provider",
+      selectProvider: "Select a provider",
+      save: "Save provider",
+      saved: "Provider {provider} added.",
+    },
+    defaults: {
+      title: "Defaults",
+      subtitle: "Applies across all providers and models where applicable.",
+      primary: "Model",
+      utility: "Utility Model",
+      utilityHelpLabel: "About the utility model",
+      utilityHelpPurpose:
+        "Handles short background tasks such as generated titles, progress narration, and session summaries.",
+      utilityHelpAutomatic:
+        "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
+      automatic: "Automatic (provider default)",
+      disabled: "Disabled",
+      fallback: "Fallback Model",
+      noFallback: "No fallback model",
+      selectModel: "Select a model",
+      noModels: "Configure a provider before selecting default models.",
+      thinkingHelpLabel: "About thinking defaults",
+      thinkingHelp:
+        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+      thinkingDefaultHelp:
+        "Uses the selected model's thinking policy instead of saving a global thinking override.",
+      fastModeHelpLabel: "About fast mode defaults",
+      fastModeHelp:
+        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+      fastModeDefaultHelp:
+        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+      saved: "Defaults saved.",
+    },
+    readOnly: {
+      disconnected: "Connect to the gateway to change model settings.",
+      adminRequired: "Browsing only. Model changes require operator.admin access.",
+    },
+    notes: {
+      saveKey: "Save API key for {provider} from Control UI",
+      removeKey: "Remove API key for {provider} from Control UI",
+      addProvider: "Add model provider {provider} from Control UI",
+      defaultModel: "Update defaults from Control UI",
+    },
+  },
   updates: {
     device: {
       title: "This Mac",
@@ -486,6 +619,7 @@ const enSettings = {
 
 export const registerSettingsEnglish = Object.assign(
   () => {
+    en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
