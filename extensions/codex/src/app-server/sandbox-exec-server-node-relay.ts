@@ -1,3 +1,4 @@
+import { withRunFailureOrigin } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
@@ -46,8 +47,9 @@ export function createCodexNodeExecServerDisconnectError(reason: string, cause?:
           redactSensitiveText(formatErrorMessage(cause), { mode: "tools" }),
           CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
         )}`;
-  return new Error(
+  return withRunFailureOrigin(
     `Codex execution node disconnected; start a fresh attempt. (${reason}${detail})`,
+    "runtime",
   );
 }
 

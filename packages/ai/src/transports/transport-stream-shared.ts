@@ -10,6 +10,7 @@ import type {
   StreamOptions,
   Usage,
 } from "@openclaw/llm-core";
+import { appendRuntimeFailureDiagnostic, unwrapRunFailure } from "@openclaw/llm-core/diagnostics";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendAssistantMessageDiagnostic,
@@ -168,7 +169,7 @@ export function createWritableTransportEventStream() {
  * already emits rather than churning it.
  */
 export function transportAbortError(signal?: AbortSignal): Error {
-  const reason: unknown = signal?.reason;
+  const reason: unknown = unwrapRunFailure(signal?.reason);
   return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
     ? reason
     : new Error("Request was aborted");
@@ -421,8 +422,9 @@ export function assignTransportErrorDetails(
   error: unknown,
   signal?: AbortSignal,
 ): ProviderErrorProjection {
-  const projection = projectProviderError(error, signal);
+  const projection = projectProviderError(unwrapRunFailure(error), signal);
   Object.assign(output, projection);
+  appendRuntimeFailureDiagnostic(output, error, signal);
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

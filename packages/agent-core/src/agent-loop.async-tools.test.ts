@@ -1,12 +1,22 @@
 import { setImmediate } from "node:timers/promises";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
-import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  ToolCall,
+} from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  failTransportStream,
+  transportAbortError,
+} from "../../ai/src/transports/transport-stream-shared.js";
 import { runAgentLoop } from "./agent-loop.js";
 import { Agent } from "./agent.js";
-import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
+import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "./types.js";
 
@@ -565,3 +575,149 @@ it.each(["error", "aborted"] as const)(
     }
   },
 );
+
+it.each([
+  "runtime-first",
+  "thrown-runtime",
+  "thrown-caller",
+  "coded-runtime",
+  "caller-first",
+  "runtime-then-caller",
+  "provider-first",
+  "listener",
+  "termination",
+] as const)("preserves async failure ownership when %s", async (boundary) => {
+  const fatalReady = createDeferred();
+  const terminalRead = createDeferred();
+  const failure = Object.assign(new Error("opaque admission failure"), {
+    code: boundary === "coded-runtime" ? "RUNTIME_ADMISSION" : undefined,
+  });
+  const source = call("lookup");
+  const execute = vi.fn(async () => ({ content: [], details: {} }));
+  const commitReadyCalls = vi.fn(() => {
+    if (boundary === "caller-first" || boundary === "thrown-caller") {
+      agent.abort();
+    }
+    throw failure;
+  });
+  let requests = 0;
+  const streamFn: StreamFn = (_model, _context, options) => {
+    const signal = options?.signal;
+    if (!signal) {
+      throw new Error("expected the provider execution signal");
+    }
+    const firstRecovery = ++requests === 1 && boundary === "termination";
+    const response = createAssistantMessageEventStream();
+    const aborted = createDeferred();
+    const onAbort = () => {
+      if (boundary === "runtime-then-caller") {
+        agent.abort();
+      }
+      aborted.resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    return {
+      async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+        try {
+          yield { type: "start", partial: assistant([]) };
+          yield {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: source,
+            partial: assistant([source]),
+          };
+          if (firstRecovery) {
+            response.push({ type: "done", reason: "stop", message: assistant([source]) });
+            response.end();
+          } else {
+            await (boundary === "provider-first" ? fatalReady.promise : aborted.promise);
+            const error =
+              boundary === "provider-first"
+                ? new Error("provider failed first")
+                : transportAbortError(signal);
+            if (boundary !== "provider-first") {
+              expect(error.message).toBe(
+                boundary === "coded-runtime" ? failure.message : "Request was aborted",
+              );
+            }
+            if (boundary === "thrown-runtime" || boundary === "thrown-caller") {
+              throw error;
+            }
+            failTransportStream({ stream: response, output: assistant([source]), signal, error });
+          }
+          yield* response;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+        }
+      },
+      result() {
+        terminalRead.resolve();
+        return response.result();
+      },
+    };
+  };
+  const agent = new Agent({
+    initialState: { model, tools: [tool("lookup", execute)] },
+    streamFn,
+    afterToolOutcome: async () => {
+      fatalReady.resolve();
+      if (boundary === "provider-first") {
+        await terminalRead.promise;
+      }
+      return undefined;
+    },
+  });
+  setInternalBeforeToolBatch(agent, async () => {
+    if (boundary === "listener") {
+      return undefined;
+    }
+    if (boundary === "termination") {
+      return {
+        intervention: {
+          kind: "critical-tool-loop",
+          toolCallId: source.id,
+          toolName: source.name,
+          actionKey: "lookup:same-action",
+          detector: "generic_repeat",
+          count: 20,
+          reason: "Repeated tool action",
+        },
+      };
+    }
+    return attachInternalToolBatchLifecycle(
+      {},
+      {
+        commitReadyCalls,
+        releaseSkippedCalls: () => {},
+      },
+    );
+  });
+  const events: AgentEvent[] = [];
+  agent.subscribe((event) => {
+    events.push(event);
+    if (boundary === "listener" && event.type === "tool_execution_start") {
+      throw failure;
+    }
+  });
+  await agent.prompt("look up");
+  const terminal = agent.state.messages.findLast((message) => message.role === "assistant");
+  const runtime =
+    boundary !== "caller-first" && boundary !== "thrown-caller" && boundary !== "provider-first";
+  expect(
+    terminal?.diagnostics?.some((entry) => entry.type === "synthesized_run_failure") ?? false,
+  ).toBe(runtime);
+  expect(terminal?.stopReason).toBe(
+    boundary === "provider-first" || boundary === "listener" || boundary === "thrown-runtime"
+      ? "error"
+      : "aborted",
+  );
+  expect(terminal?.errorCode).toBe(boundary === "coded-runtime" ? "RUNTIME_ADMISSION" : undefined);
+  expect(events.at(-1)?.type).toBe("agent_end");
+  expect(requests).toBe(boundary === "termination" ? 2 : 1);
+  expect(commitReadyCalls).toHaveBeenCalledTimes(
+    boundary === "listener" || boundary === "termination" ? 0 : 1,
+  );
+  expect(execute).not.toHaveBeenCalled();
+  expect(agent.state.isStreaming).toBe(false);
+  expect(agent.state.pendingToolCalls.size).toBe(0);
+});

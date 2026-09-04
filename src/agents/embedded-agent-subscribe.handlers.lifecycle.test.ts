@@ -1,9 +1,12 @@
 // Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
+import { Agent } from "../../packages/agent-core/src/agent.js";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
+import { toWorkerTranscriptMessage } from "../worker/transcript-message.js";
+import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   __testing,
   handleAgentEnd,
@@ -11,6 +14,7 @@ import {
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -1310,3 +1314,69 @@ describe("handleAgentEnd", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("keeps one actual runtime failure neutral through channel, lifecycle and serialization", async () => {
+  const model = makeProviderModelFixture({
+    id: "fixture-model",
+    provider: "openai",
+    api: "fixture",
+    baseUrl: "https://example.invalid",
+  });
+  const canary =
+    "OAuth token refresh failed for openai: invalid_grant PRIVATE_CANARY /private/session";
+  const streamFn = vi.fn(() => {
+    throw new Error("Provider must not run");
+  });
+  const agent = new Agent({
+    initialState: { model },
+    streamFn,
+    transformContext: async () => {
+      throw new Error(canary);
+    },
+  });
+  await agent.prompt("fail before provider dispatch");
+  expect(streamFn).not.toHaveBeenCalled();
+  const message = agent.state.messages.findLast((candidate) => candidate.role === "assistant");
+  if (!message || message.role !== "assistant") {
+    throw new Error("Missing failure message");
+  }
+  const projection = toWorkerTranscriptMessage(message, "transcript");
+  if (projection?.kind !== "complete") {
+    throw new Error("Expected a complete worker transcript message");
+  }
+  const wire = JSON.stringify(projection.message);
+  const serialized = JSON.parse(wire);
+  expect(serialized.diagnostics).toEqual([
+    { type: "synthesized_run_failure", timestamp: message.timestamp },
+  ]);
+  const payloads = buildEmbeddedRunPayloads({
+    assistantTexts: [],
+    currentAssistant: serialized,
+    lastAssistant: serialized,
+    provider: model.provider,
+    model: model.id,
+  });
+  expect(payloads).toEqual([{ text: "LLM request failed.", isError: true }]);
+  const onAgentEvent = vi.fn();
+  const ctx = createContext(serialized, { onAgentEvent });
+  await handleAgentEnd(ctx);
+  expect(onAgentEvent).toHaveBeenCalledWith({
+    stream: "lifecycle",
+    data: expect.objectContaining({ phase: "error", error: "LLM request failed." }),
+  });
+  const publicOutput = JSON.stringify({
+    payloads,
+    events: onAgentEvent.mock.calls,
+    console: firstWarnMeta(ctx).consoleMessage,
+  });
+  for (const excluded of [
+    "PRIVATE_CANARY",
+    "/private/session",
+    "fixture-model",
+    "invalid_grant",
+    "openai",
+  ]) {
+    expect(publicOutput).not.toContain(excluded);
+  }
+  expect(firstWarnMeta(ctx).rawErrorPreview).toContain("PRIVATE_CANARY");
+});

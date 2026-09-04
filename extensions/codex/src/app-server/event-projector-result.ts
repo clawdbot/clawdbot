@@ -1,5 +1,7 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  getRunFailureOrigin,
+  withRunFailureOrigin,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type HeartbeatToolResponse,
   type MessagingToolSend,
@@ -129,10 +131,21 @@ export function buildCodexAttemptResult(
     input.recordSynthesizedMissingToolResultError(synthesizedMissingToolResultError);
     promptErrorSource = promptErrorSource ?? "prompt";
   }
+  const turnFailed = input.completedTurn?.status === "failed";
+  // A refusal suppresses missing-tool bookkeeping, not a later runtime failure.
+  const promptError =
+    input.providerRefusal && getRunFailureOrigin(input.promptError) !== "runtime"
+      ? null
+      : (input.promptError ??
+        (storedMissingToolResultError
+          ? withRunFailureOrigin(storedMissingToolResultError, "runtime")
+          : turnFailed
+            ? (input.completedTurn?.error?.message ?? "codex app-server turn failed")
+            : null));
   const assistantMessageOptions = {
     tokenUsage: projectedUsage,
     aborted: input.aborted,
-    promptError: input.promptError,
+    promptError,
     providerRefusal: input.providerRefusal,
   };
   const lastAssistant = input.providerRefusal
@@ -168,14 +181,6 @@ export function buildCodexAttemptResult(
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
   });
-  const turnFailed = input.completedTurn?.status === "failed";
-  const promptError = input.providerRefusal
-    ? null
-    : (input.promptError ??
-      storedMissingToolResultError ??
-      (turnFailed
-        ? (input.completedTurn?.error?.message ?? "codex app-server turn failed")
-        : null));
   const agentHarnessResultClassification = input.providerRefusal
     ? undefined
     : classifyAgentHarnessTerminalOutcome({

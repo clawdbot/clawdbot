@@ -1,6 +1,10 @@
 // Native terminal settlement bounds projection and checkpoint work without harming sibling runs.
 import path from "node:path";
-import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  getRunFailureOrigin,
+  resolveActiveEmbeddedRunSessionId,
+  resolveAssistantErrorPresentation,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -179,8 +183,13 @@ describe("Codex app-server terminal settlement", () => {
       expect(readAttemptTerminal(result)).toMatchObject({
         aborted: true,
         timedOut: true,
-        promptError: "codex app-server terminal settlement timed out",
+        promptError: expect.objectContaining({
+          message: "codex app-server terminal settlement timed out",
+        }),
       });
+      expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
+      expect(result.lastAssistant).toBeDefined();
+      expect(resolveAssistantErrorPresentation(result.lastAssistant!).attribution).toBe("runtime");
       expect(result.codexAppServerFailure?.kind).toBe("turn_settlement_timeout");
       expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
       expect(result.assistantTexts).toEqual(["Completed work remains visible."]);
@@ -293,8 +302,13 @@ describe("Codex app-server terminal settlement", () => {
       expect(readAttemptTerminal(result)).toMatchObject({
         aborted: true,
         timedOut: true,
-        promptError: "codex app-server terminal settlement timed out",
+        promptError: expect.objectContaining({
+          message: "codex app-server terminal settlement timed out",
+        }),
       });
+      expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
+      expect(result.lastAssistant).toBeDefined();
+      expect(resolveAssistantErrorPresentation(result.lastAssistant!).attribution).toBe("runtime");
       expect(result.codexAppServerFailure?.kind).toBe("turn_settlement_timeout");
       expect(result.promptTimeoutOutcome).toMatchObject({ replayInvalid: true });
       expect(result.assistantTexts).toEqual(["Completed before checkpoint."]);

@@ -88,6 +88,13 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
+Harnesses use `withRunFailureOrigin(error, "runtime")` from
+`openclaw/plugin-sdk/agent-harness-runtime` when synthesizing a local failure.
+The wrapper preserves its cause; `appendRuntimeFailureDiagnostic(message, error)`
+carries only the origin into assistant diagnostics. Use
+`resolveAssistantErrorPresentation(message)` for channel copy: runtime origin
+precedes provider error-text inference. These helpers do not change retry policy.
+
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for

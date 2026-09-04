@@ -1,6 +1,9 @@
 // Covers user-facing formatting and sanitization of assistant/provider errors.
+import { getRunFailureOrigin, withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Agent } from "../../packages/agent-core/src/agent.js";
+import { transportAbortError } from "../../packages/ai/src/transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   classifyAssistantFailoverReason,
@@ -16,6 +19,7 @@ import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.
 import { isRawApiErrorPayload } from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-generation.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("formatAssistantErrorText", () => {
   const BILLING_ERROR_USER_MESSAGE =
@@ -922,5 +926,100 @@ describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () =>
       "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)";
     const result = sanitizeUserFacingText(text, { errorContext: false });
     expect(result).toBe(text);
+  });
+});
+
+describe("runtime failure presentation", () => {
+  const model = makeProviderModelFixture({
+    id: "fixture-model",
+    provider: "fixture-provider",
+    api: "fixture",
+    baseUrl: "https://example.invalid",
+  });
+  const errorText = "401 OAuth token refresh failed for openai: invalid_grant PRIVATE_CANARY";
+  const terminal = (agent: Agent) => {
+    const message = agent.state.messages.findLast((candidate) => candidate.role === "assistant");
+    if (!message || message.role !== "assistant") {
+      throw new Error("Missing terminal assistant");
+    }
+    return message;
+  };
+  it.each([errorText, "HTTP 503 unavailable", "context length exceeded"])(
+    "prioritizes synthesized runtime origin over %s",
+    (text) => {
+      const message = makeAssistantMessageFixture({
+        errorMessage: text,
+        diagnostics: [{ type: "synthesized_run_failure", timestamp: 1 }],
+      });
+      expect(formatUserFacingAssistantErrorText(message)).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
+    },
+  );
+  it.each(["onPayload", "onResponse"] as const)(
+    "keeps the runtime %s callback neutral",
+    async (hook) => {
+      const error = new Error("401 runtime callback failed");
+      let optionsReceiver: unknown;
+      const observeReceiver = vi.fn();
+      const fail = function (this: unknown) {
+        observeReceiver(this);
+        if (hook === "onResponse") {
+          return Promise.reject(error);
+        }
+        throw error;
+      };
+      const agent = new Agent({
+        initialState: { model },
+        onPayload: fail,
+        onResponse: fail,
+        streamFn: async (_model, _context, options) => {
+          optionsReceiver = options;
+          try {
+            await options?.[hook]?.({ status: 200, headers: {} }, model);
+          } catch (callbackError) {
+            if (hook === "onResponse") {
+              agent.abort(callbackError);
+              throw transportAbortError(options?.signal);
+            }
+            throw callbackError;
+          }
+          throw new Error("Expected callback failure");
+        },
+      });
+      await agent.prompt("exercise callback");
+      expect(observeReceiver).toHaveBeenCalledExactlyOnceWith(optionsReceiver);
+      expect(formatUserFacingAssistantErrorText(terminal(agent))).toBe(
+        GENERIC_ASSISTANT_ERROR_TEXT,
+      );
+    },
+  );
+  it("preserves frozen and non-Error causes without leaking origin across runs", async () => {
+    for (const cause of [
+      Object.freeze(new Error("opaque")),
+      Object.freeze({ code: "opaque" }),
+      "opaque",
+    ]) {
+      const marked = withRunFailureOrigin(cause, "runtime");
+      expect(marked.cause).toBe(cause);
+      expect(getRunFailureOrigin(new Error("replacement", { cause: marked }))).toBe("runtime");
+      expect(getRunFailureOrigin(cause)).toBeUndefined();
+      const fail = () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Foreign callbacks may throw frozen or non-Error values.
+        throw cause;
+      };
+      const agent = new Agent({
+        initialState: { model },
+        streamFn: fail,
+        transformContext: async () => fail(),
+      });
+      await agent.prompt("runtime");
+      expect(formatUserFacingAssistantErrorText(terminal(agent))).toBe(
+        GENERIC_ASSISTANT_ERROR_TEXT,
+      );
+      agent.transformContext = undefined;
+      await agent.prompt("provider");
+      expect(formatUserFacingAssistantErrorText(terminal(agent))).toBe(
+        "⚠️ fixture-provider/fixture-model request failed.",
+      );
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { getRunFailureOrigin } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -51,11 +52,19 @@ describe("CodexAppServerEventProjector terminal errors", () => {
           ),
         );
         const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
+        expect(getRunFailureOrigin(terminal.promptError)).toBeUndefined();
         expect(terminal.promptError).toBeInstanceOf(Error);
         expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
       }
     },
   );
+
+  it("marks the projector's own timeout as a runtime failure", async () => {
+    const projector = await createProjector();
+    projector.markTimedOut();
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
+  });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
@@ -193,7 +202,10 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       aborted: false,
       promptErrorSource: "prompt",
     });
-    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: expect.stringContaining("without a matching tool.result"),
+    });
+    expect(getRunFailureOrigin(readAttemptTerminal(result).promptError)).toBe("runtime");
     expect(result.lastToolError).toBeUndefined();
   });
 

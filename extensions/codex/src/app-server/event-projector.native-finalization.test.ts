@@ -685,7 +685,9 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: expect.stringContaining("without a matching tool.result"),
+    });
     expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
     expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual([]);

@@ -338,6 +338,18 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  return resolveAssistantErrorPresentation(msg, opts).text;
+}
+
+/** One presentation decision for reply text and public lifecycle diagnostics. */
+export function resolveAssistantErrorPresentation(
+  msg: AssistantMessage,
+  opts?: AssistantErrorTextOptions,
+): { text: string; attribution: "provider" | "runtime" } {
+  // Recorded runtime origin outranks provider-looking text, status and auth hints.
+  if (msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure")) {
+    return { text: GENERIC_ASSISTANT_ERROR_TEXT, attribution: "runtime" };
+  }
   const rawError = msg.errorMessage?.trim();
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
@@ -358,7 +370,10 @@ export function formatUserFacingAssistantErrorText(
           : undefined
         : friendlyError;
   if (safeFriendlyError) {
-    return safeFriendlyError.trim();
+    return { text: safeFriendlyError.trim(), attribution: "provider" };
   }
-  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
+  return {
+    text: renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT,
+    attribution: "provider",
+  };
 }

@@ -607,7 +607,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({
       aborted: false,
-      promptError: "codex app-server client closed before turn completed",
+      promptError: expect.objectContaining({
+        message: "codex app-server client closed before turn completed",
+      }),
     });
     expect(result.codexAppServerFailure).toMatchObject({
       kind: "client_closed_before_turn_completed",
@@ -747,7 +749,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({
       aborted: false,
-      promptError: "codex app-server client closed before turn completed",
+      promptError: expect.objectContaining({
+        message: "codex app-server client closed before turn completed",
+      }),
     });
     expect(result.codexAppServerFailure).toMatchObject({ transport: "websocket" });
   });

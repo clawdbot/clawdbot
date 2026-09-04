@@ -9,6 +9,8 @@ import type {
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { failTransportStream } from "../../ai/src/transports/transport-stream-shared.js";
+import { agentLoop } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { createAssistantMessageEventStream } from "./llm.js";
 import type { AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "./types.js";
@@ -376,4 +378,127 @@ describe("active response steering", () => {
     expect(steer).not.toHaveBeenCalled();
     expect(harness.agent.cancelSteeringMessage((message) => message === update)).toBe(update);
   });
+});
+
+it.each(["transform", "convert", "steer"] as const)(
+  "preserves the origin of a live %s failure",
+  async (boundary) => {
+    const reached = createDeferred();
+    const failure = new Error("live response failed");
+    const fail = () => {
+      reached.resolve();
+      throw failure;
+    };
+    const update: UserMessage = { role: "user", content: "change direction", timestamp: 3 };
+    const project = (messages: AgentMessage[]) =>
+      messages.includes(update) ? fail() : (messages as Message[]);
+    const harness = createSteerableAgent(async () => fail(), {
+      ...(boundary === "transform"
+        ? { transformContext: async (messages) => project(messages) }
+        : {}),
+      ...(boundary === "convert" ? { convertToLlm: project } : {}),
+    });
+    const run = harness.agent.prompt("original question");
+    try {
+      await harness.started;
+      harness.agent.steer(update);
+      await reached.promise;
+    } finally {
+      harness.finish();
+      await run;
+    }
+    const terminal = harness.agent.state.messages.findLast(
+      (message) => message.role === "assistant",
+    );
+    expect(terminal).toMatchObject({ stopReason: "error", errorMessage: failure.message });
+    expect(
+      terminal?.diagnostics?.some((entry) => entry.type === "synthesized_run_failure") ?? false,
+    ).toBe(boundary !== "steer");
+    expect(harness.requests).toHaveLength(1);
+    expect(harness.agent.state.isStreaming).toBe(false);
+    expect(harness.agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+  },
+);
+
+it.each(["callback", "cleanup", "provider-control", "provider-continuation"] as const)(
+  "keeps %s ownership through a cause-preserving replacement and transport conversion",
+  async (boundary) => {
+    const failure = new Error("opaque response failure");
+    const fail = () => {
+      throw failure;
+    };
+    const streamFn: StreamFn = (_model, _context, options) => {
+      const response = createAssistantMessageEventStream();
+      try {
+        const needsContinuation = vi.fn(() => false);
+        if (boundary === "provider-continuation") {
+          needsContinuation.mockImplementationOnce(fail);
+        }
+        const disconnect = options?.onActiveResponse?.({ steer: fail, needsContinuation });
+        disconnect?.();
+        throw new Error("expected callback or cleanup to fail");
+      } catch (cause) {
+        failTransportStream({
+          stream: response,
+          output: assistant(""),
+          error: new Error("transport replacement", { cause }),
+          signal: options?.signal,
+        });
+      }
+      return response;
+    };
+    const stream = agentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      {
+        model,
+        convertToLlm: (messages) => messages as Message[],
+        onActiveResponse: (control) => {
+          if (boundary === "callback") {
+            fail();
+          }
+          if (boundary === "provider-control") {
+            void control.steer([]);
+          }
+          if (boundary === "provider-continuation") {
+            control.needsContinuation?.();
+          }
+          return fail;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+    for await (const event of stream) {
+      void event;
+    }
+    const terminal = (await stream.result()).findLast((message) => message.role === "assistant");
+    expect(terminal).toMatchObject({ stopReason: "error", errorMessage: "transport replacement" });
+    expect(
+      terminal?.diagnostics?.some((entry) => entry.type === "synthesized_run_failure") ?? false,
+    ).toBe(boundary === "callback" || boundary === "cleanup");
+  },
+);
+
+it("settles transport errors without evaluating hostile cause properties", async () => {
+  const causeGetter = vi.fn(() => {
+    throw new Error("Do not evaluate causes");
+  });
+  const getterError = Object.defineProperty(new Error("provider failure"), "cause", {
+    get: causeGetter,
+  });
+  const proxyError = new Proxy(
+    {},
+    {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("Unavailable descriptors");
+      },
+    },
+  );
+  for (const error of [getterError, proxyError]) {
+    const response = createAssistantMessageEventStream();
+    failTransportStream({ stream: response, output: assistant(""), error });
+    expect(await response.result()).toMatchObject({ role: "assistant", stopReason: "error" });
+  }
+  expect(causeGetter).not.toHaveBeenCalled();
 });

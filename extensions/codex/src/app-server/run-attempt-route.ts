@@ -1,4 +1,8 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  withRunFailureOrigin,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { createCodexAttemptServerRequestController } from "./run-attempt-server-requests.js";
@@ -42,9 +46,15 @@ export async function prepareCodexAttemptRoute(
         route.signal.reason instanceof Error && route.signal.reason.cause instanceof Error
           ? route.signal.reason.cause
           : undefined;
-      state.clientClosedPromptError = closedClient
-        ? "codex app-server client closed before turn completed"
-        : `codex app-server turn route closed before turn completed: ${reasonText}`;
+      state.clientClosedPromptError = withRunFailureOrigin(
+        new Error(
+          closedClient
+            ? "codex app-server client closed before turn completed"
+            : `codex app-server turn route closed before turn completed: ${reasonText}`,
+          { cause: route.signal.reason },
+        ),
+        "runtime",
+      );
       state.clientClosedDiagnostic =
         closedClient && closeCause ? formatErrorMessage(closeCause) : undefined;
       state.clientClosedAbort = closedClient;
@@ -55,7 +65,7 @@ export async function prepareCodexAttemptRoute(
           turnId: activeTurnId,
         });
       }
-      embeddedAgentLog.warn(state.clientClosedPromptError, {
+      embeddedAgentLog.warn(state.clientClosedPromptError.message, {
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
         ...(state.clientClosedDiagnostic ? { transportError: state.clientClosedDiagnostic } : {}),

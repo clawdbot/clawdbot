@@ -213,9 +213,9 @@ function expectSuccessfulAttempt(result: EmbeddedRunAttemptResult): void {
 function expectTimedOutAttempt(result: EmbeddedRunAttemptResult): void {
   expect(readAttemptTerminal(result).aborted).toBe(true);
   expect(readAttemptTerminal(result).timedOut).toBe(true);
-  expect(readAttemptTerminal(result).promptError).toBe(
-    "codex app-server execution budget timed out",
-  );
+  expect(readAttemptTerminal(result).promptError).toMatchObject({
+    message: "codex app-server execution budget timed out",
+  });
 }
 
 async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
@@ -444,9 +444,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const mediaUrl = result.toolMediaUrls?.[0];
 
     expect(readAttemptTerminal(result).timedOut).toBe(true);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server execution budget timed out",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server execution budget timed out",
+    });
     expect(result.toolMediaUrls).toHaveLength(1);
     expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
     await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
@@ -530,7 +530,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expect(projectAttemptResult(result)).toMatchObject({
       aborted: true,
       timedOut: true,
-      promptError: "codex app-server execution budget timed out",
+      promptError: expect.objectContaining({
+        message: "codex app-server execution budget timed out",
+      }),
       assistantTexts: ["Finished."],
     });
     expect(result.itemLifecycle.completedCount).toBe(2);
@@ -921,9 +923,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const firstResult = await firstRun;
     expect(readAttemptTerminal(firstResult).timedOut).toBe(true);
-    expect(readAttemptTerminal(firstResult).promptError).toBe(
-      "codex app-server execution budget timed out",
-    );
+    expect(readAttemptTerminal(firstResult).promptError).toMatchObject({
+      message: "codex app-server execution budget timed out",
+    });
     expect(firstResult.promptTimeoutOutcome).toMatchObject({
       replayInvalid: true,
       livenessState: "abandoned",
@@ -1349,9 +1351,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     );
 
     const result = await run;
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(readAttemptTerminal(result).timedOut).toBe(false);
     expect(result.codexAppServerFailure).toEqual({
@@ -1393,9 +1395,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       }),
     ]);
 
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(readAttemptTerminal(result).timedOut).toBe(false);
     expect(result.assistantTexts).toEqual(["Done before restart."]);
@@ -1408,9 +1410,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   it("keeps partial assistant output as a client-close failure", async () => {
     const result = await runClientCloseScenario([makeAgentMessageDelta()]);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(result.assistantTexts).toEqual(["Still writing"]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -1432,9 +1434,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       makeAgentMessageDelta({ itemId: "msg-partial-2", delta: "Later partial reply" }),
     ]);
 
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(result.assistantTexts).toEqual(["Later partial reply"]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -1498,9 +1500,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
   }>)("keeps completed assistant output as a client-close failure $name", async (scenario) => {
     const result = await runClientCloseScenario(scenario.notifications);
 
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(result.assistantTexts).toEqual([scenario.assistantText]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
@@ -1526,9 +1528,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       }),
     ]);
 
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
+    expect(readAttemptTerminal(result).promptError).toMatchObject({
+      message: "codex app-server client closed before turn completed",
+    });
     expect(result.assistantTexts).toEqual(["Done before restart."]);
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",

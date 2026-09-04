@@ -1,8 +1,10 @@
 // Agent Core tests cover agent loop behavior.
 import { EventStream } from "@openclaw/ai/event-stream";
+import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { transportAbortError } from "../../ai/src/transports/transport-stream-shared.js";
 import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
@@ -86,6 +88,7 @@ function expectTerminalFailure(events: AgentEvent[], result: AgentMessage[]): vo
     stopReason: "error",
     errorMessage: "provider exploded",
   });
+  expect(result[0]).not.toHaveProperty("diagnostics");
 }
 
 describe("internal tool batch lifecycle", () => {
@@ -104,21 +107,39 @@ describe("internal tool batch lifecycle", () => {
 });
 
 describe("agentLoop EventStream failures", () => {
-  it("ends the public stream when a new prompt run rejects", async () => {
-    const stream = agentLoop(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      { systemPrompt: "", messages: [] },
-      config,
-      undefined,
-      failingStreamFn,
-    );
-    expect(stream).toBeInstanceOf(EventStream);
-
-    const events = await collectEvents(stream);
-    const result = await stream.result();
-
-    expectTerminalFailure(events, result);
-  });
+  it.each(["start", "iterator", "result"] as const)(
+    "ends a public stream after provider %s failure",
+    async (boundary) => {
+      const fail = () => {
+        throw new Error("provider exploded");
+      };
+      const streamFn: StreamFn = () => {
+        if (boundary === "start") {
+          return fail();
+        }
+        return {
+          async *[Symbol.asyncIterator]() {
+            // No event is emitted before these transport failures.
+            yield* [];
+            if (boundary === "iterator") {
+              fail();
+            }
+          },
+          result: async () => fail(),
+        };
+      };
+      const stream = agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [] },
+        config,
+        undefined,
+        streamFn,
+      );
+      expect(stream).toBeInstanceOf(EventStream);
+      const events = await collectEvents(stream);
+      expectTerminalFailure(events, await stream.result());
+    },
+  );
 
   it("ends the public stream when a continue run rejects", async () => {
     const context: AgentContext = {
@@ -131,6 +152,24 @@ describe("agentLoop EventStream failures", () => {
     const result = await stream.result();
 
     expectTerminalFailure(events, result);
+  });
+
+  it("preserves a runtime abort through a replacement exception in the public stream", async () => {
+    const controller = new AbortController();
+    const stream = agentLoopContinue(
+      { systemPrompt: "", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      config,
+      controller.signal,
+      () => {
+        controller.abort(withRunFailureOrigin(new Error("harness failed"), "runtime"));
+        throw transportAbortError(controller.signal);
+      },
+    );
+    await collectEvents(stream);
+    expect((await stream.result())[0]).toMatchObject({
+      stopReason: "aborted",
+      diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
+    });
   });
 
   it("persists and replays interruption guidance after Agent aborts a rejected run", async () => {
@@ -2068,6 +2107,10 @@ describe("agentLoop tool termination", () => {
     }
     await prompt;
 
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
+    });
     expect(providerCalls).toBe(1);
     expect(secondExecute).not.toHaveBeenCalled();
     expect(releaseSkippedCalls).toHaveBeenCalledWith(["idle-second"]);
@@ -2540,6 +2583,7 @@ describe("agentLoop tool termination", () => {
               text: expect.stringContaining("tool-loop recovery encountered another critical loop"),
             },
           ],
+          diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
         },
       });
     },

@@ -4,6 +4,10 @@
 // before any caller imports the stream API.
 import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import {
+  appendRuntimeFailureDiagnostic,
+  withRunFailureOrigin,
+} from "@openclaw/llm-core/diagnostics";
 import { getModelLlmRuntime } from "./model-runtime-binding.js";
 import "./ai-transport-host.js";
 import type {
@@ -24,9 +28,11 @@ let transportRuntimeHostPromise: Promise<void> | undefined;
 async function ensureTransportRuntimeHost(): Promise<void> {
   // Async completion entry points install heavy provider ports before the runtime
   // can invoke them, without adding their plugin graph to this eager facade.
-  transportRuntimeHostPromise ??= import("../agents/ai-transport-runtime-host.js").then(
-    ({ configureAiTransportRuntimeHost }) => configureAiTransportRuntimeHost(),
-  );
+  transportRuntimeHostPromise ??= import("../agents/ai-transport-runtime-host.js")
+    .then(({ configureAiTransportRuntimeHost }) => configureAiTransportRuntimeHost())
+    .catch((error: unknown) => {
+      throw withRunFailureOrigin(error, "runtime");
+    });
   await transportRuntimeHostPromise;
 }
 
@@ -54,6 +60,7 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
 function deferUntilTransportRuntimeHost(
   model: Model,
   start: () => AssistantMessageEventStreamContract,
+  signal?: AbortSignal,
 ): AssistantMessageEventStreamContract {
   const output = createAssistantMessageEventStream();
   void (async () => {
@@ -64,6 +71,7 @@ function deferUntilTransportRuntimeHost(
       }
     } catch (error) {
       const message = createRuntimeHostErrorMessage(model, error);
+      appendRuntimeFailureDiagnostic(message, withRunFailureOrigin(error, "provider", signal));
       output.push({ type: "error", reason: "error", error: message });
     } finally {
       output.end();
@@ -81,8 +89,10 @@ export function stream<TApi extends Api>(
   context: Context,
   options?: ProviderStreamOptions,
 ): AssistantMessageEventStreamContract {
-  return deferUntilTransportRuntimeHost(model, () =>
-    resolveRuntime(model).stream(model, context, options),
+  return deferUntilTransportRuntimeHost(
+    model,
+    () => resolveRuntime(model).stream(model, context, options),
+    options?.signal,
   );
 }
 
@@ -100,8 +110,10 @@ export function streamSimple<TApi extends Api>(
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStreamContract {
-  return deferUntilTransportRuntimeHost(model, () =>
-    resolveRuntime(model).streamSimple(model, context, options),
+  return deferUntilTransportRuntimeHost(
+    model,
+    () => resolveRuntime(model).streamSimple(model, context, options),
+    options?.signal,
   );
 }
 

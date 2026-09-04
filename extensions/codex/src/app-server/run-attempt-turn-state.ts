@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, withRunFailureOrigin } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -48,7 +48,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     // this marker remains the user-interrupt hint until Codex exposes abortReason.
     sawCodexInterruptMarker: false,
     timeout: undefined as CodexAttemptTimeout | undefined,
-    clientClosedPromptError: undefined as string | undefined,
+    clientClosedPromptError: undefined as Error | undefined,
     clientClosedDiagnostic: undefined as string | undefined,
     clientClosedAbort: false,
     shouldDelayNativeHookRelayUnregister: false,
@@ -152,10 +152,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     onTimeout: (timeout) => {
       state.timeout = timeout;
       projectorRef.current?.markTimedOut();
-      const error = new Error(
+      const error = withRunFailureOrigin(
         timeout.kind === "execution"
           ? "codex app-server execution budget timed out"
           : "codex app-server terminal settlement timed out",
+        "runtime",
       );
       const fields = {
         threadId: resourceState.thread.threadId,

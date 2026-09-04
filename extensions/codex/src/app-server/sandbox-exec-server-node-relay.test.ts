@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { getRunFailureOrigin } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -658,6 +659,7 @@ describe("Codex paired-device exec-server relay", () => {
     await expect(socketClosed).resolves.toEqual({ code: 1011 });
     expect(onExecutionDisconnect).toHaveBeenCalledOnce();
     const failure = onExecutionDisconnect.mock.calls[0]?.[0];
+    expect(getRunFailureOrigin(failure)).toBe("runtime");
     expect(failure?.message).toContain("exec-server launch failed");
     expect(failure?.message).not.toContain(fakeSecret);
     expect(failure?.message.length).toBeLessThan(360);

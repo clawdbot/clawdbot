@@ -214,7 +214,7 @@ function pushLoopFailure(
   signal: AbortSignal | undefined,
 ): void {
   const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted);
+  const failureMessage = createFailureMessage(config.model, error, aborted, signal);
   stream.push({ type: "message_start", message: failureMessage });
   stream.push({ type: "message_end", message: failureMessage });
   stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });

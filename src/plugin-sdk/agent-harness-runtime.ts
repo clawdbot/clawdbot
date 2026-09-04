@@ -642,3 +642,10 @@ export function classifyAgentHarnessTerminalOutcome(
 function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
+
+export {
+  withRunFailureOrigin,
+  getRunFailureOrigin,
+  appendRuntimeFailureDiagnostic,
+} from "@openclaw/llm-core/diagnostics";
+export { resolveAssistantErrorPresentation } from "../agents/embedded-agent-helpers/error-text.js";
