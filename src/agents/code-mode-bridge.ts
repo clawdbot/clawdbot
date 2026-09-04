@@ -16,16 +16,7 @@ import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
-import {
-  consumeToolEffectReceipt,
-  registerToolEffectReceipt,
-  type ToolEffectReceipt,
-} from "./tool-effect-receipt.js";
 import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -203,7 +194,6 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   const catalogProjection = params.catalogProjection;
-  let effectReceipt: ToolEffectReceipt | undefined;
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
@@ -279,7 +269,6 @@ export async function runBridgeRequest(params: {
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
-        effectReceipt = consumeToolEffectReceipt(called.result);
         value =
           isRecord(called.result) && "details" in called.result
             ? called.result.details
@@ -330,7 +319,6 @@ export async function runBridgeRequest(params: {
               signal: params.signal,
               onUpdate: params.onUpdate,
             });
-            effectReceipt = consumeToolEffectReceipt(called.result);
             if (request.catalogId) {
               const guestResult = consumeMcpCodeModeGuestResult(called.result);
               if (guestResult === undefined) {
@@ -345,7 +333,6 @@ export async function runBridgeRequest(params: {
               : called.result;
           },
         );
-        effectReceipt ??= consumeToolEffectReceipt(value);
         break;
       }
       case "agentSpawn":
@@ -402,24 +389,16 @@ export async function runBridgeRequest(params: {
         "Search results exceed the output budget. Narrow the query or lower the limit.",
       );
     }
-    const settled: SettledBridgeRequest = { id: params.request.id, ok: true, value };
-    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
+    return { id: params.request.id, ok: true, value };
   } catch (error) {
     const boundedError = boundCodeModeError(
       redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
       params.maxOutputBytes,
     );
-    const settled: SettledBridgeRequest = {
+    return {
       id: params.request.id,
       ok: false,
       error: boundedError,
     };
-    const trustedNoStart = consumeTrustedToolNoStartError(error);
-    if (trustedNoStart) {
-      registerTrustedToolNoStartError(settled);
-    }
-    effectReceipt =
-      consumeToolEffectReceipt(error) ?? (trustedNoStart ? { state: "not_started" } : undefined);
-    return effectReceipt ? registerToolEffectReceipt(settled, effectReceipt) : settled;
   }
 }

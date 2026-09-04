@@ -61,7 +61,6 @@ describe("applyPromptBuildToolsAllow", () => {
         tools,
         catalogRef,
         codeModeControlsEnabled: false,
-        coreReadAuthorized: true,
       });
       if (hookTiming === "before") {
         policy.apply(["read"]);
@@ -128,11 +127,9 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual([]);
-    expect(result.coreReadAuthorized).toBe(false);
     expect(result.effectiveTools).toEqual([]);
     expect(result.uncompactedEffectiveTools).toEqual([]);
     expect(result.tools).toEqual([]);
@@ -159,7 +156,6 @@ describe("applyPromptBuildToolsAllow", () => {
       uncompactedEffectiveTools: [{ name: "message" }, { name: "read" }],
       tools: [{ name: "message" }, { name: "read" }],
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual(["message"]);
@@ -196,11 +192,9 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);
-    expect(result.coreReadAuthorized).toBe(true);
     expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
     expect(result.uncompactedEffectiveTools).toEqual([{ name: "read" }]);
     expect(result.tools).toEqual([{ name: "read" }]);
@@ -219,11 +213,9 @@ describe("applyPromptBuildToolsAllow", () => {
       uncompactedEffectiveTools: [{ name: "read" }],
       tools: [{ name: "read" }],
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual([]);
-    expect(result.coreReadAuthorized).toBe(false);
     expect(result.effectiveTools).toEqual([]);
     expect(result.uncompactedEffectiveTools).toEqual([]);
     expect(result.tools).toEqual([]);
@@ -255,7 +247,6 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [pluginTool],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: false,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);
@@ -283,7 +274,6 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     };
 
     applyPromptBuildToolsAllow({ ...params, toolsAllow: ["read"] });
