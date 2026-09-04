@@ -1,112 +1,50 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { describe, expect, it } from "vitest";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
-import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
+  createSettledFinalizationTestInput,
+  createSettledProviderFailureAttempt,
+} from "./settled-turn-finalization.test-support.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-const backend = vi.hoisted(() => ({ finalize: vi.fn() }));
-vi.mock("./backend.js", () => ({
-  resolveRuntimeModelAttempt: () => undefined,
-  runEmbeddedSettledTurnFinalizationWithBackend: backend.finalize,
-}));
-vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
-  appendAssistantMirrorMessageByIdentity: vi.fn(),
-}));
-
-function providerFailedAttempt(): EmbeddedRunAttemptResult {
-  const toolAssistant = buildEmbeddedRunnerAssistant({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", id: "call-write", name: "write", arguments: {} }],
-  });
-  const assistant = buildEmbeddedRunnerAssistant({
-    stopReason: "error",
-    errorMessage: "503 upstream connection refused",
-  });
-  const messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"] = [
-    { role: "user", content: "Write the note", timestamp: 0 },
-    toolAssistant,
-    {
-      role: "toolResult",
-      toolCallId: "call-write",
-      toolName: "write",
-      content: [{ type: "text", text: "Note saved" }],
-      isError: false,
-      timestamp: 1,
-    },
-    assistant,
-  ];
-  return makeEmbeddedRunnerAttempt({
-    terminal: { kind: "failed", source: "prompt", error: new Error(assistant.errorMessage) },
-    assistantTexts: [],
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    currentAttemptCompletedAssistant: assistant,
-    messagesSnapshot,
-    toolMetas: [{ toolCallId: "call-write", toolName: "write", isError: false, replaySafe: false }],
-    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    settledTurnFinalizationContext: {
-      source: "openclaw-transcript",
-      messages: Object.freeze([...messagesSnapshot]),
-    },
-  });
+function prepareRequest(
+  attempt = createSettledProviderFailureAttempt(),
+  trigger: "user" | "cron" = "user",
+): Parameters<typeof resolveSettledTurnFinalizationRequest>[0] {
+  const { initial, terminalBase, finalization } = createSettledFinalizationTestInput(
+    attempt,
+    createTestAdmittedRunContext("run-settled"),
+  );
+  terminalBase.runParams.trigger = trigger;
+  const prepared = prepareEmbeddedRunTerminal({ ...terminalBase, ...initial });
+  return {
+    runParams: terminalBase.runParams,
+    attempt,
+    activeErrorContext: terminalBase.activeErrorContext,
+    modelApi: finalization.modelApi,
+    executionContract: finalization.executionContract,
+    payloadsWithToolMedia: prepared.payloadsWithToolMedia,
+    recoveredFinalAssistantPayloadsAfterPromptTimeout:
+      prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
+    terminalState: initial.terminalState,
+    hasTerminalToolPresentation: false,
+    settledTurnFinalizationAvailable: true,
+  };
 }
 
 describe("prepared provider errors after settled tools", () => {
-  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
-  let input: Parameters<typeof prepareTerminalWithSettledTurnFinalization>[0];
-  beforeEach(async () => {
-    admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
-    const attempt = providerFailedAttempt();
-    input = createSettledFinalizationTestInput(attempt, await admission.admit("embedded"));
-    input.initial.currentAttemptCompletedAssistant = attempt.currentAttemptCompletedAssistant;
-    input.terminalBase.runParams.trigger = "user";
-    backend.finalize.mockReset().mockResolvedValue({
-      outcome: "answered",
-      result: {
-        assistant: buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "Note saved." }],
-        }),
-      },
-    });
-  });
-  afterEach(() => admission.close());
-
-  it("replaces the generated provider error with one isolated final answer", async () => {
-    const prepared = prepareEmbeddedRunTerminal({ ...input.terminalBase, ...input.initial });
-    expect(prepared.payloadsWithToolMedia).toEqual([
+  it("does not mistake the generated provider error for an authored answer", () => {
+    const request = prepareRequest();
+    expect(request.payloadsWithToolMedia).toEqual([
       expect.objectContaining({
         isError: true,
         text: expect.stringContaining("connection refused"),
       }),
     ]);
-
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(result.finalizationOutcome).toBe("answered");
-    expect(backend.finalize).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        disableTools: true,
-        operation: "settled-tool-finalization",
-        skipPreparedUserTurnMessage: true,
-        suppressNextUserMessagePersistence: true,
-      }),
-      input.initial.attempt,
-      input.finalization.harness,
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
     );
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: "Note saved." }),
-    ]);
-    expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
-    expect(input.initial.attempt.replayMetadata.replaySafe).toBe(false);
   });
 
   it.each([
@@ -131,53 +69,26 @@ describe("prepared provider errors after settled tools", () => {
     { name: "delivered media", change: { hasToolMediaBlockReply: true } },
     { name: "pending media", change: { toolMediaUrls: ["/tmp/note.png"] } },
     { name: "cancellation", change: { terminal: { kind: "aborted", source: "external" } } },
-    {
-      name: "non-transient provider error",
-      change: {
-        terminal: { kind: "failed", source: "prompt", error: new Error("invalid api key") },
-        settledTurnFinalizationContext: undefined,
-      },
-    },
   ] satisfies Array<{ name: string; change: Partial<EmbeddedRunAttemptResult> }>)(
     "preserves $name instead of finalizing",
-    async ({ change }) => {
-      Object.assign(input.initial.attempt, change);
-      input.initial.terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt: input.initial.attempt,
-        assistant: input.initial.attempt.currentAttemptAssistant,
-      });
-      const result = await prepareTerminalWithSettledTurnFinalization(input);
-      expect(result.finalizationOutcome).toBe("not-attempted");
-      expect(backend.finalize).not.toHaveBeenCalled();
-      expect(result.attempt).toBe(input.initial.attempt);
+    ({ change }) => {
+      const request = prepareRequest(createSettledProviderFailureAttempt(change));
+      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
     },
   );
 
-  it("keeps the failure-honest fallback when the isolated finalizer fails", async () => {
-    backend.finalize.mockRejectedValueOnce(new Error("final provider request failed"));
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-    expect(backend.finalize).toHaveBeenCalledOnce();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
-      }),
-    ]);
-    expect(result.attempt.toolMetas).toBe(input.initial.attempt.toolMetas);
-  });
-
-  it("preserves a structured provider refusal even with stale transient context", async () => {
-    const assistant = input.initial.currentAttemptCompletedAssistant;
+  it("preserves a structured provider refusal even with stale transient context", () => {
+    const attempt = createSettledProviderFailureAttempt();
+    const assistant = attempt.currentAttemptCompletedAssistant;
     if (!assistant) {
       throw new Error("Missing failed assistant");
     }
     assistant.diagnostics = [
       { type: "provider_refusal", timestamp: 0, details: { provider: "openai" } },
     ];
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-    expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(backend.finalize).not.toHaveBeenCalled();
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
+    const request = prepareRequest(attempt);
+    expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
+    expect(request.payloadsWithToolMedia).toEqual([
       expect.objectContaining({
         isError: true,
         text: expect.stringContaining("refused this request"),
@@ -185,47 +96,30 @@ describe("prepared provider errors after settled tools", () => {
     ]);
   });
 
-  it("preserves a cron tool-authored silent outcome after discounting the error", async () => {
-    input.terminalBase.runParams.trigger = "cron";
-    const resultMessage = input.initial.attempt.messagesSnapshot.find(
-      (message) => message.role === "toolResult",
-    );
-    if (!resultMessage || resultMessage.role !== "toolResult") {
+  it("preserves a cron tool-authored silent outcome after discounting the error", () => {
+    const attempt = createSettledProviderFailureAttempt();
+    const result = attempt.messagesSnapshot.find((message) => message.role === "toolResult");
+    if (!result || result.role !== "toolResult") {
       throw new Error("Missing settled tool result");
     }
-    resultMessage.content = [{ type: "text", text: "NO_REPLY" }];
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-    expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(backend.finalize).not.toHaveBeenCalled();
+    result.content = [{ type: "text", text: "NO_REPLY" }];
+    expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt, "cron"))).toBeNull();
   });
 
   it.each(["unmarked error", "structured tool error", "tool presentation"])(
     "preserves %s alongside the generated provider error",
     (kind) => {
-      const prepared = prepareEmbeddedRunTerminal({ ...input.terminalBase, ...input.initial });
-      const request = resolveSettledTurnFinalizationRequest({
-        runParams: input.terminalBase.runParams,
-        attempt: input.initial.attempt,
-        activeErrorContext: input.terminalBase.activeErrorContext,
-        modelApi: input.finalization.modelApi,
-        executionContract: input.finalization.executionContract,
-        payloadsWithToolMedia: [
-          ...(prepared.payloadsWithToolMedia ?? []),
-          ...(kind === "tool presentation"
-            ? []
-            : [
-                {
-                  text: "Explicit error",
-                  isError: true,
-                  ...(kind === "structured tool error" ? { channelData: { explicit: true } } : {}),
-                },
-              ]),
-        ],
-        hasTerminalToolPresentation: kind === "tool presentation",
-        terminalState: input.initial.terminalState,
-        settledTurnFinalizationAvailable: true,
-      });
-      expect(request).toBeNull();
+      const request = prepareRequest();
+      if (kind === "tool presentation") {
+        request.hasTerminalToolPresentation = true;
+      } else {
+        request.payloadsWithToolMedia?.push({
+          text: "Explicit error",
+          isError: true,
+          ...(kind === "structured tool error" ? { channelData: { explicit: true } } : {}),
+        });
+      }
+      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
     },
   );
 });

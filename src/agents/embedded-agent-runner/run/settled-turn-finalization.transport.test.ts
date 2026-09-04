@@ -5,7 +5,11 @@ import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports"
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../../../../packages/agent-core/src/agent-loop.js";
-import type { AgentTool } from "../../../../packages/agent-core/src/types.js";
+import type { AgentMessage, AgentTool } from "../../../../packages/agent-core/src/types.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "../../../../test/helpers/openai-responses-sse.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
@@ -15,13 +19,20 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import {
-  createResolvedEmbeddedRunnerModel,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createResolvedEmbeddedRunnerModel } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
-import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
+import {
+  createSettledFinalizationTestInput,
+  createSettledProviderFailureAttempt,
+} from "./settled-turn-finalization.test-support.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
+
+function toLlmMessages(items: AgentMessage[]): Message[] {
+  return items.filter(
+    (message): message is Message =>
+      message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+  );
+}
 
 const fixture = useTempSessionsFixture("settled-provider-error-loopback-");
 let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
@@ -31,7 +42,7 @@ beforeEach(() => {
 afterEach(() => admission.close());
 
 it("executes the tool once and finalizes over HTTP after a transient 503", async () => {
-  const requests: Array<{ tools?: unknown[]; input?: unknown[] }> = [];
+  const requests: Array<{ tools?: unknown[] }> = [];
   const server = createServer((request, response) => {
     request.setEncoding("utf8");
     let body = "";
@@ -52,25 +63,23 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
         );
         return;
       }
-      const item =
-        requests.length === 1
-          ? {
-              type: "function_call",
-              id: "fc_write",
-              call_id: "call_write",
-              name: "write",
-              arguments: "{}",
-              status: "completed",
-            }
-          : {
-              type: "message",
-              id: "msg_final",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "Note saved once.", annotations: [] }],
-            };
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const events = [
+      if (requests.length !== 1) {
+        writeOpenAiResponsesText(response, {
+          text: "Note saved once.",
+          messageId: "msg_final",
+          responseId: "resp_final",
+        });
+        return;
+      }
+      const item = {
+        type: "function_call",
+        id: "fc_write",
+        call_id: "call_write",
+        name: "write",
+        arguments: "{}",
+        status: "completed",
+      };
+      writeOpenAiResponsesSse(response, [
         {
           type: "response.output_item.added",
           output_index: 0,
@@ -86,11 +95,7 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
             usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
           },
         },
-      ];
-      for (const event of events) {
-        response.write("data: " + JSON.stringify(event) + "\n\n");
-      }
-      response.end();
+      ]);
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -102,15 +107,12 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     if (!address || typeof address === "string") {
       throw new Error("Missing loopback address");
     }
-    const model: Model = {
-      id: "test-model",
-      name: "Loopback",
-      provider: "loopback-provider",
-      api: "openai-responses",
+    const resolved = createResolvedEmbeddedRunnerModel("loopback-provider", "test-model", {
       baseUrl: "http://127.0.0.1:" + address.port + "/v1",
-      reasoning: false,
+    });
+    const model: Model = {
+      ...resolved.model,
       input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 8192,
       maxTokens: 256,
     };
@@ -121,6 +123,8 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
       storePath: path.join(fs.realpathSync(fixture.sessionsDir()), "sessions.json"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const persist = (message: AgentMessage) =>
+      appendSessionTranscriptMessageByIdentity({ ...target, config: {}, message });
     const note = path.join(fixture.sessionsDir(), "note.txt");
     const execute = vi.fn(async () => {
       fs.appendFileSync(note, "saved\n");
@@ -141,13 +145,7 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
       {
         model,
         apiKey: "synthetic-loopback-key",
-        convertToLlm: (items) =>
-          items.filter(
-            (message): message is Message =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          ),
+        convertToLlm: toLlmMessages,
       },
       async (event) => {
         if (event.type === "tool_execution_start") {
@@ -159,11 +157,7 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
           itemLifecycle.activeCount--;
         }
         if (event.type === "message_end") {
-          await appendSessionTranscriptMessageByIdentity({
-            ...target,
-            config: {},
-            message: event.message,
-          });
+          await persist(event.message);
         }
       },
       undefined,
@@ -180,46 +174,31 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
     expect(itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     const prefix = await readVisibleSessionTranscriptMessageEntries(target);
     expect(prefix.some((entry) => entry.message.role === "toolResult")).toBe(true);
-    const attempt = makeEmbeddedRunnerAttempt({
-      terminal: { kind: "failed", source: "prompt", error },
+    const attempt = createSettledProviderFailureAttempt({
       sessionIdUsed: target.sessionId,
       messagesSnapshot: messages,
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptCompletedAssistant: assistant,
       toolMetas: [
         { toolName: "write", toolCallId: "call_write", isError: false, replaySafe: false },
       ],
       itemLifecycle,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      settledTurnFinalizationContext: {
-        source: "openclaw-transcript",
-        messages: Object.freeze([...messages]),
-      },
     });
     const input = createSettledFinalizationTestInput(attempt, await admission.admit("embedded"));
-    input.initial.currentAttemptCompletedAssistant = assistant;
     input.terminalBase.runParams.trigger = "user";
     input.terminalBase.runParams.config = {};
     input.terminalBase.provider = model.provider;
     input.terminalBase.model = model.id;
     input.terminalBase.activeErrorContext = { provider: model.provider, model: model.id };
-    Object.assign(
-      input.finalization.preparedAttempt,
-      createResolvedEmbeddedRunnerModel("loopback-provider", model.id),
-      {
-        model,
-        config: {},
-        provider: "loopback-provider",
-        modelId: model.id,
-        resolvedApiKey: "synthetic-loopback-key",
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        authProfileStore: { version: 1, profiles: {} },
-      },
-    );
+    Object.assign(input.finalization.preparedAttempt, resolved, {
+      model,
+      config: {},
+      provider: "loopback-provider",
+      modelId: model.id,
+      resolvedApiKey: "synthetic-loopback-key",
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      authProfileStore: { version: 1, profiles: {} },
+    });
     const finalize = vi.fn<NonNullable<typeof input.finalization.harness.finalizeSettledTurn>>(
       async ({ attempt: prepared, settledAttempt }) => {
         expect(prepared).toMatchObject({
@@ -232,22 +211,13 @@ it("executes the tool once and finalizes over HTTP after a transient 503", async
           model,
           {
             systemPrompt: prepared.prompt,
-            messages: messages.filter(
-              (message): message is Message =>
-                message.role === "user" ||
-                message.role === "assistant" ||
-                message.role === "toolResult",
-            ),
+            messages: toLlmMessages(messages),
             tools: prepared.disableTools ? [] : [tool],
           },
           { apiKey: "synthetic-loopback-key", signal: prepared.abortSignal },
         );
         const answer = await response.result();
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          config: {},
-          message: answer,
-        });
+        await persist(answer);
         return { assistant: answer, assistantTranscriptOwned: true };
       },
     );
