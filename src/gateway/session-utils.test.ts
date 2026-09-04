@@ -48,7 +48,6 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
-import { resolveSessionListSearchModelFields } from "./session-utils-search.js";
 import {
   type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
@@ -370,6 +369,58 @@ describe("gateway session utils", () => {
     });
 
     expect(row.modelOverrideSource).toBe(expected);
+  });
+
+  test("projects the active fallback model separately from the selected model", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: "fallback-session",
+        updatedAt: 1,
+        providerOverride: "codex",
+        modelOverride: "gpt-5.5",
+        modelProvider: "ollama",
+        model: "qwen3.5:9b",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.5",
+          activeModel: "ollama/qwen3.5:9b",
+        },
+      },
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "codex",
+      model: "gpt-5.5",
+      activeModelProvider: "ollama",
+      activeModel: "qwen3.5:9b",
+    });
+  });
+
+  test("does not project a stale fallback notice after the runtime returns to the selection", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "codex/gpt-5.5" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: "recovered-session",
+        updatedAt: 1,
+        modelProvider: "codex",
+        model: "gpt-5.5",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.5",
+          activeModel: "ollama/qwen3.5:9b",
+        },
+      },
+    });
+
+    expect(row.activeModelProvider).toBeUndefined();
+    expect(row.activeModel).toBeUndefined();
   });
 
   test.each([
@@ -1460,7 +1511,7 @@ describe("gateway session utils", () => {
 
   test.each([true, false])(
     "projects the private native model instead of outer or observed guesses (lightweight=%s)",
-    (lightweightListRow) => {
+    async (lightweightListRow) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.6-sol" });
       const entry = (sessionId: string): InternalSessionEntry => ({
         sessionId,
@@ -1544,9 +1595,13 @@ describe("gateway session utils", () => {
         });
       const nativeRow = readRow(nativeKey);
       expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
-      expect(
-        resolveSessionListSearchModelFields({ cfg, key: nativeKey, entry: native, rowContext }),
-      ).toContain("openai/gpt-5.6-luna");
+      const matches = await listSessionsFromStoreAsync({
+        cfg,
+        storePath: "",
+        store,
+        opts: { search: "openai/gpt-5.6-luna" },
+      });
+      expect(matches.sessions.map((row) => row.key)).toEqual([nativeKey]);
       expect(buildGatewaySessionEventFields({ sessionRow: nativeRow })).toMatchObject({
         modelProvider: "openai",
         model: "gpt-5.6-luna",

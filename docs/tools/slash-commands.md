@@ -275,6 +275,7 @@ plugins.
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
+    | `/dashboard [request]` | Create or update the current session's dashboard using the Control UI dashboard workflow |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
@@ -282,6 +283,11 @@ plugins.
     | `/whoami` | Show your sender id. Alias: `/id` |
     | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
   </Accordion>
+
+`/dashboard` is reserved as a built-in command. If an existing user skill is
+named `dashboard`, skill discovery exposes its generated slash alias as
+`/dashboard_2`; `$dashboard` and `/skill dashboard` continue to select that
+user skill directly.
 
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |

@@ -2,7 +2,7 @@ import {
   observeAgentRunApprovalWait,
   type AgentRunApprovalWait,
 } from "./agent-run-approval-wait.js";
-import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { codeModeReplayIdForToolCall, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
@@ -12,7 +12,6 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
-import { registerRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -35,7 +34,6 @@ import {
   createCodeModeRunOwner,
   createPendingBridgeStates,
   disposeCodeModeRun,
-  isCodeModeBridgeRepairEligible,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
@@ -52,7 +50,6 @@ import {
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
@@ -81,10 +78,7 @@ export async function runCodeModeExec(params: {
   const bridgeDispatch = createCodeModeBridgeDispatchState();
   const deadlineMs = performance.now() + config.timeoutMs;
   const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = resolveSwarmConfig(
-    params.ctx.runtimeConfig ?? params.ctx.config,
-    params.ctx.agentId,
-  ).enabled;
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const codeModeReplayId = codeModeReplayIdForToolCall(
     params.ctx,
     params.toolCallId,
@@ -424,7 +418,7 @@ async function settleCodeModeResult(params: {
         {
           error: result.pendingRequests.every((request) => request.method === "namespace")
             ? "restart-safe code mode cannot call namespace tools."
-            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
+            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
         },
         params.runtime.hasNetworkContent(),
       );
@@ -498,11 +492,7 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
-  const finalized = output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
-  if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
-    registerRepairableCodeModeFailure(finalized);
-  }
-  return finalized;
+  return output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
 }
 
 export async function runWait(params: {

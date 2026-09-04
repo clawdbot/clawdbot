@@ -43,7 +43,9 @@ process.stdin.on("end", () => {
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const detail = "startup-tail-é " + process.argv[3] + "/chrome/Profile 1 " +
   "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
-process.stderr.write("discarded-startup-prefix\n" + "x".repeat(9000) + "\n" + detail);
+if (process.argv[4] === undefined) {
+  process.stderr.write("discarded-startup-prefix\n" + "x".repeat(9000) + "\n" + detail);
+}
 const failureMethod = process.argv[2];
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
@@ -51,11 +53,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   if (message.method === failureMethod) {
     send({ id: message.id, error: { code: -32000, message: "fixture attach failed: " + detail } });
   } else if (message.method === "initialize") {
-    send({ id: message.id, result: {
+    // A full stderr pipe must drain before the handshake can finish.
+    process.stderr.write("x".repeat(Number(process.argv[4] ?? 0)), () => send({ id: message.id, result: {
       protocolVersion: message.params.protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: "synthetic-browser", version: "1.0.0" },
-    } });
+    } }));
   } else if (message.method === "tools/list") {
     send({ id: message.id, result: { tools: [{ name: "list_pages", inputSchema: { type: "object" } }] } });
   } else if (message.method === "tools/call" && message.params.name === "list_pages") {
@@ -125,16 +128,21 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     },
   );
 
-  it("keeps successful startup and tool calls usable without emitting failure diagnostics", async () => {
-    const result = await withChromeMcpLease(profileName, options, {}, async ({ session }) =>
-      session.client.callTool({ name: "list_pages", arguments: {} }),
-    );
-    expect(result).toMatchObject({
-      content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-    });
-    expect(getChromeMcpPid(profileName)).toBeGreaterThan(0);
-    expect(warn).not.toHaveBeenCalled();
-    await expect(closeChromeMcpSession(profileName)).resolves.toBe(true);
-    await expectSubprocessClosed();
-  });
+  it.each([0, 2 * 1024 * 1024])(
+    "keeps startup and tool calls usable with %i stderr bytes",
+    async (stderrBytes) => {
+      options.args.push(String(stderrBytes));
+      const result = await withChromeMcpLease(profileName, options, {}, async ({ session }) =>
+        session.client.callTool({ name: "list_pages", arguments: {} }),
+      );
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+      });
+      expect(getChromeMcpPid(profileName)).toBeGreaterThan(0);
+      expect(warn).not.toHaveBeenCalled();
+      await expect(closeChromeMcpSession(profileName)).resolves.toBe(true);
+      await expectSubprocessClosed();
+    },
+    40_000,
+  );
 });
