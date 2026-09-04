@@ -317,8 +317,8 @@ function createReplyActionPlugin(handleAction: ChannelActionHandler): ChannelPlu
       },
     },
     actions: {
-      describeMessageTool: () => ({ actions: ["reply", "poll"] }),
-      supportsAction: ({ action }) => action === "reply" || action === "poll",
+      describeMessageTool: () => ({ actions: ["reply", "poll", "dice"] }),
+      supportsAction: ({ action }) => action === "reply" || action === "poll" || action === "dice",
       handleAction,
     },
   };
@@ -378,6 +378,28 @@ export async function runCurrentConversationPollAction(params: { to: string }) {
       pollQuestion: "Preferred default?",
       pollOption: ["Tell me right away", "Only important"],
     },
+    toolContext,
+    messageActionAuthorization: {
+      requesterAccountId: "default",
+      toolContext,
+    },
+    sessionKey: "agent:main:testchat:direct:user-1",
+    defaultAccountId: "default",
+    sourceReplyDeliveryMode: "message_tool_only",
+    dryRun: false,
+  });
+}
+
+export async function runCurrentConversationDiceAction(params: { to: string }) {
+  const toolContext = {
+    currentChannelProvider: "testchat" as const,
+    currentChannelId: "direct:user-1",
+    currentMessageId: "1783",
+  };
+  return await runFixtureMessageAction({
+    cfg: testchatConfig,
+    action: "dice",
+    params: { channel: "testchat", to: params.to, diceEmoji: "\u{1F3B2}" },
     toolContext,
     messageActionAuthorization: {
       requesterAccountId: "default",

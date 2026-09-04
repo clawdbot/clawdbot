@@ -195,6 +195,12 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
+const sendDiceTelegram = vi.fn(async () => ({
+  messageId: "801",
+  chatId: "123",
+  emoji: "\u{1F3B2}",
+  value: 4,
+}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const editMessageTelegram = vi.fn(async () => ({
   ok: true,
@@ -364,6 +370,7 @@ describe("handleTelegramAction", () => {
       sendMessageTelegram,
       sendPollTelegram,
       sendStickerTelegram,
+      sendDiceTelegram,
       deleteMessageTelegram,
       editMessageTelegram,
       editMessageReplyMarkupTelegram,
@@ -377,6 +384,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
+    sendDiceTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
     editMessageReplyMarkupTelegram.mockClear();
@@ -1604,6 +1612,23 @@ describe("handleTelegramAction", () => {
     expect(details.messageId).toBe("790");
     expect(details.chatId).toBe("123");
     expect(details.pollId).toBe("poll-1");
+  });
+
+  it("forwards the silent option to a dice roll", async () => {
+    // The shared schema accepts `silent` for dice and the sender supports it; dropping it
+    // here made silent rolls notify recipients anyway.
+    const result = await handleTelegramAction(
+      { action: "dice", to: "@testchannel", diceEmoji: "\u{1F3B2}", silent: true },
+      telegramConfig(),
+    );
+    const call = mockCall(sendDiceTelegram, 0, "send dice");
+    expect(call[0]).toBe("@testchannel");
+    expect(call[1]).toBe("\u{1F3B2}");
+    const options = requireRecord(call[2], "send dice options");
+    expect(options.silent).toBe(true);
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.value).toBe(4);
   });
 
   it("returns a model-visible warning when public poll routing is unavailable", async () => {

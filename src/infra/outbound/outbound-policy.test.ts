@@ -199,6 +199,22 @@ describe("outbound policy helpers", () => {
       expected: /target="C999" while bound to "C123"/,
     },
     {
+      // A roll is recipient-visible and addressed by `to`; omitting it from the guard set
+      // let a bound run drop out of the check before targets were ever compared.
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "dice" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: /target="C999" while bound to "C123"/,
+    },
+    {
       cfg: {
         ...workspaceConfig,
         agents: {

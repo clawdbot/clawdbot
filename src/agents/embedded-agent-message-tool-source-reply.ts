@@ -126,9 +126,12 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
     return false;
   }
   const args = asOptionalRecord(params.args) ?? {};
+  // A recorded `current-source` route is the producer's own delivery fact: it already
+  // proved this send reached the run's conversation. Re-deriving eligibility from the
+  // action name here silently drops native sends the name list does not enumerate.
   const sourceRouteReplyAction =
-    (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
-    isMessageToolSourceReplyActionName(args.action);
+    confirmedCurrentSourceRoute ||
+    (params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action));
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }

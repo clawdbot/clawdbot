@@ -237,6 +237,62 @@ describe("mirrorDeliveredSourceReplyToTranscript", () => {
     expect(mirrored).toBe(false);
     expect(transcriptMocks.append).not.toHaveBeenCalled();
   });
+
+  // The message tool's argument object is flat, so a roll can carry send-payload fields.
+  // Telegram ignores them, so mirroring would record assistant text nobody received.
+  it("does not mirror a dice delivery carrying ignored send-payload text", async () => {
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      action: "dice",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", message: "You rolled a six" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true, messageId: "dice-1" },
+    });
+
+    expect(mirrored).toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror a dice delivery carrying ignored media fields", async () => {
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      action: "dice",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", mediaUrl: "https://example.invalid/roll.png" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true, messageId: "dice-2" },
+    });
+
+    expect(mirrored).toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror a poll delivery carrying ignored send-payload text", async () => {
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript({
+      action: "poll",
+      channel: "testchat",
+      actionParams: { to: "direct:user-1", message: "ignored poll caption" },
+      cfg: {},
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true, messageId: "poll-1" },
+    });
+
+    expect(mirrored).toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
 });
 
 describe("beginTerminalSourceReplyDelivery", () => {

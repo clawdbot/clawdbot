@@ -44,6 +44,9 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-create",
   "thread-reply",
   "sticker",
+  // A roll is a recipient-visible send addressed by `to`, so it must clear the same
+  // cross-context check; without the entry the guard returns before comparing targets.
+  "dice",
 ]);
 
 // Mutations are guarded above, but markers only apply to outbound payloads that
