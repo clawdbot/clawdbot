@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "ts": "2026-09-04T08:31:23.668Z",
+  "goal": "Execute the committed plan.md and goal.json at current HEAD, completing detached no-persistence behavior and cancellation-after-committed-append consistency with real owner/delivery-boundary E2E proof.",
+  "constraints": [
+    "Treat plan.md and goal.json at current HEAD as authoritative.",
+    "Use strict RED→GREEN for every implementation slice; preserve a demonstrably failing pre-fix regression before implementation.",
+    "Touch at most 5 files per slice.",
+    "Do not run or restart the runtime.",
+    "Do not push before the final review advances/approves the work."
+  ],
+  "success_criteria": [
+    "All gates in goal.json pass.",
+    "Detached execution performs no persistence as specified by the plan.",
+    "Cancellation after a committed append remains consistent across the owning boundary.",
+    "Real owner/delivery-boundary E2E verifies user-visible behavior; mocks alone are insufficient.",
+    "Reviewer confirms RED→GREEN evidence, scoped file slices, and no premature push."
+  ],
+  "max_attempts": 1
+}

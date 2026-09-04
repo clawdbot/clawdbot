@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "ts": "2026-09-04T08:28:32.168Z",
+  "goal": "Fix detached no-persistence and cancellation-after-committed-append consistency at the canonical owner/delivery boundary, with real E2E proof for normal, detached, and cancellation flows.",
+  "constraints": [
+    "Strict RED→GREEN: capture the failing regression before production edits and rerun it unchanged after the fix.",
+    "Change at most five implementation/test files, excluding plan.md and goal.json.",
+    "Do not add configuration, protocol, or persistence-schema surfaces.",
+    "Do not use consumer-only guards, retries, larger timeouts, weakened assertions, or mock-only proof.",
+    "Run relevant repository gates.",
+    "Do not push until the Reviewer gives final advance."
+  ],
+  "success_criteria": [
+    "Normal delivery persists and reports committed output consistently.",
+    "Detached delivery does not lose committed output.",
+    "Cancellation after a committed append preserves and reports committed state consistently.",
+    "Real owner/delivery-boundary E2E covers all three flows.",
+    "Relevant tests and static checks pass; final diff stays within five repair files."
+  ],
+  "max_attempts": 5
+}

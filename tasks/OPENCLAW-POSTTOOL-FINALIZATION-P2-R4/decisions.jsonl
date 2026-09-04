@@ -1,0 +1,1 @@
+{"ts":"2026-09-04T08:31:23.667Z","kind":"spawn_subagents","actor":"planner","payload":{"coder_engine":"codex","coder_model":"gpt-5.6-sol","reviewer_engine":"cursor","reviewer_model":"auto"}}
