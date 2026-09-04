@@ -7,6 +7,7 @@ import {
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
 } from "./diagnostic-env.test-support.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 
 const mocks = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), run: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -16,10 +17,18 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.run }));
 
+// The real Node child needs valid Windows bootstrap roots before it can run the report.
+// Capture them before the fixture replaces the environment and mocks the platform.
 const routing = {
   Path: "C:\\SyntheticTools",
-  SystemRoot: "C:\\SyntheticWindows",
-  WINDIR: "C:\\SyntheticWindows",
+  SystemRoot:
+    process.platform === "win32"
+      ? resolveEnvironmentValue(process.env, "SystemRoot")
+      : "C:\\SyntheticWindows",
+  WINDIR:
+    process.platform === "win32"
+      ? resolveEnvironmentValue(process.env, "WINDIR")
+      : "C:\\SyntheticWindows",
   ComSpec: "C:\\SyntheticWindows\\System32\\cmd.exe",
   PATHEXT: ".EXE;.COM",
   USERPROFILE: "C:\\Users\\fixture",

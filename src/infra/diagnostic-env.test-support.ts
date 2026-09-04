@@ -16,7 +16,7 @@ export function diagnosticEnvReportScript(routing: NodeJS.ProcessEnv): string {
   })`;
 }
 
-// Clear ambient values before launching fixtures: even the pre-fix child sees only synthetic data.
+// Clear ambient values before launching fixtures: even the pre-fix child sees only fixture inputs.
 export async function withSyntheticDiagnosticEnv(
   routing: NodeJS.ProcessEnv,
   run: () => Promise<void>,
