@@ -8660,16 +8660,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
     }
 
-    private static func nodeAppModelSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Model/NodeAppModel.swift")
-    }
-}
-
-@Suite(.serialized)
-struct GatewayWebSocketDeliveryTests {
     @Test
     func `one shot frames survive receive registration gaps`() async throws {
         let socket = GatewayTestWebSocketTask()
@@ -8714,5 +8704,12 @@ struct GatewayWebSocketDeliveryTests {
             }
         }
         #expect(errors == [.cancelled])
+    }
+
+    private static func nodeAppModelSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Model/NodeAppModel.swift")
     }
 }
