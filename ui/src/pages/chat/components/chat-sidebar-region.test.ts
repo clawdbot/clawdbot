@@ -99,7 +99,7 @@ describe("chat sidebar region", () => {
       const state = createPageState(
         context,
         { afterCommit: () => () => {}, invalidate: vi.fn() },
-        { querySelector: () => null },
+        document.createElement("div"),
       );
       state.sessionKey = "agent:main:main";
       state.sidebarLayout = layout;
