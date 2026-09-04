@@ -198,6 +198,74 @@ describe("managed llama-server", () => {
     );
   });
 
+  it("prepares an isolated candidate without changing the active restart preset", async () => {
+    const root = tempDirs.make("llama-server-candidate-");
+    const presetPath = path.join(root, "models.ini");
+    const active = "version = 1\n\n[active-chat]\nmodel = /models/active.gguf\n";
+    await fs.writeFile(presetPath, active);
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    const command = path.join(root, "llama-server");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({ command, asset });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: root,
+      command,
+      presetPath,
+    });
+
+    const candidate = await prepareManagedLlamaServer({
+      chatModel: {
+        mode: "configure",
+        id: "candidate-chat",
+        path: "/models/candidate.gguf",
+        contextSize: 16_384,
+      },
+      embeddingModelPath: "/models/embedding.gguf",
+      asset,
+      isolated: true,
+      port: 19_435,
+    });
+    const candidatePreset = candidate.args[candidate.args.indexOf("--models-preset") + 1]!;
+    expect(candidatePreset).not.toBe(presetPath);
+    expect(await fs.readFile(presetPath, "utf8")).toBe(active);
+    const contents = await fs.readFile(candidatePreset, "utf8");
+    expect(contents).toContain(
+      "[candidate-chat]\nmodel = /models/candidate.gguf\nctx-size = 16384",
+    );
+    expect(contents).toContain("[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf");
+    expect(contents).not.toContain("active-chat");
+  });
+
+  it.each(["environment preset", "direct model"])(
+    "preserves a configured %s service",
+    async (mode) => {
+      const root = tempDirs.make("llama-server-configured-");
+      const presetPath = path.join(root, "custom.ini");
+      const localService = {
+        command: path.join(root, "custom-server"),
+        cwd: root,
+        args: mode === "direct model" ? ["--model", "/models/chat.gguf", "--alias", "chat"] : [],
+        ...(mode === "environment preset"
+          ? { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }
+          : {}),
+      };
+      const runtime = await prepareManagedLlamaServer({
+        localService,
+        port: 19436,
+        chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf" },
+        embeddingModelPath: "/models/embedding.gguf",
+      });
+      expect(runtime.command).toBe(localService.command);
+      expect(runtime.args).toEqual(localService.args);
+      if (mode === "environment preset") {
+        expect(await fs.readFile(presetPath, "utf8")).toContain(
+          "[chat]\nmodel = /models/chat.gguf",
+        );
+      } else {
+        expect(await fs.readdir(root)).toEqual([]);
+      }
+    },
+  );
+
   it("writes a 2048-token physical batch in the combined preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
@@ -271,37 +339,32 @@ describe("managed llama-server", () => {
     }
   });
 
-  it("preserves a custom embedding model when chat prepares the shared restart preset", async () => {
+  it("preserves both model stanzas and the configured CUDA runtime during concurrent preparation", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const chatModelPath = path.join(tempRoot, "chat.gguf");
     const embeddingModelPath = path.join(tempRoot, "custom-embedding.gguf");
-    const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
-    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
-      presetPath,
-    });
+    const localService = {
+      command: path.join(tempRoot, "win32-x64-cuda-12.4", "llama-server.exe"),
+      args: ["--models-preset", presetPath],
+    };
 
     try {
       await Promise.all([
         fs.writeFile(chatModelPath, "GGUF"),
         fs.writeFile(embeddingModelPath, "GGUF"),
       ]);
-      await Promise.all([
+      const [embeddingRuntime] = await Promise.all([
         prepareManagedLlamaServer({
           chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
+          localService,
         }),
         ensureManagedLlamaServerForChat({
           provider: {
             baseUrl: "http://127.0.0.1:19434/v1",
-            localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+            localService,
             models: [],
             params: { modelCacheDir: tempRoot },
           },
@@ -313,6 +376,10 @@ describe("managed llama-server", () => {
         }),
       ]);
 
+      expect(embeddingRuntime.command).toBe(localService.command);
+      expect(embeddingRuntime.args).toContain(presetPath);
+      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+      expect(installMocks.resolveManagedLlamaServerPaths).not.toHaveBeenCalled();
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
       expect(preset).toContain(

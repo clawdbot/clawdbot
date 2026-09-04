@@ -412,7 +412,7 @@ describe("pending spawn invocation authority", () => {
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
       const survivor = vi.fn(async () => {});
       enqueueSwarmRun({
-        groupId: JSON.stringify([parentSessionKey, groupId]),
+        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
         runId: "surviving-reservation",
         maxConcurrent: 1,
         activeRunIds: [],
@@ -441,7 +441,7 @@ describe("pending spawn invocation authority", () => {
       const { cfg, context, admission, parent, admitted } = await createBoundParent();
       const blockerStarted = createDeferred();
       enqueueSwarmRun({
-        groupId: JSON.stringify([parentSessionKey, groupId]),
+        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
         runId: "handoff-blocker",
         maxConcurrent: 1,
         activeRunIds: [],

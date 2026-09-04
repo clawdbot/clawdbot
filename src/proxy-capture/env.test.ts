@@ -1,6 +1,7 @@
 // Proxy capture env tests cover environment variable generation for capture sessions.
-import { describe, expect, it } from "vitest";
-import { resolveDebugProxySettings } from "./env.js";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveDebugProxySettings, resolveEffectiveDebugProxyUrl } from "./env.js";
 
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
@@ -24,5 +25,34 @@ describe("resolveDebugProxySettings", () => {
     });
 
     expect(settings.sessionId).toBe("session-explicit");
+  });
+});
+
+describe("resolveEffectiveDebugProxyUrl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("does not discover capture paths while disabled and retains configured URL precedence", () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv(OPENCLAW_DEBUG_PROXY_ENABLED, "0");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://ambient.example.test:8080");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    expect(resolveEffectiveDebugProxyUrl()).toBeUndefined();
+    expect(resolveEffectiveDebugProxyUrl(" http://configured.example.test:8080 ")).toBe(
+      "http://configured.example.test:8080",
+    );
+    expect(existsSync).not.toHaveBeenCalled();
+
+    vi.stubEnv(OPENCLAW_DEBUG_PROXY_ENABLED, "1");
+    expect(resolveEffectiveDebugProxyUrl()).toBe("http://ambient.example.test:8080");
+    expect(resolveEffectiveDebugProxyUrl("http://configured.example.test:8080")).toBe(
+      "http://configured.example.test:8080",
+    );
+    vi.stubEnv(OPENCLAW_DEBUG_PROXY_ENABLED, "0");
+    expect(resolveEffectiveDebugProxyUrl()).toBeUndefined();
   });
 });

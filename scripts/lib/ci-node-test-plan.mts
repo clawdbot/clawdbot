@@ -16,7 +16,7 @@ import {
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
-import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -1738,7 +1738,10 @@ function createCoreUnitSrcSecuritySplitShards(): NodeTestSplitShard[] {
 function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const isolatedUiFiles = new Set(uiIsolatedTestFiles);
-  const files = listTestFiles("ui/src").filter(
+  const files = [
+    ...listTestFiles("ui/src"),
+    ...listTestFiles("extensions").filter(isPluginControlUiPath),
+  ].filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
       !isolatedUiFiles.has(file) &&

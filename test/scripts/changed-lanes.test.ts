@@ -1932,6 +1932,24 @@ describe("scripts/changed-lanes", () => {
       },
     },
     {
+      name: "routes plugin browser production to extension typechecks",
+      path: "extensions/workboard/browser/index.ts",
+      expected: {
+        lanes: { extensions: true, extensionTests: true },
+        includes: ["tsgo:extensions", "tsgo:extensions:test"],
+        excludes: ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
+      },
+    },
+    {
+      name: "routes plugin browser tests to extension test types",
+      path: "extensions/workboard/browser/catalog.test.ts",
+      expected: {
+        lanes: { extensionTests: true },
+        includes: ["tsgo:extensions:test"],
+        excludes: ["tsgo:extensions", "tsgo:core", "tsgo:core:test", "tsgo:ui"],
+      },
+    },
+    {
       name: "routes extension production changes to extension prod and extension test lanes",
       path: "extensions/lmstudio/src/model-reasoning.ts",
       expected: {

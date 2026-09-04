@@ -3119,38 +3119,6 @@ a:is(
   stroke-linejoin: round;
 }
 
-.workboard-board-glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--workboard-board-color, var(--muted)) 34%, transparent);
-  border-radius: 6px;
-  background: color-mix(
-    in srgb,
-    var(--workboard-board-color, var(--muted)) 16%,
-    var(--bg-elevated)
-  );
-  color: var(--workboard-board-color, var(--muted));
-  font-size: 10px;
-  font-weight: 750;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.workboard-board-glyph--sidebar {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  font-size: 9px;
-}
-
-.nav-item--active .workboard-board-glyph {
-  color: var(--workboard-board-color, var(--accent));
-}
-
 .nav-item__text {
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
@@ -4369,16 +4337,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 14px;
 }
 
-.content--workboard > openclaw-router-outlet,
-.content--workboard openclaw-workboard-page {
+.content--workboard > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
   min-height: 0;
-}
-
-.content--workboard openclaw-workboard-page {
-  gap: 14px;
 }
 
 :root[data-theme-mode="light"] .content {
@@ -4402,14 +4365,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* Keep ordinary page headers below the fixed web chrome instead of shifting
-   their titles away from the page content. Settings, mobile drawers, and
-   native hosts own different chrome. */
+/* Clear collapsed-sidebar web chrome once, at the reconnect notice or page header.
+   Settings, mobile drawers, and native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell.shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
-  .content:not(.content--chat)
-  .content-header {
-  margin-top: 48px;
+  .content:not(.content--chat) {
+  > .connection-action-block,
+  &:not(:has(> .connection-action-block)) .content-header {
+    margin-top: 48px;
+  }
 }
 
 .content-header--page + * {

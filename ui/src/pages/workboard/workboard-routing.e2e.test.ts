@@ -8,6 +8,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard routing",
@@ -99,6 +100,7 @@ suite.define(() => {
     const { page } = recorded;
     try {
       await installMockGateway(page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": configSnapshot(true),
           "sessions.list": sessionsListResponse(),
@@ -131,9 +133,8 @@ suite.define(() => {
       const customize = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
       );
-      await customize.getByText("WorkBoard", { exact: true }).waitFor();
       await customize.getByRole("menuitemcheckbox", { name: /Operations/u }).click();
-      const pinnedBoard = sidebar.locator('[data-sidebar-entry="workboard:ops"] a');
+      const pinnedBoard = sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a');
       await pinnedBoard.waitFor();
       expect(await pinnedBoard.getAttribute("href")).toBe("/workboard/ops");
       if (captureUiProofEnabled) {
@@ -153,7 +154,7 @@ suite.define(() => {
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
 
       await page.reload();
-      await sidebar.locator('[data-sidebar-entry="workboard:ops"] a').waitFor();
+      await sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a').waitFor();
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -162,6 +163,7 @@ suite.define(() => {
         });
       }
 
+      const historyBeforeMissingBoard = await page.evaluate(() => history.length);
       await page.goto(`${suite.server.baseUrl}workboard/deleted?agent=main`);
       await waitForControlUiRoute(page, {
         pathname: "/workboard",
@@ -170,6 +172,7 @@ suite.define(() => {
       });
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
       await page.locator(".workboard-page-title", { hasText: "Workboard" }).waitFor();
+      expect(await page.evaluate(() => history.length)).toBe(historyBeforeMissingBoard + 1);
     } finally {
       await closeRecordedPage(recorded, "routing");
     }
@@ -196,6 +199,7 @@ suite.define(() => {
         };
 
         const gateway = await installMockGateway(page, {
+          ...workboardUi,
           methodResponses: {
             "agents.list": {
               defaultId: "main",
@@ -254,11 +258,11 @@ suite.define(() => {
         await gateway.deferNext("workboard.cards.create");
         await page.getByRole("button", { name: /New card/u }).click();
 
-        const createForm = page.locator('openclaw-modal-dialog[label="New card"]');
+        const createForm = page.locator(".workboard-draft");
         await expect
           .poll(() =>
             createForm
-              .locator(".workboard-agent-select")
+              .locator(".workboard-agent-select openclaw-agent-select")
               .evaluate((select) => (select as HTMLElement & { value: string }).value),
           )
           .toBe("writer");
@@ -282,6 +286,7 @@ suite.define(() => {
   it("hides Workboard navigation while the plugin is inactive", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page, {
+        nativePlugins: [],
         methodResponses: {
           "config.get": configSnapshot(false),
           "sessions.list": sessionsListResponse(),
@@ -298,8 +303,8 @@ suite.define(() => {
       const customize = sidebar.locator(
         "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
       );
-      expect(await customize.getByText("WorkBoard", { exact: true }).count()).toBe(0);
-      expect(await customize.locator('[value^="workboard:"]').count()).toBe(0);
+      expect(await customize.getByText("Workboard", { exact: true }).count()).toBe(0);
+      expect(await customize.locator('[value^="plugin:workboard/"]').count()).toBe(0);
     });
   });
 });

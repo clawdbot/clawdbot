@@ -896,6 +896,10 @@
     "target": "工具插件"
   },
   {
+    "source": "Feature plugins",
+    "target": "功能插件"
+  },
+  {
     "source": "Plugin SDK subpaths",
     "target": "插件 SDK 子路径"
   },

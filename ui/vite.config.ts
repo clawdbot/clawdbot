@@ -395,11 +395,11 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiPublicAssetBuildIdPlugin(buildId: string, buildOutDir: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugin {
   let publicAssets: ControlUiAssetManifestEntry[] = [];
   let cacheId: string | undefined;
   return {
-    name: "control-ui-public-asset-build-id",
+    name: "control-ui-build-output",
     apply: "build",
     configResolved(config) {
       const publicDir = config.build.copyPublicDir && config.publicDir;
@@ -414,10 +414,19 @@ function controlUiPublicAssetBuildIdPlugin(buildId: string, buildOutDir: string)
         ? `${buildId}-${hashControlUiAssetManifestEntries(publicAssets)}`
         : undefined;
     },
-    transformIndexHtml(html) {
-      return cacheId
-        ? html.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
-        : html;
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        return cacheId
+          ? marked.replace(/<html\b/iu, `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${cacheId}"`)
+          : marked;
+      },
     },
     writeBundle() {
       const swPath = path.join(buildOutDir, "sw.js");
@@ -608,7 +617,7 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(buildOutDir),
-      controlUiPublicAssetBuildIdPlugin(buildInfo.buildId, buildOutDir),
+      controlUiBuildOutputPlugin(buildInfo.buildId, buildOutDir),
       controlUiAssetManifestPlugin(buildOutDir),
       {
         name: "control-ui-dev-stubs",

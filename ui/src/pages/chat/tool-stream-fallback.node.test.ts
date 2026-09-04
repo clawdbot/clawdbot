@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 import type { FallbackStatus } from "./tool-stream-contract.ts";
@@ -204,17 +204,20 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       const request = vi.fn(async (method: string) =>
         method === "sessions.patch" ? pendingPatch.promise : result,
       );
-      const sessions = createSessionCapability({
-        snapshot: {
-          client: { request } as unknown as GatewayBrowserClient,
-          phase: "connected",
-          hello: null,
-          assistantAgentId: agentId,
-          sessionKey: key,
+      const sessions = createTestSessionCapability(
+        {
+          snapshot: {
+            client: { request } as unknown as GatewayBrowserClient,
+            phase: "connected",
+            hello: null,
+            assistantAgentId: agentId,
+            sessionKey: key,
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
         },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
-      });
+        agentId,
+      );
       const host = createHost({
         sessionKey: key,
         assistantAgentId: agentId,

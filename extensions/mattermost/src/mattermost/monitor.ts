@@ -20,6 +20,7 @@ import {
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
+import { normalizeMention } from "./monitor-helpers.js";
 import {
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
@@ -266,7 +267,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return false;
       }
       const text = normalizeOptionalString(entry.post.message) ?? "";
-      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
+      // Same mention-stripped view as the post handler, so "@bot /new" is never batched.
+      return (
+        Boolean(text) &&
+        !core.channel.commands.isControlCommandMessage(normalizeMention(text, botUsername), cfg)
+      );
     },
     onFlush: (entries, createFlush) => {
       const last = entries.at(-1);

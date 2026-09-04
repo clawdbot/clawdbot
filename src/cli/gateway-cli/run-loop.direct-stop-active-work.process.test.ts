@@ -38,7 +38,10 @@ const childScript = `
 
   const tracePath = process.argv[1];
   const stateDir = process.argv[2];
-  const trace = (line) => fs.appendFileSync(tracePath, line + "\\n");
+  const trace = (line) => {
+    fs.appendFileSync(tracePath, line + "\\n");
+    process.stdout.write("process proof: " + line + "\\n");
+  };
   const keepAlive = setInterval(() => {}, 1_000);
   const queue = createChannelIngressQueue({
     channelId: "process-proof",
@@ -127,9 +130,9 @@ function readTrace(tracePath: string): string[] {
 describe("runGatewayLoop direct-stop active work", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt(
-    "waits for a rootless adopted channel run before close after an OS SIGTERM",
-    async () => {
+  posixIt.each([false, true])(
+    "reports and drains a rootless adopted channel run after OS SIGTERM (trace=%s)",
+    async (traceEnabled) => {
       const fixtureDir = tempDirs.make("openclaw-direct-stop-active-work-");
       const stateDir = path.join(fixtureDir, "state");
       const homeDir = path.join(fixtureDir, "home");
@@ -149,13 +152,16 @@ describe("runGatewayLoop direct-stop active work", () => {
             NODE_OPTIONS: undefined,
             OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
             OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_GATEWAY_RESTART_TRACE: traceEnabled ? "1" : undefined,
             VITEST: undefined,
           },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
       children.add(child);
+      const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
+      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
       await vi.waitFor(
@@ -166,7 +172,8 @@ describe("runGatewayLoop direct-stop active work", () => {
         },
         { timeout: CHILD_READY_TIMEOUT_MS, interval: 25 },
       );
-      const exited = once(child, "exit") as Promise<
+      // The exit event can precede the final stdout data; close joins both streams.
+      const exited = once(child, "close") as Promise<
         [code: number | null, signal: NodeJS.Signals | null]
       >;
       expect(child.kill("SIGTERM")).toBe(true);
@@ -183,6 +190,22 @@ describe("runGatewayLoop direct-stop active work", () => {
       expect(trace.indexOf("signal:SIGTERM")).toBeLessThan(trace.indexOf("embedded-completed"));
       expect(trace.indexOf("embedded-completed")).toBeLessThan(trace.indexOf("gateway-close"));
       expect(trace.indexOf("gateway-close")).toBeLessThan(trace.indexOf("process-exit:0"));
+      const output = Buffer.concat(stdout).toString("utf8");
+      expect(output).toContain("embeddedRuns=1");
+      expect(output.indexOf("embeddedRuns=1")).toBeLessThan(
+        output.indexOf("process proof: embedded-completed"),
+      );
+      expect(output).toContain("active-work drain settled; beginning server close");
+      expect(output.indexOf("active-work drain settled; beginning server close")).toBeLessThan(
+        output.indexOf("process proof: gateway-close"),
+      );
+      if (traceEnabled) {
+        expect(output).toContain("restart trace: stop.signal.received ");
+        expect(output).toContain("restart trace: stop.drain.begin ");
+        expect(output).toContain("restart trace: stop.drain ");
+      } else {
+        expect(output).not.toContain("restart trace:");
+      }
     },
     TEST_TIMEOUT_MS,
   );

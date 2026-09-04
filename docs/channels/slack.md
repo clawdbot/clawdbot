@@ -1559,10 +1559,10 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
 - `block`: append chunked preview updates.
 - `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
-- `streaming.preview.toolProgress`: controls tool previews in `partial` and `block` modes (default: `true`). In `progress` mode, ordinary tool activity drives one work summary rather than visible tool rows.
-- `streaming.preview.commandText`: `status` hides command/exec text in tool previews (default); `raw` includes it. Progress summaries do not show ordinary command lines.
+- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
-Use the default quiet progress presentation:
+Show the tool log while hiding raw command/exec text:
 
 ```json
 {
@@ -1571,7 +1571,8 @@ Use the default quiet progress presentation:
       "streaming": {
         "mode": "progress",
         "progress": {
-          "nativeTaskCards": true
+          "toolProgress": true,
+          "commandText": "status"
         }
       }
     }
@@ -1581,11 +1582,11 @@ Use the default quiet progress presentation:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan milestones, or one stable work-summary row when no plan exists. It does not turn each tool call into a task. Routine updates coalesce at one-second intervals; approvals, actual failures, and completion bypass that delay. A tool failure shows as a red attention row while the turn runs; if the turn still completes successfully, that row settles as `Recovered: …` instead of staying red. The card appears only once a turn does real work, so a plain question is answered without one.
+In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests and failed commands get their own row. With `progress.toolProgress: true`, it also shows per-tool task rows alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, failures, and completion bypass that delay. A tool failure shows as a red attention row while the turn runs; if the turn still completes successfully, that row settles as `Recovered: …` instead of staying red. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation. Set `style: "card"` explicitly to retain a card while hiding tool progress.
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset; leaving both options unset keeps the default quiet card. Set `style: "card"` to keep a card with `toolProgress: false`. Commentary appears as italic text, and authored reasoning, approval requests, and failures remain visible. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
 For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
@@ -1616,7 +1617,7 @@ Both surfaces link the session with **Open in OpenClaw**, but only when that lin
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
-- Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
+- Outside compact progress, media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - Native streamed replies wait for Slack's acknowledgement before delivery is marked successful. Each complete reply block flushes separately, including short blocks; routine progress updates still coalesce. A later progress-card finalization failure does not discard an already acknowledged reply.
 - Definite recipient or scope rejections fall back to normal delivery for buffered text. Ambiguous streaming failures (such as a lost response) report failure without replaying the unacknowledged text, because Slack may already have accepted it. Later payloads use normal delivery.
 

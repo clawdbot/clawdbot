@@ -419,6 +419,7 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.controlUi.enabled",
     "gateway.controlUi.basePath",
     "gateway.controlUi.root",
+    "gateway.controlUi.experimental.customPlugins",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
     "browser.evaluateEnabled",
