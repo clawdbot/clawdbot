@@ -102,9 +102,12 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
+    if (block.type !== "toolCall") {
+      return sameModel ? block : [];
+    }
     const { thoughtSignature: _, ...unsigned } = block;
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
-    const trimmedId = block.id.trim();
+    const trimmedId = typeof block.id === "string" ? block.id.trim() : "";
     if (sameModel) {
       return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
@@ -133,7 +136,7 @@ export function transformMessages<TApi extends Api>(
     if (message.role !== "toolResult") {
       return message;
     }
-    const trimmedId = message.toolCallId.trim();
+    const trimmedId = typeof message.toolCallId === "string" ? message.toolCallId.trim() : "";
     const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
     return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
