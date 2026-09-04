@@ -10,19 +10,36 @@ const withinRoot = (root: string, file: string) => {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
 
-export function assertDeclarationInput(root: string, file: string) {
-  const absolute = path.isAbsolute(file) ? file : path.resolve(root, file);
-  // Generated declaration IDs do not exist yet, but their source directory does.
-  let existing = absolute;
-  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
-    existing = path.dirname(existing);
-  }
-  const real = fs.realpathSync(existing);
-  if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
-    throw new Error(
-      `Declaration input escapes checkout: ${absolute} -> ${real}. Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`,
-    );
-  }
+export function createDeclarationInputBoundary(cwd: string) {
+  const declared = path.resolve(cwd);
+  const root = fs.realpathSync.native(declared);
+  // Translate only the declared checkout prefix, including Windows 8.3 aliases.
+  // Resolving an entire outside candidate would admit ancestor symlinks into the checkout.
+  const resolve = (file: string) => {
+    const absolute = path.resolve(declared, file);
+    return withinRoot(declared, absolute)
+      ? path.resolve(root, path.relative(declared, absolute))
+      : absolute;
+  };
+  return {
+    root,
+    resolve,
+    assert(file: string) {
+      const absolute = resolve(file);
+      // Generated declaration IDs do not exist yet, but their source directory does.
+      let existing = absolute;
+      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+        existing = path.dirname(existing);
+      }
+      const real = fs.realpathSync.native(existing);
+      if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+        throw new Error(
+          `Declaration input escapes checkout: ${absolute} -> ${real}. Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`,
+        );
+      }
+      return absolute;
+    },
+  };
 }
 
 export function resolveDeclarationInputCaptureModule() {
@@ -34,7 +51,8 @@ export function resolveDeclarationInputCaptureModule() {
 type ActiveBoundary = { root: string; users: number; failure?: Error; restore: () => void };
 const activeSystems = new Map<ts.System, ActiveBoundary>();
 
-function acquireDeclarationSystem(root: string) {
+function acquireDeclarationSystem(inputs: ReturnType<typeof createDeclarationInputBoundary>) {
+  const { root, resolve } = inputs;
   // Use the compiler loaded by the declaration plugin, including its pnpm peer context.
   const require = createRequire(resolveDeclarationInputCaptureModule());
   const { sys }: typeof ts = require("typescript");
@@ -61,7 +79,7 @@ function acquireDeclarationSystem(root: string) {
     };
     const assert = (file: string) => {
       try {
-        assertDeclarationInput(root, file);
+        inputs.assert(file);
       } catch (error) {
         // CompilerHost catches read errors; buildEnd must still reject publication.
         boundary.failure ??= toErrorObject(error, "Declaration input boundary failed");
@@ -79,15 +97,15 @@ function acquireDeclarationSystem(root: string) {
       // Automatic types and relative filesystem calls must share the declared checkout.
       getCurrentDirectory: () => root,
       fileExists: (file) => {
-        const absolute = path.resolve(root, file);
+        const absolute = resolve(file);
         return visible(absolute) && original.fileExists.call(sys, absolute);
       },
       directoryExists: (directory) => {
-        const absolute = path.resolve(root, directory);
+        const absolute = resolve(directory);
         return visible(absolute) && original.directoryExists.call(sys, absolute);
       },
       readFile: (file, encoding) => {
-        const absolute = path.resolve(root, file);
+        const absolute = resolve(file);
         if (!withinRoot(root, absolute) && !original.fileExists.call(sys, absolute)) {
           return undefined;
         }
@@ -95,16 +113,16 @@ function acquireDeclarationSystem(root: string) {
         return original.readFile.call(sys, absolute, encoding);
       },
       realpath: (file) => {
-        const absolute = path.resolve(root, file);
+        const absolute = resolve(file);
         assert(absolute);
         return original.realpath?.call(sys, absolute) ?? absolute;
       },
       getDirectories: (directory) => {
-        const absolute = path.resolve(root, directory);
+        const absolute = resolve(directory);
         return visible(absolute) ? original.getDirectories.call(sys, absolute) : [];
       },
       readDirectory: (directory, ...args) => {
-        const absolute = path.resolve(root, directory);
+        const absolute = resolve(directory);
         if (!visible(absolute)) {
           return [];
         }
@@ -178,14 +196,14 @@ function prepareDeclarationBoundary({ options }: BuildContext) {
 
 /** Scope compiler filesystem adaptation to bundling, never config import or writer snapshots. */
 function createDeclarationBoundaryPlugin(cwd: string): NonNullable<UserConfig["plugins"]> {
-  const root = fs.realpathSync(cwd);
+  const inputs = createDeclarationInputBoundary(cwd);
   const releases: (() => void)[] = [];
   return {
     name: "openclaw-declaration-boundary",
     buildStart: {
       order: "pre",
       handler() {
-        releases.push(acquireDeclarationSystem(root));
+        releases.push(acquireDeclarationSystem(inputs));
       },
     },
     load: {
@@ -194,7 +212,7 @@ function createDeclarationBoundaryPlugin(cwd: string): NonNullable<UserConfig["p
         // OXC's declaration resolver has its own filesystem. Check its selected
         // declarations and sources before either Rolldown or the dts plugin loads them.
         if (path.isAbsolute(id) && /\.(?:[cm]?ts|tsx|json)$/u.test(id)) {
-          assertDeclarationInput(root, id);
+          inputs.assert(id);
         }
       },
     },

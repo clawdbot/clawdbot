@@ -5,12 +5,12 @@ import type { BuildContext } from "tsdown";
 import type ts from "typescript";
 import { portableRelativePath } from "./build-artifact-cache.mts";
 import {
-  assertDeclarationInput,
+  createDeclarationInputBoundary,
   resolveDeclarationInputCaptureModule,
 } from "./tsdown-declaration-boundary.mts";
 
 const stagePrefix = (root: string) =>
-  path.join(fs.realpathSync(root), ".artifacts/plugin-sdk-staging-");
+  path.join(fs.realpathSync.native(root), ".artifacts/plugin-sdk-staging-");
 const receiptPath = (output: string, name: string) =>
   path.join(output, "..", "compiler-inputs", `${name}.json`);
 
@@ -27,7 +27,8 @@ export function requestDeclarationInputs(output: string, name: string, roots: st
 
 export function createDeclarationInputCapture(name: string) {
   return async ({ options }: BuildContext) => {
-    const stage = path.dirname(options.outDir);
+    const boundary = createDeclarationInputBoundary(options.cwd);
+    const stage = path.dirname(boundary.resolve(options.outDir));
     const prefix = stagePrefix(options.cwd);
     // Only the writer's private stage owns receipts. A direct build's sibling
     // compiler-inputs directory is ordinary checkout data, even if names match.
@@ -48,12 +49,10 @@ export function createDeclarationInputCapture(name: string) {
     );
     const roots = new Set(
       globalContext.programs.flatMap((program) =>
-        program.getRootFileNames().map((root) => fs.realpathSync(root)),
+        program.getRootFileNames().map((root) => fs.realpathSync.native(root)),
       ),
     );
-    if (
-      request.roots.some((root) => !roots.has(fs.realpathSync(path.resolve(options.cwd, root))))
-    ) {
+    if (request.roots.some((root) => !roots.has(fs.realpathSync.native(boundary.resolve(root))))) {
       throw new Error(`Incomplete compiler membership for ${name}`);
     }
     const inputs = [
@@ -61,13 +60,10 @@ export function createDeclarationInputCapture(name: string) {
         globalContext.programs.flatMap((program) =>
           program
             .getSourceFiles()
-            .map((source) => portableRelativePath(options.cwd, source.fileName)),
+            .map((source) => portableRelativePath(boundary.root, boundary.assert(source.fileName))),
         ),
       ),
     ].toSorted();
-    for (const input of inputs) {
-      assertDeclarationInput(fs.realpathSync(options.cwd), input);
-    }
     fs.writeFileSync(file, JSON.stringify({ ...request, inputs }));
   };
 }
