@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
+import { markIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -186,7 +187,7 @@ export async function executePreparedReplyAgentRun(
   };
 
   await typingSignals.signalRunStart();
-  turnAdoptionLifecycle?.onProcessingStarted?.();
+  markIngressBoundedProcessingStarted(turnAdoptionLifecycle?.abortSignal);
 
   // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
   // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.

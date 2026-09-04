@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { markIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -376,7 +377,7 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
-      turn.queued.turnAdoptionLifecycle?.onProcessingStarted?.();
+      markIngressBoundedProcessingStarted(turn.queued.turnAdoptionLifecycle?.abortSignal);
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,

@@ -356,10 +356,6 @@ export function createSlackMessageHandler(params: {
                     turnAdoptionLifecycle?.onDeferredHeartbeat?.();
                     admissionLifecycle.onDeferredHeartbeat?.();
                   },
-                  onProcessingStarted: () => {
-                    turnAdoptionLifecycle?.onProcessingStarted?.();
-                    admissionLifecycle.onProcessingStarted?.();
-                  },
                   onAbandoned: () => {
                     settlementHandedOff = true;
                     releaseClaims();

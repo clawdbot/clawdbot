@@ -55,7 +55,6 @@ function createLifecycle() {
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
-    processingStarted: vi.fn(),
     finalizing: vi.fn(),
     abandoned: vi.fn(async () => {}),
   };
@@ -63,7 +62,6 @@ function createLifecycle() {
     abortSignal: controller.signal,
     onAdopted: calls.adopted,
     onDeferred: calls.deferred,
-    onProcessingStarted: calls.processingStarted,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: async () => {
       await Promise.all([...abandonHandlers].map(async (handler) => await handler()));
@@ -89,7 +87,6 @@ function createHarness(params: {
   lifecycles: ReadonlyMap<string, FeishuIngressLifecycle>;
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
-  startProcessing?: boolean;
 }) {
   let onFlush:
     | ((entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush)
@@ -121,15 +118,6 @@ function createHarness(params: {
     },
   } as unknown as PluginRuntime["channel"];
   const handleMessage = vi.fn(async (turn: HandleMessageParams) => {
-    if (params.startProcessing) {
-      (
-        turn.turnAdoptionLifecycle as
-          | (NonNullable<HandleMessageParams["turnAdoptionLifecycle"]> & {
-              onProcessingStarted?: () => void;
-            })
-          | undefined
-      )?.onProcessingStarted?.();
-    }
     if (params.adoptTurn) {
       turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
       await turn.turnAdoptionLifecycle?.onAdopted();
@@ -180,21 +168,6 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
-  it("forwards processing ownership through transport and debounce lifecycles", async () => {
-    const transport = createLifecycle();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-processing", transport.lifecycle]]),
-      claims: [createClaim("processing")],
-      adoptTurn: true,
-      startProcessing: true,
-    });
-
-    await harness.handler(createTextEvent("evt-processing", "msg-processing", "hello"));
-    await harness.flush();
-
-    expect(transport.calls.processingStarted).toHaveBeenCalledTimes(1);
-  });
-
   it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
     const transport = createLifecycle();
     const logicalClaim = createClaim("empty-group-mention");

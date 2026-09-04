@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bindIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -563,8 +564,10 @@ describe("admitFollowupTurn", () => {
     state.loadEntry.mockReturnValue(entry);
     state.preflight.mockResolvedValue(entry);
     const onProcessingStarted = vi.fn();
+    const abort = new AbortController();
+    bindIngressBoundedProcessingStarted(abort.signal, onProcessingStarted);
     const queued = createRun();
-    queued.turnAdoptionLifecycle = Object.assign({ onAdopted: vi.fn() }, { onProcessingStarted });
+    queued.turnAdoptionLifecycle = { onAdopted: vi.fn(), abortSignal: abort.signal };
 
     await admitFollowupTurn({
       queued,

@@ -20,31 +20,6 @@ afterEach(() => {
 });
 
 describe("Twitch durable ingress", () => {
-  it("forwards processing ownership to the delivered turn lifecycle", async () => {
-    await withTwitchIngressTestQueue(async (queue) => {
-      const deliver = vi.fn(async (_message, lifecycle) => {
-        const start = (lifecycle as typeof lifecycle & { onProcessingStarted?: () => void })
-          .onProcessingStarted;
-        expect(start).toBeTypeOf("function");
-        await lifecycle.onAdopted();
-      });
-      const ingress = createTwitchIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
-      ingress.start();
-      try {
-        await ingress.accept(createTwitchIngressTestMessage({ id: "processing-owner" }));
-        await waitForTwitchIngressVerdict(queue, "processing-owner", "completed");
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("durably appends before dispatch", async () => {
     await withTwitchIngressTestQueue(async (queue) => {
       const realEnqueue = queue.enqueue.bind(queue);

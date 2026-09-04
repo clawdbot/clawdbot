@@ -6,7 +6,6 @@ import {
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
 import { sleep } from "../../utils/sleep.js";
-import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   createChannelIngressDrain,
   type ChannelIngressDrain,
@@ -28,8 +27,16 @@ export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 type ChannelIngressPayloadEnvelope<TBody> = { version: number; body: TBody };
 
 /** Claim ownership lifecycle handed to one channel delivery. */
-export type ChannelIngressMonitorLifecycle = ChannelIngressDispatchLifecycle & {
+export type ChannelIngressMonitorLifecycle = {
   admission: "exclusive";
+  abortSignal: AbortSignal;
+  onAdopted: () => void | Promise<void>;
+  onDeferred: () => void;
+  onDeferredHeartbeat?: () => void;
+  onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
+  onCancelled?: () => void | Promise<void>;
+  onAbandoned: () => void | Promise<void>;
 };
 
 /** Optional explicit outcome from a channel delivery. */

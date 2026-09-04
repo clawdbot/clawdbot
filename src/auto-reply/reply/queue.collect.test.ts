@@ -3006,7 +3006,6 @@ describe("followup queue collect routing", () => {
     const { calls, done } = createDrainRecorder();
     const sourceCompletions = [vi.fn(), vi.fn()];
     const sourceCancellationRetirements = [vi.fn(), vi.fn()];
-    const sourceProcessingStarts = [vi.fn(), vi.fn()];
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     for (const [index, prompt] of ["first dropped", "second dropped"].entries()) {
@@ -3018,7 +3017,6 @@ describe("followup queue collect routing", () => {
           turnAdoptionLifecycle: {
             onAdopted: async () => {},
             onCancellationRetired: sourceCancellationRetirements[index],
-            onProcessingStarted: sourceProcessingStarts[index],
             onSettled: sourceCompletions[index],
           },
         },
@@ -3031,15 +3029,6 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       if (calls.length === 1) {
         expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-        (
-          run.turnAdoptionLifecycle as
-            | (NonNullable<typeof run.turnAdoptionLifecycle> & {
-                onProcessingStarted?: () => void;
-              })
-            | undefined
-        )?.onProcessingStarted?.();
-        expect(sourceProcessingStarts[0]).toHaveBeenCalledTimes(1);
-        expect(sourceProcessingStarts[1]).toHaveBeenCalledTimes(1);
         await run.turnAdoptionLifecycle?.onAdopted?.();
         expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
         expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();

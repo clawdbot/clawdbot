@@ -153,7 +153,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   onAdopted: turn.turnAdoptionLifecycle.onAdopted,
                   onDeferred: turn.turnAdoptionLifecycle.onDeferred,
                   onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
-                  onProcessingStarted: turn.turnAdoptionLifecycle.onProcessingStarted,
                   onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
                   abortSignal: turn.turnAdoptionLifecycle.abortSignal,
                 }

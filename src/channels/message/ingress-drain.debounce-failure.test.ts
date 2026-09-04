@@ -8,6 +8,7 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+import { markIngressBoundedProcessingStarted } from "./ingress-processing-handoff.js";
 
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
@@ -105,9 +106,9 @@ describe("channel ingress drain debounce failures", () => {
           createFlush({
             lifecycle: entries[0]?.lifecycle,
             dispatch: async (lifecycle) => {
-              const start = (lifecycle as typeof lifecycle & { onProcessingStarted?: () => void })
-                .onProcessingStarted;
-              resolveProcessingStarted(start);
+              resolveProcessingStarted(() =>
+                markIngressBoundedProcessingStarted(lifecycle.abortSignal),
+              );
               await processingReleased;
               await lifecycle.onAdopted();
             },

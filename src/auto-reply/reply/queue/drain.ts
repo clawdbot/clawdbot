@@ -1300,11 +1300,6 @@ async function runSyntheticOverflowSummary(params: {
               await params.onAdmitted?.();
               admitted = true;
             },
-            onProcessingStarted: () => {
-              for (const source of params.sources) {
-                source.turnAdoptionLifecycle?.onProcessingStarted?.();
-              }
-            },
             onSettled: () => {
               if (admitted) {
                 for (const source of params.sources) {
@@ -1644,11 +1639,6 @@ export function scheduleFollowupDrain(
                           ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
                           : {}),
                         onAdopted: admitGroupSources,
-                        onProcessingStarted: () => {
-                          for (const item of activeGroupItems) {
-                            item.turnAdoptionLifecycle?.onProcessingStarted?.();
-                          }
-                        },
                         onSettled: () => {
                           if (admitted) {
                             completeGroup();

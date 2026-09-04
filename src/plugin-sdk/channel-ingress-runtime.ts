@@ -192,11 +192,6 @@ export function fanInChannelIngressLifecycles(
           lifecycle.onDeferredHeartbeat?.();
         }
       },
-      onProcessingStarted: () => {
-        for (const lifecycle of lifecycles) {
-          lifecycle.onProcessingStarted?.();
-        }
-      },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();

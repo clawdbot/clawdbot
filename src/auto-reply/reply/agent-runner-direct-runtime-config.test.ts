@@ -10,6 +10,7 @@ import {
   createTestIngressQueue,
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
+import { bindIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -354,15 +355,17 @@ describe("runReplyAgent runtime config", () => {
 
   it("hands pre-adoption ownership to the bounded reply runtime before memory flush", async () => {
     const onProcessingStarted = vi.fn();
+    const abort = new AbortController();
+    bindIngressBoundedProcessingStarted(abort.signal, onProcessingStarted);
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
     replyParams.opts = {
-      turnAdoptionLifecycle: Object.assign(
-        { onAdopted: async () => undefined },
-        { onProcessingStarted },
-      ),
+      turnAdoptionLifecycle: {
+        onAdopted: async () => undefined,
+        abortSignal: abort.signal,
+      },
     };
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);

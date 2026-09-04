@@ -8,6 +8,7 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+import { markIngressBoundedProcessingStarted } from "./ingress-processing-handoff.js";
 
 async function deferNext(
   queue: ReturnType<typeof createTestIngressQueue>,
@@ -143,20 +144,16 @@ describe("channel ingress drain watchdog", () => {
       const dispatchReleased = new Promise<void>((resolve) => {
         releaseDispatch = resolve;
       });
-      let processingStarted: (() => void) | undefined;
       let deferredHeartbeat: (() => void) | undefined;
       let adopted: (() => void | Promise<void>) | undefined;
+      let processingAbort: AbortSignal | undefined;
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
         adoptionStallTimeoutMs: 5_000,
         dispatchClaimedEvent: async (_event, lifecycle) => {
           lifecycle.onDeferred();
-          processingStarted = (
-            lifecycle as ChannelIngressDispatchLifecycle & {
-              onProcessingStarted?: () => void;
-            }
-          ).onProcessingStarted;
+          processingAbort = lifecycle.abortSignal;
           deferredHeartbeat = lifecycle.onDeferredHeartbeat;
           adopted = lifecycle.onAdopted;
           await dispatchReleased;
@@ -165,8 +162,8 @@ describe("channel ingress drain watchdog", () => {
       });
 
       await drain.drainOnce();
-      expect(processingStarted).toBeTypeOf("function");
-      processingStarted?.();
+      expect(processingAbort).toBeDefined();
+      markIngressBoundedProcessingStarted(processingAbort);
       deferredHeartbeat?.();
       await vi.advanceTimersByTimeAsync(15_000);
       expect(await queue.listClaims()).toHaveLength(1);
