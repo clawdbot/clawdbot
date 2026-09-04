@@ -131,15 +131,24 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
         result = "already-claimed";
         return;
       }
-      const sourceRow = sourceDatabaseKeys
-        .map((key) => selectAcpSessionRow(database.db, key))
-        .find(
-          (row) =>
-            row !== undefined &&
-            row.agent === params.expectedAgent &&
-            acpSessionRowMatchesEntry(row, params.entry),
-        );
+      const sourceRows = [...new Set(sourceDatabaseKeys)].flatMap((key) => {
+        const row = selectAcpSessionRow(database.db, key);
+        return row ? [row] : [];
+      });
+      const sourceRow = sourceRows.find(
+        (row) => row.agent === params.expectedAgent && acpSessionRowMatchesEntry(row, params.entry),
+      );
       if (!sourceRow) {
+        return;
+      }
+      const divergentSource = sourceRows.find(
+        (row) =>
+          row.agent !== params.expectedAgent ||
+          !acpSessionRowMatchesEntry(row, params.entry) ||
+          !sameAcpSessionMetadata(row, sourceRow),
+      );
+      if (divergentSource) {
+        result = "conflict";
         return;
       }
       insertRow(database.db, {
