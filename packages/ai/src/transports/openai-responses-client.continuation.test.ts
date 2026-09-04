@@ -142,10 +142,10 @@ async function run(
     sessionId?: string;
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
-    model?: Model<"openai-responses">;
   },
+  requestModel: Model = model,
 ): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(options.model ?? model, context, {
+  const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
     transport: "sse",
@@ -258,11 +258,13 @@ describe("native OpenAI Responses SSE continuation", () => {
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const first = await run(
       { messages: [firstUser], tools: [] },
-      { onPayload, model: customEndpointModel },
+      { onPayload },
+      customEndpointModel,
     );
     await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload, model: customEndpointModel },
+      { onPayload },
+      customEndpointModel,
     );
 
     expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
@@ -278,11 +280,13 @@ describe("native OpenAI Responses SSE continuation", () => {
     const identity = (payload: Record<string, unknown>) => payload;
     const first = await run(
       { messages: [firstUser], tools: [] },
-      { onPayload: identity, model: customEndpointModel },
+      { onPayload: identity },
+      customEndpointModel,
     );
     await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload: identity, model: customEndpointModel },
+      { onPayload: identity },
+      customEndpointModel,
     );
 
     expect(sseState.requests[0]).toMatchObject({ store: true });
@@ -299,11 +303,13 @@ describe("native OpenAI Responses SSE continuation", () => {
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const first = await run(
       { messages: [firstUser], tools: [] },
-      { onPayload, model: unoptedCustomEndpointModel },
+      { onPayload },
+      unoptedCustomEndpointModel,
     );
     await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload, model: unoptedCustomEndpointModel },
+      { onPayload },
+      unoptedCustomEndpointModel,
     );
 
     expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
