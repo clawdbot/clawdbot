@@ -148,6 +148,28 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
   });
 
+  it("inherits execution.defaults.timeoutMs into every phase and lets a phase override win", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          execution: {
+            defaults: { timeoutMs: 600_000 },
+          },
+          phases: {
+            deep: {
+              execution: { timeoutMs: 900_000 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.execution.defaults.timeoutMs).toBe(600_000);
+    expect(resolved.phases.light.execution.timeoutMs).toBe(600_000);
+    expect(resolved.phases.deep.execution.timeoutMs).toBe(900_000);
+    expect(resolved.phases.rem.execution.timeoutMs).toBe(600_000);
+  });
+
   it("enables dreaming by default and falls back to cfg timezone and deep defaults", () => {
     const cfg = {
       agents: {
