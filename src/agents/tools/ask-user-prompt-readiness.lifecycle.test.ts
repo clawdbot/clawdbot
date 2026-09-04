@@ -118,6 +118,7 @@ describe("ask_user prompt readiness lifecycle", () => {
           "question.request",
           expect.anything(),
           expect.anything(),
+          undefined,
         ),
       );
 
