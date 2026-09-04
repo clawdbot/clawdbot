@@ -56,7 +56,7 @@ function collectPluginIdsForConfiguredChannel(
   return [claims[0]?.id ?? builtInId ?? normalizedChannelId];
 }
 
-export function collectConfiguredChannelIds(
+export function collectAutoEnableChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
@@ -123,7 +123,7 @@ export function resolveConfiguredChannelAutoEnableCandidates(
 ): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
   for (const channelId of params.configuredChannelIds ??
-    collectConfiguredChannelIds(params.config, params.env)) {
+    collectAutoEnableChannelIds(params.config, params.env)) {
     for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }

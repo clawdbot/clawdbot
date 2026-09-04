@@ -18,7 +18,7 @@ import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.j
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import {
-  collectConfiguredChannelIds,
+  collectAutoEnableChannelIds,
   resolveConfiguredChannelAutoEnableCandidates,
   type ConfiguredPluginAutoEnableParams,
 } from "./plugin-auto-enable.channels.js";
@@ -450,7 +450,7 @@ export function resolvePluginAutoEnableReadiness(
   if (arePluginsGloballyDisabled(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds: [] };
   }
-  const configuredChannelIds = collectConfiguredChannelIds(cfg, env, discovery, ambientEnvTriggers);
+  const configuredChannelIds = collectAutoEnableChannelIds(cfg, env, discovery, ambientEnvTriggers);
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
