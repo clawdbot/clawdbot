@@ -11,7 +11,7 @@ const catalogMocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   loadPublishedOwner: vi.fn(),
   authStore: { version: 1, profiles: {} } as AuthProfileStore,
-  isCurrent: () => true,
+  isCurrent: (): boolean => true,
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => {
