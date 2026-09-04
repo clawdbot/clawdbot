@@ -146,8 +146,14 @@ export async function readCollectionBackupManifest(params: {
     parsedResultSkillHashes[relativeDir] = hash;
   }
   for (const relativeDir of skillDirs) {
-    if (!(await pathExists(path.join(params.backupDir, "skills", relativeDir)))) {
+    const savedSkillDir = path.join(params.backupDir, "skills", relativeDir);
+    if (!(await pathExists(savedSkillDir))) {
       throw new Error(`Skill collection backup is incomplete: ${relativeDir}`);
+    }
+    // Legacy hashes omitted deep content. Verify retained originals too, or deleting
+    // an omitted subtree from the result could let restore resurrect it unnoticed.
+    if (resultSkillDirs.includes(relativeDir)) {
+      await readSkillProposalTargetTreeSha256(savedSkillDir);
     }
   }
   return {

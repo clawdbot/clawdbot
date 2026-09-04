@@ -782,8 +782,10 @@ describe("buildGatewayCronService", () => {
       expect(await state.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
       expect(cronTriggerEvaluatorMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          jobId: job.id,
-          toolsAllow: ["read", "cron"],
+          job: expect.objectContaining({
+            id: job.id,
+            payload: expect.objectContaining({ toolsAllow: ["read", "cron"] }),
+          }),
         }),
       );
     } finally {
@@ -2278,10 +2280,14 @@ describe("buildGatewayCronService", () => {
 
       expect(cronScriptExecutorMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          jobId: job.id,
-          script: "return { notify: 'queue changed' }",
-          timeoutSeconds: 300,
-          toolBudget: 50,
+          job: expect.objectContaining({
+            id: job.id,
+            payload: expect.objectContaining({
+              script: "return { notify: 'queue changed' }",
+              timeoutSeconds: 300,
+              toolBudget: 50,
+            }),
+          }),
         }),
       );
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(

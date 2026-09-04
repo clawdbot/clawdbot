@@ -76,6 +76,7 @@ export type CronActiveJobMarker = {
   scheduleMutated?: true;
   triggerMutated?: true;
   jobRemoved?: true;
+  selfRemovalAccepted?: true;
   preserveAcrossGenerationAdvance?: boolean;
   onInactive?: Set<() => void>;
   inactiveNotified?: true;
@@ -229,8 +230,19 @@ export function noteActiveCronJobRemoval(
   // marker for duplicate exclusion and deferred session cleanup until completion.
   if (!commitGuard || getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
     requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
+  } else {
+    marker.selfRemovalAccepted = true;
   }
   return marker;
+}
+
+/** Completion retains its live receipt after self-removal; closed tools gain no new authority. */
+export function isCronSelfRemovalCurrent(marker: CronActiveJobMarker | undefined): boolean {
+  return (
+    marker?.selfRemovalAccepted === true &&
+    marker.cancellation?.kind !== "requested" &&
+    getCurrentCronActiveJobMarker(marker.jobId) === marker
+  );
 }
 
 function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, reason: string): void {

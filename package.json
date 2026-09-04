@@ -1481,6 +1481,18 @@
       "types": "./dist/plugin-sdk/widget-html.d.ts",
       "default": "./dist/plugin-sdk/widget-html.js"
     },
+    "./plugin-sdk/control-ui": {
+      "types": "./dist/plugin-sdk/control-ui.d.ts",
+      "default": "./dist/plugin-sdk/control-ui.js"
+    },
+    "./plugin-sdk/feature-contract": {
+      "types": "./dist/plugin-sdk/feature-contract.d.ts",
+      "default": "./dist/plugin-sdk/feature-contract.js"
+    },
+    "./plugin-sdk/feature-plugin": {
+      "types": "./dist/plugin-sdk/feature-plugin.d.ts",
+      "default": "./dist/plugin-sdk/feature-plugin.js"
+    },
     "./plugin-sdk/tool-plugin": {
       "types": "./dist/plugin-sdk/tool-plugin.d.ts",
       "default": "./dist/plugin-sdk/tool-plugin.js"
@@ -2085,7 +2097,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.7.1",
+    "@openclaw/fs-safe": "0.7.2",
     "@openclaw/proxyline": "0.3.7",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.22.0",

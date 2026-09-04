@@ -28,21 +28,6 @@ const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribut
     label: t("sessionProgressCard.widgetLabel"),
     loader: async () => (await import("./session-progress.ts")).renderSessionProgressWidget,
   },
-  "workboard:board": {
-    kind: "workboard:board",
-    label: t("workboard.widget.boardLabel"),
-    loader: async () => (await import("./workboard-board.ts")).renderWorkboardBoardWidget,
-  },
-  "workboard:card": {
-    kind: "workboard:card",
-    label: t("workboard.widget.cardLabel"),
-    loader: async () => (await import("./workboard-card.ts")).renderWorkboardCardWidget,
-  },
-  "workboard:mini": {
-    kind: "workboard:mini",
-    label: t("workboard.widget.summaryLabel"),
-    loader: async () => (await import("./workboard-mini.ts")).renderWorkboardMiniWidget,
-  },
 };
 
 const pluginRendererPromises = new Map<string, Promise<PluginBoardWidgetRenderer>>();

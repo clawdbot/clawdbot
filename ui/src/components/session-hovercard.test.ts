@@ -398,6 +398,39 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it("presents an older progress card as paused during a later run", () => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "running" }),
+        progressCard: { ...progressCard(), updatedAt: startedAt - 1 },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+    expect(plan?.querySelector("polyline")).not.toBeNull();
+  });
+
+  it("keeps an older progress card paused after the later run ends", () => {
+    const container = document.createElement("div");
+    const startedAt = Date.now();
+    render(
+      renderSessionHovercard({
+        row: row({ startedAt, status: "done" }),
+        progressCard: { ...progressCard(), updatedAt: startedAt - 1 },
+      }),
+      container,
+    );
+
+    const plan = container.querySelector(".session-hovercard__plan-row");
+    expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
+    expect(plan?.querySelector(".session-run-spinner")).toBeNull();
+  });
+
   it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
     const container = document.createElement("div");
     render(
@@ -495,7 +528,7 @@ describe("renderSessionHovercard", () => {
   });
 
   it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides stale plan work after the session is %s",
+    "hides plan work updated during the run after the session is %s",
     (status) => {
       const container = document.createElement("div");
       render(

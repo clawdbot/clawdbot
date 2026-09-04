@@ -22,6 +22,7 @@ import {
   hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
   readSessionTranscriptTitleProbeBatch,
@@ -101,6 +102,11 @@ describe("session accessor readonly listing", () => {
 
     expect(listSessionEntriesReadOnly({ agentId, env })).toEqual([]);
     expect(openSessionEntryReadView({ agentId, env }).entries()).toEqual([]);
+    expect(
+      loadExactSessionEntryCandidatesReadOnlyBatch([
+        { agentId, env, sessionKeys: [`agent:${agentId}:main`] },
+      ]),
+    ).toEqual([{ ok: true, value: [] }]);
     expect(
       readSessionStoreSummaryReadOnly(
         { agentId, env },
@@ -194,13 +200,38 @@ describe("session accessor readonly listing", () => {
     });
 
     const retainedScope = { ...scope, sessionKey: "agent:main:retained" };
+    const exactReadFailure = {
+      ok: false,
+      error: expect.objectContaining({ message: expect.stringContaining("openclaw doctor --fix") }),
+    };
     for (const projection of ["full", "list"] as const) {
       expect(loadExactSessionEntryReadOnly({ ...retainedScope, projection })).toBeUndefined();
-      for (const key of ["bad-json", "bad-timestamp"]) {
+      for (const key of ["pending", "bad-json", "bad-timestamp"]) {
         expect(() =>
           loadExactSessionEntryReadOnly({ ...scope, sessionKey: `agent:main:${key}`, projection }),
         ).toThrow("openclaw doctor --fix");
       }
+      const grouped = loadExactSessionEntryCandidatesReadOnlyBatch(
+        [
+          ["agent:main:tie-b"],
+          ["agent:main:pending"],
+          ["agent:main:bad-json"],
+          ["agent:main:tie-a", "agent:main:bad-timestamp"],
+          ["agent:main:tie-a"],
+          [retainedScope.sessionKey, "agent:main:missing"],
+        ].map((sessionKeys) => ({ agentId: scope.agentId, env, sessionKeys, projection })),
+      );
+      expect(grouped).toMatchObject([
+        {
+          ok: true,
+          value: [{ sessionKey: "agent:main:tie-b", entry: { sessionId: "tie-b" } }],
+        },
+        exactReadFailure,
+        exactReadFailure,
+        exactReadFailure,
+        { ok: true, value: [{ sessionKey: "agent:main:tie-a", entry: { sessionId: "tie-a" } }] },
+        { ok: true, value: [] },
+      ]);
     }
     update.run(
       JSON.stringify({ skillsSnapshot: { prompt: "invalid prompt-only row" } }),
@@ -213,6 +244,15 @@ describe("session accessor readonly listing", () => {
 
     closeOpenClawAgentDatabasesForTest();
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow("openclaw doctor --fix");
+    expect(
+      loadExactSessionEntryCandidatesReadOnlyBatch(
+        ["agent:main:pending", "agent:main:tie-a"].map((sessionKey) => ({
+          agentId: scope.agentId,
+          env,
+          sessionKeys: [sessionKey],
+        })),
+      ),
+    ).toEqual([exactReadFailure, exactReadFailure]);
   });
 
   it("surfaces missing canonical transcript tables through single and batched reads", async () => {

@@ -15,7 +15,7 @@ draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
 By default, Skill Workshop writes only under the active agent's
-`<state-dir>/agents/<agentId>/agent/workshop-skills`. When `agents.<id>.agentDir` is
+`<state-dir>/agents/<agentId>/agent/workshop-skills`. When `agents.entries.<id>.agentDir` is
 configured, it writes under `<agentDir>/workshop-skills` instead. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
@@ -33,7 +33,7 @@ On a shared Gateway, ask the agent normally: **Create a skill for me that
 summarizes a reviewed change list.** The authenticated requester owns the
 result, even when another person created or owns the session. No separate
 authoring mode or identity argument is required. A single administrator keeps
-the workspace workflow by default; explicitly ask for a personal-library skill
+the Workshop workflow by default; explicitly ask for a personal-library skill
 when that is the intended destination.
 
 Personal create and update operations publish complete managed revisions after
@@ -66,7 +66,7 @@ only an administrator can transfer its management ownership to the team.
 
 ## How it works
 
-The following lifecycle applies to workspace proposals:
+The following lifecycle applies to Workshop proposals:
 
 - **Proposal first:** generated content is stored as `PROPOSAL.md`, not
   `SKILL.md`.
@@ -139,6 +139,8 @@ running sessions keep their existing skill snapshot.
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
 agent-scoped lock. Restore refuses if any affected skill changed after cleanup.
+For an older backup that cannot be verified, follow the
+[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically).
 
 Each attempt is persisted under the agent id review key before the model starts.
 Review is admitted only for collections of at most
@@ -152,9 +154,43 @@ the latest 90 outcomes per agent.
 Collection rewrites and merges produce `SKILL.md` files at or below 10,000
 characters. A skill already above the cap can only become shorter.
 
+### When an older backup cannot be restored automatically
+
+Restore also refuses when it cannot completely read the included content in a
+current result tree or its saved original, including content beyond sixteen path
+components. This leaves the current skill files and retained backup intact. Older
+backups may contain hashes that omitted deeper files, so deleting that content
+from the current tree cannot make the backup verifiable. A skill dropped by the
+cleanup can still be restored to its absent path, including deep support files.
+Do not edit backup hashes or delete or flatten live files merely to make restore pass.
+
+For operator-led recovery:
+
+1. Pause writes to the agent's Workshop, including collection review. A later cleanup can
+   replace the retained backup.
+2. Locate the backup under
+   `<agentDir>/skill-workshop/collection-backups/<backup-id>/`.
+   Its `manifest.json` identifies the affected Workshop-relative directories in
+   `skillDirs` and `resultSkillDirs`.
+3. Create a new private inspection directory outside the Workshop and state
+   directory. Copy the entire backup directory, including `manifest.json` and
+   all saved content, into it. Current backups use `skills/`; history-only imports
+   use `history/workspace/`. Separately copy each existing affected current directory
+   into a `current/` subtree, preserving its Workshop-relative path. Include hidden
+   files and all nested content. If any file cannot be copied, stop rather than use
+   a partial copy.
+4. Compare the inspection copies to select the intended content. Keep the live
+   tree and original backup unchanged during review, and retain unedited copies
+   of both versions before carrying out any operator-approved recovery.
+
+Retained legacy backups may instead live under
+`<state-dir>/skill-workshop/collection-backups/<workspace-hash>/<backup-id>/`
+and contain a `workspace/` subtree. Preserve that original layout in inspection
+copies; do not rewrite the manifest to make an old backup look current.
+
 ## Chat
 
-For workspace authoring, ask the agent for the skill you want; it calls
+For Workshop authoring, ask the agent for the skill you want; it calls
 `skill_workshop` and returns a proposal id. Personal library authoring instead
 returns the managed publication receipt described above.
 
@@ -181,7 +217,7 @@ apply it through the normal approval flow or with `openclaw skills workshop`.
 When the actual turn supports only personal publication, including paired-node
 personal CLI authoring, `/learn` stops without changing a skill. Ask normally
 for explicit personal creation if you want to publish a revision, or use the
-existing administrator UI or CLI for workspace proposal review. Personal
+existing administrator UI or CLI for Workshop proposal review. Personal
 pending drafts are not currently supported.
 
 Create:
@@ -328,11 +364,21 @@ Rejected support-file paths: absolute paths, hidden path segments, path
 traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
 and paths outside the standard support folders.
 
+Directory drafts must be completely readable and fit within eight path
+components, including the filename. Evaluator bundles require all included target
+content to be readable and within sixteen path components. Root `.clawhub`,
+`.clawdhub`, and `.openclaw` metadata entries are excluded; those names nested
+elsewhere remain included. Unreadable included directories or deeper content
+produce an error. Fix the reported directory or reduce its nesting, then retry.
+For a collection restore failure, follow the
+[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically)
+instead of restructuring the live tree.
+
 ## Agent tool
 
 For personal library operations, `skill_workshop` exposes
 `list | read | create | update | share | unshare | transfer | activate | remove | rollback`.
-The Gateway chooses the authorized namespace. When workspace authoring is also
+The Gateway chooses the authorized namespace. When Workshop authoring is also
 available, `target: "personal"` selects the personal library. Reads return a
 stable skill ID and revision. Updates require `skill_id` and `expected_revision`;
 omit `proposal_content` to preserve the instructions. Use `files` for named
@@ -341,9 +387,9 @@ support files are preserved. Large instructions are returned whole or explicitly
 omitted with directions to the operator workflow; binary supporting content is
 not injected into model context.
 
-For workspace proposals, the tool uses one required `action`:
+For Workshop proposals, the tool uses one required `action`:
 `create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
-Other workspace parameters apply depending on the action:
+Other Workshop parameters apply depending on the action:
 
 | Parameter                  | Used by                                                          | Notes                                                                 |
 | -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
@@ -388,10 +434,10 @@ prompt-enforced. A hard guard is not currently possible at the tool-policy seam.
 `skill_workshop` to the active `tools.allow` list, or use
 `tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
 explicit `tools.allow`. Sandboxed runs do not construct the host-side
-workspace proposal tool. When an authorized personal-library capability is
+Workshop proposal tool. When an authorized personal-library capability is
 available, sandbox and cloud runs use its Gateway-backed authoring surface
 instead; the library and database are not mounted writable into the worker.
-Use a normal host-side session or the CLI for workspace proposal review.
+Use a normal host-side session or the CLI for Workshop proposal review.
 </Note>
 
 ## Self-learning

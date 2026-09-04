@@ -5697,3 +5697,12 @@ td.data-table-key-col {
   display: block;
   line-height: 0;
 }
+
+/* Recovery stays outside a plugin-owned workspace so the built-in UI remains reachable. */
+.plugin-ui-recovery {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 110;
+  box-shadow: var(--shadow-md);
+}

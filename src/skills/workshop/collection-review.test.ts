@@ -28,12 +28,7 @@ import { getSkillCuratorStatus } from "./curator.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
-const authStoresByAgentDir = vi.hoisted(() => new Map<string, unknown>());
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
-vi.mock("../../agents/auth-profiles/store.js", () => ({
-  loadAuthProfileStoreForRuntime: (agentDir: string) =>
-    authStoresByAgentDir.get(agentDir) ?? { version: 1, profiles: {} },
-}));
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -88,7 +83,6 @@ async function writeWorkshopSkills(
 }
 
 beforeEach(async () => {
-  authStoresByAgentDir.clear();
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-collection-review-state-",
