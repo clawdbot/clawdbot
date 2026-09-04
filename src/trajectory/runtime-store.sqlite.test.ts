@@ -89,6 +89,19 @@ describe("SQLite trajectory runtime store", () => {
     },
   );
 
+  it("rejects a foreign owner for a non-shared agent store on append and read", async () => {
+    const foreign = { agentId: "ops", sessionId: "session-1", storePath };
+    expect(() =>
+      appendSqliteTrajectoryRuntimeEvents(foreign, [createTrajectoryEvent({ type: "foreign" })]),
+    ).toThrow(/store path belongs to agent main; requested agent ops/);
+    expect(() => loadSqliteTrajectoryRuntimeEventRowsSync(foreign)).toThrow(
+      /store path belongs to agent main; requested agent ops/,
+    );
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
+    ).resolves.toEqual([]);
+  });
+
   it("trims oldest rows beyond the configured byte window", async () => {
     appendSqliteTrajectoryRuntimeEvents(
       { maxRuntimeBytes: 900, sessionId: "session-1", storePath },
