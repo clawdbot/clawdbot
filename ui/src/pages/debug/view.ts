@@ -21,6 +21,8 @@ import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
+  connected: boolean;
+  offlineStable: boolean;
   loading: boolean;
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
@@ -98,6 +100,21 @@ function renderDiagnosticsError(error: string | null) {
   `;
 }
 
+function renderSnapshotActivity(props: DebugProps) {
+  const active = props.connected ? props.loading : props.offlineStable;
+  if (!active) {
+    return nothing;
+  }
+  const refreshing = props.connected;
+  return renderSettingsRow({
+    title: renderSettingsStatus({
+      kind: refreshing ? "accent" : "muted",
+      label: t(refreshing ? "common.refreshing" : "common.offline"),
+    }),
+    description: t(refreshing ? "debug.refreshingSnapshots" : "debug.offlineSnapshots"),
+  });
+}
+
 function renderEventRow(evt: EventLogEntry) {
   return renderSettingsRow({
     title: evt.event,
@@ -109,19 +126,24 @@ ${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
 }
 
 export function renderDebug(props: DebugProps) {
+  const refreshPending = props.connected && props.loading;
   const snapshotsSection = renderSettingsSection(
     {
       title: t("debug.snapshotsTitle"),
       description: t("debug.snapshotsSubtitle"),
       actions: html`
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? t("common.refreshing") : t("common.refresh")}
+        <button
+          class="btn"
+          ?disabled=${!props.connected || props.loading}
+          @click=${props.onRefresh}
+        >
+          ${refreshPending ? t("common.refreshing") : t("common.refresh")}
         </button>
       `,
     },
     html`
-      ${renderDiagnosticsError(props.diagnosticsError)} ${renderSecurityRow(props)}
-      ${renderJsonRow(t("debug.status"), props.status)}
+      ${renderSnapshotActivity(props)} ${renderDiagnosticsError(props.diagnosticsError)}
+      ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
     `,
