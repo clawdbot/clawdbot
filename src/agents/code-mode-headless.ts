@@ -45,20 +45,36 @@ import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
-function createHeadlessAbortScope(
+/** Each invocation owns a deadline, including callers that prepare tools before starting a guest. */
+export function createHeadlessDeadlineScope(
   signal: AbortSignal | undefined,
   wallClockMs: number,
-): { signal: AbortSignal; cleanup: () => void } {
+  label?: string,
+) {
   const controller = new AbortController();
-  const onAbort = () => controller.abort(signal?.reason);
+  const onAbort = () =>
+    controller.abort(label ? new CodeModeHeadlessAbortError(`${label} aborted`) : signal?.reason);
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) {
     onAbort();
   }
-  const timer = setTimeout(() => controller.abort(new CodeModeHeadlessTimeoutError()), wallClockMs);
+  const timeoutError = () =>
+    new CodeModeHeadlessTimeoutError(label ? `${label} timed out` : undefined);
+  const timer = setTimeout(() => controller.abort(timeoutError()), wallClockMs);
+  const deadline = performance.now() + wallClockMs;
   return {
+    deadline,
     signal: controller.signal,
+    wait: <T>(promise: Promise<T>) =>
+      awaitCodeModeDeadline({
+        operation: () => promise,
+        remainingMs: Math.ceil(deadline - performance.now()),
+        signal: controller.signal,
+        createTimeoutError: timeoutError,
+        createAbortError: headlessAbortError,
+      }),
     cleanup: () => {
+      controller.abort(new CodeModeHeadlessAbortError());
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     },
@@ -217,9 +233,9 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const deadline = performance.now() + wallClockMs;
   const owner = createCodeModeRunOwner(params.ctx);
-  const abortScope = createHeadlessAbortScope(owner.bindCall(params.signal), wallClockMs);
+  const abortScope = createHeadlessDeadlineScope(owner.bindCall(params.signal), wallClockMs);
+  const deadline = abortScope.deadline;
   const output = new CodeModeOutputState(config.maxOutputBytes);
   let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
@@ -325,13 +341,7 @@ export async function runCodeModeScriptHeadless(params: {
           toolCallCount,
         });
       }
-      await awaitCodeModeDeadline({
-        operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
-        remainingMs: remainingHeadlessMs(deadline),
-        signal: abortScope.signal,
-        createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
-        createAbortError: headlessAbortError,
-      });
+      await abortScope.wait(waitForPendingBridgeSettlement(pending, settlementMode));
       const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
       pending = pending.filter((entry) => !entry.settled);
       result = await runHeadlessWorkerLeg({

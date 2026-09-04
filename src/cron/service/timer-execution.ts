@@ -117,6 +117,7 @@ export async function executeJobCore(
       state: job.state.triggerState,
       streamBatch: options?.streamBatch,
       abortSignal,
+      executionIdentity: options?.executionIdentity,
     });
     // Trigger scripts may settle after cancellation; never start payload work
     // or persist trigger results for a run that has already been aborted.
@@ -154,14 +155,7 @@ export async function executeJobCore(
   options?.assertRunCurrent?.();
   options?.onPayloadExecutionStarted?.();
   if (effectiveJob.payload.kind === "script") {
-    const result = await executeScriptCronJob(
-      state,
-      effectiveJob,
-      abortSignal,
-      options?.activeJobMarker,
-      options?.streamBatch,
-      options?.assertRunCurrent,
-    );
+    const result = await executeScriptCronJob(state, effectiveJob, abortSignal, options);
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (options?.streamBatch !== undefined) {
@@ -507,9 +501,7 @@ async function executeScriptCronJob(
   state: CronServiceState,
   job: CronJob,
   abortSignal: AbortSignal | undefined,
-  activeJobMarker?: CronActiveJobMarker,
-  streamBatch?: string,
-  assertRunCurrent?: () => void,
+  options?: ExecuteJobCoreOptions,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled === false) {
     return {
@@ -525,16 +517,21 @@ async function executeScriptCronJob(
       ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
     };
   }
-  const result = await state.deps.runScriptJob({ job, streamBatch, abortSignal });
+  const result = await state.deps.runScriptJob({
+    job,
+    streamBatch: options?.streamBatch,
+    abortSignal,
+    executionIdentity: options?.executionIdentity,
+  });
   // Script runners may settle after ignoring an abort. Recheck both operator
   // cancellation and scheduler ownership before any notify/wake side effect.
-  if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
+  if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
     return { status: "error" as const, error: "Gateway restarting." };
   }
   if (abortSignal?.aborted) {
     return { status: "error" as const, error: abortErrorMessage(abortSignal) };
   }
-  assertRunCurrent?.();
+  options?.assertRunCurrent?.();
   if (result.status !== "ok") {
     return result;
   }
