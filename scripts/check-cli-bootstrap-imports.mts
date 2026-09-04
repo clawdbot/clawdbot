@@ -30,7 +30,8 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "process-respawn",
   "restart-sentinel",
   "server-close",
-  "server-reload-handlers",
+  "server-reload-hot",
+  "server-reload-managed",
 ];
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;

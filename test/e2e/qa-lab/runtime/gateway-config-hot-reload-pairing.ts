@@ -228,7 +228,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
   };
   try {
     const fixtureIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(root, "state", "openclaw.sqlite"),
+      path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
       identityKey: "hot-reload-fixture",
     });
     await stage(fixtureIdentity, false);
@@ -272,7 +272,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
       const connections: HotReloadConnection[] = [];
       const identity = () =>
         loadOrCreateDeviceIdentity({
-          path: path.join(root, "state", "openclaw.sqlite"),
+          path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
           identityKey: `hot-reload-${randomUUID()}`,
         });
       const patchPairing = (pairing: GatewayNodePairingConfig) =>

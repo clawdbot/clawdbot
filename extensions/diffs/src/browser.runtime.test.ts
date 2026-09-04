@@ -231,6 +231,36 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["config", "runtimeConfig"] as const)(
+    "uses explicit tool %s for viewer links and screenshot browser selection",
+    async (configField) => {
+      const processConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://process.example" },
+        browser: { executablePath: path.join(rootDir, "unavailable-browser") },
+      };
+      const explicitConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://explicit.example" },
+        browser: { executablePath: process.execPath },
+      };
+      const { render } = createRegistrationHarness({
+        pluginConfig: {},
+        currentConfig: () => processConfig,
+      });
+      launchMock.mockResolvedValue(createMockBrowser([]));
+
+      const { details } = await render({ config: processConfig, [configField]: explicitConfig });
+
+      expect
+        .soft(String(details.viewerUrl))
+        .toContain("https://explicit.example/plugins/diffs/view/");
+      expect(details.fileError).toBeUndefined();
+      expect(launchMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executablePath: process.execPath }),
+      );
+      await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
+    },
+  );
+
   it("renders PDF output when format is pdf", async () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");

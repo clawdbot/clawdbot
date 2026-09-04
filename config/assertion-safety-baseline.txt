@@ -952,7 +952,7 @@ extensions/qa-channel/src/channel-actions.ts	2
 extensions/qa-channel/src/channel-base.ts	6
 extensions/qa-channel/src/channel.ts	5
 extensions/qa-channel/src/gateway.ts	2
-extensions/qa-channel/src/inbound.ts	6
+extensions/qa-channel/src/inbound.ts	2
 extensions/qa-channel/src/setup.ts	2
 extensions/qa-lab/src/agentic-parity-report.ts	1
 extensions/qa-lab/src/auth-profile.fixture.ts	3
@@ -2185,7 +2185,7 @@ src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
 src/boards/sqlite-board-store.ts	3
 src/bootstrap/node-startup-env.ts	1
-src/canvas/documents.ts	2
+src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
 src/canvas/widget-tool.ts	2
 src/channels/account-snapshot-fields.ts	1
@@ -2774,7 +2774,6 @@ src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
 src/gateway/cli-session-history.claude.ts	15
 src/gateway/cli-session-history.merge.ts	6
-src/gateway/config-reload-plan.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
 src/gateway/control-ui.ts	2
@@ -2823,7 +2822,7 @@ src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	5
 src/gateway/server-close.ts	1
-src/gateway/server-core-runtime.ts	2
+src/gateway/server-core-runtime.ts	1
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	5
 src/gateway/server-http-upgrades.ts	2
@@ -3635,7 +3634,7 @@ src/skills/workshop/policy.ts	1
 src/skills/workshop/store-record.ts	3
 src/skills/workshop/store-sqlite-event.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
-src/snapshot/git-backup-codec.ts	10
+src/snapshot/git-backup-codec.ts	9
 src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	8
 src/snapshot/manifest.ts	1

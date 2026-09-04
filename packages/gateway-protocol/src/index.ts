@@ -15,6 +15,7 @@ export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
+export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export {
   SessionCreatedActorSchema,

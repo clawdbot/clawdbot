@@ -67,7 +67,6 @@ export async function startCodexAttemptTurn(
     appServer,
     attemptStartedAt,
     startupAuthProfileId,
-    abortFromUpstream,
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
@@ -275,7 +274,6 @@ export async function startCodexAttemptTurn(
         log: embeddedAgentLog,
         cleanup: async () => trajectoryRecorder?.flush(),
       });
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
       await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({

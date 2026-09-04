@@ -13,7 +13,10 @@ import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/int
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
@@ -383,6 +386,9 @@ async function runSkillExperienceReviewInner(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps,
 ): Promise<void> {
+  // Reset replaces the global controller; this review keeps its original lifetime
+  // across context acquisition, model execution, and entry to autonomous apply.
+  const abortSignal = getGatewayRestartDrainSignal();
   const foregroundPromptContext = candidate.ctx.foregroundPromptContext;
   const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
   const foregroundSessionKey = candidate.ctx.sessionKey;
@@ -434,10 +440,14 @@ async function runSkillExperienceReviewInner(
       sessionKey: foregroundSessionKey,
       missingSessionKey: "resolve-existing",
     });
-    const detachedSession = SessionManager.openModelContext(foregroundSessionTarget, {
+    abortSignal.throwIfAborted();
+    const detachedSession = await SessionManager.openModelContextAsync(foregroundSessionTarget, {
       cwd: workspaceDir,
+      signal: abortSignal,
     });
+    abortSignal.throwIfAborted();
     const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+    abortSignal.throwIfAborted();
     const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
       config,
       agentId: foregroundPromptContext.agentId,
@@ -454,6 +464,7 @@ async function runSkillExperienceReviewInner(
         sessionPersistence: "detached",
         workspaceDir,
         config,
+        abortSignal,
         prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
         provider: modelProviderId,
         model: modelId,
@@ -479,6 +490,7 @@ async function runSkillExperienceReviewInner(
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
+    abortSignal.throwIfAborted();
 
     // A failed review can leave a pending proposal; never auto-apply it.
     assertSkillReviewRunSucceeded(embeddedResult);
@@ -489,13 +501,18 @@ async function runSkillExperienceReviewInner(
     const currentConfig = deps.getCurrentConfig
       ? await deps.getCurrentConfig()
       : (await import("../../config/config.js")).getRuntimeConfig();
+    abortSignal.throwIfAborted();
     if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode === "auto") {
       const { inspectSkillProposal } = await import("./service.js");
+      abortSignal.throwIfAborted();
       for (const mutatedProposalId of proposalIds) {
+        // An entered apply owns its commit/rollback; fence any subsequent proposal.
+        abortSignal.throwIfAborted();
         const proposal = await inspectSkillProposal(mutatedProposalId, {
           workspaceDir,
           agentId: foregroundPromptContext.agentId,
         });
+        abortSignal.throwIfAborted();
         if (
           !proposal ||
           proposal.record.status !== "pending" ||

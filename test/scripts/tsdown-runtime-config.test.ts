@@ -273,7 +273,7 @@ describe("tsdown config", () => {
     );
   });
 
-  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+  it("preserves the reload entry lazy-loaded by already-running v2026.9.1 Gateways", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(

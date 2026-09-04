@@ -22,6 +22,7 @@ export type GatewayReloadPlan = {
   restartReasons: string[];
   hotReasons: string[];
   reloadHooks: boolean;
+  reloadInternalHooks?: boolean;
   /** Refresh the hook target-policy snapshot without invalidating transform modules. */
   refreshHooksPolicy?: boolean;
   restartGmailWatcher: boolean;
@@ -36,45 +37,41 @@ export type GatewayReloadPlan = {
   noopPaths: string[];
 };
 
+const RELOAD_ACTIONS = [
+  "reloadHooks",
+  "reloadInternalHooks",
+  "refreshHooksPolicy",
+  "restartGmailWatcher",
+  "restartCron",
+  "restartHeartbeat",
+  "reconcileSystemJobs",
+  "reloadPlugins",
+  "disposeMcpRuntimes",
+] as const;
+type ReloadAction = (typeof RELOAD_ACTIONS)[number];
+
 export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
   return (
     !plan.restartGateway &&
     plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.refreshHooksPolicy &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.reconcileSystemJobs &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
+    RELOAD_ACTIONS.every((action) => !plan[action]) &&
     plan.restartChannels.size === 0 &&
     (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
-type ReloadRule = {
-  prefix: string;
+type ReloadPolicy = {
+  prefixes: readonly string[];
   kind: "restart" | "hot" | "none";
-  actions?: ReloadAction[];
-  accountScopedPlugin?: ChannelPlugin;
+  actions?: readonly ReloadAction[];
+  channels?: readonly ChannelPlugin[];
+  accountScoped?: boolean;
 };
+type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
 
 type ConfigReloadMetadata = {
   kind: ReloadRule["kind"];
 };
-
-type ReloadAction =
-  | "reload-hooks"
-  | "refresh-hooks-policy"
-  | "restart-gmail-watcher"
-  | "restart-cron"
-  | "restart-heartbeat"
-  | "reconcile-system-jobs"
-  | "reload-plugins"
-  | "dispose-mcp-runtimes"
-  | `restart-channel-account:${ChannelId}`
-  | `restart-channel:${ChannelId}`;
 
 type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
@@ -87,206 +84,240 @@ type GatewayReloadPlanOptions = {
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const AUTH_CREDENTIAL_PATHS = ["gateway.auth.token", "gateway.auth.password"];
 
-const BASE_RELOAD_RULES: ReloadRule[] = [
-  { prefix: "gateway.remote", kind: "none" },
-  { prefix: "gateway.reload", kind: "none" },
-  ...AUTH_CREDENTIAL_PATHS.map((prefix): ReloadRule => ({ prefix, kind: "restart" })),
-  // Request policy reads the published config; listeners and startup-owned
-  // resources retain the broad Gateway restart rule below.
-  { prefix: "gateway.http.endpoints", kind: "hot" },
-  { prefix: "gateway.http.securityHeaders.strictTransportSecurity", kind: "hot" },
-  { prefix: "gateway.tools", kind: "hot" },
-  { prefix: "gateway.cliAgents", kind: "hot" },
-  { prefix: "gateway.controlUi.environment", kind: "hot" },
-  { prefix: "gateway.controlUi.communityInvite", kind: "hot" },
-  { prefix: "gateway.controlUi.github", kind: "hot" },
-  { prefix: "gateway.controlUi.toolTitles", kind: "hot" },
-  { prefix: "gateway.controlUi.sessionObserver", kind: "hot" },
-  { prefix: "gateway.controlUi.embedSandbox", kind: "hot" },
-  { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
-  { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
-  { prefix: "gateway.controlUi.allowedOrigins", kind: "hot" },
-  { prefix: "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback", kind: "hot" },
-  { prefix: "gateway.nodes.browser", kind: "hot" },
-  { prefix: "gateway.nodes.pairing", kind: "hot" },
-  { prefix: "gateway.nodes.commands", kind: "hot" },
-  { prefix: "gateway.nodes.pluginTools.enabled", kind: "hot" },
-  { prefix: "gateway.nodes.allowSkills", kind: "hot" },
-  { prefix: "gateway.push.apns.relay", kind: "hot" },
-  { prefix: "gateway.terminal", kind: "hot" },
-  { prefix: "gateway.auth.rateLimit", kind: "hot" },
-  { prefix: "discovery.mdns.mode", kind: "hot" },
-  { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
-  { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
-  ...[
-    "agents.defaults.heartbeat",
-    "agents.defaults.models",
-    "agents.defaults.modelPolicy",
-    "agents.defaults.model",
-    "models",
-    "agent.heartbeat",
-  ].map((prefix): ReloadRule => ({
-    prefix,
-    kind: "hot",
-    actions: ["restart-heartbeat", "reconcile-system-jobs"],
-  })),
+const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
+  { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
   {
-    prefix: "agents.defaults.sessionStore",
-    kind: "hot",
-    actions: ["refresh-hooks-policy"],
+    prefixes: [
+      ...AUTH_CREDENTIAL_PATHS,
+      "mcp.apps",
+      "secrets.egressProxy",
+      "plugins.load",
+      "plugins.installs",
+    ],
+    kind: "restart",
   },
-  { prefix: "agents.defaults", kind: "hot" },
   {
-    prefix: "agents.entries",
+    // These policies use the published snapshot or an existing committed owner;
+    // listener and service replacement requires an explicit action below.
+    prefixes: [
+      "gateway.http.endpoints",
+      "gateway.http.securityHeaders.strictTransportSecurity",
+      "gateway.tools",
+      "gateway.cliAgents",
+      "gateway.publicOrigin",
+      "gateway.controlUi.environment",
+      "gateway.controlUi.communityInvite",
+      "gateway.controlUi.github",
+      "gateway.controlUi.toolTitles",
+      "gateway.controlUi.sessionObserver",
+      "gateway.controlUi.embedSandbox",
+      "gateway.controlUi.allowExternalEmbedUrls",
+      "gateway.controlUi.automaticallyFetchFavicons",
+      "gateway.controlUi.allowedOrigins",
+      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
+      "gateway.nodes.browser",
+      "gateway.nodes.pairing",
+      "gateway.nodes.commands",
+      "gateway.nodes.pluginTools.enabled",
+      "gateway.nodes.allowSkills",
+      "gateway.push.apns.relay",
+      "gateway.terminal",
+      "gateway.auth.rateLimit",
+      "discovery.mdns.mode",
+      "mcp.apps.sandboxOrigin",
+      "agents.defaults",
+    ],
     kind: "hot",
-    actions: ["restart-heartbeat", "reconcile-system-jobs", "refresh-hooks-policy"],
   },
-  { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
+  { prefixes: ["hooks.gmail"], kind: "hot", actions: ["restartGmailWatcher", "reloadHooks"] },
   {
-    prefix: "skills.workshop.autonomous.mode",
+    prefixes: ["hooks.internal", "agents.defaults.workspace"],
     kind: "hot",
-    actions: ["reconcile-system-jobs"],
+    actions: ["reloadInternalHooks"],
   },
-  { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
-  // The dedicated Apps listener and origin are created once during Gateway
-  // startup; disposing MCP runtimes cannot move or create that HTTP server.
-  { prefix: "mcp.apps", kind: "restart" },
-  { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
-  // The proxy listener, per-start CA, and run-token registry are Gateway-owned.
-  { prefix: "secrets.egressProxy", kind: "restart" },
-  { prefix: "plugins.load", kind: "restart" },
-  { prefix: "plugins.installs", kind: "restart" },
-  // Capability ownership changes must replace the plugin generation that owns its routes.
-  { prefix: "talk.provider", kind: "hot", actions: ["reload-plugins"] },
-  { prefix: "talk.realtime.provider", kind: "hot", actions: ["reload-plugins"] },
+  { prefixes: ["hooks"], kind: "hot", actions: ["reloadHooks"] },
+  {
+    prefixes: [
+      "agents.defaults.heartbeat",
+      "agents.defaults.models",
+      "agents.defaults.modelPolicy",
+      "agents.defaults.model",
+      "models",
+      "agent.heartbeat",
+    ],
+    kind: "hot",
+    actions: ["restartHeartbeat", "reconcileSystemJobs"],
+  },
+  {
+    prefixes: ["agents.entries"],
+    kind: "hot",
+    actions: [
+      "restartHeartbeat",
+      "reconcileSystemJobs",
+      "refreshHooksPolicy",
+      "reloadInternalHooks",
+    ],
+  },
+  {
+    prefixes: ["agents.defaults.sessionStore", "agents.ownership"],
+    kind: "hot",
+    actions: ["refreshHooksPolicy"],
+  },
+  {
+    prefixes: ["skills.workshop.autonomous.mode"],
+    kind: "hot",
+    actions: ["reconcileSystemJobs"],
+  },
+  { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
+  { prefixes: ["mcp"], kind: "hot", actions: ["disposeMcpRuntimes"] },
+  // Capability ownership changes replace the plugin generation that owns its routes.
+  {
+    prefixes: ["talk.provider", "talk.realtime.provider"],
+    kind: "hot",
+    actions: ["reloadPlugins"],
+  },
 ];
 
-const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
-  { prefix: "meta", kind: "none" },
-  { prefix: "identity", kind: "none" },
-  { prefix: "wizard", kind: "none" },
-  { prefix: "logging", kind: "none" },
-  { prefix: "agents", kind: "none" },
-  { prefix: "tools", kind: "hot" },
-  { prefix: "bindings", kind: "none" },
-  { prefix: "audio", kind: "none" },
-  { prefix: "agent", kind: "none" },
-  { prefix: "routing", kind: "none" },
-  { prefix: "messages", kind: "none" },
-  { prefix: "session", kind: "none" },
-  { prefix: "talk", kind: "none" },
-  { prefix: "skills", kind: "none" },
-  { prefix: "secrets", kind: "none" },
-  { prefix: "session.scope", kind: "hot", actions: ["refresh-hooks-policy"] },
-  { prefix: "session.store", kind: "hot", actions: ["refresh-hooks-policy"] },
-  { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
-  { prefix: "tui", kind: "none" },
-  { prefix: "ui", kind: "none" },
-  { prefix: "gateway", kind: "restart" },
-  { prefix: "discovery", kind: "restart" },
+const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
+  {
+    prefixes: [
+      "meta",
+      "identity",
+      "wizard",
+      "logging",
+      "agents",
+      "bindings",
+      "audio",
+      "agent",
+      "routing",
+      "messages",
+      "session",
+      "talk",
+      "skills",
+      "secrets",
+      "tui",
+      "ui",
+    ],
+    kind: "none",
+  },
+  {
+    // Prospective operation policy; retained turns and resources keep their own
+    // lifetime. Narrow plugin declarations may override these defaults.
+    prefixes: [
+      "tools",
+      "approvals.exec",
+      "approvals.plugin",
+      "auth.order",
+      "auth.profiles",
+      "broadcast",
+      "memory.citations",
+      "worktreeRoot",
+      "cloudWorkers.projectProfiles",
+      "security.audit.suppressions",
+      "security.installPolicy",
+      "diagnostics.cacheTrace.enabled",
+      "acp.runtime.installCommand",
+      "attachments.ttlHours",
+      "update.checkOnStart",
+      "update.channel",
+      "update.auto.enabled",
+      "telemetry.enabled",
+      "telemetry.consentedAt",
+    ],
+    kind: "hot",
+  },
+  { prefixes: ["session.scope", "session.store"], kind: "hot", actions: ["refreshHooksPolicy"] },
+  { prefixes: ["plugins"], kind: "hot", actions: ["reloadPlugins", "disposeMcpRuntimes"] },
+  { prefixes: ["gateway", "discovery"], kind: "restart" },
 ];
 
-let cachedReloadRules: ReloadRule[] | null = null;
-let cachedRefinementPrefixes: string[] = [];
-let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
-let cachedGatewayRegistryVersion = -1;
+let cachedCatalog:
+  | {
+      registry: ReturnType<typeof getActivePluginHttpRouteRegistry>;
+      version: number;
+      rules: ReloadRule[];
+      refinementPrefixes: string[];
+    }
+  | undefined;
 
-function listReloadRules(): ReloadRule[] {
-  // Reload metadata is gateway policy owned by the process-root registry.
+function getReloadPolicyCatalog() {
   const registry = getActivePluginHttpRouteRegistry();
-  const gatewayRegistryVersion = getActivePluginHttpRouteRegistryVersion();
-  // Plugin/channel reload rules are process-stable until the root registry
-  // version changes; cache them to keep every config diff cheap.
-  if (registry !== cachedRegistry || gatewayRegistryVersion !== cachedGatewayRegistryVersion) {
-    cachedReloadRules = null;
-    cachedRefinementPrefixes = [];
-    cachedRegistry = registry;
-    cachedGatewayRegistryVersion = gatewayRegistryVersion;
+  const version = getActivePluginHttpRouteRegistryVersion();
+  // Only process-root registry publication changes plugin/channel policy.
+  if (cachedCatalog?.registry === registry && cachedCatalog.version === version) {
+    return cachedCatalog;
   }
-  if (cachedReloadRules) {
-    return cachedReloadRules;
-  }
-  // Channel docking: plugins contribute hot reload/no-op prefixes here.
   const channelPlugins = listChannelPlugins();
-  const channelReloadRules: ReloadRule[] = channelPlugins.flatMap((plugin) => {
-    const restartAction = plugin.reload?.accountScopedRestart
-      ? (`restart-channel-account:${plugin.id}` as ReloadAction)
-      : (`restart-channel:${plugin.id}` as ReloadAction);
-    return (plugin.reload?.configPrefixes ?? [])
-      .map((prefix): ReloadRule => {
-        const rule: ReloadRule = {
-          prefix,
-          kind: "hot",
-          actions: [restartAction],
-        };
-        if (plugin.reload?.accountScopedRestart) {
-          rule.accountScopedPlugin = plugin;
-        }
-        return rule;
-      })
-      .concat(
-        (plugin.reload?.noopPrefixes ?? []).map((prefix): ReloadRule => ({
-          prefix,
-          kind: "none",
-        })),
-      );
-  });
-  const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
-    {
-      prefix: `plugins.entries.${plugin.id}`,
+  const policies: ReloadPolicy[] = [
+    ...CORE_RELOAD_POLICIES,
+    ...(registry?.reloads ?? []).flatMap(({ registration }) =>
+      (
+        [
+          ["restart", registration.restartPrefixes],
+          ["hot", registration.hotPrefixes],
+          ["none", registration.noopPrefixes],
+        ] as const
+      ).map(([kind, prefixes]) => ({ kind, prefixes: prefixes ?? [] })),
+    ),
+    ...channelPlugins.flatMap((plugin): ReloadPolicy[] => [
+      {
+        prefixes: plugin.reload?.configPrefixes ?? [],
+        kind: "hot",
+        channels: [plugin],
+        accountScoped: plugin.reload?.accountScopedRestart,
+      },
+      { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none" },
+    ]),
+    ...channelPlugins.map((plugin): ReloadPolicy => ({
+      prefixes: [`plugins.entries.${plugin.id}`],
       kind: "hot",
-      actions: [
-        "reload-plugins",
-        "dispose-mcp-runtimes",
-        `restart-channel:${plugin.id}` as ReloadAction,
-      ],
-    },
-  ]);
-  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (
-      [
-        ["restart", entry.registration.restartPrefixes],
-        ["hot", entry.registration.hotPrefixes],
-        ["none", entry.registration.noopPrefixes],
-      ] as const
-    ).flatMap(([kind, prefixes]) => (prefixes ?? []).map((prefix) => ({ prefix, kind }))),
-  );
-  const rules: ReloadRule[] = [
-    ...BASE_RELOAD_RULES,
-    ...pluginReloadRules,
-    ...channelReloadRules,
-    ...channelPluginStateRules,
+      actions: ["reloadPlugins", "disposeMcpRuntimes"],
+      channels: [plugin],
+    })),
     // Channel snapshots capture shared policy. Fan out by default while
     // preserving explicit plugin/channel policies above on equal-prefix ties.
-    ...["agents.defaults.mediaMaxMb", "channels.defaults", "channels.modelByChannel"].map(
-      (prefix): ReloadRule => ({
-        prefix,
-        kind: "hot",
-        actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
-      }),
-    ),
-    ...BASE_RELOAD_RULES_TAIL,
+    {
+      prefixes: [
+        "agents.defaults.mediaMaxMb",
+        "channels.defaults",
+        "channels.modelByChannel",
+        "messages.inbound",
+        "messages.ackReactionScope",
+        "commands",
+        "accessGroups",
+        "tts",
+        "surfaces",
+        "acp.stream",
+        "diagnostics.flags",
+      ],
+      kind: "hot",
+      channels: channelPlugins,
+    },
+    ...DEFAULT_RELOAD_POLICIES,
   ];
+  const rules = policies.flatMap(({ prefixes, ...policy }) =>
+    prefixes.map((prefix) => ({ ...policy, prefix })),
+  );
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
   rules.sort((a, b) => b.prefix.length - a.prefix.length);
-  cachedRefinementPrefixes = rules.map((rule) => rule.prefix);
-  cachedReloadRules = rules;
-  return rules;
+  cachedCatalog = {
+    registry,
+    version,
+    rules,
+    refinementPrefixes: rules.map((rule) => rule.prefix),
+  };
+  return cachedCatalog;
 }
 
 export function listConfigReloadRefinementPrefixes(): string[] {
-  listReloadRules();
-  return cachedRefinementPrefixes;
+  return getReloadPolicyCatalog().refinementPrefixes;
 }
 
-function matchRule(path: string): ReloadRule | null {
-  for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
-      return rule;
-    }
-  }
-  return null;
+function matchRule(path: string): ReloadRule | undefined {
+  return getReloadPolicyCatalog().rules.find(
+    ({ prefix }) => path === prefix || path.startsWith(`${prefix}.`),
+  );
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
@@ -375,33 +406,16 @@ export function listPluginInstallWholeRecordPaths(
 
 function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
   const prefix = `channels.${channel}.accounts.`;
-  if (!path.startsWith(prefix)) {
-    return null;
-  }
-  const rest = path.slice(prefix.length);
-  if (rest.length === 0) {
-    return null;
-  }
-  const dotIdx = rest.indexOf(".");
-  const id = dotIdx === -1 ? rest : rest.slice(0, dotIdx);
-  if (id.length === 0) {
-    return null;
-  }
+  const id = path.startsWith(prefix) ? path.slice(prefix.length).split(".", 1)[0] : undefined;
   // Default config is the inheritance base, so it can change every account.
-  if (id === DEFAULT_ACCOUNT_ID) {
-    return null;
-  }
-  return id;
+  return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
 function isResolvableChannelAccount(params: {
-  plugin: ChannelPlugin | undefined;
+  plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
 }): boolean {
-  if (!params.plugin) {
-    return false;
-  }
   try {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
@@ -426,6 +440,7 @@ export function buildGatewayReloadPlan(
     restartReasons: [],
     hotReasons: [],
     reloadHooks: false,
+    reloadInternalHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
@@ -437,72 +452,6 @@ export function buildGatewayReloadPlan(
     noopPaths: [],
   };
 
-  const applyAction = (
-    action: ReloadAction,
-    originatingPath: string,
-    accountScopedPlugin?: ChannelPlugin,
-  ) => {
-    if (action.startsWith("restart-channel-account:")) {
-      const channel = action.slice("restart-channel-account:".length) as ChannelId;
-      const accountId = extractAccountIdFromPath(channel, originatingPath);
-      if (accountId !== null) {
-        if (
-          options.candidateConfig &&
-          !isResolvableChannelAccount({
-            plugin: accountScopedPlugin,
-            accountId,
-            config: options.candidateConfig,
-          })
-        ) {
-          plan.restartChannels.add(channel);
-          return;
-        }
-        let set = restartChannelAccounts.get(channel);
-        if (!set) {
-          set = new Set<string>();
-          restartChannelAccounts.set(channel, set);
-        }
-        set.add(accountId);
-        return;
-      }
-      plan.restartChannels.add(channel);
-      return;
-    }
-    if (action.startsWith("restart-channel:")) {
-      const channel = action.slice("restart-channel:".length) as ChannelId;
-      plan.restartChannels.add(channel);
-      return;
-    }
-    switch (action) {
-      case "reload-hooks":
-        plan.reloadHooks = true;
-        break;
-      case "refresh-hooks-policy":
-        plan.refreshHooksPolicy = true;
-        break;
-      case "restart-gmail-watcher":
-        plan.restartGmailWatcher = true;
-        break;
-      case "restart-cron":
-        plan.restartCron = true;
-        break;
-      case "restart-heartbeat":
-        plan.restartHeartbeat = true;
-        break;
-      case "reconcile-system-jobs":
-        plan.reconcileSystemJobs = true;
-        break;
-      case "reload-plugins":
-        plan.reloadPlugins = true;
-        break;
-      case "dispose-mcp-runtimes":
-        plan.disposeMcpRuntimes = true;
-        break;
-      default:
-        break;
-    }
-  };
-
   for (const path of changedPaths) {
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
@@ -512,36 +461,43 @@ export function buildGatewayReloadPlan(
       continue;
     }
     const rule = matchRule(path);
-    if (!rule) {
-      plan.restartGateway = true;
-      plan.restartReasons.push(path);
-      continue;
-    }
+    const kind = rule?.kind ?? "restart";
     const isCredentialRotation =
+      rule &&
       AUTH_CREDENTIAL_PATHS.includes(rule.prefix) &&
       canHotReloadGatewayAuthCredentials(options.previousConfig, options.candidateConfig);
-    if (rule.kind === "restart" && !isCredentialRotation) {
+    if (kind === "restart" && !isCredentialRotation) {
       plan.restartGateway = true;
       plan.restartReasons.push(path);
       continue;
     }
-    if (rule.kind === "none") {
+    if (kind === "none") {
       plan.noopPaths.push(path);
       continue;
     }
     plan.hotReasons.push(path);
-    for (const action of rule.actions ?? []) {
-      applyAction(action, path, rule.accountScopedPlugin);
+    for (const action of rule?.actions ?? []) {
+      plan[action] = true;
+    }
+    for (const plugin of rule?.channels ?? []) {
+      const accountId = rule?.accountScoped ? extractAccountIdFromPath(plugin.id, path) : null;
+      if (
+        accountId === null ||
+        (options.candidateConfig &&
+          !isResolvableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+      ) {
+        plan.restartChannels.add(plugin.id);
+        continue;
+      }
+      const accounts = restartChannelAccounts.get(plugin.id) ?? new Set<string>();
+      accounts.add(accountId);
+      restartChannelAccounts.set(plugin.id, accounts);
     }
   }
 
   // A wholesale restart covers its account targets and must run only once.
   for (const channel of plan.restartChannels) {
     restartChannelAccounts.delete(channel);
-  }
-
-  if (plan.restartGmailWatcher) {
-    plan.reloadHooks = true;
   }
 
   return plan;
