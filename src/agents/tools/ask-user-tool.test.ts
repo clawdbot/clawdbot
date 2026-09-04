@@ -344,7 +344,6 @@ describe("ask_user prompt delivery", () => {
           "question.request",
           expect.anything(),
           expect.anything(),
-          expect.anything(),
         ),
       );
 
