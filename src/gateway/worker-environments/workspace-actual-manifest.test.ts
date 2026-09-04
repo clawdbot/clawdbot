@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -12,6 +13,63 @@ import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limit
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["metadata", "files"] as const)(
+  "bounds pending promise resources while %s operations are blocked",
+  async (phase) => {
+    const root = await fs.realpath(tempDirs.make("workspace-inventory-pending-"));
+    const files = Array.from({ length: 512 }, (_, index) => `file-${index}.txt`);
+    await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+    const gate = createDeferred();
+    let started = 0;
+    const pause = async (target: unknown) => {
+      if (String(target).startsWith(root + path.sep)) {
+        started++;
+        await gate.promise;
+      }
+    };
+    if (phase === "metadata") {
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        await pause(args[0]);
+        return await lstat(...args);
+      });
+    } else {
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        await pause(args[0]);
+        return await open(...args);
+      });
+    }
+    const pendingPromises = new Set<number>();
+    const hook = createHook({
+      init(id, type) {
+        if (type === "PROMISE") {
+          pendingPromises.add(id);
+        }
+      },
+      promiseResolve(id) {
+        pendingPromises.delete(id);
+      },
+    }).enable();
+    const scan = readActualWorkspaceManifestImpl({
+      root,
+      baseCommit: null,
+      includePaths: new Set(files),
+    });
+    try {
+      await vi.waitFor(() => expect(started).toBe(4));
+      // Observe queued resources, not limiter internals: idle paths must not
+      // each retain a promise graph while the active I/O is blocked.
+      expect(pendingPromises.size).toBeLessThan(files.length);
+    } finally {
+      hook.disable();
+      gate.resolve();
+      await Promise.allSettled([scan]);
+    }
+    expect((await scan).manifest.entries).toHaveLength(files.length);
+  },
+);
 
 it("joins bounded file readers after a workspace file moves outside its root", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-readers-"));
