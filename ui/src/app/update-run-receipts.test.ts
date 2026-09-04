@@ -39,8 +39,12 @@ describe("update browser receipts", () => {
       TRIAGED_KEY,
       JSON.stringify([JSON.stringify(["ws://gateway.test", null, "previous"])]),
     );
-    if (failure === "invalid receipts") storage.setItem(TRIAGED_KEY, "false");
-    if (failure === "oversized history") storage.setItem(TRIAGED_KEY, "x".repeat(150_000));
+    if (failure === "invalid receipts") {
+      storage.setItem(TRIAGED_KEY, "false");
+    }
+    if (failure === "oversized history") {
+      storage.setItem(TRIAGED_KEY, "x".repeat(150_000));
+    }
     const previous = storage.getItem(TRIAGED_KEY);
     if (failure === "read denied") {
       vi.spyOn(storage, "getItem").mockImplementation(() => {
@@ -62,8 +66,9 @@ describe("update browser receipts", () => {
 
   it("bounds retained receipts while keeping the newest diagnostic consumed", () => {
     const receipts = createUpdateRunReceipts();
-    for (let index = 0; index <= 32; index++)
+    for (let index = 0; index <= 32; index++) {
       receipts.recordTriage("ws://gateway.test", null, String(index));
+    }
     const reloaded = createUpdateRunReceipts();
     expect(reloaded.triaged("ws://gateway.test", null, "0")).toBe(false);
     expect(reloaded.triaged("ws://gateway.test", null, "1")).toBe(true);

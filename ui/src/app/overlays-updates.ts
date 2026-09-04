@@ -260,11 +260,11 @@ export function createApplicationUpdateOverlays(
       publish();
     } else {
       // Schedule refreshes must not replace a run report with a retained sentinel.
-      const failure = projectUpdateRunFailure(snapshot.updateRun);
+      const runFailure = projectUpdateRunFailure(snapshot.updateRun);
       snapshot = {
         ...snapshot,
-        updateStatusBanner: failure?.banner ?? null,
-        recordedUpdateAttempt: failure?.attempt ?? null,
+        updateStatusBanner: runFailure?.banner ?? null,
+        recordedUpdateAttempt: runFailure?.attempt ?? null,
       };
       publish();
     }
@@ -427,7 +427,7 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
-    acknowledgeUpdateRun() {
+    acknowledgeUpdateRun(this: void) {
       const run = snapshot.updateRun;
       if (run && run.status !== "running") {
         receipts.acknowledge(updateGatewayScope, profileId, run.runId);

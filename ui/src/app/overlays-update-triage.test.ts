@@ -227,8 +227,9 @@ describe("update failure triage admission", () => {
   it("does not turn failed status or hold requests into a failed update", async () => {
     let unavailable = false;
     const harness = updateRunHarness(async (method) => {
-      if (unavailable && (method === "update.status" || method === "update.hold"))
+      if (unavailable && (method === "update.status" || method === "update.hold")) {
         throw new Error("Unavailable");
+      }
       return {};
     });
     const onUpdateFailure = vi.fn();

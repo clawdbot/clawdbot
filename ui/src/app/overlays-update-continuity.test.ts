@@ -26,10 +26,15 @@ describe("server-owned update continuity", () => {
   it("reads an accepted run and follows events through restart to a visible success row", async () => {
     let run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "update.run") return { ok: true, runId: run.runId };
-      if (method === "update.runs.get") return { run };
-      if (method === "update.status" && run.status === "succeeded")
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return { run };
+      }
+      if (method === "update.status" && run.status === "succeeded") {
         return { updateAvailable: null };
+      }
       return {};
     });
     const harness = updateRunHarness(request);
@@ -44,7 +49,7 @@ describe("server-owned update continuity", () => {
       );
 
       for (const phase of ["activating", "restarting"] as const) {
-        run = { ...run, phase, updatedAtMs: run.updatedAtMs + 1 };
+        run = updateRunFixture({ phase, updatedAtMs: run.updatedAtMs + 1 });
         harness.emitEvent("update.run.changed", run);
         await flushMicrotasks();
         expect(overlays.snapshot.updateRun?.phase).toBe(phase);
@@ -160,8 +165,12 @@ describe("server-owned update continuity", () => {
   it("keeps a known run on reconnect even when status retains another attempt", async () => {
     let run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "update.run") return { ok: true, runId: run.runId };
-      if (method === "update.runs.get") return { run };
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return { run };
+      }
       return {};
     });
     const harness = updateRunHarness(request);

@@ -173,10 +173,15 @@ describe("update triage presentation", () => {
     let run = createUpdateRunFixture();
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") return { ok: true, runId: run.runId };
-        if (method === "update.runs.get") return { run };
-        if (method === "update.status")
+        if (method === "update.run") {
+          return { ok: true, runId: run.runId };
+        }
+        if (method === "update.runs.get") {
+          return { run };
+        }
+        if (method === "update.status") {
           return { activeRun: run.status === "running" ? run : null, lastRun: run };
+        }
         return method === "openclaw.chat"
           ? {
               sessionId: params?.sessionId,
@@ -284,10 +289,15 @@ describe("update triage presentation", () => {
     } as const;
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") return { ok: true, runId: run.runId };
-        if (method === "update.runs.get") return { run };
-        if (method === "update.status")
+        if (method === "update.run") {
+          return { ok: true, runId: run.runId };
+        }
+        if (method === "update.runs.get") {
+          return { run };
+        }
+        if (method === "update.status") {
           return { activeRun: run.status === "running" ? run : null, lastRun: run, schedule };
+        }
         return method === "openclaw.chat"
           ? { sessionId: params?.sessionId, reply: "Ready to inspect the update." }
           : {};

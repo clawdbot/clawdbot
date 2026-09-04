@@ -837,8 +837,12 @@ describe("application update overlays", () => {
   ])("routes $name to the admitted update run", async ({ activeSessionKey, options }) => {
     const run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "update.run") return { ok: true, runId: run.runId };
-      if (method === "update.runs.get") return { run };
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return { run };
+      }
       return {};
     });
     const harness = createGatewayHarness(client(request));

@@ -139,8 +139,12 @@ describe("update run response races", () => {
     const run = updateRunFixture();
     let reads = 0;
     const firstRequest = vi.fn<RequestFn>(async (method) => {
-      if (method === "update.run") return { ok: true, runId: run.runId };
-      if (method === "update.runs.get") return ++reads === 1 ? { run } : pending.promise;
+      if (method === "update.run") {
+        return { ok: true, runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        return ++reads === 1 ? { run } : pending.promise;
+      }
       return {};
     });
     const finished = {
