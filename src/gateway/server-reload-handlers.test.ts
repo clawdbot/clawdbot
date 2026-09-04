@@ -309,7 +309,7 @@ const hoisted = vi.hoisted(() => ({
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
-  disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  reloadSessionMcpRuntimes: vi.fn(async () => {}),
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
     storePath: "/tmp/rebuilt-cron.json",
@@ -439,7 +439,7 @@ vi.mock("../agents/model-provider-auth.js", () => ({
 }));
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
-  disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
+  reloadSessionMcpRuntimes: hoisted.reloadSessionMcpRuntimes,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
@@ -963,8 +963,8 @@ afterEach(() => {
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
-  hoisted.disposeAllSessionMcpRuntimes.mockClear();
-  hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+  hoisted.reloadSessionMcpRuntimes.mockClear();
+  hoisted.reloadSessionMcpRuntimes.mockResolvedValue(undefined);
   hoisted.buildGatewayCronService.mockClear();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
@@ -2131,7 +2131,7 @@ describe("gateway hot reload model state", () => {
     expect(cron.stop).not.toHaveBeenCalled();
     expect(channels.start).not.toHaveBeenCalled();
     expect(channels.stop).not.toHaveBeenCalled();
-    expect(hoisted.disposeAllSessionMcpRuntimes).not.toHaveBeenCalled();
+    expect(hoisted.reloadSessionMcpRuntimes).not.toHaveBeenCalled();
     expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
   });
 
@@ -2521,9 +2521,9 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
+  it("reconciles cached MCP owners on MCP config hot reloads", async () => {
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    hoisted.disposeAllSessionMcpRuntimes.mockRejectedValueOnce(new Error("dispose failed"));
+    hoisted.reloadSessionMcpRuntimes.mockRejectedValueOnce(new Error("dispose failed"));
     const { applyHotReload, setState } = createReloadHandlersForTest(
       logReload,
       undefined,
@@ -2541,7 +2541,7 @@ describe("gateway hot reload model state", () => {
       nextConfig,
     );
 
-    expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    expect(hoisted.reloadSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(setState).toHaveBeenCalledOnce();
     expect(logReload.warn).toHaveBeenCalledWith(
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
@@ -2716,9 +2716,11 @@ describe("gateway hot reload superseded tail recovery", () => {
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const prepareRuntimeConfig = vi.fn(async (): Promise<OpenClawConfig> => ({
-      logging: { level: "debug" },
-    }));
+    const prepareRuntimeConfig = vi.fn(
+      async (): Promise<OpenClawConfig> => ({
+        logging: { level: "debug" },
+      }),
+    );
     const handlers = createReloadHandlersForTest(
       undefined,
       undefined,
@@ -2880,7 +2882,7 @@ describe("gateway hot reload superseded tail recovery", () => {
         throw new Error("gmail tail failed");
       });
       if (surface === "mcp") {
-        hoisted.disposeAllSessionMcpRuntimes.mockImplementationOnce(async () => {
+        hoisted.reloadSessionMcpRuntimes.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
         });

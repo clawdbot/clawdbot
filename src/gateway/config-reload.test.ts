@@ -481,7 +481,6 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
-    "gateway.publicOrigin",
     "mcp.apps.sandboxOrigin",
     "approvals.exec.enabled",
     "approvals.plugin.targets",
@@ -600,6 +599,10 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "gateway.publicOrigin",
       expected: { disposeMcpRuntimes: true },
     },
     {

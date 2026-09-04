@@ -1,4 +1,4 @@
-import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -543,7 +543,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     if (plan.disposeMcpRuntimes) {
       await disposeMcpRuntimesWithTimeout({
-        dispose: disposeAllSessionMcpRuntimes,
+        dispose: () =>
+          reloadSessionMcpRuntimes({
+            cfg: nextConfig,
+            manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+            reloadPlugins: plan.reloadPlugins,
+          }),
         timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
         onWarn: params.logReload.warn,
         label: "bundle-mcp runtime disposal during config reload",

@@ -104,7 +104,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
       "gateway.cliAgents",
-      "gateway.publicOrigin",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
@@ -170,7 +169,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reconcileSystemJobs"],
   },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
-  { prefixes: ["mcp"], kind: "hot", actions: ["disposeMcpRuntimes"] },
+  { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
     prefixes: ["talk.provider", "talk.realtime.provider"],
@@ -269,12 +268,14 @@ function getReloadPolicyCatalog() {
       },
       { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none" },
     ]),
-    ...channelPlugins.map((plugin): ReloadPolicy => ({
-      prefixes: [`plugins.entries.${plugin.id}`],
-      kind: "hot",
-      actions: ["reloadPlugins", "disposeMcpRuntimes"],
-      channels: [plugin],
-    })),
+    ...channelPlugins.map(
+      (plugin): ReloadPolicy => ({
+        prefixes: [`plugins.entries.${plugin.id}`],
+        kind: "hot",
+        actions: ["reloadPlugins", "disposeMcpRuntimes"],
+        channels: [plugin],
+      }),
+    ),
     // Channel snapshots capture shared policy. Fan out by default while
     // preserving explicit plugin/channel policies above on equal-prefix ties.
     {
