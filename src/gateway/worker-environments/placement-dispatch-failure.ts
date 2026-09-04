@@ -12,7 +12,7 @@ import type {
 } from "./placement-store.js";
 import type { WorkerPlacementAuthorization } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { boundedWorkerError } from "./worker-error.js";
+import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
 export type WorkerActiveDispatchPlacement = Extract<
@@ -100,7 +100,6 @@ export type WorkerActivationBarrier = (params: {
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
-const boundedError = boundedWorkerError;
 
 export function workerDisappearanceError(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -232,9 +231,9 @@ export function createPlacementFailureActions(deps: {
   const retryFailedTeardown = async (
     placement: WorkerFailedDispatchPlacement,
     authorize?: WorkerPlacementAuthorization,
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     if (!placement.environmentId) {
-      return;
+      return undefined;
     }
     const environment = environments.get(placement.environmentId);
     if (
@@ -243,7 +242,7 @@ export function createPlacementFailureActions(deps: {
       environment.state === "failed" ||
       environment.state === "orphaned"
     ) {
-      return;
+      return undefined;
     }
     const teardownErrors = await cleanupEnvironment({
       environmentId: placement.environmentId,
@@ -260,6 +259,8 @@ export function createPlacementFailureActions(deps: {
         recoveryError: truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT),
       });
     }
+    // The persisted failure may intentionally retain an earlier terminal cause.
+    return teardownErrors.length > 0 ? boundedError(teardownErrors.join("; ")) : undefined;
   };
 
   const startDrain = (
