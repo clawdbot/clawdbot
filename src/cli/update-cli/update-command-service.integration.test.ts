@@ -60,9 +60,7 @@ const mocks = vi.hoisted(() => ({
   child: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
   health: vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
   doctor: vi.fn(),
-  configSnapshot: vi.fn(async () => {
-    throw new Error("Unexpected config snapshot during preserved activation");
-  }),
+  configSnapshot: vi.fn<() => Promise<void>>(),
   error: vi.fn(),
   log: vi.fn(),
   capability:
@@ -236,6 +234,9 @@ beforeEach(async () => {
     return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
   });
   mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
+  mocks.configSnapshot
+    .mockReset()
+    .mockRejectedValue(new Error("Unexpected config snapshot during preserved activation"));
 });
 afterEach(async () => {
   envSnapshot.restore();
@@ -246,73 +247,119 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
-  it("lets a healthy service refresh remain the sole activation", async () => {
-    mocks.capability.mockResolvedValue({ kind: "writable" });
-    const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateInstallKind: "package",
-      root,
-      shouldRestart: true,
-      jsonMode: true,
-    });
-    expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
-
-    mocks.child.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    mocks.health.mockImplementation(async (params) =>
-      params.attempts === 10 && params.delayMs === 500
-        ? {
-            healthy: false,
-            staleGatewayPids: [],
-            runtime: { status: "running" },
-            portUsage: { port: params.port, status: "free", listeners: [], hints: [] },
-          }
-        : readyRecoveryHealth(params.port, true),
-    );
-
-    const activated = await maybeRestartService({
-      channel: "stable",
-      shouldRestart: true,
-      result: {
-        status: "ok",
-        mode: "npm",
+  it.each([
+    { startup: "fast", readyAfterMs: 0, needsRecovery: false },
+    { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
+    { startup: "unready", readyAfterMs: Infinity, needsRecovery: true },
+    { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
+  ])(
+    "verifies the $startup refresh before deciding on recovery",
+    async ({ startup, readyAfterMs, needsRecovery }) => {
+      let nowMs = 0;
+      let recovering = false;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
+      mocks.capability.mockResolvedValue({ kind: "writable" });
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: "package",
         root,
-        steps: [],
-        durationMs: 0,
-        before: { version: "2026.1.1" },
-        after: { version: VERSION },
-      },
-      opts: { json: true },
-      refreshServiceEnv: true,
-      serviceInstallEnv: process.env,
-      serviceUpdateVerdict: before.serviceUpdateVerdict,
-      serviceEnv: before.serviceEnv,
-      gatewayPort: 19305,
-      requireRunningServiceAfterRestart: true,
-      timeoutMs: 1_000,
-    });
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
 
-    expect(activated).toBe(true);
-    expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(1);
-    expect(mocks.child.mock.calls.filter(([args]) => args.includes("restart"))).toHaveLength(0);
-    expect(mocks.script).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.health).toHaveBeenCalledTimes(1);
-    const healthParams = mocks.health.mock.calls[0]?.[0];
-    expect(healthParams).toMatchObject({
-      port: 19305,
-      expectedVersion: VERSION,
-      requireRunningService: true,
-      settle: { probes: 12 },
-    });
-    expect(healthParams).not.toHaveProperty("attempts");
-    expect(healthParams).not.toHaveProperty("delayMs");
-  });
+      mocks.child.mockImplementation(async (args) => {
+        if (args.includes("restart")) {
+          recovering = true;
+          mocks.events.push("recovery restart");
+        } else {
+          expect(args).toContain("install");
+          mocks.events.push("refresh activation");
+        }
+        mocks.running = true;
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+      mocks.configSnapshot.mockResolvedValue(undefined);
+      mocks.ports.mockImplementation(async (port) => {
+        const ready = recovering || nowMs >= readyAfterMs;
+        return {
+          port,
+          status: ready ? "busy" : "free",
+          listeners: ready ? [{ pid: 4242, command: "openclaw-gateway" }] : [],
+          hints: [],
+        };
+      });
+      mocks.call.mockImplementation(async (opts) =>
+        gatewayHealthResponse({
+          server: {
+            version: startup === "wrong version" && !recovering ? "2026.1.1" : VERSION,
+            connId: "fixture",
+          },
+        })(opts),
+      );
+      const { waitForGatewayHealthyRestart } = await vi.importActual<
+        typeof import("../daemon-cli/restart-health.js")
+      >("../daemon-cli/restart-health.js");
+      const healthResults: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>[] = [];
+      mocks.health.mockImplementation(async (params) => {
+        const health = await waitForGatewayHealthyRestart(params);
+        healthResults.push(health);
+        mocks.events.push(`health: ${health.waitOutcome}`);
+        return health;
+      });
+
+      const activated = await maybeRestartService({
+        channel: "stable",
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode: "npm",
+          root,
+          steps: [],
+          durationMs: 0,
+          before: { version: "2026.1.1" },
+          after: { version: VERSION },
+        },
+        opts: { json: true },
+        refreshServiceEnv: true,
+        serviceInstallEnv: process.env,
+        serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceEnv: before.serviceEnv,
+        gatewayPort: 19305,
+        requireRunningServiceAfterRestart: true,
+        timeoutMs: 1_000,
+      });
+
+      expect(activated).toBe(true);
+      expect(mocks.events).toEqual([
+        "native stop",
+        "refresh activation",
+        ...(needsRecovery
+          ? [
+              `health: ${startup === "wrong version" ? "version-mismatch" : "timeout"}`,
+              "recovery restart",
+            ]
+          : []),
+        "health: healthy",
+      ]);
+      expect(mocks.script).not.toHaveBeenCalled();
+      expect(mocks.restart).not.toHaveBeenCalled();
+      if (startup === "unready") {
+        expect(healthResults[0]?.elapsedMs).toBeGreaterThanOrEqual(60_000);
+      } else if (!needsRecovery) {
+        expect(nowMs).toBeGreaterThanOrEqual(readyAfterMs + 5_500);
+      }
+    },
+  );
 
   it.each([
     ...(

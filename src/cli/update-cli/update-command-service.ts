@@ -62,6 +62,7 @@ export {
 } from "./update-command-service-maintenance.js";
 
 const CLI_NAME = resolveCliName();
+
 export function shouldPrepareUpdatedInstallRestart(params: {
   updateMode: UpdateRunResult["mode"];
   serviceInstalled: boolean;
@@ -360,13 +361,6 @@ export async function maybeRestartService(params: {
               }),
             });
             refreshedGatewayAlreadyHealthy = health.healthy;
-            if (refreshedGatewayAlreadyHealthy && !activation.opts.json) {
-              defaultRuntime.log(
-                theme.muted(
-                  "Gateway already reports the updated version after service refresh; skipped redundant restart.",
-                ),
-              );
-            }
           }
         } catch (err) {
           defaultRuntime.error(
@@ -422,15 +416,21 @@ export async function maybeRestartService(params: {
           return false;
         }
       }
-      // A verified service refresh owns activation. Only an unverified or
-      // non-healthy refresh reaches the existing restart path.
-      if (!refreshedGatewayAlreadyHealthy && restartScriptPath) {
+      // Refresh already activated and verified this process. Complete root validation
+      // above before skipping the restart and its second readiness pass.
+      if (refreshedGatewayAlreadyHealthy) {
+        if (!activation.opts.json) {
+          defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+        }
+        return true;
+      }
+      if (restartScriptPath) {
         if (!preserveDefinition) {
           await createUpdateConfigSnapshot();
         }
         await runRestartScript(restartScriptPath);
         restartInitiated = true;
-      } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall()) {
+      } else if (canRestartUpdatedInstall()) {
         if (!preserveDefinition) {
           await createUpdateConfigSnapshot();
         }
@@ -454,7 +454,6 @@ export async function maybeRestartService(params: {
           return false;
         }
       } else if (
-        !refreshedGatewayAlreadyHealthy &&
         shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode }) &&
         !activation.skipLegacyServiceRestart
       ) {
@@ -462,7 +461,7 @@ export async function maybeRestartService(params: {
           await createUpdateConfigSnapshot();
         }
         restarted = await runDaemonRestart();
-      } else if (!refreshedGatewayAlreadyHealthy && !activation.opts.json) {
+      } else if (!activation.opts.json) {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
@@ -472,7 +471,7 @@ export async function maybeRestartService(params: {
           (preserveDefinition ||
             expectedGatewayVersion !== undefined ||
             activation.result.mode === "git")) ||
-        (!refreshedGatewayAlreadyHealthy && activation.requireRunningServiceAfterRestart);
+        activation.requireRunningServiceAfterRestart;
       if (shouldVerifyRestart) {
         const requireRunningService =
           updatedInstallRestartNeedsServiceRootProof ||
