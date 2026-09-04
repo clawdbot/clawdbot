@@ -1,23 +1,25 @@
 {
   "schema_version": 1,
   "iter": 0,
-  "ts": "2026-09-04T10:47:07.538Z",
-  "goal": "Resume from the intact workspace and preserve the current five-file candidate. Run every pending goal.json gate using only the verified pnpm 12.1.0 executable `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native`. Emit iter_complete with exact command/output evidence, then hand off to the Reviewer for a read-only audit.",
+  "ts": "2026-09-04T11:17:47.888Z",
+  "goal": "Resume from the preserved five-file candidate and ledger evidence. Do not rerun the full suite. Run only the remaining goal.json gates that are executable without recursively requiring a literal pnpm binary, using `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native` wherever pnpm is invoked. Capture exact outputs and digests, verify scope and production-versus-test LOC, and emit iter_complete for Reviewer handoff.",
   "constraints": [
-    "Use only `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native` for pnpm commands.",
-    "Do not use npx, pnpm 12.0.0, the package placeholder wrapper, package-manager overrides, or workarounds.",
-    "Fix only demonstrated candidate failures within the existing five files.",
-    "Do not repeat RED capture or implementation.",
-    "Do not touch a sixth file.",
+    "Preserve the five-file candidate unless a remaining authoritative gate demonstrates a candidate failure.",
+    "Do not rerun RED, focal GREEN suites, sibling GREEN suites, or the completed full suite.",
+    "Do not substitute npx, pnpm 12.0.0, the wrapper placeholder, package-manager overrides, or workarounds.",
+    "If a command recursively requires unavailable literal pnpm, record the exact failure as an environment/evaluator exception.",
     "Do not run or restart runtime services.",
+    "Do not touch a sixth product file.",
+    "Do not reimplement the fix.",
     "Do not push.",
     "Reviewer must remain read-only."
   ],
   "success_criteria": [
-    "All pending goal.json gates have exact command/output evidence from pnpm-native 12.1.0.",
-    "The five-file candidate remains unchanged unless an authoritative gate demonstrates a real failure.",
+    "All remaining executable gates have exact command/output evidence and digests.",
+    "Scope and LOC classification are verified.",
+    "Preserved RED/GREEN evidence and full-suite environmental failures remain intact and correctly classified.",
     "Coder emits iter_complete.",
-    "Reviewer performs the subsequent read-only audit."
+    "Reviewer independently audits the exact candidate, RED/GREEN evidence, environmental classification, latest ClawSweeper P2 moves, and current PR state."
   ],
   "max_attempts": 1
 }
