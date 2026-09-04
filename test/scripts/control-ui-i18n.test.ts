@@ -1,10 +1,10 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import * as llm from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "@openclaw/ai";
 import * as ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,6 +32,14 @@ import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
+const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
+vi.mock("@openclaw/ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/ai")>();
+  return {
+    ...actual,
+    createLlmRuntime: () => ({ ...actual.createLlmRuntime(), completeSimple: llm.completeSimple }),
+  };
+});
 
 describe("translation provider privacy and fallback", () => {
   const primary = "private-primary-fixture";
@@ -41,7 +49,7 @@ describe("translation provider privacy and fallback", () => {
     source: "Open",
     sourcePath: "fixture.ts",
   }));
-  const response = (overrides: Partial<llm.AssistantMessage> = {}): llm.AssistantMessage => ({
+  const response = (overrides: Partial<AssistantMessage> = {}): AssistantMessage => ({
     role: "assistant",
     content: [
       {
@@ -65,6 +73,7 @@ describe("translation provider privacy and fallback", () => {
     ...overrides,
   });
   beforeEach(() => {
+    llm.completeSimple.mockReset();
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_PROVIDER", "openai");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", primary);
@@ -74,6 +83,57 @@ describe("translation provider privacy and fallback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
+    const temp = createTempDirTracker();
+    const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const scriptUrl = pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href;
+      const code = `
+        import assert from "node:assert/strict";
+        import net from "node:net";
+        import { syncBuiltinESMExports } from "node:module";
+        const rejectNetwork = () => { throw new Error("Unexpected network connection"); };
+        net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
+        syncBuiltinESMExports();
+        let requests = 0;
+        globalThis.fetch = async () => {
+          requests += 1;
+          const item = { id: "message", type: "message", role: "assistant", content: [] };
+          const text = JSON.stringify({ connect: "Connecter" });
+          const events = [
+            { type: "response.created", response: { id: "response" } },
+            { type: "response.output_item.added", output_index: 0, item },
+            { type: "response.content_part.added", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+            { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: text },
+            { type: "response.output_item.done", output_index: 0, item: { ...item, content: [{ type: "output_text", text, annotations: [] }] } },
+            { type: "response.completed", response: { id: "response", status: "completed" } },
+          ];
+          return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
+        };
+        const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "fixture" }], "fr");
+        assert.equal(result.get("connect"), "Connecter");
+        assert.equal(requests, 1);
+        console.log("isolated-runtime-ok");
+      `;
+      const result = await runProcess(process.execPath, [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        code,
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("isolated-runtime-ok");
+      expect(result.stdout + result.stderr).not.toContain(primary);
+      expect(result.stdout + result.stderr).not.toContain("[model-fetch]");
+      expect(existsSync(stateDir)).toBe(false);
+    } finally {
+      temp.cleanup();
+    }
   });
 
   it("switches only an unavailable model and keeps the fallback for later batches", async () => {

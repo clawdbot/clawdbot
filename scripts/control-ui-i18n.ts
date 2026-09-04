@@ -5,10 +5,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
+import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
   syncControlUiCatalogFallbackBaseline,
@@ -36,6 +37,11 @@ import {
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+
+// Translation is standalone tooling: Gateway host hooks open operator state
+// and log model identifiers before this script can redact provider failures.
+const translationRuntime = createLlmRuntime();
+registerBuiltInApiProviders(translationRuntime.registry);
 
 type RunProcessParentSignalState = {
   done: boolean;
@@ -860,19 +866,21 @@ class TranslationClient {
         }, timeoutMs);
 
         const complete = () =>
-          completeSimple(
-            this.model,
-            {
-              systemPrompt: this.systemPrompt,
-              messages: [{ role: "user", content: message, timestamp: Date.now() }],
-            },
-            {
-              maxTokens: 4096,
-              reasoning: resolveThinkingLevel(),
-              signal: controller.signal,
-              timeoutMs,
-            },
-          ).then(extractTranslationResult);
+          translationRuntime
+            .completeSimple(
+              this.model,
+              {
+                systemPrompt: this.systemPrompt,
+                messages: [{ role: "user", content: message, timestamp: Date.now() }],
+              },
+              {
+                maxTokens: 4096,
+                reasoning: resolveThinkingLevel(),
+                signal: controller.signal,
+                timeoutMs,
+              },
+            )
+            .then(extractTranslationResult);
         complete()
           .catch(async (error: unknown) => {
             const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
