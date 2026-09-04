@@ -95,6 +95,63 @@ describe("plugin dashboard declarations", () => {
     );
   });
 
+  it.each([
+    { firstPublic: false, secondPublic: true, sharedPath: true },
+    { firstPublic: true, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: true },
+    { firstPublic: false, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: false },
+  ])(
+    "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
+    ({ firstPublic, secondPublic, sharedPath }) => {
+      useNoBundledPlugins();
+      const plugins = [firstPublic, secondPublic].map((isPublic, index) => {
+        const kind = index === 0 ? "first" : "second";
+        const resourceName = index === 0 || sharedPath ? "shared" : "other";
+        return writePlugin({
+          id: `renderer-${kind}`,
+          body: `module.exports = {
+            id: "renderer-${kind}",
+            register(api) {
+              api.registerBoardWidgetContentKind({
+                kind: "${kind}",
+                label: "Renderer",
+                resources: {
+                  surface: "${kind}",
+                  paths: ["/__openclaw__/renderer/${resourceName}.js"],
+                  ${isPublic ? "async readPublicResource() { return undefined; }," : ""}
+                },
+                validateSource() {},
+                composeDocument() { return ""; },
+              });
+            },
+          };`,
+        });
+      });
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugins[0].dir,
+        config: {
+          plugins: {
+            load: { paths: plugins.map((plugin) => plugin.file) },
+            allow: plugins.map((plugin) => plugin.id),
+          },
+        },
+        onlyPluginIds: plugins.map((plugin) => plugin.id),
+      });
+      expect(registry.plugins.find((entry) => entry.id === plugins[0].id)?.status).toBe("loaded");
+      const second = registry.plugins.find((entry) => entry.id === plugins[1].id);
+      if (sharedPath && (firstPublic || secondPublic)) {
+        expect(second).toMatchObject({ status: "error", failurePhase: "register" });
+        expect(second?.error).toContain("public resource paths must be unique");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first"]);
+      } else {
+        expect(second?.status).toBe("loaded");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first", "second"]);
+      }
+    },
+  );
+
   it("loads the Workboard bindings and dispatch action from its manifest", () => {
     const result = loadPluginManifest(path.join(process.cwd(), "extensions", "workboard"));
 

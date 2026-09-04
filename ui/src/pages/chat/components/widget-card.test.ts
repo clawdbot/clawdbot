@@ -37,6 +37,7 @@ describe("widget-card", () => {
       render: "url",
       viewId: "cv_surface_lease_one",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
+      sandbox: "strict",
     } as const;
     const host = document.createElement("div");
     document.body.append(host);
@@ -132,6 +133,7 @@ describe("widget-card", () => {
           render: "url",
           viewId: "cv_tall_widget",
           url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
+          sandbox: "strict",
         } as const,
         "chat_message",
         { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
@@ -158,6 +160,7 @@ describe("widget-card", () => {
       render: "url",
       viewId: "cv_surface_lease_height",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
+      sandbox: "strict",
     } as const;
     const host = document.createElement("div");
     document.body.append(host);
@@ -208,6 +211,7 @@ describe("widget-card", () => {
       render: "url",
       viewId: "cv_surface_lease_mounted",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_mounted/index.html",
+      sandbox: "strict",
     } as const;
     const mountedHost = document.createElement("div");
     render(
@@ -348,7 +352,7 @@ describe("widget-card", () => {
     expect(unknown.childElementCount).toBe(0);
   });
 
-  it("pins normalized Canvas HTML through the board provider", async () => {
+  it("pins default-script Canvas HTML through the board provider", async () => {
     const pinWidget = vi.fn(async () => undefined);
     const snapshotSignal = {
       value: {
@@ -375,13 +379,13 @@ describe("widget-card", () => {
           title: "Release status",
           viewId: " cv_release ",
           url: "/__openclaw__/canvas/documents/cv_release/index.html",
-          sandbox: "scripts",
         },
         "chat_message",
         { boardProvider: provider },
       ),
       canvas,
     );
+    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
     canvas.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -623,5 +627,26 @@ describe("widget-card presentation", () => {
     expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
     expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
     expect(host.querySelector("openclaw-canvas-widget-view")?.title).toBe("Clock");
+  });
+
+  it.each([
+    ["strict", undefined, false],
+    ["strict", "scripts", false],
+    ["trusted", undefined, true],
+    ["trusted", "strict", false],
+  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
+    const host = document.createElement("div");
+    render(
+      renderToolPreview({ ...preview, sandbox }, "chat_message", {
+        embedSandboxMode,
+        boardProvider: providerWith(),
+      }),
+      host,
+    );
+    expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(scripted);
+    expect(host.querySelector("[data-pin-widget]") !== null).toBe(scripted);
+    if (!scripted) {
+      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+    }
   });
 });

@@ -65,12 +65,13 @@ function registerPluginBoardWidgetContentKind(params: {
   if (publicReader !== undefined && typeof publicReader !== "function") {
     fail(record.id, "readPublicResource must be a function");
   }
-  if (publicReader) {
-    for (const registered of registry.boardWidgetContentKinds.values()) {
-      const existing = registered.definition.resources;
-      if (existing.readPublicResource && existing.paths.some((entry) => paths.includes(entry))) {
-        fail(record.id, "public resource paths must be unique across registered content kinds");
-      }
+  for (const registered of registry.boardWidgetContentKinds.values()) {
+    const existing = registered.definition.resources;
+    if (
+      (publicReader || existing.readPublicResource) &&
+      existing.paths.some((entry) => paths.includes(entry))
+    ) {
+      fail(record.id, "public resource paths must be unique across registered content kinds");
     }
   }
   if (registry.boardWidgetContentKinds.has(kind)) {

@@ -411,15 +411,12 @@ function renderMcpAppView(params: {
 function renderWidgetContent(
   kind: "canvas-html" | "mcp-app",
   preview: CanvasToolPreview,
+  sandbox: string,
   options?: WidgetCardOptions,
 ) {
   switch (kind) {
     case "canvas-html": {
-      if (
-        preview.sandbox === "scripts" &&
-        options?.embedSandboxMode !== "strict" &&
-        isManagedCanvasDocumentPreview(preview)
-      ) {
+      if (sandbox.includes("allow-scripts") && isManagedCanvasDocumentPreview(preview)) {
         void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
           (error: unknown) => console.error("[openclaw] failed to load widget view", error),
         );
@@ -449,7 +446,7 @@ function renderWidgetContent(
           ? getCanvasWidgetFrameConnectionGeneration()
           : undefined,
         height: preview.preferredHeight,
-        sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+        sandbox,
         // Only hosted Canvas documents may drive the chat; externally
         // allowed embed URLs render but never get prompt authority.
         promptCapable,
@@ -602,6 +599,7 @@ function renderWidgetCard(
     return nothing;
   }
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
+  const sandbox = resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox);
   const provider = options?.boardProvider;
   const mcpAppViewId = preview.mcpApp?.viewId?.trim();
   const pinName = preview.mcpApp
@@ -619,7 +617,7 @@ function renderWidgetCard(
     (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
     pinName &&
     ((contentKind === "canvas-html" &&
-      preview.sandbox === "scripts" &&
+      sandbox.includes("allow-scripts") &&
       isManagedCanvasDocumentPreview(preview)) ||
       (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
@@ -655,7 +653,7 @@ function renderWidgetCard(
     >
       ${actions}
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderWidgetContent(contentKind, preview, options)}
+        ${renderWidgetContent(contentKind, preview, sandbox, options)}
       </div>
     </div>
   `;

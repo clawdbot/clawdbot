@@ -458,6 +458,10 @@ For inline rendering, `resources.readPublicResource(path)` can optionally return
 These bytes are public: the isolated sandbox listener serves them with no
 Gateway credentials. Return only static renderer assets, never user data or
 secrets. Unregistered paths and registrations without this callback stay private.
+Opting in reserves every declared path in one global sandbox namespace: no other
+content kind may declare the same path, even without a public reader. Registration
+rejects these collisions regardless of order; only private registrations may
+share paths.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway

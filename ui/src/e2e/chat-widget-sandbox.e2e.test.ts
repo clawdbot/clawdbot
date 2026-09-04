@@ -219,17 +219,8 @@ suite.define(() => {
                 role: "assistant",
                 content: [
                   {
-                    type: "canvas",
-                    preview: {
-                      kind: "canvas",
-                      surface: "assistant_message",
-                      render: "url",
-                      title: "Community pulse",
-                      viewId: documentId,
-                      url: documentPath,
-                      preferredHeight: 460,
-                      sandbox: "scripts",
-                    },
+                    type: "text",
+                    text: `[embed ref="${documentId}" title="Community pulse" height="460" /]`,
                   },
                 ],
                 timestamp: Date.now(),

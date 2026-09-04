@@ -67,7 +67,7 @@ suite.define(() => {
     ]);
     expect(session.ok).toBe(true);
     expect(typeof session.sessionId).toBe("string");
-    const document = await createCanvasDocument(
+    await createCanvasDocument(
       {
         id: docId,
         kind: "html_bundle",
@@ -87,16 +87,6 @@ suite.define(() => {
       },
       { stateDir: owner.stateDir },
     );
-    const preview = {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      title: "Live widget proof",
-      viewId: docId,
-      url: document.entryUrl,
-      preferredHeight: 320,
-      sandbox: "scripts",
-    };
     const a2uiDocId = `${docId}-a2ui`;
     const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
     const a2uiBoot = JSON.stringify({
@@ -121,7 +111,7 @@ suite.define(() => {
       ],
       actionTier: "state",
     }).replaceAll("<", "\\u003c");
-    const a2ui = await createCanvasDocument(
+    await createCanvasDocument(
       {
         id: a2uiDocId,
         kind: "html_bundle",
@@ -139,13 +129,12 @@ suite.define(() => {
       },
       { stateDir: owner.stateDir },
     );
-    const a2uiPreview = {
-      ...preview,
-      viewId: a2uiDocId,
-      title: "A2UI live proof",
-      url: a2ui.entryUrl,
-      preferredHeight: 200,
-    };
+    const content = [
+      {
+        type: "text",
+        text: `The synthetic widgets are ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]\n[embed ref="${a2uiDocId}" title="A2UI live proof" height="200" /]`,
+      },
+    ];
     await appendTranscriptMessage(
       {
         agentId: "main",
@@ -156,11 +145,7 @@ suite.define(() => {
       {
         message: {
           role: "assistant",
-          content: [{ type: "text", text: "The synthetic widget is ready." }],
-          openclawDisplayContent: [
-            { type: "canvas", preview },
-            { type: "canvas", preview: a2uiPreview },
-          ],
+          content,
           timestamp: Date.now(),
         },
       },
@@ -174,9 +159,7 @@ suite.define(() => {
       "--json",
     ]);
     expect(history.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ content: expect.arrayContaining([{ type: "canvas", preview }]) }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ content })]),
     );
     const handoff = await cliJson(["dashboard", "--json"]);
     expect(typeof handoff.browserUrl).toBe("string");

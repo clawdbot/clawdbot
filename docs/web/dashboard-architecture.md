@@ -234,6 +234,9 @@ delivers it only after that exact proxy reports ready. Mounted widgets retain
 their loaded document across presentation changes and ticket renewal. Inline
 views share concurrent reads of the same document only within one client and
 connection generation; each view still owns its own sandbox and prompt channel.
+Managed `[embed ref="..."]` previews use that authenticated path whenever their
+effective sandbox policy permits scripts, including the default with no explicit
+sandbox field. Explicit strict previews remain script-free.
 There is no completed-document cache: Canvas permits replacing named document
 IDs, so a remount reads the current source again. Reconnection retires pending
 results from the previous connection.

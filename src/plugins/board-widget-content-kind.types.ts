@@ -8,7 +8,11 @@ export type PluginBoardWidgetContentKind = {
   resources: {
     surface: string;
     paths: string[];
-    /** Public static renderer bytes only; these exact paths may also load on the isolated origin without Gateway credentials. */
+    /**
+     * Public static renderer bytes served without Gateway credentials.
+     * Declaring this reader reserves every path globally across content kinds,
+     * including registrations without a public reader.
+     */
     readPublicResource?: (
       path: string,
     ) => Promise<{ body: Uint8Array; contentType: string } | undefined>;
