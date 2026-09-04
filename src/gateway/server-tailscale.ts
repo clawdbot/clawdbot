@@ -1,6 +1,9 @@
 // Gateway Tailscale exposure helper.
-// Applies Serve/Funnel routes and returns optional shutdown cleanup.
+// Claims Serve/Funnel routes, re-claims them when the foreground owner dies,
+// and returns optional shutdown cleanup.
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { TailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import {
   claimTailscaleRoute,
   getTailnetHostname,
@@ -10,6 +13,15 @@ import {
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+
+// A restarted or upgraded Tailscale daemon drops every foreground claim at once.
+// Retry quickly first, then settle to one attempt per minute while it stays down.
+const RECLAIM_BACKOFF: BackoffPolicy = { initialMs: 1_000, maxMs: 60_000, factor: 2, jitter: 0.2 };
+
+type ManagedTailscaleRoute = {
+  claim: Awaited<ReturnType<typeof claimTailscaleRoute>>;
+  releaseOrigin: () => void;
+};
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -25,10 +37,9 @@ export async function startGatewayTailscaleExposure(params: {
   if (!params.backend) {
     throw new Error("Managed Tailscale ingress failed to start");
   }
+  const mode = params.tailscaleMode;
   const backendTarget = params.backend.port;
-  const effectiveMode = params.tailscaleMode;
-  let clearPublishedOrigin: (() => void) | undefined;
-  if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
+  if (mode === "serve" && params.preserveFunnel === true) {
     let preservedFunnel: boolean;
     try {
       preservedFunnel = await hasTailscaleFunnelRouteForPort(params.port);
@@ -49,60 +60,91 @@ export async function startGatewayTailscaleExposure(params: {
     }
   }
 
-  let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
-  try {
-    claim = await claimTailscaleRoute(
-      params.tailscaleMode,
-      backendTarget,
-      params.port,
-      params.logTailscale.info,
-    );
-    const host = await (
-      params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
-    ).catch(() => null);
-    if (!claim.isActive()) {
-      throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
-    }
-    if (host) {
-      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      const publicHost = resolveTailscalePublishedHost({
-        tailscaleMode: effectiveMode,
-        tailnetHost: host,
-      });
+  const claimRoute = async (): Promise<ManagedTailscaleRoute> => {
+    let claim: ManagedTailscaleRoute["claim"] | undefined;
+    let releaseOrigin = () => {};
+    try {
+      claim = await claimTailscaleRoute(mode, backendTarget, params.port, params.logTailscale.info);
+      const host = await (
+        mode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
+      ).catch(() => null);
+      if (!claim.isActive()) {
+        throw new Error(`Managed Tailscale ${mode} claim exited during startup`);
+      }
+      const publicHost = resolveTailscalePublishedHost({ tailscaleMode: mode, tailnetHost: host });
       if (publicHost) {
-        clearPublishedOrigin = prepareMcpAppChannelOrigin({
+        releaseOrigin = prepareMcpAppChannelOrigin({
           origin: `https://${publicHost}`,
-          reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
+          reachability: mode === "funnel" ? "internet" : "tailnet",
         });
+        const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
         params.logTailscale.info(
-          `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
+          `${mode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
         );
       } else {
-        params.logTailscale.info(`${params.tailscaleMode} enabled`);
+        params.logTailscale.info(`${mode} enabled`);
       }
-    } else {
-      params.logTailscale.info(`${params.tailscaleMode} enabled`);
+      return { claim, releaseOrigin };
+    } catch (err) {
+      releaseOrigin();
+      await claim?.stop();
+      params.logTailscale.warn(`${mode} failed: ${formatErrorMessage(err)}`);
+      throw err;
     }
-  } catch (err) {
-    clearPublishedOrigin?.();
-    await claim?.stop();
-    params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
-    throw err;
-  }
+  };
 
   let stopping = false;
-  void claim.exited.then(() => {
-    if (stopping) {
+  let route = await claimRoute();
+  let reclaiming: Promise<void> | undefined;
+  const reclaimAbort = new AbortController();
+
+  const reclaimRoute = async () => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await sleepWithAbort(computeBackoff(RECLAIM_BACKOFF, attempt), reclaimAbort.signal, {
+          ref: false,
+        });
+        // Cleanup awaits this promise, then releases whatever `route` holds.
+        route = await claimRoute();
+      } catch (err) {
+        if (stopping) {
+          return;
+        }
+        if (err instanceof TailscaleRouteOwnershipConflictError) {
+          params.logTailscale.warn(
+            `${mode} route is now owned elsewhere; managed Tailscale ingress stays down until the Gateway restarts`,
+          );
+          return;
+        }
+        continue;
+      }
+      watchRoute(route);
       return;
     }
-    clearPublishedOrigin?.();
-    params.logTailscale.warn(
-      `${params.tailscaleMode} route claim exited; managed Tailscale ingress is unavailable until the Gateway restarts`,
-    );
-  });
+  };
+
+  const watchRoute = (watched: ManagedTailscaleRoute) => {
+    void watched.claim.exited.then(() => {
+      if (stopping) {
+        return;
+      }
+      watched.releaseOrigin();
+      params.logTailscale.warn(`${mode} route claim exited; reclaiming managed Tailscale ingress`);
+      const pending: Promise<void> = reclaimRoute().finally(() => {
+        if (reclaiming === pending) {
+          reclaiming = undefined;
+        }
+      });
+      reclaiming = pending;
+    });
+  };
+
+  watchRoute(route);
   return async () => {
     stopping = true;
-    clearPublishedOrigin?.();
-    await claim.stop();
+    reclaimAbort.abort();
+    await reclaiming;
+    route.releaseOrigin();
+    await route.claim.stop();
   };
 }
