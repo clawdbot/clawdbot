@@ -5115,11 +5115,10 @@ describe("grouped chat rendering", () => {
       const container = document.createElement("div");
       renderAssistantMessage(container, createAssistantMessage([block]));
 
-      expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
-      expect(container.textContent).toContain("Image unavailable in history");
-      expect(container.textContent).toContain(
-        "Inline image data was omitted from stored chat history.",
-      );
+      expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+      expect(container.textContent).toContain("Image");
+      expect(container.textContent).toContain("History");
+      expect(container.textContent).toContain("Omitted from history");
     }
   });
 
@@ -5136,8 +5135,8 @@ describe("grouped chat rendering", () => {
 
     renderAssistantMessage(container, message, { showToolCalls: false });
 
-    expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
-    expect(container.textContent).toContain("Image unavailable in history");
+    expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+    expect(container.textContent).toContain("Omitted from history");
   });
 
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
