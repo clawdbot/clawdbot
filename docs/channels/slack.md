@@ -1315,9 +1315,9 @@ Use an entry's `identifier` directly as the `react` emoji; surrounding colons ar
 Slack Canvas actions use `action: "canvas"` with an `op` parameter:
 
 - `op: "create"` — create a channel-attached canvas. Pass `documentContent: { type: "markdown", markdown: "..." }` for the initial content and an optional `title`.
-- `op: "edit"` — apply changes to an existing canvas. Requires `canvasId` and a non-empty `changes` array. Each change has an `operation` (`insert_at_start`, `insert_at_end`, `insert_after`, `insert_before`, `replace`, `delete`, or `rename`); `insert_after`/`insert_before`/`delete` need a `sectionId`, `rename` needs `titleContent`, and the rest need `documentContent`.
-- `op: "delete"` — delete a canvas by `canvasId`.
-- `op: "sections"` (default) — list canvas sections filtered by `sectionTypes` (e.g. `["h1", "h2", "any_header"]`) or `containsText`. At least one of `sectionTypes` or `containsText` is required; Slack rejects an empty filter.
+- `op: "edit"` — apply changes to a canvas **created by this action**. Requires `canvasId` and a non-empty `changes` array. Each change has an `operation` (`insert_at_start`, `insert_at_end`, `insert_after`, `insert_before`, `replace`, `delete`, or `rename`); `insert_after`/`insert_before`/`delete` need a `sectionId`, `rename` needs `titleContent`, and the rest need `documentContent`.
+- `op: "delete"` — delete a canvas **created by this action** by `canvasId`.
+- `op: "sections"` (default) — list sections of a canvas **created by this action**, filtered by `sectionTypes` (e.g. `["h1", "h2", "any_header"]`) or `containsText`. At least one of `sectionTypes` or `containsText` is required; Slack rejects an empty filter.
 
 Create a canvas attached to a channel:
 
@@ -1373,6 +1373,8 @@ The response returns the new canvas under `canvas.canvasId` (F-prefixed). List i
 ```
 
 Canvas actions require the `canvases:write` scope (create/edit/delete) and `canvases:read` (sections). The `canvasId` must match Slack's F-prefixed id format, and the target channel must already be authorized for reads, so the agent cannot touch canvases attached to channels it is not allowed to read.
+
+**Follow-up operations work only on canvases created by this action.** `edit`, `delete`, and `sections` identify a document purely by `canvasId` (Slack's API takes no channel on those calls), so OpenClaw persists a `canvas_id → channel/account` binding when it creates a canvas and rejects any follow-up `canvasId` without that binding **before any Slack call**. A pre-existing workspace canvas — one created in Slack's UI or before this action was enabled — has no binding and cannot be edited, deleted, or inspected through this action; the action returns `Slack canvas "<id>" is not bound to an authorized channel.` To operate on a canvas, create it through `op: "create"` (which records the binding) and pass the returned `canvas.canvasId` back to `edit`/`delete`/`sections`. This keeps an agent from proxying a denied channel's canvas through an allowed one, at the cost that only OpenClaw-created canvases are reachable.
 
 ## Access control and routing
 
