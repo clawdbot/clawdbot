@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   COMPLETION_SHELLS,
@@ -39,7 +40,7 @@ const registerSubCliByNameMock = vi.hoisted(() =>
     return true;
   }),
 );
-const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => null));
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("./output-file.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -442,6 +443,34 @@ describe("completion-cli write-state", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
       await fs.rm(homeDir, { recursive: true, force: true });
     }
+  });
+
+  it("writes core completion with a warning when invalid config prevents plugin discovery", async () => {
+    await withIsolatedCompletionState(async () => {
+      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(
+        createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: Expected a number"),
+      );
+
+      await writeCompletionCacheForShell("zsh");
+
+      await expect(
+        fs.readFile(resolveCompletionCachePath("zsh", "openclaw"), "utf8"),
+      ).resolves.toContain("#compdef openclaw");
+      expect(stderrWrites).toHaveBeenCalledWith(
+        expect.stringContaining("skipping plugin commands: Invalid config"),
+      );
+    });
+  });
+
+  it("does not publish completion after an unrelated plugin registration failure", async () => {
+    await withIsolatedCompletionState(async () => {
+      const error = new Error("plugin registrar failed");
+      registerPluginCliCommandsFromValidatedConfigMock.mockRejectedValueOnce(error);
+
+      await expect(writeCompletionCacheForShell("zsh")).rejects.toBe(error);
+
+      expect(outputFileMocks.publishOutputFileAtomically).not.toHaveBeenCalled();
+    });
   });
 
   it("structures completion registration warnings for JSON console output", async () => {

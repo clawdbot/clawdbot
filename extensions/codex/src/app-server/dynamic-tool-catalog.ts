@@ -37,6 +37,7 @@ const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 // contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
+  "agents_wait",
   // Native update_plan is disabled on every thread; its replacement must be
   // available in the initial context, including catalogs prepared at creation.
   "progress_card",

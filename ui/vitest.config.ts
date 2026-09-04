@@ -15,6 +15,7 @@ import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
+  preserveIndependentVitestProject,
   resolveDefaultVitestPool,
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
@@ -108,6 +109,8 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 
 const sharedUiTestConfig = {
   ...loadVitestExperimentalConfig(process.env, process.platform, here),
+  // Preserve calls recorded during shared setup and beforeAll hooks.
+  clearMocks: false,
   isolate: false,
   pool: resolveDefaultVitestPool(),
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
@@ -116,11 +119,7 @@ const sharedUiTestConfig = {
   hookTimeout: 60_000,
 } as const;
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
-const mockRegistryUnitTests = [
-  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
-  "src/components/mcp-app-view.test.ts",
-  "src/pages/chat/chat-page.test.ts",
-] as const;
+const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [
   "/snap/bin/chromium",
@@ -203,6 +202,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
+    // These projects already own their complete plugins, aliases, and test config.
     projects: [
       defineProject({
         plugins: [controlUiLocaleModulesPlugin()],
@@ -265,6 +265,6 @@ export default defineConfig({
         },
       }),
       createUiBrowserVitestConfig(),
-    ],
+    ].map(preserveIndependentVitestProject),
   },
 });

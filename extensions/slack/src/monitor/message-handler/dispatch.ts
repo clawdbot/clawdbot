@@ -33,11 +33,6 @@ import {
   recordSlackThreadFailureNotice,
   recordSlackThreadParticipation,
 } from "../../sent-thread-cache.js";
-import {
-  SlackStreamNotDeliveredError,
-  stopSlackStream,
-  type SlackStreamSession,
-} from "../../streaming.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
@@ -102,14 +97,12 @@ async function dispatchSlackMessageWithSetup(
     messageSentHookContext,
     messageSentHookTarget,
     onModelSelected,
-    onSlackDeliveryError,
     previewStreamingEnabled,
     replyPipeline,
     replyPlan,
     route,
     runtime,
     slackClient,
-    slackMessageMetadata,
     slackStreaming,
     sourceReplyDeliveryMode,
     statusReactions,
@@ -118,6 +111,7 @@ async function dispatchSlackMessageWithSetup(
     suppressRoomEventTyping,
     useStreaming,
   } = setup;
+  let dispatchError: unknown;
   const delivery = createSlackStreamingDeliveryRuntime(setup);
   const draftPreviewCommitted = { value: false };
   const progress = createSlackProgressRuntime({
@@ -456,7 +450,6 @@ async function dispatchSlackMessageWithSetup(
       progress.progressDraft.markFinalReplyDelivered();
     }
   };
-  let dispatchError: unknown;
   let agentRunFailed = false;
   let settledDispatchResult: Parameters<typeof hasVisibleInboundReplyDispatch>[0];
   try {
@@ -480,7 +473,12 @@ async function dispatchSlackMessageWithSetup(
       },
       delivery: {
         deliver: deliverSlackPayload,
-        onError: onSlackDeliveryError,
+        onError: (err, info) => {
+          // Core settles delivery errors without throwing; Slack closeout still owns the failure.
+          dispatchError ??= err;
+          runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
+          replyPipeline.typingCallbacks?.onIdle?.();
+        },
       },
       record: prepared.turn.record as InboundReplyRecordOptions,
       history: prepared.turn.history,
@@ -624,7 +622,7 @@ async function dispatchSlackMessageWithSetup(
       }
     }
   } catch (err) {
-    dispatchError = err;
+    dispatchError ??= err;
   } finally {
     await progress.cancel();
     if (!progress.useDraftProgressCard) {
@@ -632,58 +630,19 @@ async function dispatchSlackMessageWithSetup(
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Finalize the stream if one was started
-  // -----------------------------------------------------------------------
-  let streamFallbackDelivered = false;
-  const finalStream = delivery.streamSession as SlackStreamSession | null;
-  if (finalStream && !finalStream.stopped) {
-    try {
-      const completionChunks =
-        progress.useNativeProgressStreaming && !progress.nativeProgressCompletionSent
-          ? progress.buildNativeProgressCompletionChunks(
-              dispatchError || agentRunFailed ? "error" : progress.nativeProgressTerminalStatus,
-            )
-          : undefined;
-      if (completionChunks?.length) {
-        progress.nativeProgressCompletionSent = true;
-      }
-      const stopResult = await stopSlackStream({
-        session: finalStream,
-        ...(completionChunks?.length ? { chunks: completionChunks } : {}),
-        ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-      });
-      // The stream finalized successfully, flushing any buffered text to Slack.
-      // Emit the `message_sent` plugin hook for every streamed reply payload
-      // here (the streaming happy-path never goes through deliverReplies, which
-      // emits for the non-streaming/fallback paths). emitSlackMessageSentHooks
-      // self-gates on registered listeners, so this is a no-op when unused.
-      delivery.acknowledgeStoppedStreamedDeliveries(finalStream, stopResult?.messageId);
-    } catch (err) {
-      if (err instanceof SlackStreamNotDeliveredError) {
-        streamFallbackDelivered = await delivery.deliverPendingStreamFallback(finalStream, err);
-        if (!streamFallbackDelivered && !finalStream.stoppedBySlack) {
-          dispatchError ??= err;
-        }
-      } else {
-        const error = formatSlackError(err);
-        delivery.emitAcknowledgedStreamedDeliveries();
-        delivery.emitFailedPendingStreamedDeliveries(error);
-        runtime.error?.(danger(`slack-stream: failed to stop stream: ${error}`));
-        if (!finalStream.delivered) {
-          dispatchError ??= err;
-        }
-      }
-    }
+  const completionChunks =
+    progress.useNativeProgressStreaming && !progress.nativeProgressCompletionSent
+      ? progress.buildNativeProgressCompletionChunks(
+          dispatchError || agentRunFailed ? "error" : progress.nativeProgressTerminalStatus,
+        )
+      : undefined;
+  if (completionChunks?.length) {
+    progress.nativeProgressCompletionSent = true;
   }
-
-  if (finalStream?.stoppedBySlack) {
-    delivery.acknowledgeStoppedStreamedDeliveries(finalStream);
-  }
+  await delivery.finishStream(completionChunks);
 
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {
     observedReplyDelivery: delivery.observedReplyDelivery,
-    fallbackDelivered: streamFallbackDelivered,
   });
 
   if (

@@ -6,7 +6,6 @@ import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   dropMemoryPathFtsTriggers,
-  ensureDir,
   ensureMemoryChunkProvenance,
   ensureMemoryIndexSchema,
   ensureMemoryRecallMetadataSchema,
@@ -20,7 +19,6 @@ import {
   openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  ensureOpenClawAgentDatabaseSchema,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -30,7 +28,6 @@ import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 const MEMORY_INDEX_STATE_ID = 1;
-const READ_ONLY_MEMORY_DATABASES = new WeakMap<DatabaseSync, () => void>();
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
@@ -224,29 +221,29 @@ export async function publishMemoryDatabaseTables(params: {
   sourcePath: string;
   metaKey: string;
   expectedRevision: number;
+  sourceHasVectors: boolean;
   vectorExtensionPath?: string;
 }): Promise<void> {
   ensureMemoryRecallMetadataSchema(params.targetDb);
   // Existing pre-provenance databases lack the provenance table the publish
   // below writes to; ensure it (idempotent) alongside the recall columns.
   ensureMemoryChunkProvenance(params.targetDb);
+  if (params.sourceHasVectors && !hasSqliteVecExtension(params.targetDb)) {
+    const loaded = await loadSqliteVecExtension({
+      db: params.targetDb,
+      extensionPath: params.vectorExtensionPath,
+    });
+    if (!loaded.ok) {
+      throw new Error(
+        `Failed to load sqlite-vec before publishing the full memory reindex: ` +
+          (loaded.error ?? "unknown sqlite-vec load error"),
+      );
+    }
+  }
+  // The target can be shared with sessions and other managers. Never leave an
+  // attached shadow on it across an await or outside the synchronous publication.
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
-    if (
-      tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_index_chunks_vec") &&
-      !hasSqliteVecExtension(params.targetDb)
-    ) {
-      const loaded = await loadSqliteVecExtension({
-        db: params.targetDb,
-        extensionPath: params.vectorExtensionPath,
-      });
-      if (!loaded.ok) {
-        throw new Error(
-          `Failed to load sqlite-vec before publishing the full memory reindex: ` +
-            (loaded.error ?? "unknown sqlite-vec load error"),
-        );
-      }
-    }
     runSqliteImmediateTransactionSync(params.targetDb, () => {
       const liveRevision = readMemoryDatabaseRevision(params.targetDb);
       if (liveRevision !== params.expectedRevision) {
@@ -399,21 +396,13 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
   }
 }
 
-export function openMemoryDatabaseAtPath(
-  dbPath: string,
-  allowExtension: boolean,
-  agentId?: string,
-): DatabaseSync {
-  ensureDir(path.dirname(dbPath));
+export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
   const db = openNodeSqliteDatabase(dbPath, { allowExtension });
   try {
     configureMemorySqliteWalMaintenance(db, {
       busyTimeoutMs: 5000,
       databasePath: dbPath,
     });
-    if (agentId) {
-      ensureOpenClawAgentDatabaseSchema(db, { agentId, path: dbPath, register: true });
-    }
     return db;
   } catch (err) {
     try {
@@ -424,13 +413,12 @@ export function openMemoryDatabaseAtPath(
   }
 }
 
-function openUninitializedMemoryDatabase(allowExtension: boolean): DatabaseSync {
+function openUninitializedMemoryDatabase(allowExtension: boolean) {
   const database = openNodeSqliteDatabase(":memory:", { allowExtension });
   try {
     ensureMemoryIndexSchema({ cacheEnabled: true, db: database, ftsEnabled: true });
     database.exec("PRAGMA query_only = ON");
-    READ_ONLY_MEMORY_DATABASES.set(database, () => database.close());
-    return database;
+    return { db: database, release: () => database.close() };
   } catch (error) {
     database.close();
     throw error;
@@ -442,7 +430,7 @@ export function openMemoryDatabaseReadOnlyAtPath(
   dbPath: string,
   allowExtension: boolean,
   agentId: string,
-): DatabaseSync {
+) {
   const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
   if (!opened.found) {
     if (opened.reason === "database-missing") {
@@ -455,21 +443,12 @@ export function openMemoryDatabaseReadOnlyAtPath(
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  READ_ONLY_MEMORY_DATABASES.set(database.db, database.close);
-  return database.db;
+  return { db: database.db, release: database.close };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {
-  const closeReadOnly = READ_ONLY_MEMORY_DATABASES.get(db);
-  if (closeReadOnly) {
-    READ_ONLY_MEMORY_DATABASES.delete(db);
-    closeReadOnly();
-    return;
-  }
   closeMemorySqliteWalMaintenance(db);
-  db.close();
-}
-
-export function isMemoryDatabaseReadOnly(db: DatabaseSync): boolean {
-  return READ_ONLY_MEMORY_DATABASES.has(db);
+  if (db.isOpen) {
+    db.close();
+  }
 }

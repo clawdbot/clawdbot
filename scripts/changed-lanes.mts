@@ -125,6 +125,19 @@ export type ChangedLaneResult = {
   reasons: string[];
 };
 
+/** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
+export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
+  const { lanes } = result;
+  if (lanes.all || lanes.core || lanes.ui || lanes.tooling || lanes.liveDockerTooling) {
+    return undefined;
+  }
+  const paths = result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs");
+  return paths.length > 0 &&
+    paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
+    ? paths
+    : undefined;
+}
+
 type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
 };

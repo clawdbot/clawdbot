@@ -523,6 +523,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
 export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
   id: channel,
   meta: getChatChannelMeta(channel),
+  reload: { configPrefixes: ["channels.twitch"] },
   capabilities: {
     chatTypes: ["group"],
   },

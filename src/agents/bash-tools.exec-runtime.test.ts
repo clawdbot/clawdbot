@@ -18,7 +18,7 @@ import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import {
   getFinishedSession,
-  markTerminalPollObserved,
+  acknowledgeNotifyOnExit,
   waitForExecScope,
 } from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -625,8 +625,6 @@ describe("terminal execution-context release", () => {
         scopeKey: "process-scope",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
-        mainKey: "main",
-        sessionScope: "per-sender",
         eventRouting: { mainKey: "main", sessionScope: "per-sender" },
         notifyDeliveryContext: deliveryContext,
         notifyOnExit: true,
@@ -641,7 +639,7 @@ describe("terminal execution-context release", () => {
       });
       markBackgrounded(run.session);
       if (path === "observed") {
-        markTerminalPollObserved(run.session);
+        acknowledgeNotifyOnExit(run.session);
       }
       exit.resolve({
         reason: "exit",
@@ -661,8 +659,6 @@ describe("terminal execution-context release", () => {
       for (const field of [
         "sessionKey",
         "agentId",
-        "mainKey",
-        "sessionScope",
         "eventRouting",
         "notifyDeliveryContext",
         "notifyOnExit",

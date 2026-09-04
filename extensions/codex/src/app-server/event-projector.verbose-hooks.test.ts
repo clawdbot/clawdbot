@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as compactionActivity from "./context-compaction-activity.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -10,6 +12,8 @@ import {
   createParams,
   createProjector,
   createProjectorWithHooks,
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
   buildEmptyToolTelemetry,
   requireRecord,
   requireArray,
@@ -18,6 +22,7 @@ import {
   forCurrentTurn,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import * as sessionHistory from "./session-history.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -401,6 +406,71 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(afterContext.sessionId).toBe("session-1");
     expect(afterContext).toMatchObject(agentHookContext);
   });
+
+  describe.each(["item/started", "item/completed"] as const)(
+    "%s compaction lifecycle",
+    (method) => {
+      it.each(
+        ["history", "hook"].flatMap((pendingStage) =>
+          ["closed", "aborted", "run aborted"].map((ending) => ({ pendingStage, ending })),
+        ),
+      )("stops after $ending while awaiting $pendingStage", async ({ pendingStage, ending }) => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const runAbort = new AbortController();
+        const read = vi
+          .spyOn(sessionHistory, "readCodexMirroredSessionHistoryMessages")
+          .mockImplementation(async () => {
+            if (pendingStage === "history") {
+              entered.resolve();
+              await release.promise;
+            }
+            return [];
+          });
+        const hook = vi.fn(async () => {
+          if (pendingStage === "hook") {
+            entered.resolve();
+            await release.promise;
+          }
+        });
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: method === "item/started" ? "before_compaction" : "after_compaction",
+              handler: hook,
+            },
+          ]),
+        );
+        const onAgentEvent = vi.fn();
+        const persistActivity = vi.spyOn(
+          compactionActivity,
+          "persistCodexContextCompactionActivity",
+        );
+        const projector = await createProjector(
+          { ...(await createParams()), onAgentEvent },
+          { runAbortSignal: runAbort.signal },
+        );
+        const notification = projector.handleNotification(
+          forCurrentTurn(method, { item: { type: "contextCompaction", id: "compact-late" } }),
+        );
+        await entered.promise;
+        if (ending === "closed") {
+          await projector.closeProjection();
+        } else if (ending === "aborted") {
+          projector.markAborted();
+        } else {
+          runAbort.abort(new Error("run ended during compaction projection"));
+        }
+        release.resolve();
+        await notification;
+
+        expect(hook).toHaveBeenCalledTimes(pendingStage === "hook" ? 1 : 0);
+        expect(onAgentEvent).not.toHaveBeenCalled();
+        expect(persistActivity).not.toHaveBeenCalled();
+        expect(read.mock.calls[0]?.[3]).toBe(runAbort.signal);
+      });
+    },
+  );
 
   it("projects codex hook started and completed notifications into agent events", async () => {
     const onAgentEvent = vi.fn();

@@ -7,6 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
+const rosterMatch = { includeGlobal: true };
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
@@ -75,12 +76,12 @@ suite.define(() => {
       // The selected session has an optimistic placeholder before roster hydration.
       await expect.poll(() => adaRow.count()).toBe(1);
       await expect.poll(() => bobRow.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(0);
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true, list: sharedRoster });
       await adaRow.waitFor();
       await bobRow.waitFor();
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(0);
       await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();

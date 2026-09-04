@@ -170,16 +170,25 @@ function serializeTable(
   const primaryKey = columns
     .filter((column) => column.pk > 0)
     .toSorted((left, right) => left.pk - right.pk)
-    .map((column) => quoteIdentifier(column.name));
-  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "rowid";
+    .map((column) => `source.${quoteIdentifier(column.name)}`);
+  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "source.rowid";
+  // Escape TEXT before node:sqlite can truncate embedded NULs. Keep filtering
+  // on decoded values and sorting on source columns, not escaped result aliases.
+  const projection = columns.map(({ name }) => {
+    const column = quoteIdentifier(name);
+    return `CASE WHEN typeof(${column}) = 'text' THEN json_quote(${column}) ELSE ${column} END AS ${column}`;
+  });
   const statement = database.prepare(
-    `SELECT ${columns.map((column) => quoteIdentifier(column.name)).join(", ")}
-       FROM ${quoteIdentifier(table)} ORDER BY ${orderBy}`,
+    `SELECT ${projection.join(", ")}
+       FROM ${quoteIdentifier(table)} AS source ORDER BY ${orderBy}`,
   );
   statement.setReadBigInts(true);
   const lines: string[] = [];
   for (const rawRow of statement.iterate()) {
-    const source = rawRow as Record<string, unknown>;
+    const source: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(rawRow)) {
+      source[name] = typeof value === "string" ? JSON.parse(value) : value;
+    }
     if (rowFilter && !rowFilter(source)) {
       continue;
     }

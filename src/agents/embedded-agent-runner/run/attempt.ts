@@ -373,7 +373,6 @@ export async function runEmbeddedAttempt(
           effectiveWorkspace,
           initialSystemPrompt: preparedSystemPrompt.systemPromptText,
           isRawModelRun,
-          nestedToolActivities: preparedToolBase.nestedToolActivities,
           sessionManager: {
             replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
             resolveActiveContextEnginePluginId,
@@ -453,16 +452,12 @@ export async function runEmbeddedAttempt(
         tools: preparedBundleTools.tools,
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         codeModeControlsEnabled: preparedToolBase.codeModeControlsEnabledForRun,
-        coreReadAuthorized: preparedSessionRuntime.agentSession.coreReadAuthorized,
         onApplied: (surface) => {
           const allowedNames = new Set([
             ...surface.activeToolNames,
             ...surface.uncompactedEffectiveTools.map((tool) => tool.name),
           ]);
           preparedToolCatalog.applyPromptToolPolicy(allowedNames);
-          preparedSessionRuntime.agentSession.setCodeModeReconciliationReadAuthorized(
-            surface.coreReadAuthorized,
-          );
         },
         forceToolNames: [
           ...(preparedToolBase.forceDirectMessageTool ? ["message"] : []),

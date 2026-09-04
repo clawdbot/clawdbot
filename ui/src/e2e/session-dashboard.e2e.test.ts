@@ -5,12 +5,19 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import {
+  dockChatSidePanel,
+  focusChatSidePanel,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 
@@ -152,6 +159,20 @@ async function showDashboard(page: Page): Promise<void> {
   );
 }
 
+async function createProofContext(name: string) {
+  const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+  const proofDir = recordProof ? path.join(suite.artifactDir, name) : undefined;
+  if (proofDir) {
+    await mkdir(proofDir, { recursive: true });
+  }
+  const viewport = { height: 900, width: 1280 };
+  const context = await suite.browser.newContext({
+    viewport,
+    ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+  });
+  return { context, recordProof };
+}
+
 function workboardConfigSnapshot(enabled = true) {
   const config = { plugins: { entries: { workboard: { enabled } } } };
   return {
@@ -165,6 +186,7 @@ function workboardConfigSnapshot(enabled = true) {
 }
 
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
   it("keeps widget documents in standards mode and cancels self-navigation", async () => {
     const sandboxHost = createSandboxHostHttpServer();
     await new Promise<void>((resolve, reject) => {
@@ -253,21 +275,7 @@ suite.define(() => {
   });
 
   it("pins Canvas HTML, follows board commands, and switches dashboard panel width", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
-    }
-    const context = await suite.browser.newContext({
-      viewport: { height: 900, width: 1280 },
-      ...(recordProof
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "workboard-pin"),
-              size: { height: 900, width: 1280 },
-            },
-          }
-        : {}),
-    });
+    const { context, recordProof } = await createProofContext("workboard-pin");
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
@@ -302,6 +310,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        "canvas.document.view": canvasView(
+          buildWidgetDocument("Release status", "<p>Release status</p>"),
+        ),
         "board.get": boardSnapshot,
         "board.widget.put": pinnedBoardSnapshot,
       },
@@ -312,7 +323,7 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
-    await page.locator(".side-panel").waitFor();
+    await page.locator('[data-panel-slot="dashboard"]').waitFor();
     await page.locator(".board-session-surface").waitFor();
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -321,7 +332,7 @@ suite.define(() => {
       });
     }
 
-    await page.locator(".side-panel__dock-bottom").click();
+    await dockChatSidePanel(page, "bottom");
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
     if (recordProof) {
@@ -400,10 +411,10 @@ suite.define(() => {
       proofDir: recordProof ? path.join(suite.artifactDir, "workboard-pin") : undefined,
     });
 
-    const expand = page.getByRole("button", { name: "Expand side panel" });
-    await expand.click();
+    await restoreChatAsMain(page);
+    await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-    await page.getByRole("button", { name: "Collapse", exact: true }).click();
+    await page.getByRole("button", { name: "Restore split", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
@@ -416,7 +427,8 @@ suite.define(() => {
         path: path.join(suite.artifactDir, "workboard-pin", "05-collapsed-bottom.png"),
       });
     }
-    await page.locator(".side-panel__minimize").click();
+    await restoreChatAsMain(page);
+    await page.locator('[data-region-header="side"] .side-panel__minimize').click();
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -428,21 +440,7 @@ suite.define(() => {
   });
 
   it("shows a bounded visible outcome when a Canvas dashboard pin fails", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "workboard-pin-failure"), { recursive: true });
-    }
-    const context = await suite.browser.newContext({
-      viewport: { height: 900, width: 1280 },
-      ...(recordProof
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "workboard-pin-failure"),
-              size: { height: 900, width: 1280 },
-            },
-          }
-        : {}),
-    });
+    const { context, recordProof } = await createProofContext("workboard-pin-failure");
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
@@ -477,6 +475,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        "canvas.document.view": canvasView(
+          buildWidgetDocument("Stale release status", "<p>Stale release status</p>"),
+        ),
         "board.get": boardSnapshot,
         "board.widget.put": {
           __mockError: {
@@ -585,21 +586,7 @@ suite.define(() => {
   });
 
   it("renders and updates active Workboard plugin widgets", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "workboard-plugin-widgets"), { recursive: true });
-    }
-    const context = await suite.browser.newContext({
-      viewport: { height: 900, width: 1280 },
-      ...(recordProof
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "workboard-plugin-widgets"),
-              size: { height: 900, width: 1280 },
-            },
-          }
-        : {}),
-    });
+    const { context, recordProof } = await createProofContext("workboard-plugin-widgets");
     const page = await context.newPage();
     const readyCard = {
       id: "card-widget-ready",
@@ -674,7 +661,7 @@ suite.define(() => {
         Reflect.set(globalThis, "workboardPluginElementIdentity", element);
       });
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      await page.locator(".side-panel__minimize").click();
+      await page.locator('[data-region-header="side"] .side-panel__minimize').click();
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expect
         .poll(() =>
@@ -823,21 +810,7 @@ suite.define(() => {
   });
 
   it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "workboard-cardboard"), { recursive: true });
-    }
-    const context = await suite.browser.newContext({
-      viewport: { height: 900, width: 1280 },
-      ...(recordProof
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "workboard-cardboard"),
-              size: { height: 900, width: 1280 },
-            },
-          }
-        : {}),
-    });
+    const { context, recordProof } = await createProofContext("workboard-cardboard");
     const page = await context.newPage();
     const card = {
       id: "card-dashboard-stitch",

@@ -622,9 +622,28 @@ suite.define(() => {
 
   it("blocks capability mutations until the session row and runtime config load", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const rosterMatch = { includeGlobal: true };
+      const roster = sessionsList({
+        mcpToolsDeny: { notion: ["delete_page"] },
+        webSearch: true,
+      });
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.list", "config.get"],
+        sessions: roster.sessions,
+        heldMethods: ["sessions.list"],
+        deferredMethods: ["config.get"],
         methodResponses: {
+          // The held roster owns readiness; other projections must not expose the seeded row early.
+          "chat.startup": { messages: [], sessionId: "capability-menu-session" },
+          "sessions.describe": { session: null },
+          "sessions.list": {
+            cases: [
+              { match: rosterMatch, response: roster },
+              {
+                match: { includeGlobal: false },
+                response: { ...roster, count: 0, sessions: [] },
+              },
+            ],
+          },
           "skills.status": {
             workspaceDir: "/tmp/openclaw-e2e/workspace",
             managedSkillsDir: "/tmp/openclaw-e2e/skills",
@@ -635,7 +654,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await Promise.all([
-        gateway.waitForRequest("sessions.list"),
+        gateway.waitForRequest("sessions.list", { match: rosterMatch }),
         gateway.waitForRequest("config.get"),
       ]);
       const composer = await openMenu(page);
@@ -650,13 +669,7 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
-      await gateway.resolveDeferred(
-        "sessions.list",
-        sessionsList({
-          mcpToolsDeny: { notion: ["delete_page"] },
-          webSearch: true,
-        }),
-      );
+      await gateway.resolveDeferred("sessions.list");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toBe("Loading…");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);

@@ -1129,9 +1129,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       });
     }
-    if (nativeCommands.some((command) => "prepareDispatch" in command)) {
-      pluginCommandRuntime.retainNativeCatalog("slack");
-    }
   } else {
     logVerbose("slack: slash commands disabled");
   }
