@@ -677,6 +677,24 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
 </AccordionGroup>
 
+## Linux user bus inspection
+
+If `doctor --fix` or `openclaw update` reports that the systemd user D-Bus is unavailable, restore bus access from the account that owns the Gateway service before retrying. A working `systemctl --user` command does not prove that the user D-Bus is available: systemctl can connect directly to the user manager, while effective service-command inspection uses `busctl` through the user bus.
+
+From that service account, check the user manager and the bus separately. Replace the unit name with `openclaw-gateway-<profile>.service` for a named profile:
+
+```bash
+systemctl --user show openclaw-gateway.service --property=LoadState,ActiveState
+```
+
+```bash
+busctl --user --json=short call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager LoadUnit s openclaw-gateway.service
+```
+
+The bus call should return the unit's object path. If it cannot connect, check that the account's user bus is installed and running and that its login/session environment selects that bus. On Debian/Ubuntu, check the `dbus-user-session` package. A missing package is one possible cause, not a diagnosis inferred from every bus error. If `busctl` itself cannot execute, restore the utility or its executable access instead. Do not run Doctor with sudo or bypass ownership checks to work around a failed probe.
+
+Doctor still refuses maintenance when it cannot inspect the effective service. Updates with automatic restart still refuse code mutation at this preflight; `--no-restart` does not grant Doctor permission to repair a running or unverified service. Restore inspection access, stop the Gateway through its owner when requested, then rerun the original command with the same profile. User-service cleanup also preserves unit files when the bus is unavailable and disable cannot be verified.
+
 ## Related
 
 - [Gateway runbook](/gateway)

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -8,7 +9,13 @@ const mocks = vi.hoisted(() => ({
   runDaemonInstall: vi.fn<typeof import("../daemon-cli.js").runDaemonInstall>(),
   runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
   runRestartScript: vi.fn(async () => undefined),
+  resolveGatewayService: vi.fn<typeof import("../../daemon/service.js").resolveGatewayService>(),
   waitForGatewayHealthyRestart: vi.fn(),
+}));
+
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
 }));
 
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
@@ -47,6 +54,8 @@ describe("maybeRestartService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Keep loaded-state and failed-health recovery probes off the real native manager.
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: {

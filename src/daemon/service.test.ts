@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -25,7 +26,20 @@ vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
   probePortUsage,
 }));
 
+const coordinatorDirs = useAutoCleanupTempDirTracker(afterEach);
+const coordinatorFixture = vi.hoisted(() => ({
+  runtimeDirectory: undefined as string | undefined,
+}));
+
+vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
+  const { createIsolatedStateCoordinator } =
+    await import("../../test/helpers/state-database-coordinator.js");
+  return createIsolatedStateCoordinator(actual, () => coordinatorFixture.runtimeDirectory);
+});
 beforeEach(() => {
+  // Config guards retain real observations, whose SQLite initialization also needs private locks.
+  coordinatorFixture.runtimeDirectory = coordinatorDirs.make("openclaw-service-coordinators-");
   mockSystemAccountHome();
   probePortUsage.mockReset();
   probePortUsage.mockRejectedValue(new Error("unexpected port probe"));
@@ -37,6 +51,7 @@ function setPlatform(value: NodeJS.Platform) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  coordinatorFixture.runtimeDirectory = undefined;
 });
 
 function createService(overrides: Partial<GatewayService> = {}): GatewayService {

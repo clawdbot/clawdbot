@@ -13,6 +13,8 @@ afterEach(() => vi.restoreAllMocks());
 
 async function createInstalledTriage(params: { hang?: boolean; promptPath?: string } = {}) {
   const root = await fs.realpath(tempDirs.make("openclaw-triage-child-"));
+  // The fake package must not inherit an enclosing checkout's ESM module type.
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "commonjs" }));
   const receiptPath = path.join(root, "receipt.json");
   const promptPath = params.promptPath ?? path.join(root, "triage-prompt.md");
   await fs.mkdir(path.join(root, "dist"));

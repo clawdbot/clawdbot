@@ -33,6 +33,8 @@ const failedUpdate: UpdateRunResult = {
 
 async function createInstalledTriage(exitCode = 0) {
   const root = await fs.realpath(tempDirs.make("openclaw-update-triage-"));
+  // The fake package must not inherit an enclosing checkout's ESM module type.
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "commonjs" }));
   await fs.mkdir(path.join(root, "dist"));
   // The real child consumes the failure export and environment after the caller unwinds.
   await fs.writeFile(
@@ -361,6 +363,8 @@ describe("update failure triage boundary", () => {
         const secret = "sk-test-triage-recovery-secret-1234567890";
         await fs.mkdir(invocationCwd);
         await fs.mkdir(bin);
+        // The extensionless fake executable owns its format independently of TMPDIR.
+        await fs.writeFile(path.join(bin, "package.json"), JSON.stringify({ type: "commonjs" }));
         if (stateFailure === "missing") {
           await fs.symlink(state.path("unavailable-state-volume"), brokenStateDir, "dir");
         } else {

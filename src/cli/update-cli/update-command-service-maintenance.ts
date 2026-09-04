@@ -24,6 +24,7 @@ import {
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { resolveSystemdInspectionDiagnostic } from "../../daemon/systemd-unavailable.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
@@ -97,7 +98,7 @@ export type ManagedGatewayUpdateVerdict =
       requiresInstallRootRefresh?: boolean;
     }
   | { kind: "unresolved"; root: string; fingerprint: string }
-  | { kind: "unavailable"; message: string };
+  | { kind: "unavailable"; message?: string };
 
 async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root: string;
@@ -105,10 +106,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
 }): Promise<ManagedGatewayUpdateVerdict> {
   const { state, root } = params;
   const { command } = state;
-  const unavailable = (): ManagedGatewayUpdateVerdict => ({
-    kind: "unavailable",
-    message: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE,
-  });
+  const unavailable = (): ManagedGatewayUpdateVerdict => ({ kind: "unavailable" });
   if (!command) {
     return !state.installed &&
       state.loadState.status === "not-loaded" &&
@@ -404,15 +402,20 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
-    message: string,
-  ): PreManagedServiceStop =>
-    params.shouldRestart
-      ? {
-          ...base,
-          serviceMutationAllowed: false,
-          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
-        }
-      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
+    message?: string,
+  ): PreManagedServiceStop => {
+    const policy = params.shouldRestart
+      ? GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE
+      : GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE;
+    const detail = [policy, message].filter(Boolean).join(" ");
+    return {
+      ...base,
+      serviceMutationAllowed: false,
+      // Preserve the diagnosis separately from update-only recovery instructions for Doctor.
+      serviceUpdateVerdict: { kind: "unavailable", message },
+      ...(params.shouldRestart ? { blockMessage: detail } : { serviceMutationSkipMessage: detail }),
+    };
+  };
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -433,7 +436,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected, resolveSystemdInspectionDiagnostic(err));
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,

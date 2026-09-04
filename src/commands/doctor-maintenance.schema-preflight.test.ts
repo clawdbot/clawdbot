@@ -9,9 +9,24 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+const coordinatorFixture = vi.hoisted(() => ({
+  runtimeDirectory: undefined as string | undefined,
+}));
+
+vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
+  const { createIsolatedStateCoordinator } =
+    await import("../../test/helpers/state-database-coordinator.js");
+  return createIsolatedStateCoordinator(actual, () => coordinatorFixture.runtimeDirectory);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  coordinatorFixture.runtimeDirectory = undefined;
+});
 
 function createLegacyRegistryFixture() {
+  coordinatorFixture.runtimeDirectory = tempDirs.make("openclaw-doctor-schema-coordinators-");
   const root = tempDirs.make("openclaw-doctor-legacy-registry-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");

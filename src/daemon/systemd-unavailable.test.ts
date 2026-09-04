@@ -29,22 +29,15 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(classifySystemdUnavailableDetail("systemctl not available")).toBe("missing_systemctl");
   });
 
-  it("classifies user bus/session failures", () => {
-    expect(
-      isSystemdUserBusUnavailableDetail(
-        "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
-      ),
-    ).toBe(true);
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: No medium found",
-      ),
-    ).toBe("user_bus_unavailable");
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
-      ),
-    ).toBe("user_bus_unavailable");
+  it.each([
+    "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+    "systemctl --user unavailable: Failed to connect to bus: No medium found",
+    "systemctl --user unavailable: Failed to connect to bus: Permission denied",
+    "Failed to connect to user scope bus via local transport: No such file or directory",
+  ])("classifies user bus/session failure: %s", (detail) => {
+    expect(isSystemdUserBusUnavailableDetail(detail)).toBe(true);
+    expect(isSystemctlMissingDetail(detail)).toBe(false);
+    expect(classifySystemdUnavailableDetail(detail)).toBe("user_bus_unavailable");
   });
 
   it("classifies generic systemd-unavailable details", () => {
@@ -92,6 +85,11 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
     { output: "running", code: 0, available: true },
     { output: "degraded", code: 1, available: true },
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
+    {
+      output: "Failed to connect to user scope bus via local transport: No such file or directory",
+      code: 1,
+      available: false,
+    },
   ])("preserves manager status $output", async ({ output, code, available }) => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
       await fs.writeFile(
@@ -190,6 +188,7 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
     it.each([
       { availability: "signal", disableFails: true },
       { availability: "signal", disableFails: false },
+      { availability: "user-bus", disableFails: true },
       { availability: "missing", disableFails: false },
     ])(
       "handles $availability status with disable failure $disableFails",
@@ -207,7 +206,9 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
                 "#!/bin/sh",
                 'printf "%s\\n" "$*" >> "$HOME/systemctl.calls"',
                 'case " $* " in',
-                '*" status "*) kill -TERM $$ ;;',
+                availability === "user-bus"
+                  ? '*" status "*) printf "%s\\n" "Failed to connect to user scope bus via local transport: No such file or directory" >&2; exit 1 ;;'
+                  : '*" status "*) kill -TERM $$ ;;',
                 '*" is-enabled "*) printf "enabled\\n" ;;',
                 '*" disable "*)',
                 `  test -f "$HOME/.config/systemd/user/${unitName}" || exit 98`,

@@ -9,6 +9,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let packageRoot: string;
 const mocks = vi.hoisted(() => ({
   checkCompletionStatus: vi.fn(),
   completePluginUpdate: vi.fn(),
@@ -176,8 +177,8 @@ async function finishSuccessfulPackageSwitch(
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
   } = {
-    previousRoot: "/tmp/openclaw-update",
-    packageRoot: "/tmp/openclaw-update",
+    previousRoot: packageRoot,
+    packageRoot,
     restartEnvironment: process.env,
   },
 ): Promise<void> {
@@ -231,6 +232,8 @@ async function finishSuccessfulPackageSwitch(
 
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
+    // Completion runs a real child when this package contains openclaw.mjs.
+    packageRoot = tempDirs.make("openclaw-post-update-package-");
     vi.clearAllMocks();
     mocks.leaseActive = false;
     mocks.loadPluginRecords.mockResolvedValue({});
@@ -412,8 +415,8 @@ describe("successful update finalization ordering", () => {
 
     await expect(
       finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
+        previousRoot: packageRoot,
+        packageRoot,
         restartEnvironment: process.env,
         json: true,
         windowsTaskAutoStartRecovery: {
@@ -521,11 +524,11 @@ describe("successful update finalization ordering", () => {
       result: {
         status: "ok",
         mode: "npm",
-        root: "/tmp/openclaw-update",
+        root: packageRoot,
         steps: [],
         durationMs: 1,
       },
-      root: "/tmp/openclaw-update",
+      root: packageRoot,
       installKindChanged: false,
       configSnapshot: validConfigSnapshot,
       requestedChannel: null,
@@ -593,7 +596,11 @@ describe("successful update finalization ordering", () => {
 
   it("removes operator overrides and process identity from the managed install environment", async () => {
     const identity = createManagedServiceIdentityFixture();
-    const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
+    const programArguments = [
+      "/usr/bin/node",
+      path.join(packageRoot, "dist", "index.js"),
+      "gateway",
+    ];
     const managedEnvironment = {
       ANTHROPIC_API_KEY: "managed-provider",
       MANAGED_VALUE: "base",
@@ -633,8 +640,8 @@ describe("successful update finalization ordering", () => {
         delete ownedUpdateEnvironment[key];
       }
       await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
+        previousRoot: packageRoot,
+        packageRoot,
         restartEnvironment: ownedUpdateEnvironment,
       });
 
@@ -697,7 +704,7 @@ describe("successful update finalization ordering", () => {
     ] as const)("skips unsafe metadata refresh for %s ownership", async (_, environment) => {
       const programArguments = [
         "/usr/bin/node",
-        "/tmp/openclaw-update/dist/index.js",
+        path.join(packageRoot, "dist", "index.js"),
         "gateway",
         "--port",
         "19305",
@@ -743,7 +750,7 @@ describe("successful update finalization ordering", () => {
         command: {
           programArguments: [
             "/usr/bin/node",
-            "/tmp/openclaw-update/dist/index.js",
+            path.join(packageRoot, "dist", "index.js"),
             "gateway",
             ...args,
           ],
@@ -763,8 +770,8 @@ describe("successful update finalization ordering", () => {
       });
       vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
       await finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
+        previousRoot: packageRoot,
+        packageRoot,
         restartEnvironment: { ...process.env },
         sealed,
       });
@@ -784,21 +791,40 @@ describe("successful update finalization ordering", () => {
       }
     });
 
-    it.each(["inspection", "revalidation"] as const)(
-      "does not restart a stopped sealed service when fresh %s fails",
-      async (failure) => {
+    it.each(
+      [
+        { failure: "inspection", userBus: false },
+        { failure: "revalidation", userBus: false },
+        { failure: "inspection", userBus: true },
+      ].flatMap(({ failure, userBus }) =>
+        [true, false].flatMap((stoppedForUpdate) =>
+          [true, false].map((json) => ({ failure, userBus, stoppedForUpdate, json })),
+        ),
+      ),
+    )(
+      "preserves fresh $failure failure without restart (userBus=$userBus, stopped=$stoppedForUpdate, json=$json)",
+      async ({ failure, userBus, stoppedForUpdate, json }) => {
         let now = 1_000;
         vi.spyOn(Date, "now").mockImplementation(() => now);
         mocks.writeSentinel.mockImplementationOnce(async () => {
           now += 100;
         });
-        const error = new Error("inspection-secret-canary");
+        const error = new Error("inspection-secret-canary", {
+          cause: new Error("Failed to connect to user scope bus: inspection-cause-secret-canary"),
+        });
+        if (userBus) {
+          Object.assign(error, { code: "SYSTEMD_USER_BUS_UNAVAILABLE" });
+        }
         mocks.readServiceState.mockResolvedValue({
           installed: true,
           loadState: { status: "loaded" },
           env: {},
           command: {
-            programArguments: ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"],
+            programArguments: [
+              "/usr/bin/node",
+              path.join(packageRoot, "dist", "index.js"),
+              "gateway",
+            ],
           },
         });
         if (failure === "inspection") {
@@ -806,30 +832,63 @@ describe("successful update finalization ordering", () => {
         } else {
           mocks.revalidateService.mockRejectedValueOnce(error);
         }
-        await expect(
-          finishSuccessfulPackageSwitch({
-            previousRoot: "/tmp/openclaw-update",
-            packageRoot: "/tmp/openclaw-update",
-            restartEnvironment: { ...process.env },
-            sealed: true,
-            json: true,
-          }),
-        ).rejects.toMatchObject({
-          name: "UpdateCommandFailure",
-          exitCode: 1,
-          result: { status: "error", reason: "service-revalidation-failed" },
+        const finishing = finishSuccessfulPackageSwitch({
+          previousRoot: packageRoot,
+          packageRoot,
+          restartEnvironment: { ...process.env },
+          sealed: true,
+          stoppedForUpdate,
+          json,
         });
+        if (stoppedForUpdate) {
+          await expect(finishing).rejects.toMatchObject({
+            name: "UpdateCommandFailure",
+            exitCode: 1,
+            result: { status: "error", reason: "service-revalidation-failed" },
+          });
+          expect(mocks.restartService).not.toHaveBeenCalled();
+          if (!userBus) {
+            expect(defaultRuntime.error).toHaveBeenCalledWith(
+              "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
+            );
+          }
+        } else {
+          await finishing;
+          expect(mocks.restartService).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              shouldRestart: false,
+              serviceMutationSkipMessage: expect.stringContaining(
+                "Code update completed; gateway service management skipped",
+              ),
+            }),
+          );
+        }
 
-        expect(mocks.restartService).not.toHaveBeenCalled();
+        const skipMessage = mocks.restartService.mock.lastCall?.[0].serviceMutationSkipMessage;
+        const errors = vi.mocked(defaultRuntime.error).mock.calls.flat().map(String).join("\n");
+        const diagnostic = stoppedForUpdate ? errors : skipMessage;
+        if (userBus) {
+          expect(diagnostic).toMatch(/user.*D-Bus/i);
+        } else {
+          expect(diagnostic).not.toMatch(/user.*D-Bus/i);
+        }
+        const published = [
+          errors,
+          vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n"),
+          JSON.stringify(mocks.printResult.mock.calls),
+          skipMessage,
+        ].join("\n");
+        expect(published).not.toContain("secret-canary");
         expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
-        expect(defaultRuntime.error).toHaveBeenCalledWith(
-          "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
-        );
         expect(mocks.printResult).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "error", reason: "service-revalidation-failed" }),
-          expect.objectContaining({ json: true }),
+          expect.objectContaining(
+            stoppedForUpdate
+              ? { status: "error", reason: "service-revalidation-failed" }
+              : { status: "ok" },
+          ),
+          expect.objectContaining({ json }),
         );
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
           mocks.printResult.mock.lastCall?.[0],
@@ -851,7 +910,11 @@ describe("successful update finalization ordering", () => {
       },
     ])("canonical sealed post-update $name", async ({ activated, unloaded }) => {
       const serviceEnv = { MANAGED_VALUE: "revalidated" };
-      const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
+      const programArguments = [
+        "/usr/bin/node",
+        path.join(packageRoot, "dist", "index.js"),
+        "gateway",
+      ];
       mocks.readServiceState.mockResolvedValueOnce({
         installed: true,
         loadState: { status: unloaded ? "not-loaded" : "loaded" },
@@ -860,8 +923,8 @@ describe("successful update finalization ordering", () => {
       });
       mocks.restartService.mockResolvedValueOnce(activated);
       const finishing = finishSuccessfulPackageSwitch({
-        previousRoot: "/tmp/openclaw-update",
-        packageRoot: "/tmp/openclaw-update",
+        previousRoot: packageRoot,
+        packageRoot,
         restartEnvironment: { ...process.env },
         sealed: true,
         updateMode: unloaded ? "git" : "npm",
@@ -885,7 +948,7 @@ describe("successful update finalization ordering", () => {
           serviceEnv,
           serviceUpdateVerdict: {
             kind: "owned",
-            root: "/tmp/openclaw-update",
+            root: packageRoot,
             refreshDefinition: false,
             fingerprint: "sealed",
           },

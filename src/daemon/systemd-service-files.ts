@@ -1,7 +1,7 @@
 /** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -18,6 +18,10 @@ import type {
   GatewayServiceReadOptions,
 } from "./service-types.js";
 import { execBusctlUser } from "./systemd-exec.js";
+import {
+  createSystemdInspectionError,
+  isSystemdUserBusUnavailableDetail,
+} from "./systemd-unavailable.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -96,7 +100,6 @@ async function readSystemdManagerCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const manager = "org.freedesktop.systemd1";
   const unitName = `${resolveSystemdServiceName(env)}.service`;
-  const unavailable = () => new Error("Effective systemd service command could not be inspected.");
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
   const deadlineAt = Date.now() + timeoutMs;
@@ -115,17 +118,20 @@ async function readSystemdManagerCommand(
       ) {
         return null;
       }
-      throw unavailable();
+      const code =
+        result.errorCode === "ENOENT" || result.errorCode === "EACCES"
+          ? "SYSTEMD_BUSCTL_UNAVAILABLE"
+          : isSystemdUserBusUnavailableDetail(result.stderr)
+            ? "SYSTEMD_USER_BUS_UNAVAILABLE"
+            : undefined;
+      throw createSystemdInspectionError(code);
     }
-    const properties = result.stdout
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => asOptionalRecord(JSON.parse(line)));
+    const properties = result.stdout.trim().split(/\r?\n/).map(safeParseJsonRecord);
     if (
       properties.length !== signatures.length ||
       !properties.every((property, index) => property?.type === signatures[index])
     ) {
-      throw unavailable();
+      throw createSystemdInspectionError();
     }
     return properties.map((property) => property?.data);
   };
@@ -139,7 +145,7 @@ async function readSystemdManagerCommand(
   const loadedUnit = loaded[0];
   const unitPath = Array.isArray(loadedUnit) && loadedUnit.length === 1 ? loadedUnit[0] : null;
   if (typeof unitPath !== "string" || !unitPath) {
-    throw unavailable();
+    throw createSystemdInspectionError();
   }
   const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
     query(["get-property", manager, unitPath, `${manager}.${scope}`, ...names], signatures);
@@ -163,7 +169,7 @@ async function readSystemdManagerCommand(
     dropInPaths.some((pathname) => !pathname) ||
     typeof reloadPending !== "boolean"
   ) {
-    throw unavailable();
+    throw createSystemdInspectionError();
   }
   const properties = await readProperties(
     "Service",
@@ -197,13 +203,13 @@ async function readSystemdManagerCommand(
     !isStringArray(unsetEnvironment) ||
     unsetEnvironment.some((assignment) => !assignment || assignment.startsWith("="))
   ) {
-    throw unavailable();
+    throw createSystemdInspectionError();
   }
   const inlineEnvironment: Record<string, string> = {};
   for (const assignment of assignments) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
-      throw unavailable();
+      throw createSystemdInspectionError();
     }
     inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
   }

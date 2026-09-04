@@ -2,6 +2,7 @@ import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 // Systemd tests cover Linux service install, start, stop, and status behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { err as resultErr, ok } from "@openclaw/normalization-core/result";
@@ -327,12 +328,16 @@ function buildSystemdUnitPropertyOutput(
 }
 
 function mockSystemdManagerProperties(
-  output: string | Error,
+  output: string | Error | ExecFileResult,
   unitOutput: string | Error = buildSystemdUnitPropertyOutput({}),
 ): void {
   vi.spyOn(systemdExec, "execBusctlUser").mockRestore();
   execFileMock.mockReset();
   execFileMock.mockImplementation((_command, args, _options, callback) => {
+    if (Array.isArray(output)) {
+      callback(...output);
+      return;
+    }
     const propertyOutput = args.includes("LoadUnit")
       ? JSON.stringify({
           type: "o",
@@ -1649,23 +1654,100 @@ describe("readSystemdServiceExecStart", () => {
       Object.assign(new Error("missing base"), { code: "ENOENT" }),
     );
     mockSystemdManagerProperties(output);
-    await expect(
-      readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
-    ).rejects.toThrow();
+    const failure = await readSystemdServiceExecStart(
+      { HOME: TEST_SERVICE_HOME },
+      { requireEffective: true },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/effective systemd.*could not be inspected/i),
+    });
+    expect(inspect(failure)).not.toContain("secret-canary");
     await expect(readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME })).resolves.toBeNull();
   });
 
-  it("requires manager-effective inspection for an existing unit only in strict mode", async () => {
-    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
-    mockSystemdManagerProperties(new Error("manager-effective-secret-canary"));
+  it.each([
+    {
+      name: "user-bus connection failure",
+      nativeCode: 1,
+      stderr:
+        "Failed to connect to user scope bus via local transport: No such file or directory\nstderr-secret-canary",
+      diagnosticCode: "SYSTEMD_USER_BUS_UNAVAILABLE",
+      message: /user.*D-Bus/i,
+    },
+    {
+      name: "missing busctl executable",
+      nativeCode: "ENOENT",
+      stderr: "spawn busctl ENOENT: stderr-secret-canary",
+      diagnosticCode: "SYSTEMD_BUSCTL_UNAVAILABLE",
+      message: /busctl/i,
+    },
+    {
+      name: "inaccessible busctl executable",
+      nativeCode: "EACCES",
+      stderr: "spawn busctl EACCES: stderr-secret-canary",
+      diagnosticCode: "SYSTEMD_BUSCTL_UNAVAILABLE",
+      message: /busctl/i,
+    },
+    {
+      name: "unrelated failure with D-Bus environment data only in property stdout",
+      nativeCode: 1,
+      stderr: "Failed to read property: Access denied; stderr-secret-canary",
+      diagnosticCode: null,
+      message: /effective systemd.*could not be inspected/i,
+    },
+  ])(
+    "strictly classifies $name without leaking details or authorizing local fallback",
+    async ({ nativeCode, stderr, diagnosticCode, message }) => {
+      const localArguments = [
+        "/usr/bin/openclaw",
+        "gateway",
+        "run",
+        "--token",
+        "argv-secret-canary",
+      ];
+      mockReadGatewayServiceFile([
+        "[Service]",
+        `ExecStart=${localArguments.join(" ")}`,
+        "Environment=OPENCLAW_GATEWAY_TOKEN=environment-secret-canary",
+      ]);
+      mockSystemdManagerProperties([
+        createExecFileError("native-command-secret-canary", { code: nativeCode }),
+        buildSystemdManagerPropertyOutput({
+          programArguments: [
+            "/opt/operator/openclaw",
+            "gateway",
+            "--token",
+            "stdout-secret-canary",
+          ],
+          environment: ["DBUS_SESSION_BUS_ADDRESS=unix:path=/stdout-environment-secret-canary"],
+        }),
+        stderr,
+      ]);
 
-    await expect(
-      readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
-    ).rejects.toThrow();
-    await expect(readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME })).resolves.toMatchObject({
-      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-    });
-  });
+      const failure = await readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        { requireEffective: true },
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringMatching(message) });
+      if (diagnosticCode) {
+        expect(failure).toMatchObject({ code: diagnosticCode });
+      } else {
+        expect(failure).not.toMatchObject({ code: "SYSTEMD_USER_BUS_UNAVAILABLE" });
+        expect(failure).not.toMatchObject({ code: "SYSTEMD_BUSCTL_UNAVAILABLE" });
+      }
+      expect(inspect(failure)).not.toContain("secret-canary");
+      await expect(readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME })).resolves.toMatchObject(
+        {
+          programArguments: localArguments,
+          environment: { OPENCLAW_GATEWAY_TOKEN: "environment-secret-canary" },
+          managedDefinition: { programArguments: localArguments },
+          managedOverrides: { launcher: "command", environment: true },
+        },
+      );
+    },
+  );
 
   it("parses continued environment assignments using systemd syntax", async () => {
     mockReadGatewayServiceFile([

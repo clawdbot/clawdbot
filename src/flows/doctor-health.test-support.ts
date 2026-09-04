@@ -1,4 +1,5 @@
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
@@ -8,11 +9,13 @@ const mocks = vi.hoisted(() => ({
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
+  busctl: vi.fn<typeof import("../daemon/systemd-exec.js").execBusctlUser>(),
   probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
   restartedHealthy: true,
   emulateNativeInstall: true,
   servicePlatform: undefined as NodeJS.Platform | undefined,
+  coordinatorRuntimeDirectory: undefined as string | undefined,
   taskDefinitelyStopped: vi.fn(() => true),
   startupFallbackRuntime: vi.fn<() => Promise<{ status: string } | null>>(async () => null),
 }));
@@ -36,6 +39,41 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => mocks.service(),
 }));
+
+vi.mock("../daemon/systemd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-exec.js")>()),
+  execBusctlUser: mocks.busctl,
+}));
+
+const coordinatorDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  // Keep real coordinators outside removable state without using the host's shared lock directory.
+  mocks.coordinatorRuntimeDirectory = coordinatorDirs.make("openclaw-doctor-coordinators-");
+  mocks.config.mockReturnValue({});
+  mocks.packageRoot.mockReturnValue(undefined);
+  mocks.service.mockReset();
+  mocks.busctl.mockReset().mockRejectedValue(new Error("Unexpected native bus inspection"));
+  mocks.probePortUsage.mockReset().mockResolvedValue("free");
+  mocks.restartedHealthy = true;
+  mocks.emulateNativeInstall = true;
+  mocks.servicePlatform = undefined;
+  mocks.taskDefinitelyStopped.mockReset().mockReturnValue(true);
+  mocks.startupFallbackRuntime.mockReset().mockResolvedValue(null);
+  mocks.outro.mockClear();
+  mocks.runContributions.mockReset().mockResolvedValue(undefined);
+  mocks.writeUpdatePostInstallDoctorResult.mockClear();
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  mocks.coordinatorRuntimeDirectory = undefined;
+});
+
+vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
+  const { createIsolatedStateCoordinator } =
+    await import("../../test/helpers/state-database-coordinator.js");
+  return createIsolatedStateCoordinator(actual, () => mocks.coordinatorRuntimeDirectory);
+});
 
 // Service absence requires a free port too; never consult the host Gateway
 // while exercising the fixture's in-memory native manager.

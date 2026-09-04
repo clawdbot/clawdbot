@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
 import {
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
   signal: vi.fn(),
   events: [] as string[],
+  coordinatorRuntimeDirectory: undefined as string | undefined,
   command: vi.fn<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>(),
   restart: vi.fn(async () => {
     mocks.events.push("native restart");
@@ -154,6 +156,15 @@ vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
   createGatewayLifecycleMutationAudit: vi.fn(),
 }));
 
+const coordinatorDirs = useAutoCleanupTempDirTracker(afterEach);
+
+vi.mock("../../infra/state-database-coordinator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/state-database-coordinator.js")>();
+  const { createIsolatedStateCoordinator } =
+    await import("../../../test/helpers/state-database-coordinator.js");
+  return createIsolatedStateCoordinator(actual, () => mocks.coordinatorRuntimeDirectory);
+});
+
 let root: string;
 let configPath: string;
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -161,6 +172,8 @@ const writeConfig = (version: string) => writeRecoveryConfig(configPath, version
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Real config/version guards initialize SQLite observations, but must not touch host lock paths.
+  mocks.coordinatorRuntimeDirectory = coordinatorDirs.make("openclaw-update-service-coordinators-");
   mockProcessPlatform("linux");
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")));
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
@@ -244,6 +257,7 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
+  mocks.coordinatorRuntimeDirectory = undefined;
 });
 
 describe("preserved update activation with real version guards", () => {

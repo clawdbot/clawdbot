@@ -14,15 +14,28 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const coordinatorFixture = vi.hoisted(() => ({
+  runtimeDirectory: undefined as string | undefined,
+}));
+
+vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
+  const { createIsolatedStateCoordinator } =
+    await import("../../test/helpers/state-database-coordinator.js");
+  return createIsolatedStateCoordinator(actual, () => coordinatorFixture.runtimeDirectory);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
   clearPluginMetadataLifecycleCaches();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
+  coordinatorFixture.runtimeDirectory = undefined;
 });
 
 it("admits plugin-only repair before executing setup or doctor modules", async () => {
+  // The second SQLite connection and Doctor must contend outside removable plugin state.
+  coordinatorFixture.runtimeDirectory = tempDirs.make("openclaw-doctor-plugin-coordinators-");
   const root = tempDirs.make("openclaw-doctor-plugin-maintenance-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");

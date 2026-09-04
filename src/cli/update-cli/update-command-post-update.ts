@@ -5,6 +5,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveSystemdInspectionDiagnostic } from "../../daemon/systemd-unavailable.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
@@ -501,7 +502,10 @@ export async function finishUpdate(params: {
           serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
         if (serviceUpdateVerdict.kind === "unavailable") {
           serviceMutationAllowed = false;
-          serviceMutationSkipMessage = serviceUpdateVerdict.message;
+          const diagnostic =
+            serviceUpdateVerdict.message ??
+            "Gateway service management skipped: inspection is unavailable.";
+          serviceMutationSkipMessage = `${diagnostic} Run \`openclaw gateway status --deep\` and restart the gateway manually when service access is restored.`;
         } else if (serviceUpdateVerdict.kind === "foreign") {
           serviceMutationAllowed = false;
           serviceMutationSkipMessage =
@@ -550,11 +554,16 @@ export async function finishUpdate(params: {
           );
         }
       } catch (err) {
+        const diagnostic = resolveSystemdInspectionDiagnostic(err);
         if (params.preManagedServiceStop?.stopped) {
-          const message =
+          const message = [
             err instanceof GatewayServiceUpdateOwnershipError
               ? formatErrorMessage(err)
-              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
+              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
+            diagnostic,
+          ]
+            .filter(Boolean)
+            .join(" ");
           defaultRuntime.error(message);
           const reported = await reportResult({
             ...resultWithPostUpdate,
@@ -569,9 +578,13 @@ export async function finishUpdate(params: {
           );
         }
         serviceMutationAllowed = false;
-        serviceMutationSkipMessage =
+        serviceMutationSkipMessage = [
           "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +
-          "Run `openclaw gateway status --deep` before restarting it manually.";
+            "Run `openclaw gateway status --deep` before restarting it manually.",
+          diagnostic,
+        ]
+          .filter(Boolean)
+          .join(" ");
       }
     }
 

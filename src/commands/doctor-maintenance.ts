@@ -90,7 +90,8 @@ function assertDoctorMaintenanceInspection(
   inspection: PreManagedServiceStop,
   env: NodeJS.ProcessEnv,
 ): void {
-  const kind = inspection.serviceUpdateVerdict?.kind;
+  const verdict = inspection.serviceUpdateVerdict;
+  const kind = verdict?.kind;
   // Non-owned services grant no stop authority. The native lifecycle owner
   // must prove them offline before Doctor can repair its own selected state.
   if (
@@ -103,7 +104,12 @@ function assertDoctorMaintenanceInspection(
   throw new Error(
     kind === "owned" && inspection.blockMessage
       ? inspection.blockMessage
-      : `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
+      : [
+          `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
+          verdict?.kind === "unavailable" ? verdict.message : undefined,
+        ]
+          .filter(Boolean)
+          .join(" "),
   );
 }
 
