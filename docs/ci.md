@@ -206,6 +206,10 @@ The watcher has no PR-bound replacement evidence for `pull_request_target` graph
 so their unique jobs remain visible too. Missing or ambiguous PR associations
 prevent whole-graph replacement while the attached run is monitored; same-name,
 same-event deduplication still applies on the shared head SHA.
+Replacement proof resolves older run IDs referenced by the rollup, including runs
+outside the initial attachment page. Metadata is reused across jobs and polls;
+missing records are read under the watcher deadline, followed by a fresh PR and
+rollup observation before deciding. Missing or foreign associations remain blocking.
 
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after

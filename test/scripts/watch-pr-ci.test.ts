@@ -299,6 +299,10 @@ esac
       conclusion?: string | null;
       runPatch?: Record<string, unknown>;
       previousPatch?: Record<string, unknown>;
+      olderRunOutsidePage?: boolean;
+      afterMetadata?: Record<string, unknown>;
+      slowMetadata?: boolean;
+      slowFinalRun?: boolean;
       checkSuiteId?: number | null;
       oldConclusion?: "FAILURE" | "CANCELLED";
       checkEvent?: string;
@@ -324,6 +328,79 @@ esac
         output: "TIMEOUT",
       },
       { label: "successful replacement", exitCode: 0, output: "GREEN" },
+      {
+        label: "21-run same-PR replacement",
+        olderRunOutsidePage: true,
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "21-run same-PR cancellation replacement",
+        olderRunOutsidePage: true,
+        oldConclusion: "CANCELLED",
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "21-run unknown older association",
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [] },
+      },
+      {
+        label: "21-run foreign older association",
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [association(43)] },
+      },
+      ...[
+        { label: "wrong returned run", previousPatch: { id: 99 } },
+        { label: "wrong returned head", previousPatch: { head_sha: "c".repeat(40) } },
+        { label: "wrong returned suite", previousPatch: { check_suite_id: 999 } },
+        { label: "wrong returned event", previousPatch: { event: "pull_request_target" } },
+        { label: "wrong returned workflow", previousPatch: { workflow_id: 20 } },
+        {
+          label: "moved head",
+          afterMetadata: { headRefOid: "c".repeat(40) },
+          exitCode: 11,
+          output: "HEAD-MOVED",
+        },
+        {
+          label: "closed PR",
+          afterMetadata: { state: "CLOSED" },
+          exitCode: 10,
+          output: "PR-CLOSED",
+        },
+        {
+          label: "conflicting PR",
+          afterMetadata: { mergeable: false },
+          exitCode: 14,
+          output: "CONFLICTING-MID-WAIT",
+        },
+        {
+          label: "new failing check",
+          afterMetadata: {
+            statusCheckRollup: {
+              state: "FAILURE",
+              contexts: {
+                totalCount: 1,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
+              },
+            },
+          },
+          output: "FAILING checks=new required check",
+        },
+        { label: "slow metadata", slowMetadata: true, exitCode: 16, output: "TIMEOUT" },
+        { label: "slow final run", slowFinalRun: true, exitCode: 16, output: "TIMEOUT" },
+        {
+          label: "running replacement",
+          status: "in_progress",
+          conclusion: null,
+          exitCode: 16,
+          output: "TIMEOUT",
+        },
+      ].map((entry) =>
+        Object.assign(entry, { label: `21-run ${entry.label}`, olderRunOutsidePage: true }),
+      ),
       {
         label: "same-PR unique cancellation replacement",
         oldConclusion: "CANCELLED",
@@ -438,6 +515,10 @@ esac
         conclusion = "success",
         runPatch,
         previousPatch,
+        olderRunOutsidePage = false,
+        afterMetadata,
+        slowMetadata = false,
+        slowFinalRun = false,
         checkSuiteId = 10_000,
         oldConclusion = "FAILURE",
         checkEvent = "pull_request",
@@ -518,26 +599,65 @@ esac
             },
           },
         };
-        const result = await runWatcher(
-          `#!/usr/bin/env node
+        const listedRuns = olderRunOutsidePage
+          ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
+          : [run, previous];
+        if (olderRunOutsidePage) {
+          // Multiple visible jobs share one exact old-run metadata read.
+          pr.statusCheckRollup.contexts.nodes.push({
+            ...pr.statusCheckRollup.contexts.nodes[0]!,
+            databaseId: 1_001,
+            name: "old matrix shard 2",
+          });
+          pr.statusCheckRollup.contexts.totalCount += 1;
+        }
+        const result = await withTempDir("openclaw-watch-pr-ci-ownership-", async (root) => {
+          const calls = join(root, "calls.jsonl");
+          writeFileSync(calls, "");
+          const watched = await runWatcher(
+            `#!/usr/bin/env node
+const fs = require("node:fs");
 const args = process.argv.slice(2);
-const pr = ${JSON.stringify(pr)};
-const runs = ${JSON.stringify([run, previous])};
+const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
+const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
+const runs = ${JSON.stringify(listedRuns)};
+const previous = ${JSON.stringify(previous)};
 let value;
 if (args[0] === "pr" && args[1] === "view") value = pr;
-else if (args[0] === "run" && args[1] === "view") value = runs.find((run) => String(run.id) === args[2]);
+else if (args[0] === "run" && args[1] === "view") {
+  if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = runs.find((run) => String(run.id) === args[2]);
+}
 else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
-else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: runs };
+else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
+else if (args[1] === "repos/openclaw/openclaw/actions/runs/100") {
+  if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = previous;
+}
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
-          sha,
-          completion ? ["--completion", completion] : [],
-        );
+            sha,
+            completion ? ["--completion", completion] : [],
+            slowMetadata || slowFinalRun ? "wall" : "poll",
+          );
+          return {
+            ...watched,
+            calls: readFileSync(calls, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as string[]),
+          };
+        });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect(result.stdout).toContain(`ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
+        expect(
+          result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
+        ).toHaveLength(olderRunOutsidePage ? 1 : 0);
       },
     );
   });

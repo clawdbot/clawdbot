@@ -407,29 +407,7 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   if (!run) {
     return undefined;
   }
-  const boundToPr = (candidate: RunListItem) =>
-    pr !== undefined &&
-    candidate.event === "pull_request" &&
-    candidate.head_sha === sha &&
-    candidate.pull_requests?.length === 1 &&
-    candidate.pull_requests[0]?.number === pr &&
-    candidate.pull_requests[0]?.head.sha === sha;
-  const checkSuites = new Map<number, number>();
-  if (boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined) {
-    for (const previous of runs) {
-      if (
-        previous.id < run.id &&
-        previous.workflow_id === run.workflow_id &&
-        previous.check_suite_id !== undefined &&
-        boundToPr(previous)
-      ) {
-        checkSuites.set(previous.id, previous.check_suite_id);
-      }
-    }
-  }
-  const replacement =
-    run.workflow_id === undefined ? undefined : { workflowId: run.workflow_id, checkSuites };
-  return { run, replacement };
+  return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
 const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
@@ -663,6 +641,72 @@ function readRollup(pr: number, repo: string, deadline?: number) {
   );
 }
 
+function readPrRollup(
+  args: ReturnType<typeof parseArgs>,
+  attachment: NonNullable<ReturnType<typeof findRun>>,
+  deadline: number,
+  reconciled?: ReadonlyMap<number, string>,
+) {
+  const { run, runs } = attachment;
+  const boundToPr = (candidate: RunListItem) =>
+    candidate.event === "pull_request" &&
+    candidate.head_sha === args.headSha &&
+    candidate.pull_requests?.length === 1 &&
+    candidate.pull_requests[0]?.number === args.pr &&
+    candidate.pull_requests[0]?.head.sha === args.headSha;
+  const checkSuites = new Map<number, number>();
+  const replacement =
+    boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
+      ? { workflowId: run.workflow_id, checkSuites }
+      : undefined;
+  while (true) {
+    const pr = readRollup(args.pr, args.repo, deadline);
+    const blocked = precheck(pr, args.headSha, true);
+    if (blocked !== null) {
+      return { exitCode: blocked };
+    }
+    const knownRuns = runs.size;
+    for (const check of pr.statusCheckRollup?.contexts?.nodes ?? []) {
+      const identity = checkRunIdentity(check);
+      if (
+        !replacement ||
+        !identity ||
+        identity.runId >= run.id ||
+        identity.workflowId !== replacement.workflowId ||
+        identity.event !== "pull_request" ||
+        check.checkSuite?.databaseId === undefined
+      ) {
+        continue;
+      }
+      // The attachment page is not history. Resolve only rollup-referenced IDs,
+      // caching even unbound results so repeated jobs/polls do not multiply reads.
+      let previous = runs.get(identity.runId);
+      if (!previous) {
+        previous = RunListItemSchema.parse(
+          execGhJson(
+            ["api", `repos/${args.repo}/actions/runs/${identity.runId}`],
+            ghReadOptions(deadline),
+          ),
+        );
+        runs.set(identity.runId, previous);
+      }
+      if (
+        previous.id === identity.runId &&
+        previous.workflow_id === replacement.workflowId &&
+        previous.check_suite_id !== undefined &&
+        boundToPr(previous)
+      ) {
+        checkSuites.set(previous.id, previous.check_suite_id);
+      }
+    }
+    // Metadata reads can span a push or new checks. Reobserve before deciding;
+    // any newly referenced IDs are resolved within the same watcher deadline.
+    if (runs.size === knownRuns) {
+      return { pr, result: classifyRollup(pr.statusCheckRollup, reconciled, replacement) };
+    }
+  }
+}
+
 const emit = (line: string, code: number) => {
   console.log(line);
   return code;
@@ -793,15 +837,15 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        let pr = readRollup(args.pr, args.repo);
-        const blocked = precheck(pr, args.headSha, true);
-        if (blocked !== null) {
-          return blocked;
+        let observed = readPrRollup(args, attachment, watchDeadline);
+        if ("exitCode" in observed) {
+          return observed.exitCode;
         }
-        let result = classifyRollup(pr.statusCheckRollup, undefined, attachment.replacement);
+        let { pr, result } = observed;
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
-        let run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
+        let run =
+          result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
         if (
           result.verdict === "PENDING" &&
           result.pendingCount > 0 &&
@@ -819,12 +863,11 @@ async function main(argv = process.argv.slice(2)) {
           if (reconciled.size > 0) {
             // The evidence scan may span pushes or new checks. Reobserve the PR
             // before applying proof, then retain the ordinary final CI-run check.
-            pr = readRollup(args.pr, args.repo, watchDeadline);
-            const currentBlocked = precheck(pr, args.headSha, true);
-            if (currentBlocked !== null) {
-              return currentBlocked;
+            observed = readPrRollup(args, attachment, watchDeadline, reconciled);
+            if ("exitCode" in observed) {
+              return observed.exitCode;
             }
-            result = classifyRollup(pr.statusCheckRollup, reconciled, attachment.replacement);
+            ({ pr, result } = observed);
             run =
               result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
           }
