@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -846,7 +847,7 @@ describe("models.authStatus", () => {
       runtimeExternalCliProfileIds: [profileId],
     });
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
-    const usage = Promise.withResolvers<UsageSummary>();
+    const usage = createDeferred<UsageSummary>();
     mocks.loadProviderUsageSummary.mockReturnValueOnce(usage.promise);
     try {
       const pending = await firstAuthStatusProvider();
@@ -1870,7 +1871,7 @@ describe("models.authStatus", () => {
         providerUsageAuthEnvVars: { [provider]: [envVar] },
       };
       setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
-      mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
         updatedAt: 0,
         providers: [
           {
@@ -1966,9 +1967,9 @@ describe("models.authStatus", () => {
         },
       },
     });
-    let pending = Promise.withResolvers<void>();
+    let pending = createDeferred<void>();
     let billingSummary = "Organization billing";
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => {
+    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
       if (options.providerOnly) await pending.promise;
       return {
         updatedAt: 1,
@@ -1998,7 +1999,7 @@ describe("models.authStatus", () => {
         expect(result.providers[0]?.independentUsage?.summary).toBe("Organization billing");
         expect(result.usageRefreshPending).toBeUndefined();
       });
-      pending = Promise.withResolvers<void>();
+      pending = createDeferred<void>();
       billingSummary = "Updated billing";
       await readAuthStatus({ refresh: true });
       await waitForFast(async () => {
@@ -2069,9 +2070,9 @@ describe("models.authStatus", () => {
       profiles,
       providers: [{ provider: "openrouter", status: "ok", profiles, effectiveProfiles: profiles }],
     });
-    const login = Promise.withResolvers<void>();
+    const login = createDeferred<void>();
     if (!pending) login.resolve();
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => {
+    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
       if (options.authProfile?.profileId === loginId) await login.promise;
       return {
         updatedAt: 0,
@@ -2160,7 +2161,7 @@ describe("models.authStatus", () => {
         profiles,
         providers: [{ provider: "anthropic", status: "ok", profiles }],
       });
-      mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
         updatedAt: 0,
         providers: [
           {
@@ -2961,7 +2962,7 @@ describe("models.authOrderSet", () => {
       profiles,
       providers: [{ provider: "openai", status: "ok", profiles }],
     });
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
       updatedAt: Date.now(),
       providers: [
         {
@@ -2994,7 +2995,7 @@ describe("models.authOrderSet", () => {
     mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
       setPreparedAuthStore(reordered);
     });
-    const warming = Promise.withResolvers<void>();
+    const warming = createDeferred<void>();
     mocks.warmCurrentProviderAuthStateOffMainThread.mockReturnValueOnce(warming.promise);
     const opts = createOrderOptions({ provider: "openai", profileIds: order });
     try {
@@ -3012,7 +3013,11 @@ describe("models.authOrderSet", () => {
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(3);
       await loadUsageStatusStaleWhileRevalidate({ config });
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(4);
-      expect(mocks.loadProviderUsageSummary.mock.calls.at(-1)?.[0].authProfile).toBeUndefined();
+      const providerRequest = expectDefined(
+        mocks.loadProviderUsageSummary.mock.calls.at(-1)?.[0],
+        "provider usage request",
+      );
+      expect(providerRequest.authProfile).toBeUndefined();
     } finally {
       warming.resolve();
     }
