@@ -25,7 +25,6 @@ import {
   statWorkspacePath,
   toUpdatedAtMs,
   WORKSPACE_PREVIEW_MAX_BYTES,
-  workspaceStatKind,
 } from "./workspace-fs.js";
 
 // Images bypass the text preview cap but stay far below the 25MB WS payload
@@ -126,10 +125,9 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
     const { agentId, workspaceDir, browserPath } = scope;
     const stat = await statWorkspacePath(workspaceDir, browserPath);
-    const dirents =
-      stat && workspaceStatKind(stat) === "directory"
-        ? await listWorkspacePath(workspaceDir, browserPath)
-        : undefined;
+    const dirents = stat?.isDirectory
+      ? await listWorkspacePath(workspaceDir, browserPath)
+      : undefined;
     if (!dirents) {
       respond(
         false,
@@ -142,8 +140,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
     const entries = sortWorkspaceEntries(
       dirents.flatMap((dirent): AgentsWorkspaceEntry[] => {
-        const statKind = workspaceStatKind(dirent);
-        const kind = statKind === "directory" ? "directory" : statKind === "file" ? "file" : null;
+        const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : null;
         if (!kind) {
           return [];
         }
@@ -195,7 +192,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
     const stat = await statWorkspacePath(workspaceDir, browserPath);
-    if (!stat || workspaceStatKind(stat) !== "file") {
+    if (!stat?.isFile) {
       respondNotFound();
       return;
     }

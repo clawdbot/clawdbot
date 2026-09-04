@@ -58,7 +58,6 @@ import {
   toUpdatedAtMs,
   updateWorkspaceFile,
   WORKSPACE_PREVIEW_MAX_BYTES,
-  workspaceStatKind,
   type WorkspaceDirEntry,
   type WorkspaceFileUpdateResult,
   type WorkspaceRoot,
@@ -476,7 +475,7 @@ async function toSessionFileEntry(
   }
   const browserPath = toDisplayPath(root!, resolved);
   const stat = await statWorkspacePath(opts.workspaceRoot ?? root!, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "file") {
+  if (!stat?.isFile) {
     return { ...base, missing: true };
   }
   const entry: SessionFileEntry = {
@@ -582,8 +581,7 @@ async function toBrowserEntry(
   dirent: WorkspaceDirEntry,
   relevance: ReadonlyMap<string, SessionFileRelevance>,
 ): Promise<SessionFileBrowserEntry | undefined> {
-  const statKind = workspaceStatKind(dirent);
-  const kind = statKind === "directory" ? "directory" : statKind === "file" ? "file" : null;
+  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : null;
   if (!kind) {
     return undefined;
   }
@@ -641,7 +639,7 @@ async function searchBrowserEntries(params: {
           entries.push(entry);
         }
       }
-      if (workspaceStatKind(dirent) === "directory" && !SEARCH_SKIP_DIRS.has(dirent.name)) {
+      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
         await visit(browserPath);
       }
     }
@@ -682,7 +680,7 @@ async function buildBrowserResult(params: {
     return undefined;
   }
   const stat = await statWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "directory") {
+  if (!stat?.isDirectory) {
     return undefined;
   }
   const dirents = await listWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
@@ -981,7 +979,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     for (const candidate of candidates) {
       const candidatePath = toDisplayPath(loaded.root, candidate);
       const stat = await statWorkspacePath(loaded.root, candidatePath);
-      if (stat && workspaceStatKind(stat) === "file") {
+      if (stat?.isFile) {
         browserPath = candidatePath;
         break;
       }

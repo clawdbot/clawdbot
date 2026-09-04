@@ -178,7 +178,7 @@ export async function updateWorkspaceFile(
       renameIdentity: "strict",
     });
     const stat = await workspaceRoot.stat(browserPath);
-    if (workspaceStatKind(stat) !== "file") {
+    if (!stat.isFile) {
       return { status: "unsafe" };
     }
     return {
@@ -232,34 +232,6 @@ export function resolveWorkspacePath(
   }
   const resolved = path.resolve(root, filePath);
   return isPathInside(root, resolved) ? resolved : undefined;
-}
-
-export function workspaceStatKind(
-  stat: WorkspacePathStat,
-): "file" | "directory" | "symlink" | undefined {
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind === "file" || kind === "directory" || kind === "symlink") {
-    return kind;
-  }
-  const nodeStat = stat as {
-    isDirectory?: boolean | (() => boolean);
-    isFile?: boolean | (() => boolean);
-    isSymbolicLink?: boolean | (() => boolean);
-  };
-  const isFile = typeof nodeStat.isFile === "function" ? nodeStat.isFile() : nodeStat.isFile;
-  if (isFile) {
-    return "file";
-  }
-  const isDirectory =
-    typeof nodeStat.isDirectory === "function" ? nodeStat.isDirectory() : nodeStat.isDirectory;
-  if (isDirectory) {
-    return "directory";
-  }
-  const isSymbolicLink =
-    typeof nodeStat.isSymbolicLink === "function"
-      ? nodeStat.isSymbolicLink()
-      : nodeStat.isSymbolicLink;
-  return isSymbolicLink ? "symlink" : undefined;
 }
 
 /** Protocol timestamps are integer milliseconds. */
