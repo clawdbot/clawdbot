@@ -33,9 +33,11 @@ function mount(
     updateComplete: Promise.resolve(true),
   });
   controller.hostConnected();
-  const state = createPageState(context, controller.createRenderLifecycle(), {
-    querySelector: () => null,
-  });
+  const state = createPageState(
+    context,
+    controller.createRenderLifecycle(),
+    document.createElement("div"),
+  );
   Object.assign(state, {
     client: transport.client,
     connected: true,
