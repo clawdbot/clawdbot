@@ -102,8 +102,11 @@ export class DesktopClient {
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = options.scaleViewport ?? true;
+    let retired = false;
     rfb.addEventListener("connect", () => options.onConnect?.());
     rfb.addEventListener("disconnect", (event) => {
+      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+      retired = true;
       // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
       const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
       options.onDisconnect?.({ ...closeDetail, clean });
@@ -133,7 +136,12 @@ export class DesktopClient {
         cancelable: true,
       });
     return {
-      disconnect: () => rfb.disconnect(),
+      disconnect: () => {
+        if (!retired) {
+          retired = true;
+          rfb.disconnect();
+        }
+      },
       disableInput: () => {
         rfb.viewOnly = true;
       },

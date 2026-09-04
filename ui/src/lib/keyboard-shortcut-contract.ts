@@ -4,6 +4,7 @@ type KeyboardShortcutModifier = "mod" | "ctrl" | "shift" | "alt";
 type KeyboardShortcutKey =
   | "k"
   | "b"
+  | "s"
   | "d"
   | "f"
   | "h"
@@ -39,6 +40,7 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },
   homePanel: { modifiers: ["mod", "shift"], key: "h" },
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
+  sideChat: { modifiers: ["mod", "shift"], key: "s" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },
   historyPrevious: { modifiers: [], key: "ArrowUp" },

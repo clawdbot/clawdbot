@@ -1,5 +1,4 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -28,6 +27,7 @@ import {
   createShouldEmitToolResult,
   isAudioPayload,
 } from "./agent-runner-helpers.js";
+import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
@@ -52,7 +52,7 @@ import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import {
-  createFollowupRunToolAuthorityProjector,
+  prepareReplyToolAuthority,
   resolveFollowupRunToolAuthorityFingerprint,
 } from "./reply-tool-authority.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -210,36 +210,11 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const pendingQuestionText = (
-    transcriptCommandBody ??
-    followupRun.transcriptPrompt ??
-    commandBody
-  ).trim();
-  const isExternalUserInput =
-    followupRun.run.inputProvenance === undefined ||
-    followupRun.run.inputProvenance.kind === "external_user";
-  if (
-    !isHeartbeat &&
-    isExternalUserInput &&
-    pendingQuestionText &&
-    !followupRun.images?.length &&
-    !followupRun.media?.length &&
-    (await claimPendingAgentQuestionAnswer({
-      sessionKey,
-      text: pendingQuestionText,
-      persist: followupRun.userTurnTranscriptRecorder
-        ? async () => {
-            await followupRun.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    }))
-  ) {
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-    }
+  const questionInput = await runReplyQuestionInput(params);
+  if (questionInput.handled) {
     releaseAdmissionTicket();
     typing.cleanup();
-    return undefined;
+    return questionInput.payload;
   }
 
   const baseShouldEmitToolResult = createShouldEmitToolResult({
@@ -303,7 +278,7 @@ export async function runReplyAgent(
     messageInjectionDisposition === "none"
   ) {
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
-    await runActiveReplySteer({
+    const result = await runActiveReplySteer({
       followupRun,
       opts,
       providedReplyOperation,
@@ -323,7 +298,7 @@ export async function runReplyAgent(
         ? activeToolAuthorityFingerprint
         : undefined,
     });
-    return undefined;
+    return result === "handled" ? undefined : result;
   }
 
   const activeRunQueueAction = resolveActiveRunQueueAction({
@@ -541,10 +516,7 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(followupRun));
-  replyOperation.bindToolAuthorityFingerprint(
-    resolveFollowupRunToolAuthorityFingerprint(followupRun),
-  );
+  replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;

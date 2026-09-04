@@ -24,7 +24,7 @@ struct WatchInboxView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> String?)?
+    var onSendChatMessage: ((String, Bool) async -> String?)?
 
     var body: some View {
         NavigationStack {
@@ -50,7 +50,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> String?)?
+    var onSendChatMessage: ((String, Bool) async -> String?)?
     @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
@@ -229,6 +229,9 @@ private struct WatchControlSurfaceView: View {
 
             if let replyStatusText = store.replyStatusText, !replyStatusText.isEmpty {
                 WatchTinyStatus(text: replyStatusText)
+            }
+            if let receipt = self.store.savedPromptDeliveryReceipt {
+                WatchChatDeliveryReceiptView(receipt: receipt)
             }
         }
     }
@@ -1184,7 +1187,7 @@ private struct WatchChatTimelineView: View {
     var avatarImageSource: String?
     var avatarText: String?
     var onRefresh: (() -> Void)?
-    var onSendMessage: ((String) -> String?)?
+    var onSendMessage: ((String, Bool) async -> String?)?
     @State private var speechPlayback = WatchSpeechPlayback()
     @State private var voiceReplyTimeout: Task<Void, Never>?
     @State private var isVisible = false
@@ -1206,6 +1209,10 @@ private struct WatchChatTimelineView: View {
 
                     if let sendStatusText, !sendStatusText.isEmpty {
                         WatchTinyStatus(text: sendStatusText)
+                    }
+
+                    if let receipt = self.store.savedChatDeliveryReceipt {
+                        WatchChatDeliveryReceiptView(receipt: receipt)
                     }
 
                     if let voiceStatusText = self.voiceStatusText {
@@ -1299,10 +1306,16 @@ private struct WatchChatTimelineView: View {
                     reason: String(localized: "Chat changed on iPhone. Your message was not sent."))
                 return
             }
-            guard let commandId = self.onSendMessage?(text) else { return }
-            if spokenReply {
-                self.store.beginVoiceTurn(commandId: commandId)
-                self.scheduleVoiceReplyTimeout()
+            Task { @MainActor in
+                guard self.store.appSnapshot?.chatSessionIdentity == chatSession,
+                      await self.onSendMessage?(text, spokenReply) != nil
+                else { return }
+                // The durable command keeps its original owner if iPhone changes chat while saving.
+                guard self.store.appSnapshot?.chatSessionIdentity == chatSession else { return }
+                if spokenReply {
+                    self.handleCompletedVoiceTurn()
+                    self.scheduleVoiceReplyTimeout()
+                }
             }
         }
     }

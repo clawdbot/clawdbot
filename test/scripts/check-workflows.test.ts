@@ -314,7 +314,14 @@ describe("check-workflows", () => {
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
     );
 
-    const preflight = native.steps[0]!;
+    const isolation = native.steps[0]!;
+    expect(isolation.id).toBe("native_isolation");
+    expect(isolation.if).toBeUndefined();
+    expect(isolation.env).toEqual({
+      NATIVE_RUNNER_ENVIRONMENT: "${{ runner.environment }}",
+      EXPECTED_HEAD: "${{ inputs.target_ref }}",
+    });
+    const preflight = native.steps[1]!;
     expect(preflight.name).toBe("Preflight native Scheduled Task session");
     expect(preflight.if).toBe(native.if);
     expect(preflight.run).toContain(
@@ -379,8 +386,10 @@ describe("check-workflows", () => {
     expect(proof.run).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
     expect(proof.run).toContain("export CI_WINDOWS_SCHTASKS_HEAD");
     expect(proof.run).toContain("pnpm test:windows:schtasks:integration");
-    expect(cleanup.if).toBe("${{ always() && inputs.run_windows_ci }}");
-    expect(upload.if).toBe(cleanup.if);
+    expect(cleanup.if).toBe(
+      '${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == \'success\' && contains(fromJSON(\'["success","failure","cancelled"]\'), steps.native_schtasks.outcome) }}',
+    );
+    expect(upload.if).toBe("${{ always() && inputs.run_windows_ci }}");
     expect(cleanup.env).toEqual({
       TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
       TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
@@ -392,6 +401,7 @@ describe("check-workflows", () => {
     expect(cleanup.run).toContain('throw ($cleanupErrors -join " ")');
     expect(upload.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/u);
     expect(upload.with?.path).toContain(".artifacts/windows-schtasks/proof.json");
+    expect(upload.with?.path).toContain("windows-schtasks-isolation.json");
     expect(upload.with?.path).toContain("failure-diagnostics.json");
     expect(upload.with?.path).toContain("cleanup-summary.txt");
     expect(upload.with?.path).not.toContain("task-before-cleanup.xml");

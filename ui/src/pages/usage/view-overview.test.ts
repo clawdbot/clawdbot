@@ -655,7 +655,9 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 100,
           totalTokens: 100,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 1, tokens: 1 }],
+          dailyBreakdown: [
+            { ...totals, date: "2026-02-05", cost: 1, tokens: 1, totalCost: 1, totalTokens: 1 },
+          ],
         },
       } as UsageSessionEntry,
       {
@@ -666,7 +668,9 @@ describe("renderSessionsCard", () => {
           ...totals,
           totalCost: 50,
           totalTokens: 50,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 10, tokens: 10 }],
+          dailyBreakdown: [
+            { ...totals, date: "2026-02-05", cost: 10, tokens: 10, totalCost: 10, totalTokens: 10 },
+          ],
         },
       } as UsageSessionEntry,
     ];

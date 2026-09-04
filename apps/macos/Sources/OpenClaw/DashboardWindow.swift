@@ -99,13 +99,3 @@ struct DashboardWindowAuth: Equatable {
             self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
-
-/// Dashboard URLs carry the auth token in the `#token=...` fragment; strip the
-/// fragment before logging so credentials never land in unified logs.
-func dashboardLogString(for url: URL) -> String {
-    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-        return "<unparseable-url>"
-    }
-    components.fragment = nil
-    return components.url?.absoluteString ?? "<unparseable-url>"
-}

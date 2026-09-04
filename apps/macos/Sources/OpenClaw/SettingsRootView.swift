@@ -265,7 +265,7 @@ struct SettingsRootView: View {
         case .instances:
             AnyView(InstancesSettings(isActive: self.selectedTab == tab))
         case .config:
-            AnyView(ConfigSettings())
+            AnyView(ConfigSettings(isActive: self.selectedTab == tab))
         case .debug:
             AnyView(DebugSettings(state: self.state))
         case .about:

@@ -20872,18 +20872,22 @@ public struct QuestionRequestResult: Codable, Sendable {
 public struct QuestionWaitAnswerParams: Codable, Sendable {
     public let id: String
     public let timeoutms: Int?
+    public let includeresolutionid: Bool?
 
     public init(
         id: String,
-        timeoutms: Int? = nil)
+        timeoutms: Int? = nil,
+        includeresolutionid: Bool? = nil)
     {
         self.id = id
         self.timeoutms = timeoutms
+        self.includeresolutionid = includeresolutionid
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case timeoutms = "timeoutMs"
+        case includeresolutionid = "includeResolutionId"
     }
 }
 
@@ -26656,25 +26660,29 @@ public struct QuestionWaitAnswerResultPending: Codable, Sendable {
 public struct QuestionWaitAnswerResultAnswered: Codable, Sendable {
     public let status: String
     public let answers: QuestionAnswers
+    public let resolutionid: String?
 
     public init(
-        answers: QuestionAnswers
+        answers: QuestionAnswers,
+        resolutionid: String? = nil
     )
     {
         self.status = "answered"
         self.answers = answers
+        self.resolutionid = resolutionid
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
         case answers
+        case resolutionid = "resolutionId"
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["status", "answers"]).contains($0) }
+            .filter { !Set(["status", "answers", "resolutionId"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -26694,12 +26702,14 @@ public struct QuestionWaitAnswerResultAnswered: Codable, Sendable {
         }
         self.status = "answered"
         self.answers = try container.decode(QuestionAnswers.self, forKey: .answers)
+        self.resolutionid = try container.decodeIfPresent(String.self, forKey: .resolutionid)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("answered", forKey: .status)
         try container.encode(answers, forKey: .answers)
+        try container.encodeIfPresent(resolutionid, forKey: .resolutionid)
     }
 }
 
