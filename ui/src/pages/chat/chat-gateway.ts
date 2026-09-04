@@ -3,6 +3,7 @@ import {
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { ERROR_ICON_PREFIX_RE, ERROR_TEXT_PREFIX_RE } from "../../components/error-presentation.ts";
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -44,10 +45,6 @@ import {
   authoritativeHistoryAppliedForRun,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
-import {
-  ERROR_ICON_PREFIX_RE,
-  ERROR_TEXT_PREFIX_RE,
-} from "../../components/error-presentation.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -156,9 +153,7 @@ export function normalizeChatErrorComparisonText(text: string): string {
   let previous: string;
   do {
     previous = normalized;
-    normalized = normalized
-      .replace(ERROR_ICON_PREFIX_RE, "")
-      .replace(ERROR_TEXT_PREFIX_RE, "");
+    normalized = normalized.replace(ERROR_ICON_PREFIX_RE, "").replace(ERROR_TEXT_PREFIX_RE, "");
     // After stripping "Error:" the remaining may start with another icon
     // preceded by whitespace (e.g. "Error: ⚠️ foo" -> "⚠️ foo").
     normalized = normalized.trimStart();
