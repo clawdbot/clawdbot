@@ -3,7 +3,7 @@ import { normalizeOptionalString as readStringParam } from "@openclaw/normalizat
 import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
-  resolveModelProviderRouteOverridePresence,
+  createModelProviderRouteOverrideResolver,
 } from "../../config/model-provider-config.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelApi } from "../../config/types.models.js";
@@ -143,13 +143,12 @@ export function buildAgentHarnessSupportContext(params: {
           modelConfig?.params?.azureApiVersion ?? providerConfig.params?.azureApiVersion,
         ),
         request: providerConfig.request,
-        requestTransportOverrides: resolveModelProviderRouteOverridePresence({
+        requestTransportOverrides: createModelProviderRouteOverrideResolver({
           provider: params.provider,
-          modelId: params.modelId,
           authoredConfig,
           canonicalizeModelId: (configuredModelId) =>
             canonicalizeProviderModelId(params.provider, configuredModelId),
-        }),
+        })(params.modelId),
       }
     : undefined;
   const requestTransportOverrides: ProviderRouteOverridePresence =

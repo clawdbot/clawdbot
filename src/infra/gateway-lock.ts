@@ -24,6 +24,7 @@ import {
   parseProcCmdline,
 } from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
@@ -150,6 +151,7 @@ function readWindowsCmdline(pid: number): string[] | null {
 function readDarwinCmdline(pid: number): string[] | null {
   try {
     const raw = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: CMDLINE_EXEC_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],

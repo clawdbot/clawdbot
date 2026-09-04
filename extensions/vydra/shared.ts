@@ -173,13 +173,13 @@ function resolveVydraErrorMessage(payload: unknown): string | undefined {
 
 export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): string[] {
   const urls = new Set<string>();
-  const preferredKeys =
+  const urlKeys =
     kind === "audio"
       ? ["audioUrl", "audioUrls"]
       : kind === "image"
         ? ["imageUrl", "imageUrls"]
         : ["videoUrl", "videoUrls"];
-  const sharedKeys = ["resultUrl", "resultUrls", "outputUrl", "outputUrls", "url", "urls"];
+  urlKeys.push("resultUrl", "resultUrls", "outputUrl", "outputUrls", "url", "urls");
   const recurseKeys = ["output", "outputs", "result", "results", "data", "asset", "assets"];
 
   const visit = (value: unknown, depth = 0) => {
@@ -196,7 +196,7 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
     if (!object) {
       return;
     }
-    for (const key of [...preferredKeys, ...sharedKeys]) {
+    for (const key of urlKeys) {
       addUrlValue(object[key], urls);
     }
     for (const key of recurseKeys) {

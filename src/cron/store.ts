@@ -155,7 +155,7 @@ function repairLoadedCronRuntimeAuthority(params: {
   }
   const repaired = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, params.storeKey);
+      const rows = loadCronRows(db, params.storeKey, new Set(params.jobIds));
       if (rows.length === 0) {
         return false;
       }

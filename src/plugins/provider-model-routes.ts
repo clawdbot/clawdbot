@@ -1,9 +1,9 @@
 /** Generic adapter for provider-owned model route public artifacts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  createModelProviderRouteOverrideResolver,
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
-  resolveModelProviderRouteOverridePresence,
 } from "../config/model-provider-config.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ModelApi, ModelDefinitionConfig } from "../config/types.models.js";
@@ -93,40 +93,30 @@ export function createProviderModelRoutesResolver(params: {
   const configuredProvider = providerConfig
     ? { api: providerConfig.api, baseUrl: providerConfig.baseUrl }
     : undefined;
-  const normalizeConfiguredModelId = (modelId: string) =>
-    normalizeModelId(provider, modelId, surface);
   const canonicalizeModelId = (modelId: string) =>
-    normalizeConfiguredModelId(modelId) ?? modelId.trim();
+    normalizeModelId(provider, modelId, surface) ?? modelId.trim();
   const configuredModels = new Map(
     Array.from(
       resolveMergedModelProviderModels({
         models: providerConfig?.models,
-        normalizeModelId: normalizeConfiguredModelId,
+        normalizeModelId: canonicalizeModelId,
       }),
       ([modelId, model]) => [modelId, projectConfiguredModelRoute(model)] as const,
     ),
   );
-  const providerRouteOverridePresence =
+  const resolveRouteOverridePresence =
     params.requestTransportOverrides === "present"
-      ? "present"
-      : resolveModelProviderRouteOverridePresence({
+      ? () => "present" as const
+      : createModelProviderRouteOverrideResolver({
           provider,
           authoredConfig,
+          canonicalizeModelId,
         });
+  const providerRouteOverridePresence = resolveRouteOverridePresence();
   const routeOverridePresenceByModel = new Map(
-    [...configuredModels.keys()].map(
-      (modelId) =>
-        [
-          modelId,
-          params.requestTransportOverrides === "present"
-            ? "present"
-            : resolveModelProviderRouteOverridePresence({
-                provider,
-                modelId,
-                authoredConfig,
-                canonicalizeModelId,
-              }),
-        ] as const,
+    Array.from(
+      configuredModels.keys(),
+      (modelId) => [modelId, resolveRouteOverridePresence(modelId)] as const,
     ),
   );
   const env = params.env ?? process.env;

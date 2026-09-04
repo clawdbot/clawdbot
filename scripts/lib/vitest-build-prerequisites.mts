@@ -23,6 +23,12 @@ type TestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "test/agent-exec-code-mode.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
     file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
     configs: ["test/vitest/vitest.extension-qa.config.ts"],
     mode: "private-qa",
