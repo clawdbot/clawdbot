@@ -51,6 +51,13 @@ function tryOpenCanvasBindingStore(): PluginStateKeyedStore<SlackCanvasBinding> 
     bindingStore = runtime.state.openKeyedStore<SlackCanvasBinding>({
       namespace: CANVAS_BINDING_NAMESPACE,
       maxEntries: CANVAS_BINDING_MAX_ENTRIES,
+      // Never silently evict an older binding to make room for a new one: an
+      // evicted binding strands its Slack canvas (edit/delete/lookup reject it
+      // as unbound before any HTTP call, and Slack has no canvas->channel
+      // endpoint to recover from). At capacity the create path fails explicitly
+      // (PLUGIN_STATE_LIMIT_EXCEEDED -> orphan-cleanup + rethrow in
+      // action-runtime.ts) instead of corrupting the reachable set.
+      overflowPolicy: "reject-new",
     });
     bindingStoreRuntime = runtime;
     return bindingStore;

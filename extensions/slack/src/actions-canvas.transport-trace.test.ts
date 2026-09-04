@@ -9,12 +9,27 @@
 // is a real HTTP POST with a real URL-encoded form body — not a recording
 // stand-in. The server captures the exact method (URL path) and parsed form
 // arguments, proving the after-fix wire contract through the real SDK transport.
+//
+// The canvas->channel authorization binding (canvas-binding.ts) is persisted
+// through the REAL SQLite-backed plugin-state store (`createPluginStateKeyedStore`)
+// opened on an isolated OpenClaw test state, so the binding lifecycle and the
+// reject-new capacity boundary exercise the actual store behavior — no Map
+// stand-in for the authorization authority.
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SlackCanvasBinding } from "./canvas-binding.js";
 import { createSlackActions } from "./channel-actions.js";
@@ -119,6 +134,10 @@ async function startTransportServer(calls: WireCall[]): Promise<TestServer> {
   };
 }
 
+// Monotonic canvas id counter: a real Slack workspace assigns a fresh canvas id
+// per create, so the trace server must too — otherwise a second create in a
+// scenario upserts the same binding key and never reaches the capacity check.
+let traceCanvasIdCounter = 0;
 function respondTo(method: string, args: Record<string, unknown>): Record<string, unknown> {
   switch (method) {
     case "auth.test":
@@ -129,7 +148,8 @@ function respondTo(method: string, args: Record<string, unknown>): Record<string
         channel: { id: args.channel ?? args.channel_id, is_channel: true, name: "current" },
       };
     case "canvases.create":
-      return { ok: true, canvas_id: "F0TRACE001" };
+      traceCanvasIdCounter += 1;
+      return { ok: true, canvas_id: `F0TRACE${String(traceCanvasIdCounter).padStart(3, "0")}` };
     case "canvases.edit":
       return { ok: true };
     case "canvases.delete":
@@ -143,40 +163,20 @@ function respondTo(method: string, args: Record<string, unknown>): Record<string
 
 const originalEnv = Object.fromEntries(TEST_ENV_KEYS.map((key) => [key, process.env[key]]));
 
-// In-memory PluginStateKeyedStore for canvas bindings: a Map is enough to prove
-// the action-owner binding wiring without standing up the plugin-state SQLite layer.
-// Module-level so the binding recorded by a create scenario is visible to a later
-// edit/delete scenario through the same runtime store handle.
-const canvasBindingMap = new Map<string, SlackCanvasBinding>();
-function createInMemoryCanvasBindingStore(): PluginStateKeyedStore<SlackCanvasBinding> {
-  return {
-    register: async (key, value) => {
-      canvasBindingMap.set(key, value);
-    },
-    registerIfAbsent: async (key, value) => {
-      if (canvasBindingMap.has(key)) {
-        return false;
-      }
-      canvasBindingMap.set(key, value);
-      return true;
-    },
-    lookup: async (key) => canvasBindingMap.get(key),
-    consume: async (key) => {
-      const value = canvasBindingMap.get(key);
-      canvasBindingMap.delete(key);
-      return value;
-    },
-    delete: async (key) => canvasBindingMap.delete(key),
-    entries: async () =>
-      Array.from(canvasBindingMap.entries()).map(([key, value]) => ({
-        key,
-        value,
-        createdAt: 0,
-      })),
-    clear: async () => {
-      canvasBindingMap.clear();
-    },
-  };
+// Persisted plugin-state store for canvas bindings, opened against the real
+// SQLite-backed plugin-state store on an isolated OpenClaw test state. Each
+// test runs inside `withOpenClawTestState`, so every canvas->channel binding is
+// written and read through the actual `openKeyedStore` implementation — the
+// same persistence layer production uses (including reject-new capacity
+// rejection), not a Map stand-in.
+function installRealCanvasBindingStore(state: {
+  env: NodeJS.ProcessEnv;
+}): (options: OpenKeyedStoreOptions) => Required<PluginStateKeyedStore<SlackCanvasBinding>> {
+  return (options) =>
+    createPluginStateKeyedStoreForTests<SlackCanvasBinding>("slack", {
+      ...options,
+      env: state.env,
+    });
 }
 
 function clearSlackTransportEnv(): void {
@@ -238,133 +238,163 @@ async function runCanvasScenario(
   }
 }
 
+// Run a canvas scenario against the REAL SQLite-backed plugin-state store on an
+// isolated OpenClaw test state. `openKeyedStore` hands canvas-binding.ts the
+// actual keyed-store implementation (same persistence layer production uses),
+// so the binding lifecycle and the reject-new capacity boundary exercise real
+// store behavior rather than a Map stand-in.
+async function withRealCanvasBindingStore<T>(
+  fn: (state: { env: NodeJS.ProcessEnv }) => Promise<T>,
+): Promise<T> {
+  return withOpenClawTestState(
+    { label: "slack-canvas-transport-trace", layout: "state-only", applyEnv: false },
+    async (state) => {
+      resetPluginStateStoreForTests();
+      setSlackRuntime({
+        state: {
+          openKeyedStore: installRealCanvasBindingStore(state),
+        },
+      } as never);
+      try {
+        return await fn(state);
+      } finally {
+        setSlackRuntime(null as never);
+        resetPluginStateStoreForTests();
+      }
+    },
+  );
+}
+
 describe("Slack canvas action real-transport trace", () => {
   beforeEach(() => {
     clearSlackTransportEnv();
-    canvasBindingMap.clear();
-    // Inject an in-memory plugin state store so the canvas->channel binding
-    // (canvas-binding.ts) persists across scenarios and the binding re-check can
-    // be exercised through the real action owner. A plain Map-backed store is
-    // sufficient because the transport trace proves the action-owner wiring,
-    // not the plugin-state persistence layer.
-    setSlackRuntime({
-      state: { openKeyedStore: () => createInMemoryCanvasBindingStore() },
-    } as never);
+    traceCanvasIdCounter = 0;
+    resetPluginStateStoreForTests();
   });
 
   afterEach(() => {
     restoreSlackTransportEnv();
     setSlackRuntime(null as never);
+    setMaxPluginStateEntriesPerPluginForTests(undefined);
+    resetPluginStateStoreForTests();
   });
 
   it("routes canvas create through the real SDK transport to a canvases.create HTTP POST", async () => {
-    const { result, error, calls } = await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Status",
-      documentContent: { type: "markdown", markdown: "# Status\n- [ ] task" },
-    });
-    expect(error).toBeUndefined();
-    expect(result?.details).toMatchObject({ ok: true, canvas: { canvasId: "F0TRACE001" } });
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "canvases.create",
-          args: expect.objectContaining({
-            channel_id: "C123",
-            title: "Status",
+    await withRealCanvasBindingStore(async () => {
+      const { result, error, calls } = await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Status",
+        documentContent: { type: "markdown", markdown: "# Status\n- [ ] task" },
+      });
+      expect(error).toBeUndefined();
+      expect(result?.details).toMatchObject({ ok: true, canvas: { canvasId: "F0TRACE001" } });
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "canvases.create",
+            args: expect.objectContaining({
+              channel_id: "C123",
+              title: "Status",
+            }),
           }),
-        }),
-      ]),
-    );
+        ]),
+      );
+    });
   });
 
   it("routes canvas edit through the real SDK transport to a canvases.edit HTTP POST", async () => {
-    // edit/delete/lookup require a binding, so create first to record one for
-    // the canvas id the loopback server returns (F0TRACE001).
-    await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Status",
-      documentContent: { type: "markdown", markdown: "# Status" },
+    await withRealCanvasBindingStore(async () => {
+      // edit/delete/lookup require a binding, so create first to record one for
+      // the canvas id the loopback server returns (F0TRACE001).
+      await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Status",
+        documentContent: { type: "markdown", markdown: "# Status" },
+      });
+      const { result, error, calls } = await runCanvasScenario({
+        op: "edit",
+        channelId: "C123",
+        canvasId: "F0TRACE001",
+        changes: [
+          {
+            operation: "insert_at_end",
+            documentContent: { type: "markdown", markdown: "## Updated" },
+          },
+        ],
+      });
+      expect(error).toBeUndefined();
+      expect(result?.details).toMatchObject({ ok: true });
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "canvases.edit",
+            args: expect.objectContaining({ canvas_id: "F0TRACE001" }),
+          }),
+        ]),
+      );
     });
-    const { result, error, calls } = await runCanvasScenario({
-      op: "edit",
-      channelId: "C123",
-      canvasId: "F0TRACE001",
-      changes: [
-        {
-          operation: "insert_at_end",
-          documentContent: { type: "markdown", markdown: "## Updated" },
-        },
-      ],
-    });
-    expect(error).toBeUndefined();
-    expect(result?.details).toMatchObject({ ok: true });
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "canvases.edit",
-          args: expect.objectContaining({ canvas_id: "F0TRACE001" }),
-        }),
-      ]),
-    );
   });
 
   it("routes canvas sections through the real SDK transport to a canvases.sections.lookup HTTP POST", async () => {
-    await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Status",
-      documentContent: { type: "markdown", markdown: "# Status" },
-    });
-    const { result, error, calls } = await runCanvasScenario({
-      op: "sections",
-      channelId: "C123",
-      canvasId: "F0TRACE001",
-      sectionTypes: ["h1"],
-    });
-    expect(error).toBeUndefined();
-    expect(result?.details).toMatchObject({ ok: true, sections: [{ id: "temp:C:section1" }] });
-    // The @slack/web-api WebClient JSON-stringifies nested object arguments
-    // into the URL-encoded form body (Slack's form transport is flat
-    // key/value), so criteria arrives on the wire as a JSON string, not an
-    // object. This is the real SDK transport behavior the trace proves.
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "canvases.sections.lookup",
-          args: expect.objectContaining({
-            canvas_id: "F0TRACE001",
-            criteria: JSON.stringify({ section_types: ["h1"] }),
+    await withRealCanvasBindingStore(async () => {
+      await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Status",
+        documentContent: { type: "markdown", markdown: "# Status" },
+      });
+      const { result, error, calls } = await runCanvasScenario({
+        op: "sections",
+        channelId: "C123",
+        canvasId: "F0TRACE001",
+        sectionTypes: ["h1"],
+      });
+      expect(error).toBeUndefined();
+      expect(result?.details).toMatchObject({ ok: true, sections: [{ id: "temp:C:section1" }] });
+      // The @slack/web-api WebClient JSON-stringifies nested object arguments
+      // into the URL-encoded form body (Slack's form transport is flat
+      // key/value), so criteria arrives on the wire as a JSON string, not an
+      // object. This is the real SDK transport behavior the trace proves.
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "canvases.sections.lookup",
+            args: expect.objectContaining({
+              canvas_id: "F0TRACE001",
+              criteria: JSON.stringify({ section_types: ["h1"] }),
+            }),
           }),
-        }),
-      ]),
-    );
+        ]),
+      );
+    });
   });
 
   it("routes canvas delete through the real SDK transport to a canvases.delete HTTP POST", async () => {
-    await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Status",
-      documentContent: { type: "markdown", markdown: "# Status" },
+    await withRealCanvasBindingStore(async () => {
+      await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Status",
+        documentContent: { type: "markdown", markdown: "# Status" },
+      });
+      const { result, error, calls } = await runCanvasScenario({
+        op: "delete",
+        channelId: "C123",
+        canvasId: "F0TRACE001",
+      });
+      expect(error).toBeUndefined();
+      expect(result?.details).toMatchObject({ ok: true });
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "canvases.delete",
+            args: expect.objectContaining({ canvas_id: "F0TRACE001" }),
+          }),
+        ]),
+      );
     });
-    const { result, error, calls } = await runCanvasScenario({
-      op: "delete",
-      channelId: "C123",
-      canvasId: "F0TRACE001",
-    });
-    expect(error).toBeUndefined();
-    expect(result?.details).toMatchObject({ ok: true });
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          method: "canvases.delete",
-          args: expect.objectContaining({ canvas_id: "F0TRACE001" }),
-        }),
-      ]),
-    );
   });
 
   it("fails closed with no HTTP call when the canvas gate is disabled", async () => {
@@ -377,84 +407,95 @@ describe("Slack canvas action real-transport trace", () => {
   });
 
   it("rejects an edit on a canvas whose bound channel has been disabled (binding re-check)", async () => {
-    // Create records a canvas->C123 binding. A later edit on the same canvas id
-    // is rejected before any HTTP call when C123 (the bound channel, not the
-    // caller-named channel) is disabled — closing the cross-channel proxy where
-    // canvases.* sends only canvas_id and Slack cannot bind it to the allowlist.
-    const created = await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Binding",
-      documentContent: { type: "markdown", markdown: "# Binding" },
-    });
-    expect(created.error).toBeUndefined();
-    expect(created.result?.details).toMatchObject({ ok: true, canvas: { canvasId: "F0TRACE001" } });
-
-    // The bound channel C123 is now disabled; even though the edit names C123
-    // (and would otherwise pass the caller-channel check), the binding re-check
-    // rejects it before the canvases.edit HTTP call.
-    const { calls, error } = await runCanvasScenario(
-      {
-        op: "edit",
+    await withRealCanvasBindingStore(async () => {
+      // Create records a canvas->C123 binding. A later edit on the same canvas id
+      // is rejected before any HTTP call when C123 (the bound channel, not the
+      // caller-named channel) is disabled — closing the cross-channel proxy where
+      // canvases.* sends only canvas_id and Slack cannot bind it to the allowlist.
+      const created = await runCanvasScenario({
+        op: "create",
         channelId: "C123",
-        canvasId: "F0TRACE001",
-        changes: [
-          { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
-        ],
-      },
-      slackConfig({ channels: { C123: { enabled: false } } }),
-    );
-    expect(error?.message).toBe("Slack read target channel is not allowed.");
-    expect(calls).toEqual([]);
+        title: "Binding",
+        documentContent: { type: "markdown", markdown: "# Binding" },
+      });
+      expect(created.error).toBeUndefined();
+      expect(created.result?.details).toMatchObject({
+        ok: true,
+        canvas: { canvasId: "F0TRACE001" },
+      });
+
+      // The bound channel C123 is now disabled; even though the edit names C123
+      // (and would otherwise pass the caller-channel check), the binding re-check
+      // rejects it before the canvases.edit HTTP call.
+      const { calls, error } = await runCanvasScenario(
+        {
+          op: "edit",
+          channelId: "C123",
+          canvasId: "F0TRACE001",
+          changes: [
+            { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
+          ],
+        },
+        slackConfig({ channels: { C123: { enabled: false } } }),
+      );
+      expect(error?.message).toBe("Slack read target channel is not allowed.");
+      expect(calls).toEqual([]);
+    });
   });
 
   it("rejects a canvas edit with an invalid canvas id before any HTTP call", async () => {
-    const { calls, error } = await runCanvasScenario({
-      op: "edit",
-      channelId: "C123",
-      canvasId: "not-a-canvas-id",
-      changes: [
-        { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
-      ],
+    await withRealCanvasBindingStore(async () => {
+      const { calls, error } = await runCanvasScenario({
+        op: "edit",
+        channelId: "C123",
+        canvasId: "not-a-canvas-id",
+        changes: [
+          { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
+        ],
+      });
+      expect(error?.message).toContain("Invalid Slack canvas id");
+      expect(calls).toEqual([]);
     });
-    expect(error?.message).toContain("Invalid Slack canvas id");
-    expect(calls).toEqual([]);
   });
 
   it("rejects a canvas id with no binding before any HTTP call (unbound canvas guard)", async () => {
-    // canvases.* sends only canvas_id, so an agent naming a valid-but-foreign
-    // canvas id (one OpenClaw never created, hence no canvas->channel binding)
-    // must be rejected before any HTTP call. This closes the cross-channel proxy
-    // where an agent would otherwise operate a denied channel's canvas through
-    // an allowed action context.
-    const { calls, error } = await runCanvasScenario({
-      op: "sections",
-      channelId: "C123",
-      canvasId: "F0BU46ESS8J",
-      sectionTypes: ["h1"],
+    await withRealCanvasBindingStore(async () => {
+      // canvases.* sends only canvas_id, so an agent naming a valid-but-foreign
+      // canvas id (one OpenClaw never created, hence no canvas->channel binding)
+      // must be rejected before any HTTP call. This closes the cross-channel proxy
+      // where an agent would otherwise operate a denied channel's canvas through
+      // an allowed action context.
+      const { calls, error } = await runCanvasScenario({
+        op: "sections",
+        channelId: "C123",
+        canvasId: "F0BU46ESS8J",
+        sectionTypes: ["h1"],
+      });
+      expect(error?.message).toBe(
+        'Slack canvas "F0BU46ESS8J" is not bound to an authorized channel. Only canvases created through the canvas action can be edited, deleted, or inspected.',
+      );
+      expect(calls).toEqual([]);
     });
-    expect(error?.message).toBe(
-      'Slack canvas "F0BU46ESS8J" is not bound to an authorized channel. Only canvases created through the canvas action can be edited, deleted, or inspected.',
-    );
-    expect(calls).toEqual([]);
   });
 
   it("rejects a canvas edit with an empty changes array before any HTTP call", async () => {
-    // edit requires a binding, so create first to record one for F0TRACE001.
-    await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Status",
-      documentContent: { type: "markdown", markdown: "# Status" },
+    await withRealCanvasBindingStore(async () => {
+      // edit requires a binding, so create first to record one for F0TRACE001.
+      await runCanvasScenario({
+        op: "create",
+        channelId: "C123",
+        title: "Status",
+        documentContent: { type: "markdown", markdown: "# Status" },
+      });
+      const { calls, error } = await runCanvasScenario({
+        op: "edit",
+        channelId: "C123",
+        canvasId: "F0TRACE001",
+        changes: [],
+      });
+      expect(error?.message).toContain("non-empty changes");
+      expect(calls).toEqual([]);
     });
-    const { calls, error } = await runCanvasScenario({
-      op: "edit",
-      channelId: "C123",
-      canvasId: "F0TRACE001",
-      changes: [],
-    });
-    expect(error?.message).toContain("non-empty changes");
-    expect(calls).toEqual([]);
   });
 
   it("fails the create and cleans up the orphan canvas when the binding store is unavailable", async () => {
@@ -462,60 +503,139 @@ describe("Slack canvas action real-transport trace", () => {
     // only canvas_id, so the binding is the only channel-allowlist authority).
     // When the plugin state store cannot be opened, the create must not report
     // success: it throws and deletes the just-created canvas so no orphan
-    // accumulates. The beforeEach installed a working store; this scenario
-    // overrides the runtime with one whose store cannot be opened.
-    setSlackRuntime({
-      state: {
-        openKeyedStore: () => {
-          throw new Error("plugin state store unavailable");
-        },
+    // accumulates. Drive the real action owner with a runtime whose store
+    // cannot be opened.
+    await withOpenClawTestState(
+      { label: "slack-canvas-transport-trace", layout: "state-only", applyEnv: false },
+      async () => {
+        resetPluginStateStoreForTests();
+        setSlackRuntime({
+          state: {
+            openKeyedStore: () => {
+              throw new Error("plugin state store unavailable");
+            },
+          },
+        } as never);
+        try {
+          const { result, calls, error } = await runCanvasScenario({
+            op: "create",
+            channelId: "C123",
+            title: "Orphan",
+            documentContent: { type: "markdown", markdown: "# Orphan" },
+          });
+          expect(error?.message).toContain("binding store is unavailable");
+          expect(result).toBeUndefined();
+          // The create reached Slack, then the binding failure triggered a cleanup
+          // canvases.delete for the same canvas id — no orphan left behind.
+          const createCall = calls.find((call) => call.method === "canvases.create");
+          const deleteCall = calls.find((call) => call.method === "canvases.delete");
+          expect(createCall).toBeTruthy();
+          expect(deleteCall).toBeTruthy();
+          expect(calls.indexOf(deleteCall!)).toBeGreaterThan(calls.indexOf(createCall!));
+          expect(deleteCall?.args).toMatchObject({ canvas_id: "F0TRACE001" });
+        } finally {
+          setSlackRuntime(null as never);
+          resetPluginStateStoreForTests();
+        }
       },
-    } as never);
-    const { result, calls, error } = await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Orphan",
-      documentContent: { type: "markdown", markdown: "# Orphan" },
-    });
-    expect(error?.message).toContain("binding store is unavailable");
-    expect(result).toBeUndefined();
-    // The create reached Slack, then the binding failure triggered a cleanup
-    // canvases.delete for the same canvas id — no orphan left behind.
-    const createCall = calls.find((call) => call.method === "canvases.create");
-    const deleteCall = calls.find((call) => call.method === "canvases.delete");
-    expect(createCall).toBeTruthy();
-    expect(deleteCall).toBeTruthy();
-    expect(calls.indexOf(deleteCall!)).toBeGreaterThan(calls.indexOf(createCall!));
-    expect(deleteCall?.args).toMatchObject({ canvas_id: "F0TRACE001" });
+    );
   });
 
   it("fails the create and cleans up the orphan canvas when binding register throws", async () => {
     // Same invariant as the unavailable-store case, but the store opens and the
     // write itself fails (e.g. PLUGIN_STATE_WRITE_FAILED). The create must
-    // surface the persistence failure and delete the orphan canvas.
-    setSlackRuntime({
-      state: {
-        openKeyedStore: () => ({
-          ...createInMemoryCanvasBindingStore(),
-          register: async () => {
-            throw new Error("plugin state write failed");
+    // surface the persistence failure and delete the orphan canvas. The store
+    // here is the real SQLite store with a register that fails after opening.
+    await withOpenClawTestState(
+      { label: "slack-canvas-transport-trace", layout: "state-only", applyEnv: false },
+      async (state) => {
+        resetPluginStateStoreForTests();
+        const realStore = installRealCanvasBindingStore(state);
+        setSlackRuntime({
+          state: {
+            openKeyedStore: (options) => ({
+              ...realStore(options),
+              register: async () => {
+                throw new Error("plugin state write failed");
+              },
+            }),
           },
-        }),
+        } as never);
+        try {
+          const { result, calls, error } = await runCanvasScenario({
+            op: "create",
+            channelId: "C123",
+            title: "Orphan",
+            documentContent: { type: "markdown", markdown: "# Orphan" },
+          });
+          expect(error?.message).toContain("plugin state write failed");
+          expect(result).toBeUndefined();
+          const createCall = calls.find((call) => call.method === "canvases.create");
+          const deleteCall = calls.find((call) => call.method === "canvases.delete");
+          expect(createCall).toBeTruthy();
+          expect(deleteCall).toBeTruthy();
+          expect(calls.indexOf(deleteCall!)).toBeGreaterThan(calls.indexOf(createCall!));
+          expect(deleteCall?.args).toMatchObject({ canvas_id: "F0TRACE001" });
+        } finally {
+          setSlackRuntime(null as never);
+          resetPluginStateStoreForTests();
+        }
       },
-    } as never);
-    const { result, calls, error } = await runCanvasScenario({
-      op: "create",
-      channelId: "C123",
-      title: "Orphan",
-      documentContent: { type: "markdown", markdown: "# Orphan" },
-    });
-    expect(error?.message).toContain("plugin state write failed");
-    expect(result).toBeUndefined();
-    const createCall = calls.find((call) => call.method === "canvases.create");
-    const deleteCall = calls.find((call) => call.method === "canvases.delete");
-    expect(createCall).toBeTruthy();
-    expect(deleteCall).toBeTruthy();
-    expect(calls.indexOf(deleteCall!)).toBeGreaterThan(calls.indexOf(createCall!));
-    expect(deleteCall?.args).toMatchObject({ canvas_id: "F0TRACE001" });
+    );
+  });
+
+  it("fails the create and cleans up the orphan canvas at the binding capacity boundary", async () => {
+    // The plugin-state store enforces two reject-new limits: the namespace
+    // capacity (canvas-binding.ts opens at 4096) and the per-plugin live-row
+    // ceiling (default 50,000, lowered here to 1). Creating beyond the ceiling
+    // must fail explicitly and delete the just-created canvas instead of
+    // stranding an older binding. Drive the real action owner and the real
+    // SQLite store with a one-row plugin ceiling: the first create fills it,
+    // the second hits the actual store capacity boundary.
+    await withOpenClawTestState(
+      { label: "slack-canvas-transport-trace", layout: "state-only", applyEnv: false },
+      async (state) => {
+        resetPluginStateStoreForTests();
+        setMaxPluginStateEntriesPerPluginForTests(1);
+        setSlackRuntime({
+          state: { openKeyedStore: installRealCanvasBindingStore(state) },
+        } as never);
+        try {
+          const first = await runCanvasScenario({
+            op: "create",
+            channelId: "C123",
+            title: "First",
+            documentContent: { type: "markdown", markdown: "# First" },
+          });
+          expect(first.error).toBeUndefined();
+          expect(first.result?.details).toMatchObject({ ok: true });
+
+          // The second create gets a fresh canvas id (F0TRACE002) from the trace
+          // server, so the capacity rejection is a NEW binding key past the
+          // 1-row per-plugin ceiling — not an upsert of the first canvas.
+          const { result, calls, error } = await runCanvasScenario({
+            op: "create",
+            channelId: "C123",
+            title: "Second",
+            documentContent: { type: "markdown", markdown: "# Second" },
+          });
+          expect(error?.message).toContain("live row limit");
+          expect(result).toBeUndefined();
+          // The second create reached Slack, then the capacity rejection triggered a
+          // cleanup canvases.delete for the same canvas id — no orphan accumulates and
+          // the first binding is still reachable for later edit/delete/lookup.
+          const createCall = calls.find((call) => call.method === "canvases.create");
+          const deleteCall = calls.find((call) => call.method === "canvases.delete");
+          expect(createCall).toBeTruthy();
+          expect(deleteCall).toBeTruthy();
+          expect(calls.indexOf(deleteCall!)).toBeGreaterThan(calls.indexOf(createCall!));
+          expect(deleteCall?.args).toMatchObject({ canvas_id: "F0TRACE002" });
+        } finally {
+          setMaxPluginStateEntriesPerPluginForTests(undefined);
+          setSlackRuntime(null as never);
+          resetPluginStateStoreForTests();
+        }
+      },
+    );
   });
 });
