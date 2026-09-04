@@ -178,6 +178,49 @@ export function shouldRunPreflightCompaction(params: {
  * compaction cycle. This prevents repeated flush runs within the same cycle —
  * important for both the token-based and transcript-size–based trigger paths.
  */
+/**
+ * Transcript growth that re-arms a memory flush on CLI backends.
+ *
+ * Those backends own compaction natively, so `SessionEntry.compactionCount`
+ * never advances for them: the compaction-cycle watermark below can never
+ * clear, and a single flush would disable the feature for the rest of the
+ * session. Transcript bytes advance on every backend, so they anchor the
+ * dedup instead.
+ */
+export const CLI_MEMORY_FLUSH_REARM_BYTES = 256 * 1024;
+
+/**
+ * Bucket a CLI session's transcript size into re-arm windows, or `undefined`
+ * when this session cannot use the byte anchor (not a CLI backend, or no
+ * transcript size available) and must keep the compaction-cycle watermark.
+ */
+export function resolveCliMemoryFlushRearmBucket(params: {
+  isCli: boolean;
+  transcriptByteSize?: number;
+  rearmBytes?: number;
+}): number | undefined {
+  if (!params.isCli) {
+    return undefined;
+  }
+  const { transcriptByteSize } = params;
+  if (typeof transcriptByteSize !== "number" || !Number.isFinite(transcriptByteSize)) {
+    return undefined;
+  }
+  const rearmBytes = params.rearmBytes ?? CLI_MEMORY_FLUSH_REARM_BYTES;
+  if (!Number.isFinite(rearmBytes) || rearmBytes <= 0) {
+    return undefined;
+  }
+  return Math.floor(Math.max(0, transcriptByteSize) / rearmBytes);
+}
+
+/** True when this CLI session already flushed for the current byte bucket. */
+export function hasAlreadyFlushedForCliRearmBucket(
+  entry: Pick<SessionEntry, "memoryFlush"> | undefined,
+  bucket: number,
+): boolean {
+  return entry?.memoryFlush?.compactionCount === bucket;
+}
+
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
