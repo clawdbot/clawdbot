@@ -65,21 +65,26 @@ describe("policy writer response ownership", () => {
           params: {},
         });
       });
-      await fixture.dispatch("writer");
-      await published.promise;
-      expect(fixture.client.invalidated).toBe(true);
-      expect(fixture.socketClose).not.toHaveBeenCalled();
-      await fixture.dispatch("revoked", "health");
-      expect(runtime.handler).toHaveBeenCalledOnce();
-      expect(fixture.harness.send).not.toHaveBeenCalled();
-      release.resolve();
-      expect(await fixture.harness.awaitResponseFrame("writer")).toMatchObject({
-        ok: !failed,
-        ...(failed ? { error: { message: "secrets.reload failed" } } : {}),
-      });
-      await fixture.closed.promise;
-      expect(fixture.socketClose).toHaveBeenCalledExactlyOnceWith(4001, "gateway auth changed");
-      expect(fixture.harness.send).toHaveBeenCalledBefore(fixture.socketClose);
+      const dispatch = fixture.dispatch("writer");
+      try {
+        await published.promise;
+        expect(fixture.client.invalidated).toBe(true);
+        expect(fixture.socketClose).not.toHaveBeenCalled();
+        await fixture.dispatch("revoked", "health");
+        expect(runtime.handler).toHaveBeenCalledOnce();
+        expect(fixture.harness.send).not.toHaveBeenCalled();
+        release.resolve();
+        expect(await fixture.harness.awaitResponseFrame("writer")).toMatchObject({
+          ok: !failed,
+          ...(failed ? { error: { message: "secrets.reload failed" } } : {}),
+        });
+        await fixture.closed.promise;
+        expect(fixture.socketClose).toHaveBeenCalledExactlyOnceWith(4001, "gateway auth changed");
+        expect(fixture.harness.send).toHaveBeenCalledBefore(fixture.socketClose);
+      } finally {
+        release.resolve();
+        await dispatch;
+      }
     },
   );
 
@@ -107,24 +112,32 @@ describe("policy writer response ownership", () => {
         readFinished.resolve();
       }
     });
-    await fixture.dispatch("read", "health");
-    await readStarted.promise;
-    for (const writer of writers) {
-      await fixture.dispatch(writer.id, "config.patch");
-      await writer.started.promise;
+    const dispatches = [fixture.dispatch("read", "health")];
+    try {
+      await readStarted.promise;
+      for (const writer of writers) {
+        dispatches.push(fixture.dispatch(writer.id, "config.patch"));
+        await writer.started.promise;
+      }
+      disconnectAllSharedGatewayAuthClients([fixture.client]);
+      readRelease.resolve();
+      await readFinished.promise;
+      expect(fixture.harness.send).not.toHaveBeenCalled();
+      for (const [index, writer] of writers.entries()) {
+        expect(fixture.socketClose).not.toHaveBeenCalled();
+        writer.release.resolve();
+        expect(await fixture.harness.awaitResponseFrame(writer.id)).toMatchObject({ ok: true });
+        expect(fixture.harness.send).toHaveBeenCalledTimes(index + 1);
+      }
+      await fixture.closed.promise;
+      expect(fixture.socketClose).toHaveBeenCalledOnce();
+    } finally {
+      readRelease.resolve();
+      for (const writer of writers) {
+        writer.release.resolve();
+      }
+      await Promise.all(dispatches);
     }
-    disconnectAllSharedGatewayAuthClients([fixture.client]);
-    readRelease.resolve();
-    await readFinished.promise;
-    expect(fixture.harness.send).not.toHaveBeenCalled();
-    for (const [index, writer] of writers.entries()) {
-      expect(fixture.socketClose).not.toHaveBeenCalled();
-      writer.release.resolve();
-      expect(await fixture.harness.awaitResponseFrame(writer.id)).toMatchObject({ ok: true });
-      expect(fixture.harness.send).toHaveBeenCalledTimes(index + 1);
-    }
-    await fixture.closed.promise;
-    expect(fixture.socketClose).toHaveBeenCalledOnce();
   });
 
   it.each(["throw", "return"])(
