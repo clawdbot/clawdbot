@@ -1031,20 +1031,46 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
 
-  it("resolves group routes with the refreshed runtime config after a bindings reload", async () => {
+  it("reroutes group messages to a new agent after a bindings reload without restart", async () => {
+    // Wrap the runtime's inbound.run so the route selected for each message can be observed.
+    const botRuntime = createFeishuBotRuntime();
+    const routedTurns: Array<{ agentId?: string; sessionKey?: string }> = [];
+    botRuntime.channel.inbound.run = vi.fn(
+      async (params: {
+        adapter: { resolveTurn: () => { route: { agentId?: string; sessionKey?: string } } };
+      }) => {
+        const turn = params.adapter.resolveTurn();
+        routedTurns.push(turn.route);
+        return { admission: { kind: "dispatch" as const }, dispatched: true };
+      },
+    );
+    setFeishuRuntime(botRuntime);
+
+    // Bindings live at the configuration root: before the reload a wildcard group binding
+    // routes to oc1; the reloaded runtime config adds an exact-per-peer binding to main.
     const cfg = createFeishuTestConfig(
       { enabled: true, allowFrom: ["*"], dmPolicy: "open", groupPolicy: "open" },
-      { session: { mainKey: "main", scope: "per-group" } },
-    );
-    const refreshedCfg = createFeishuTestConfig(
       {
-        enabled: true,
-        allowFrom: ["*"],
-        dmPolicy: "open",
-        groupPolicy: "open",
+        session: { mainKey: "main", scope: "per-group" },
         bindings: [
           {
             agentId: "oc1",
+            match: { channel: "feishu", accountId: "default", peer: { kind: "group", id: "*" } },
+          },
+        ],
+      },
+    );
+    const reloadedCfg = createFeishuTestConfig(
+      { enabled: true, allowFrom: ["*"], dmPolicy: "open", groupPolicy: "open" },
+      {
+        session: { mainKey: "main", scope: "per-group" },
+        bindings: [
+          {
+            agentId: "oc1",
+            match: { channel: "feishu", accountId: "default", peer: { kind: "group", id: "*" } },
+          },
+          {
+            agentId: "main",
             match: {
               channel: "feishu",
               accountId: "default",
@@ -1053,23 +1079,68 @@ describe("handleFeishuMessage ACP routing", () => {
           },
         ],
       },
-      { session: { mainKey: "main", scope: "per-group" } },
     );
+
+    // Route resolution follows the documented binding precedence: exact peer before wildcard.
+    mockResolveAgentRoute.mockImplementation(
+      (request: {
+        cfg: {
+          bindings?: Array<{ agentId: string; match?: { peer?: { id?: string; kind?: string } } }>;
+        };
+        peer?: { id?: string; kind?: string };
+      }) => {
+        const bindings = request.cfg.bindings ?? [];
+        const exact = bindings.find(
+          (binding) =>
+            binding.match?.peer?.kind === request.peer?.kind &&
+            binding.match?.peer?.id === request.peer?.id,
+        );
+        const wildcard = bindings.find(
+          (binding) =>
+            binding.match?.peer?.kind === request.peer?.kind && binding.match?.peer?.id === "*",
+        );
+        const agentId = exact?.agentId ?? wildcard?.agentId ?? "main";
+        return {
+          agentId,
+          channel: "feishu",
+          accountId: "default",
+          sessionKey: `agent:${agentId}:feishu:group:${request.peer?.id}`,
+          mainSessionKey: `agent:${agentId}:main`,
+          lastRoutePolicy: "session",
+          matchedBy: exact ? "binding" : wildcard ? "wildcard" : "default",
+        };
+      },
+    );
+
+    const event = createFeishuTestEvent({
+      senderOpenId: "ou_sender_1",
+      chatId: "oc_group_chat",
+      chatType: "group",
+      text: "hello group",
+    });
 
     await dispatchMessage({
       cfg,
-      currentCfg: refreshedCfg,
-      event: createFeishuTestEvent({
-        messageId: "msg-group-reloaded-binding",
-        senderOpenId: "ou_sender_1",
-        chatId: "oc_group_chat",
-        chatType: "group",
-        text: "hello group",
-      }),
+      currentCfg: cfg,
+      event: {
+        ...event,
+        message: { ...event.message, message_id: "msg-before-reload" },
+      },
+    });
+    await dispatchMessage({
+      cfg,
+      currentCfg: reloadedCfg,
+      event: {
+        ...event,
+        message: { ...event.message, message_id: "msg-after-reload" },
+      },
     });
 
-    const routeRequest = mockCallArg<{ cfg: ClawdbotConfig }>(mockResolveAgentRoute, 0, 0);
-    expect(routeRequest.cfg).toBe(refreshedCfg);
+    // Message 1 routes through the wildcard binding; message 2 after the accepted reload
+    // picks the exact-per-peer binding without any handler restart.
+    expect(routedTurns.map((turn) => turn.agentId)).toEqual(["oc1", "main"]);
+    const secondRouteRequest = mockCallArg<{ cfg: ClawdbotConfig }>(mockResolveAgentRoute, 1, 0);
+    expect(secondRouteRequest.cfg).toBe(reloadedCfg);
   });
 });
 
