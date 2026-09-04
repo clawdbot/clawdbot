@@ -520,6 +520,16 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "a config allow glob that only the 65th runtime allow glob shares a tool with",
+      tools: { allow: ["memos__t65*"] },
+      toolsAllow: Array.from(
+        { length: 65 },
+        (_, index) => `memos__t${String(index + 1).padStart(2, "0")}*`,
+      ),
+      toolNames: ["t65x"],
+      visible: true,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
