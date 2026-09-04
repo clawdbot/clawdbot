@@ -16,7 +16,11 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveWebhookPath } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import {
+  downloadGoogleChatMedia,
+  isUsableGoogleChatThreadName,
+  sendGoogleChatMessage,
+} from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
@@ -67,6 +71,25 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
     return "project-number";
   }
   return undefined;
+}
+
+function resolveGoogleChatDeliveryPayload<T extends { replyToId?: string }>(params: {
+  payload: T;
+  spaceId: string;
+  inboundThreadName?: string;
+}): T {
+  const inboundThreadName = params.inboundThreadName?.trim();
+  if (!inboundThreadName) {
+    return params.payload;
+  }
+  const payloadThreadName = params.payload.replyToId?.trim();
+  if (payloadThreadName === inboundThreadName) {
+    return params.payload;
+  }
+  if (payloadThreadName && isUsableGoogleChatThreadName(payloadThreadName, params.spaceId)) {
+    return params.payload;
+  }
+  return { ...params.payload, replyToId: inboundThreadName };
 }
 
 function resolveGoogleChatBotLoopProtection(params: {
@@ -394,10 +417,11 @@ async function processMessageWithPipeline(params: {
     typingIndicator = "message";
   }
   let typingMessage: GoogleChatTypingMessage | undefined;
-  const typingMessageThreadName =
+  const inboundReplyThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
       : undefined;
+  let hasDeliveredReply = false;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -411,12 +435,12 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: typingMessageThreadName,
+        thread: inboundReplyThreadName,
       });
       if (result?.messageName) {
         typingMessage = createGoogleChatTypingMessage({
           messageName: result.messageName,
-          requestedThreadName: typingMessageThreadName,
+          requestedThreadName: inboundReplyThreadName,
           deliveredThreadName: result.threadName,
         });
       }
@@ -446,6 +470,15 @@ async function processMessageWithPipeline(params: {
         route: { agentId: route.agentId, sessionKey: route.sessionKey },
         ctxPayload,
         delivery: {
+          preparePayload: (payload) =>
+            resolveGoogleChatDeliveryPayload({
+              payload,
+              spaceId,
+              inboundThreadName:
+                account.config.replyToMode === "all" || !hasDeliveredReply
+                  ? inboundReplyThreadName
+                  : undefined,
+            }),
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
               payload,
@@ -467,7 +500,16 @@ async function processMessageWithPipeline(params: {
             // Only use typing message for first delivery
             typingMessage = undefined;
           },
-          onDelivered: () => {
+          onDelivered: (payload, _info, result) => {
+            if (
+              !payload.isCompactionNotice &&
+              !payload.isFallbackNotice &&
+              !payload.isStatusNotice &&
+              !result?.suppression &&
+              result?.visibleReplySent !== false
+            ) {
+              hasDeliveredReply = true;
+            }
             statusSink?.({ lastOutboundAt: Date.now() });
           },
           onError: (err, info) => {

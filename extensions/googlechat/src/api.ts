@@ -204,7 +204,7 @@ async function fetchBuffer(
  * well-formed, same-space thread name; callers drop the rest so the message
  * still delivers to the space (as a new thread) instead of failing outright.
  */
-function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
+export function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
   return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }
 

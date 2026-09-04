@@ -57,7 +57,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-vi.mock("./api.js", () => ({
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
   deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
   sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
