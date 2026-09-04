@@ -16,6 +16,13 @@ type BuzzRelaySnapshotParams<TResult> = {
   result: () => TResult;
   onTimeout?: (error: Error) => void;
   closeRelayOnTimeout?: boolean;
+  /**
+   * On timeout, close this subscription even before EOSE. For per-turn lookups
+   * that must not tear down the shared relay: by the time the timeout fires the
+   * REQ has long since been sent, so leaving the subscription open only leaks it
+   * and its `ongoingOperations` count.
+   */
+  closeSubscriptionOnTimeout?: boolean;
   checkAbortAfterSubscribe?: boolean;
 };
 
@@ -69,14 +76,24 @@ export async function queryBuzzRelaySnapshot<TResult>(
       const error = new Error(params.timeoutMessage);
       finish(error);
       params.onTimeout?.(error);
+      if (params.closeSubscriptionOnTimeout) {
+        closeSubscription();
+      }
       if (params.closeRelayOnTimeout !== false) {
         params.relay.close();
       }
     }, params.timeoutMs ?? 10_000);
-    const closeAfterRealEose = () => {
-      if (receivedEose && subscription && !subscriptionClosed) {
+    // nostr-tools decrements ongoingOperations on every close() call, so a
+    // subscription must be closed exactly once.
+    const closeSubscription = () => {
+      if (subscription && !subscriptionClosed) {
         subscriptionClosed = true;
         subscription.close(params.closeReason);
+      }
+    };
+    const closeAfterRealEose = () => {
+      if (receivedEose) {
+        closeSubscription();
       }
     };
     const finish = (error?: unknown) => {

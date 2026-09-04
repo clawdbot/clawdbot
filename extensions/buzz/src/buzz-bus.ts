@@ -25,10 +25,14 @@ import {
   createBuzzReplayDispatchQueue,
   resolveBuzzRoomHistoryLimit,
 } from "./replay-dispatch.js";
+import { queryBuzzEventById } from "./reply-context.js";
 import { startBuzzRoomMembershipNotifications } from "./room-membership-notification.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
-import { resolveBuzzSubscriptionBudget } from "./subscription-budget.js";
+import {
+  BUZZ_MAX_CONCURRENT_REPLY_TARGET_LOOKUPS,
+  resolveBuzzSubscriptionBudget,
+} from "./subscription-budget.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
 const PRESENCE_KIND = 20_001;
@@ -53,6 +57,14 @@ export interface BuzzBus {
     threadId?: string;
     replyToId?: string;
   }) => Promise<void>;
+  /**
+   * Look up one room message by event id, for resolving what a reply points at.
+   * Resolves `null` when the relay has no such message.
+   */
+  fetchMessageById: (params: {
+    eventId: string;
+    signal?: AbortSignal;
+  }) => Promise<BuzzInboundMessage | null>;
   close: () => Promise<void>;
 }
 
@@ -261,6 +273,7 @@ export async function startBuzzBus(options: {
     lifecycleAbort.abort(error);
     options.onFatalError?.(error);
   };
+  let replyTargetLookupsInFlight = 0;
   const replayGuard = createChannelReplayGuard<Event>({
     dedupe: {
       pluginId: "buzz",
@@ -299,6 +312,24 @@ export async function startBuzzBus(options: {
     publicKey,
     directory,
     refreshDirectory: async () => await directoryRelay?.refreshRooms(options.channelIds),
+    fetchMessageById: async ({ eventId, signal: querySignal }) => {
+      // Bounded by the shared query reserve; a saturated relay degrades to a
+      // quote-less turn instead of opening a subscription the cap would refuse.
+      if (replyTargetLookupsInFlight >= BUZZ_MAX_CONCURRENT_REPLY_TARGET_LOOKUPS) {
+        return null;
+      }
+      replyTargetLookupsInFlight += 1;
+      try {
+        const event = await queryBuzzEventById({
+          relay,
+          eventId,
+          signal: querySignal ?? signal,
+        });
+        return event ? parseBuzzMessageEvent(event) : null;
+      } finally {
+        replyTargetLookupsInFlight -= 1;
+      }
+    },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);

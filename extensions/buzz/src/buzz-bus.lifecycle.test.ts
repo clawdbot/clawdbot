@@ -53,6 +53,43 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.connect).not.toHaveBeenCalled();
   });
 
+  it("bounds concurrent reply-target lookups to the reserved query capacity", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startTestBus({});
+    relayMocks.stallReplyTargetEose = true;
+    try {
+      const idsSubscriptionsBefore = relayMocks.subscriptions.filter(
+        (entry) => entry.filter.ids?.length,
+      ).length;
+      // Three lookups occupy the reserve and stay pending on a silent relay.
+      const pending = Array.from({ length: 3 }, (_, index) =>
+        bus.fetchMessageById({ eventId: String(index).padStart(64, "0") }),
+      );
+      // The fourth must not open a subscription the relay cap would refuse.
+      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).resolves.toBeNull();
+      const idsSubscriptions = relayMocks.subscriptions.filter(
+        (entry) => entry.filter.ids?.length,
+      ).length;
+      expect(idsSubscriptions - idsSubscriptionsBefore).toBe(3);
+      // Releasing one slot lets the next lookup through again.
+      relayMocks.stallReplyTargetEose = false;
+      for (const entry of relayMocks.subscriptions) {
+        if (entry.filter.ids?.length) {
+          entry.handlers.oneose?.();
+        }
+      }
+      await Promise.allSettled(pending);
+      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).resolves.toBeNull();
+      expect(
+        relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length -
+          idsSubscriptionsBefore,
+      ).toBe(4);
+    } finally {
+      relayMocks.stallReplyTargetEose = false;
+      await bus.close();
+    }
+  });
+
   it("closes the relay and aborts NIP-11 discovery when authentication fails", async () => {
     let fetchSignal: AbortSignal | undefined;
     vi.stubGlobal(

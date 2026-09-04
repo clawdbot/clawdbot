@@ -1,5 +1,6 @@
 import {
   buildChannelConfigSchema,
+  ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -30,6 +31,7 @@ const BuzzAccountConfigSchema = z
     configWrites: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     replyToMode: z.enum(["off", "all"]).optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     markdown: MarkdownConfigSchema,
     relayUrl: z
       .string()

@@ -120,6 +120,7 @@ function createMockBus(): BuzzBus {
       channelIds: [CHANNEL_ID],
     }),
     refreshDirectory: vi.fn(async () => {}),
+    fetchMessageById: vi.fn(async () => null),
     sendText: gatewayMocks.busSendText,
     sendTyping: gatewayMocks.busSendTyping,
     close: gatewayMocks.close,

@@ -89,6 +89,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.connected = true;
     relayMocks.stallProfileQueryEose = false;
     relayMocks.stallRoomEoseChannelId = undefined;
+    relayMocks.stallReplyTargetEose = false;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>

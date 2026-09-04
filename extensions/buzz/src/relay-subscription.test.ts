@@ -1,6 +1,6 @@
 import type { Filter, Relay } from "nostr-tools";
 import { describe, expect, it, vi } from "vitest";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { openBuzzRelaySubscription, queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 describe("openBuzzRelaySubscription", () => {
   it("sends an explicit REQ without synthesizing EOSE", async () => {
@@ -62,5 +62,49 @@ describe("openBuzzRelaySubscription", () => {
     await Promise.resolve();
 
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe("queryBuzzRelaySnapshot", () => {
+  it("closes the subscription instead of the relay on timeout when asked", async () => {
+    vi.useFakeTimers();
+    const close = vi.fn();
+    const subscription = {
+      id: "sub:1",
+      closed: false,
+      close,
+    } as unknown as ReturnType<Relay["prepareSubscription"]>;
+    const closeRelay = vi.fn();
+    const relay = {
+      idleSince: undefined,
+      ongoingOperations: 0,
+      openSubs: new Map(),
+      prepareSubscription: vi.fn(() => subscription),
+      send: vi.fn(async () => {}),
+      close: closeRelay,
+    } as unknown as Relay;
+
+    const pending = queryBuzzRelaySnapshot({
+      relay,
+      filters: [{ kinds: [0] }],
+      timeoutMs: 50,
+      timeoutMessage: "timed out",
+      abortMessage: "aborted",
+      failureMessage: "failed",
+      closeReason: "done",
+      closeMessage: (reason) => reason,
+      onEvent: () => {},
+      result: () => null,
+      closeRelayOnTimeout: false,
+      closeSubscriptionOnTimeout: true,
+    });
+    const rejection = expect(pending).rejects.toThrow("timed out");
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith("done");
+    expect(closeRelay).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

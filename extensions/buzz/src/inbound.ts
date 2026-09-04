@@ -1,17 +1,21 @@
 import { normalizeURL } from "nostr-tools/utils";
+import { isNormalizedSenderAllowed } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
+  resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { BuzzBus } from "./buzz-bus.js";
 import type { BuzzConfigInput } from "./config-schema.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
+  BUZZ_HEX_ID_PATTERN,
   formatBuzzMessageForAgent,
   type BuzzInboundMessage,
 } from "./message-event.js";
@@ -21,6 +25,101 @@ import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
 const log = createSubsystemLogger("buzz/inbound");
+
+type BuzzReplyQuote = { id: string; body: string; sender?: string; senderAllowed: boolean };
+type BuzzRoomPolicy = Pick<ResolvedBuzzAccount["config"], "groupPolicy" | "groupAllowFrom">;
+
+/**
+ * Resolve the message a reply points at, so the agent sees what is being
+ * answered instead of a dangling "look at this".
+ *
+ * Fail-soft by design: a missing or unreachable parent degrades the turn to a
+ * quote-less prompt rather than dropping the message. The caller re-asserts
+ * liveness after the await, so cancellation still surfaces there.
+ */
+async function resolveBuzzReplyQuote(params: {
+  bus: BuzzBus;
+  message: BuzzInboundMessage;
+  signal: AbortSignal;
+  channelId: string;
+  policy: BuzzRoomPolicy;
+}): Promise<BuzzReplyQuote | undefined> {
+  const { bus, message, signal } = params;
+  const replyToId = message.replyToId;
+  // The marker is attacker-controlled free text: never let it reach a relay
+  // filter unless it is shaped like an event id.
+  if (!replyToId || replyToId === message.id || !BUZZ_HEX_ID_PATTERN.test(replyToId)) {
+    return undefined;
+  }
+  let parent: BuzzInboundMessage | null;
+  try {
+    parent = await bus.fetchMessageById({ eventId: replyToId, signal });
+  } catch (error) {
+    log.debug?.(
+      `Buzz reply target ${replyToId} unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+  if (!parent || !isSameBuzzRoom(parent.channelId, params.channelId)) {
+    // A reply tag can name an event in another room; never widen room scope.
+    return undefined;
+  }
+  const quotedIsBot = parent.senderPubkey === bus.publicKey;
+  // Same rule as pending history: only current room members contribute
+  // model-visible context. The bot's own messages always qualify.
+  if (!quotedIsBot && !bus.directory.isMember(params.channelId, parent.senderPubkey)) {
+    return undefined;
+  }
+  const body = formatBuzzMessageForAgent(parent);
+  if (!body) {
+    return undefined;
+  }
+  return {
+    id: parent.id,
+    body,
+    sender: bus.directory.resolveSenderName(parent.senderPubkey),
+    senderAllowed: resolveBuzzQuoteSenderAllowed({
+      quotedPubkey: parent.senderPubkey,
+      botPublicKey: bus.publicKey,
+      senderPubkey: message.senderPubkey,
+      policy: params.policy,
+    }),
+  };
+}
+
+/** Compare an untrusted `h` tag against the room this turn belongs to, in normalized form. */
+function isSameBuzzRoom(rawChannelId: string, channelId: string): boolean {
+  try {
+    return parseBuzzTarget(rawChannelId) === channelId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the quoted author passes the room allowlist, for `contextVisibility`.
+ * The bot's own words and the sender's own earlier words are never a leak
+ * vector: the bot said it, or the sender was just admitted to say it.
+ */
+function resolveBuzzQuoteSenderAllowed(params: {
+  quotedPubkey: string;
+  botPublicKey: string;
+  senderPubkey: string;
+  policy: BuzzRoomPolicy;
+}): boolean {
+  if (params.quotedPubkey === params.botPublicKey || params.quotedPubkey === params.senderPubkey) {
+    return true;
+  }
+  return resolveInboundSupplementalSenderAllowed({
+    isGroup: true,
+    groupPolicy: params.policy.groupPolicy,
+    allowFrom: params.policy.groupAllowFrom ?? [],
+    isSenderAllowed: (allowFrom) =>
+      isNormalizedSenderAllowed({ senderId: params.quotedPubkey, allowFrom: [...allowFrom] }),
+  });
+}
 
 export async function handleBuzzInbound(params: {
   account: ResolvedBuzzAccount;
@@ -132,6 +231,24 @@ export async function handleBuzzInbound(params: {
 
   const senderName = bus.directory.resolveSenderName(message.senderPubkey);
   const roomName = bus.directory.resolveRoomName(channelId);
+  const replyQuote = await resolveBuzzReplyQuote({
+    bus,
+    message,
+    signal,
+    channelId,
+    policy: {
+      groupPolicy: groupConfig?.groupPolicy ?? account.config.groupPolicy,
+      groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
+    },
+  });
+  // The lookup yielded to the relay: membership may have changed underneath it,
+  // and a shutdown mid-lookup must not commit the dedupe claim.
+  params.assertCurrent();
+  const contextVisibility = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "buzz",
+    accountId: account.accountId,
+  });
   const body = buildEnvelope({
     channel: "Buzz",
     from: senderName,
@@ -163,7 +280,10 @@ export async function handleBuzzInbound(params: {
     reply: {
       to: target,
       originatingTo: target,
-      replyToId: message.id,
+      // What the human replied to, matching telegram: the prompt renders this
+      // alongside the quote's sender and body, and delivery uses `replyTarget`
+      // below rather than this field.
+      replyToId: replyQuote?.id ?? message.id,
       messageThreadId: message.threadId,
       threadParentId: message.threadId ? channelId : undefined,
     },
@@ -177,6 +297,8 @@ export async function handleBuzzInbound(params: {
       commands: { authorized: access.commandAccess.authorized },
       mentions: { canDetectMention: true, wasMentioned },
     },
+    supplemental: replyQuote ? { quote: replyQuote } : undefined,
+    contextVisibility,
     extra: {
       GroupSubject: roomName,
       BuzzEventKind: message.kind,
