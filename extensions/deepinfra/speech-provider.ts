@@ -2,11 +2,12 @@
 import {
   createOpenAiCompatibleSpeechProvider,
   type SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
+} from "openclaw/plugin-sdk/speech-provider";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEEPINFRA_BASE_URL,
   DEEPINFRA_TTS_FALLBACK_MODELS,
+  DEEPINFRA_TTS_FALLBACK_CATALOG,
   DEFAULT_DEEPINFRA_TTS_VOICE,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
@@ -26,7 +27,7 @@ export function buildDeepInfraSpeechProvider(options?: {
     options?.ttsModels && options.ttsModels.length > 0
       ? options.ttsModels.map((model) => model.id)
       : [...DEEPINFRA_TTS_FALLBACK_MODELS];
-  const defaultModel = ids[0] ?? DEEPINFRA_TTS_FALLBACK_MODELS[0];
+  const defaultModel = ids[0] ?? DEEPINFRA_TTS_FALLBACK_CATALOG[0].id;
   return createOpenAiCompatibleSpeechProvider<DeepInfraTtsExtraConfig>({
     id: "deepinfra",
     label: "DeepInfra",

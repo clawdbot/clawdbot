@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
@@ -25,14 +26,17 @@ function createDelegationHarness(params?: {
   const onFatalError = vi.fn();
   const sessionController = new AbortController();
   const runAgentConsult = params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" }));
-  const controller = new OpenAIQuicksilverDelegationController({
-    getSocket: params?.getSocket ?? (() => socket),
-    handleDelegationInput: params?.handleDelegationInput,
-    logger,
-    onFatalError,
-    runAgentConsult,
-    signal: sessionController.signal,
-  });
+  const controller = new OpenAIQuicksilverDelegationController(
+    {
+      getSocket: params?.getSocket ?? (() => socket),
+      handleDelegationInput: params?.handleDelegationInput,
+      logger,
+      onFatalError,
+      runAgentConsult,
+      signal: sessionController.signal,
+    },
+    formatErrorMessage,
+  );
   return { controller, logger, onFatalError, runAgentConsult, sessionController, socket };
 }
 

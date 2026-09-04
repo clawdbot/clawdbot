@@ -431,7 +431,6 @@ extensions/document-extract/document-extractor.ts	1
 extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
-extensions/elevenlabs/speech-provider.ts	3
 extensions/exa/src/exa-web-search-provider.runtime.ts	9
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
@@ -903,10 +902,8 @@ extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
 extensions/openai/realtime-quicksilver-delegation-controller.ts	1
-extensions/openai/realtime-quicksilver-wire.ts	4
 extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
-extensions/openai/realtime-voice-provider.ts	1
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
@@ -1399,7 +1396,6 @@ extensions/workboard/src/workspace-access.ts	1
 extensions/xai/code-execution.ts	2
 extensions/xai/image-generation-provider.ts	1
 extensions/xai/index.ts	6
-extensions/xai/lazy-capability-providers.ts	1
 extensions/xai/model-compat.ts	2
 extensions/xai/model-definitions.ts	1
 extensions/xai/provider-catalog.ts	1
@@ -1408,7 +1404,6 @@ extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	4
 extensions/xai/realtime-voice-config.ts	2
 extensions/xai/runtime-model-compat.ts	1
-extensions/xai/speech-provider-metadata.ts	3
 extensions/xai/src/code-execution-config.ts	6
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
