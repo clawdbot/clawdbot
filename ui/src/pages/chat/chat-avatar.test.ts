@@ -4,6 +4,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
@@ -137,7 +138,8 @@ describe("renderChatAvatar", () => {
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(image?.hasAttribute("src")).toBe(false);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+    await expect(resolveAvatarImageUrl(avatarUrl)).resolves.toBeNull();
+    expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(fetchAvatar).toHaveBeenCalledWith(
       `${gatewayOrigin}${avatarUrl}`,
       expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
@@ -491,7 +493,7 @@ describe("refreshSenderAgentAvatars", () => {
 
 describe("attributed sender avatars", () => {
   it("restores pending initials when the authenticated sender avatar changes", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([1, 2, 3]), {

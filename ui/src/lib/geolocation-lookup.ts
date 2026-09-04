@@ -1,5 +1,9 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 
 /** Coarse placement for one address, plus the credit its data license requires. */
 export type ClientGeolocation = {
@@ -60,15 +64,11 @@ function readLocation(payload: unknown): ClientGeolocationResult {
 }
 
 async function requestGeolocation(ip: string): Promise<ClientGeolocationResult> {
-  const { origin, authHeader } = readAvatarGatewayContext();
+  const { origin } = readAvatarGatewayContext();
   try {
-    const response = await fetch(
+    const response = await fetchGatewayContextResource(
       `${origin ?? ""}/plugins/geolocation/lookup?ip=${encodeURIComponent(ip)}`,
-      {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
-      },
+      LOOKUP_TIMEOUT_MS,
     );
     // Only a 200 is a real answer. 503 means the database is still downloading
     // or missing, which the caller may retry.
@@ -89,7 +89,8 @@ export function lookupClientGeolocation(ip: string): Promise<ClientGeolocationRe
     return cached;
   }
   const pending = requestGeolocation(ip).then((result) => {
-    if (result.status === "unavailable") {
+    // An old context's aborted lookup must not evict its replacement.
+    if (result.status === "unavailable" && lookupCache.get(ip) === pending) {
       lookupCache.delete(ip);
     }
     return result;

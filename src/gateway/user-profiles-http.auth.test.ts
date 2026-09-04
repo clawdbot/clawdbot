@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveControlUiAuthHeader } from "../../ui/src/app/control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../../ui/src/app/control-ui-auth.ts";
 import { setAvatarGatewayOrigin } from "../../ui/src/lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../../ui/src/lib/identity-avatar-loader.ts";
 import * as configIo from "../config/io.js";
@@ -121,19 +121,34 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
-  it.each(["token", "password"] as const)(
-    "loads the saved personal photo using the hello device token under %s auth",
+  it.each(["token", "password", "trusted-proxy"] as const)(
+    "loads the saved personal photo with the connected credentials under %s auth",
     async (mode) => {
-      auth = { mode, [mode]: "test-shared-secret", allowTailscale: false };
+      auth =
+        mode === "trusted-proxy"
+          ? {
+              mode,
+              password: "test-shared-secret",
+              trustedProxy: { userHeader: "x-auth-user" },
+              allowTailscale: false,
+            }
+          : { mode, [mode]: "test-shared-secret", allowTailscale: false };
+      cfg = { gateway: { trustedProxies: ["127.0.0.1"] } };
       const { token } = await pairDevice();
+      if (mode === "trusted-proxy") {
+        // A tunnel may use the configured local password; paired HTTP tokens
+        // must not bypass the proxy identity boundary on their own.
+        expect((await request(token)).status).toBe(401);
+        expect((await request("test-shared-secret")).status).toBe(200);
+      }
       // The live hello credential wins even with saved shared credentials.
-      const header = resolveControlUiAuthHeader({
+      const candidates = resolveControlUiAuthCandidates({
         hello: { auth: { deviceToken: token } },
-        settings: { token: "test-shared-secret" },
+        settings: { token: mode === "trusted-proxy" ? "" : "test-shared-secret" },
         password: "test-shared-secret",
       });
-      expect(header === "Bearer " + token).toBe(true);
-      setAvatarGatewayOrigin(origin, header);
+      expect(candidates[0] === token).toBe(true);
+      setAvatarGatewayOrigin(origin, candidates);
       const blobUrl = await resolveAvatarImageUrl(avatarPath);
       expect(blobUrl?.startsWith("blob:")).toBe(true);
       const image = await fetch(blobUrl!);
