@@ -1418,6 +1418,73 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
+  it("leaves a failed legacy metadata promotion retryable", async () => {
+    const legacySessionKey = "agent:codex:acp:retryable";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/codex-sessions.json"
+        ? {
+            [legacySessionKey]: {
+              sessionId: "sess-retryable",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === legacySessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "retryable-resume",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+    hoisted.writeAcpSessionMetaForMigrationMock.mockImplementationOnce(() => {
+      throw new Error("synthetic metadata write failure");
+    });
+
+    const firstAttempt = await spawnAcpDirect(
+      {
+        task: "First migration attempt",
+        agentId: "codex",
+        resumeSessionId: "retryable-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(firstAttempt, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+
+    const retried = await spawnAcpDirect(
+      {
+        task: "Retry migration",
+        agentId: "codex",
+        resumeSessionId: "retryable-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(retried);
+    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:acp:retryable" }),
+      expect.objectContaining({ sessionId: "sess-retryable" }),
+    );
+  });
+
   it("rejects requester-owned resume IDs from a third owner in a shared store", async () => {
     const foreignSessionKey = "agent:other:acp:foreign";
     hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");

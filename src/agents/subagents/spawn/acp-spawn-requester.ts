@@ -231,6 +231,19 @@ async function promoteLegacyAcpResumeEntry(params: {
   ) {
     return false;
   }
+  try {
+    writeAcpSessionMetaForMigration({
+      sessionKey: ownerSessionKey,
+      sessionId: params.entry.sessionId,
+      lifecycleRevision: params.entry.lifecycleRevision,
+      meta: params.meta,
+    });
+  } catch (error) {
+    log.warn(
+      `ACP legacy owner promotion metadata write failed for ${ownerSessionKey}: ${formatErrorMessage(error)}`,
+    );
+    return false;
+  }
   const promoted = await upsertSessionEntryCore(
     {
       agentId: params.sessionOwnerAgentId,
@@ -242,12 +255,6 @@ async function promoteLegacyAcpResumeEntry(params: {
   if (!promoted) {
     return false;
   }
-  writeAcpSessionMetaForMigration({
-    sessionKey: ownerSessionKey,
-    sessionId: promoted.sessionId,
-    lifecycleRevision: promoted.lifecycleRevision,
-    meta: params.meta,
-  });
   return true;
 }
 
