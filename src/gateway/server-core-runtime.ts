@@ -187,8 +187,9 @@ export async function startGatewayCoreRuntime(input: {
             log,
             logDiscovery,
             nodeRegistry,
-            swapBonjourStop: kernel.swapBonjourStop,
+            swapDiscovery: kernel.swapDiscovery,
             pluginRegistry: pluginRuntime.registry,
+            pluginRuntimeClaim: kernel.pluginRuntimeGeneration.currentClaim(),
             broadcast,
             nodeSendToAllSubscribed,
             getPresenceVersion,
@@ -467,30 +468,10 @@ export async function startGatewayCoreRuntime(input: {
       if (!(await claim.waitForUnblocked())) {
         return;
       }
-      const stopPreviousDiscovery = kernel.swapBonjourStop(null);
-      await stopPreviousDiscovery?.().catch((err: unknown) => {
-        logDiscovery.warn(`gateway discovery stop failed before plugin refresh: ${String(err)}`);
-      });
-      const { startGatewayPluginDiscovery } = await loadGatewayStartupEarlyModule();
-      if (!(await claim.waitForUnblocked())) {
-        return;
-      }
-      const stopNextDiscovery = await startGatewayPluginDiscovery({
-        minimalTestGateway,
-        cfgAtStart,
-        port,
-        gatewayTls,
-        gatewayDirectReachable: !isLoopbackHost(bindHost),
-        tailscaleMode,
-        logDiscovery,
-        pluginRegistry: nextPluginRegistry,
-      });
-      if (
-        !(await claim.waitForUnblocked()) ||
-        !claim.publish(() => kernel.swapBonjourStop(stopNextDiscovery))
-      ) {
-        await stopNextDiscovery?.();
-      }
+      await runtimeState.discovery?.update(
+        { gatewayDiscoveryServices: nextPluginRegistry.gatewayDiscoveryServices },
+        claim,
+      );
     } catch (err) {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }
