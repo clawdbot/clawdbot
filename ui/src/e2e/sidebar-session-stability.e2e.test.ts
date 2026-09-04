@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -15,15 +16,16 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each([
-    { colorScheme: "dark", pointer: "fine", width: 1440 },
-    { colorScheme: "light", pointer: "fine", width: 1440 },
-    { colorScheme: "dark", pointer: "fine", width: 390 },
-    { colorScheme: "light", pointer: "fine", width: 390 },
-    { colorScheme: "dark", pointer: "coarse", width: 390 },
-    { colorScheme: "light", pointer: "coarse", width: 390 },
+    { colorScheme: "dark", pointer: "fine", textScale: 100, width: 1440 },
+    { colorScheme: "light", pointer: "fine", textScale: 100, width: 1440 },
+    { colorScheme: "dark", pointer: "fine", textScale: 100, width: 390 },
+    { colorScheme: "light", pointer: "fine", textScale: 100, width: 390 },
+    { colorScheme: "dark", pointer: "coarse", textScale: 100, width: 390 },
+    { colorScheme: "light", pointer: "coarse", textScale: 100, width: 390 },
+    { colorScheme: "dark", pointer: "fine", textScale: 140, width: 1440 },
   ] as const)(
-    "keeps one $colorScheme child-row placeholder stable at $width px with a $pointer pointer",
-    async ({ colorScheme, pointer, width }) => {
+    "keeps one $colorScheme child-row placeholder stable at $width px with a $pointer pointer and $textScale% text",
+    async ({ colorScheme, pointer, textScale, width }) => {
       const baseTime = Date.parse("2026-09-04T12:00:00.000Z");
       const activeKey = "agent:main:loading-active";
       const parentKey = "agent:main:loading-parent";
@@ -44,6 +46,17 @@ suite.define(() => {
         viewport: { height: 900, width },
       });
       const page = await context.newPage();
+      if (textScale !== 100) {
+        await page.addInitScript(
+          ({ scale, settingsKey }) => {
+            localStorage.setItem(settingsKey, JSON.stringify({ textScale: scale }));
+          },
+          {
+            scale: textScale,
+            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          },
+        );
+      }
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.list": {
@@ -107,7 +120,11 @@ suite.define(() => {
             .getBoundingClientRect();
           return { left: barBounds.left, rowHeight: rowBounds.height };
         });
-        expect(loadingGeometry.rowHeight).toBe(pointer === "coarse" ? 44 : 30);
+        if (textScale === 100) {
+          expect(loadingGeometry.rowHeight).toBe(pointer === "coarse" ? 44 : 30);
+        } else {
+          expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
+        }
 
         await gateway.resolveDeferred("sessions.list");
         await expect.poll(() => loading.count()).toBe(0);
@@ -120,7 +137,9 @@ suite.define(() => {
           const rowBounds = element.parentElement!.parentElement!.getBoundingClientRect();
           return { left: titleBounds.left, rowHeight: rowBounds.height };
         });
-        expect(childGeometry).toEqual(loadingGeometry);
+        expect(childGeometry.left).toBe(loadingGeometry.left);
+        // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
+        expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
       } finally {
         await context.close();
       }
