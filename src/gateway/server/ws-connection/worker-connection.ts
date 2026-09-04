@@ -198,9 +198,23 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       rejectAdmission({ id, reason: admission.reason, opaqueOnPublicIngress: true });
       return;
     }
+    if (!raiseGatewayReceiverPayloadLimit(params.socket, workerMaxPayload(admission.identity))) {
+      // Worker frames may exceed the pre-auth cap; without a writable receiver
+      // limit they would close mid-frame later instead of failing visibly here.
+      rejectAdmission({
+        id,
+        reason: "gateway-unavailable",
+        internalReason: "unsupported-websocket-receiver",
+        error: workerProtocolError("gateway-unavailable", {
+          code: ErrorCodes.UNAVAILABLE,
+          message: "unsupported Gateway WebSocket receiver",
+        }),
+        code: 1011,
+      });
+      return;
+    }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
-    raiseGatewayReceiverPayloadLimit(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
     if (disposed || params.isClosed()) {

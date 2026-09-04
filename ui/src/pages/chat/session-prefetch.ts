@@ -220,20 +220,21 @@ class SessionPrefetcher {
     client: GatewayBrowserClient,
     candidate: SessionPrefetchCandidate,
   ): Promise<void> {
-    if (
-      !this.isCurrent(snapshot, candidate.snapshotKey) ||
-      this.isOpen(candidate.snapshotKey, this.snapshot)
-    ) {
+    // Every network request re-reads readiness: a presented pane can start
+    // loading during the persisted snapshot read or between history pages.
+    const mayRequest = () =>
+      this.isCurrent(snapshot, candidate.snapshotKey) &&
+      this.snapshot?.presentedTranscriptsReady === true;
+    if (!mayRequest() || this.isOpen(candidate.snapshotKey, this.snapshot)) {
       return;
     }
-    this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
     try {
       let existing = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
         sessionKey: candidate.snapshotKey,
       });
       if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
         existing = await this.snapshotStore.read(candidate.snapshotKey);
-        if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
+        if (!mayRequest()) {
           return;
         }
         if (existing) {
@@ -245,11 +246,14 @@ class SessionPrefetcher {
           );
         }
       }
+      // The cooldown counts network attempts; a candidate yielded before its
+      // request stays eligible for the cycle after the presented transcript commits.
+      this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
       let result = await requestChatSessionSnapshot(
         client,
         candidate.snapshotKey,
         this,
-        () => this.isCurrent(snapshot, candidate.snapshotKey),
+        mayRequest,
         existing?.deltaCursor,
       );
       if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
@@ -266,9 +270,10 @@ class SessionPrefetcher {
           );
           existing = withoutCursor;
         }
-        result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, () =>
-          this.isCurrent(snapshot, candidate.snapshotKey),
-        );
+        if (!mayRequest()) {
+          return;
+        }
+        result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, mayRequest);
         if (!this.isCurrent(snapshot, candidate.snapshotKey)) {
           return;
         }
