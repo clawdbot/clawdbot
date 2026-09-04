@@ -108,6 +108,7 @@ public enum OpenClawComputerEscalationReason: String, Codable, Sendable {
 /// modifier keys held during pointer actions; `scrollAmount` is wheel ticks.
 public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
     public var action: OpenClawComputerAction
+    public var executionId: UUID?
     /// Opaque identity returned with the screenshot that supplied coordinates.
     public var displayFrameId: String?
     public var x: Double?
@@ -140,6 +141,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
 
     public init(
         action: OpenClawComputerAction,
+        executionId: UUID? = nil,
         displayFrameId: String? = nil,
         x: Double? = nil,
         y: Double? = nil,
@@ -170,6 +172,7 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
         reason: OpenClawComputerEscalationReason? = nil)
     {
         self.action = action
+        self.executionId = executionId
         self.displayFrameId = displayFrameId
         self.x = x
         self.y = y
@@ -198,6 +201,38 @@ public struct OpenClawComputerActParams: Codable, Sendable, Equatable {
         self.x2 = x2
         self.y2 = y2
         self.reason = reason
+    }
+}
+
+/// Execution envelope shared by native and forwarded actions. Each provider still
+/// decodes its own action schema; managed close is never an advertised action.
+public enum OpenClawComputerActInvocation: Decodable, Sendable {
+    case action(UUID)
+    case close(UUID)
+
+    private enum CodingKeys: String, CodingKey { case action, executionId }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let executionId = try container.decode(UUID.self, forKey: .executionId)
+        if try container.decode(String.self, forKey: .action) == "__close_execution" {
+            // NodeWorkerComputerCloseParamsSchema is closed and bounds the reason.
+            // The reason is diagnostic only; it cannot select or authorize cleanup.
+            let fields = try [String: String](from: decoder)
+            guard fields.count == 3, let reason = fields["reason"],
+                  (1...64).contains(reason.unicodeScalars.count),
+                  fields["executionId"]?.range(
+                      of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      options: .regularExpression) != nil
+            else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Invalid managed computer close envelope"))
+            }
+            self = .close(executionId)
+        } else {
+            self = .action(executionId)
+        }
     }
 }
 

@@ -37,13 +37,16 @@ final class ScreenSnapshotService {
         screenIndex: Int?,
         maxWidth: Int?,
         quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
+        format: OpenClawScreenSnapshotFormat?,
+        checkExecutionAllowed: @MainActor () throws -> Void) async throws
         -> ScreenSnapshotResult
     {
+        try checkExecutionAllowed()
         let format = format ?? .jpeg
         let normalized = Self.normalize(maxWidth: maxWidth, quality: quality, format: format)
 
         let content = try await SCShareableContent.current
+        try checkExecutionAllowed()
         let displays = content.displays.sorted { $0.displayID < $1.displayID }
         guard !displays.isEmpty else {
             throw ScreenSnapshotError.noDisplays
@@ -76,6 +79,7 @@ final class ScreenSnapshotService {
         } catch {
             throw ScreenSnapshotError.captureFailed("screen capture failed")
         }
+        try checkExecutionAllowed()
         // Geometry is part of the coordinate contract. If it changed while the
         // pixels were captured, no stable frame exists to authorize later input.
         let finalDisplayFrameId = try Self.displayFrameId(

@@ -66,7 +66,7 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
+      captureKey: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[0],
       options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
     ) =>
       actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {

@@ -838,31 +838,29 @@ describe("runCliAgent before_agent_reply seam", () => {
   it("keeps concurrent authenticated MCP streams alive until gateway-owned shutdown", async () => {
     const mcpHttp =
       await vi.importActual<typeof import("../gateway/mcp-http.js")>("../gateway/mcp-http.js");
-    const { getActiveMcpLoopbackRuntime } = await vi.importActual<
-      typeof import("../gateway/mcp-http.loopback-runtime.js")
-    >("../gateway/mcp-http.loopback-runtime.js");
+    const { mintAttachGrant, revokeAttachGrant } = await vi.importActual<
+      typeof import("../gateway/mcp-grant-store.js")
+    >("../gateway/mcp-grant-store.js");
     const server = await mcpHttp.ensureMcpLoopbackServer();
-    const runtime = getActiveMcpLoopbackRuntime();
-    if (!runtime) {
-      throw new Error("expected an active MCP loopback runtime");
-    }
 
     // Make the old per-run teardown exercise the actual listener, not merely a
     // mock; unrelated CLI sessions must retain their authenticated streams.
     closeMcpLoopbackServerMock.mockImplementation(() => mcpHttp.closeMcpLoopbackServer());
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
     const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    const grantTokens: string[] = [];
     const openStreams = async (sessionKeys: readonly string[]) => {
       const responses = await Promise.all(
-        sessionKeys.map((sessionKey) =>
-          fetch(`http://127.0.0.1:${server.port}/mcp`, {
+        sessionKeys.map((sessionKey) => {
+          const { token } = mintAttachGrant({ sessionKey });
+          grantTokens.push(token);
+          return fetch(`http://127.0.0.1:${server.port}/mcp`, {
             method: "GET",
             headers: {
-              authorization: `Bearer ${runtime.ownerToken}`,
-              "x-session-key": sessionKey,
+              authorization: `Bearer ${token}`,
             },
-          }),
-        ),
+          });
+        }),
       );
       for (const response of responses) {
         expect(response.status).toBe(200);
@@ -887,12 +885,6 @@ describe("runCliAgent before_agent_reply seam", () => {
 
       await runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true });
 
-      const survivingRuntime = getActiveMcpLoopbackRuntime();
-      if (!survivingRuntime) {
-        throw new Error("helper cleanup incorrectly closed the active MCP loopback server");
-      }
-      expect(survivingRuntime.port).toBe(server.port);
-      expect(survivingRuntime.ownerToken === runtime.ownerToken).toBe(true);
       const originalStreamStates = await Promise.all(
         readers.map(async (reader) => {
           let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -918,12 +910,14 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(closeMcpLoopbackServerMock).not.toHaveBeenCalled();
 
       await mcpHttp.closeMcpLoopbackServer();
-      expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
       for (const result of await Promise.all(readers.map((reader) => reader.read()))) {
         expect(result.done).toBe(true);
       }
       await expect(fetch(`http://127.0.0.1:${server.port}/mcp`)).rejects.toThrow();
     } finally {
+      for (const token of grantTokens) {
+        revokeAttachGrant(token);
+      }
       await mcpHttp.closeMcpLoopbackServer();
       await Promise.allSettled(readers.map((reader) => reader.cancel()));
     }

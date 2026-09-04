@@ -1,9 +1,8 @@
-// Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+// Process-local MCP runtime identity and CLI request/outcome capture.
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
-  nonOwnerToken: string;
 };
 
 export type McpLoopbackToolCallTerminalOutcome =
@@ -23,7 +22,7 @@ type McpLoopbackToolCallResult = {
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
 type McpLoopbackToolCallCapture = {
-  generation: number;
+  key: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
@@ -55,7 +54,6 @@ type McpLoopbackToolCallCaptureHandle = {
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
-let nextToolCallCaptureGeneration = 0;
 const toolCallCaptures = resolveGlobalMap<string, McpLoopbackToolCallCapture>(
   Symbol.for("openclaw.mcpLoopbackToolCallCaptures"),
   (captures) => {
@@ -99,14 +97,13 @@ export function beginMcpLoopbackToolCallCapture(params: {
   }) => void;
   onToolCallFinish?: (call: McpLoopbackToolCallStart, state: { prepared: boolean }) => void;
   onToolCallResult: (call: McpLoopbackToolCallResult) => void;
-}): void {
+}): McpLoopbackToolCallCapture | undefined {
   const captureKey = params.captureKey.trim();
   if (!captureKey) {
-    return;
+    return undefined;
   }
-  nextToolCallCaptureGeneration += 1;
-  toolCallCaptures.set(captureKey, {
-    generation: nextToolCallCaptureGeneration,
+  const capture: McpLoopbackToolCallCapture = {
+    key: captureKey,
     onYield: params.onYield,
     onRequestStart: params.onRequestStart,
     onRequestClassified: params.onRequestClassified,
@@ -118,7 +115,9 @@ export function beginMcpLoopbackToolCallCapture(params: {
     inFlight: 0,
     activityVersion: 0,
     activityWaiters: new Set(),
-  });
+  };
+  toolCallCaptures.set(captureKey, capture);
+  return capture;
 }
 
 /** Resolve yield state bound to the request's admitted CLI capture generation. */
@@ -126,7 +125,6 @@ export function resolveMcpLoopbackYieldContext(
   captureHandle: McpLoopbackRequestCaptureHandle | undefined,
 ):
   | {
-      cacheKey: string;
       onYield: (message: string, acknowledgment?: string) => Promise<void>;
     }
   | undefined {
@@ -135,7 +133,6 @@ export function resolveMcpLoopbackYieldContext(
     return undefined;
   }
   return {
-    cacheKey: String(capture.generation),
     onYield: async (message: string, acknowledgment?: string) => {
       await capture.onYield?.(message, acknowledgment);
     },
@@ -317,19 +314,17 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
 
 /** Wait for admitted calls to settle and for a quiet request-admission grace. */
 export async function waitForMcpLoopbackToolCallCaptureIdle(
-  captureKey: string,
+  capture: McpLoopbackToolCallCapture | undefined,
   options: {
     timeoutMs: number;
     admissionGraceMs: number;
   },
 ): Promise<boolean> {
-  const normalizedKey = captureKey.trim();
-  const capture = toolCallCaptures.get(normalizedKey);
   if (!capture) {
     return true;
   }
   const deadline = Date.now() + Math.max(0, options.timeoutMs);
-  while (toolCallCaptures.get(normalizedKey) === capture) {
+  for (;;) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       return false;
@@ -354,12 +349,15 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
       return true;
     }
   }
-  return true;
 }
 
-/** Clear observers for this capture key. Grant admission is fenced separately. */
-export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
-  deleteMcpLoopbackToolCallCapture(captureKey.trim());
+/** Clear only this observer owner; a reused header key may already name its successor. */
+export function clearMcpLoopbackToolCallCapture(
+  capture: McpLoopbackToolCallCapture | undefined,
+): void {
+  if (capture && toolCallCaptures.get(capture.key) === capture) {
+    deleteMcpLoopbackToolCallCapture(capture.key);
+  }
 }
 
 /** Return a copy of the active loopback runtime, if one has been installed. */

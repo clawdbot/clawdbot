@@ -6,12 +6,13 @@ import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
 import type {
   AgentMessage,
+  AnyAgentTool,
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 
@@ -20,7 +21,7 @@ type SettledTurnFinalizationAttemptParams = Parameters<
 >[0]["attempt"];
 import type { CopilotClientPool } from "./runtime.js";
 
-const liveToolState = vi.hoisted(() => ({
+const liveToolState = {
   calls: [] as string[],
   expectedText: "phase-1-green",
   permissionRequests: 0,
@@ -29,7 +30,7 @@ const liveToolState = vi.hoisted(() => ({
   spawnToolName: "sessions_spawn",
   toolName: "live_echo",
   userInputRequests: 0,
-}));
+};
 
 const LIVE_MODEL_PREFERENCES = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.6-luna"] as const;
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -61,88 +62,83 @@ type LiveAttemptFacts =
       resolvedApiKey: string;
     };
 
-vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness")>();
-
-  return {
-    ...actual,
-    createOpenClawCodingTools: vi.fn(() => [
-      {
-        name: liveToolState.toolName,
-        label: liveToolState.toolName,
-        description: "Echo the requested text for the copilot live smoke test.",
-        parameters: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            text: {
-              type: "string",
-              description: "Text to echo back to the model.",
-            },
+function createLiveToolSurface(): AnyAgentTool[] {
+  return [
+    {
+      name: liveToolState.toolName,
+      label: liveToolState.toolName,
+      description: "Echo the requested text for the copilot live smoke test.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: {
+            type: "string",
+            description: "Text to echo back to the model.",
           },
-          required: ["text"],
         },
-        async execute(_toolCallId: string, params: unknown) {
-          const textInput =
-            params && typeof params === "object" && !Array.isArray(params)
-              ? (params as { text?: unknown }).text
-              : undefined;
-          const text = typeof textInput === "string" ? textInput : "";
-          const echoed = `${liveToolState.sentinelPrefix}${text}`;
-          liveToolState.calls.push(text);
-          console.info(
-            `[copilot-live-smoke] ${liveToolState.toolName} ${JSON.stringify({ echoed, text })}`,
-          );
-          return {
-            content: [{ type: "text", text: echoed }],
-            details: { echoed },
-          };
-        },
+        required: ["text"],
       },
-      {
-        name: liveToolState.spawnToolName,
-        label: liveToolState.spawnToolName,
-        description: "Spawn an OpenClaw session for delegated work.",
-        parameters: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            task: { type: "string", description: "The delegated objective." },
-            visible: {
-              type: "boolean",
-              description: "Whether the user can follow the session in the sidebar.",
-            },
+      async execute(_toolCallId: string, params: unknown) {
+        const textInput =
+          params && typeof params === "object" && !Array.isArray(params)
+            ? (params as { text?: unknown }).text
+            : undefined;
+        const text = typeof textInput === "string" ? textInput : "";
+        const echoed = `${liveToolState.sentinelPrefix}${text}`;
+        liveToolState.calls.push(text);
+        console.info(
+          `[copilot-live-smoke] ${liveToolState.toolName} ${JSON.stringify({ echoed, text })}`,
+        );
+        return {
+          content: [{ type: "text", text: echoed }],
+          details: { echoed },
+        };
+      },
+    },
+    {
+      name: liveToolState.spawnToolName,
+      label: liveToolState.spawnToolName,
+      description: "Spawn an OpenClaw session for delegated work.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          task: { type: "string", description: "The delegated objective." },
+          visible: {
+            type: "boolean",
+            description: "Whether the user can follow the session in the sidebar.",
           },
-          required: ["task"],
         },
-        async execute(_toolCallId: string, params: unknown) {
-          const input =
-            params && typeof params === "object" && !Array.isArray(params)
-              ? (params as { task?: unknown; visible?: unknown })
-              : {};
-          const call = {
-            task: typeof input.task === "string" ? input.task : "",
-            visible: input.visible === true,
-          };
-          liveToolState.spawnCalls.push(call);
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Visible delegated session created: https://example.test/session/live-proof",
-              },
-            ],
-            details: {
-              sessionKey: "agent:copilot-live-smoke:subagent:live-proof",
-              url: "https://example.test/session/live-proof",
-              visible: call.visible,
-            },
-          };
-        },
+        required: ["task"],
       },
-    ]),
-  };
-});
+      async execute(_toolCallId: string, params: unknown) {
+        const input =
+          params && typeof params === "object" && !Array.isArray(params)
+            ? (params as { task?: unknown; visible?: unknown })
+            : {};
+        const call = {
+          task: typeof input.task === "string" ? input.task : "",
+          visible: input.visible === true,
+        };
+        liveToolState.spawnCalls.push(call);
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Visible delegated session created: https://example.test/session/live-proof",
+            },
+          ],
+          details: {
+            sessionKey: "agent:copilot-live-smoke:subagent:live-proof",
+            url: "https://example.test/session/live-proof",
+            visible: call.visible,
+          },
+        };
+      },
+    },
+  ];
+}
 
 const LIVE = isLiveTestEnabled(["OPENCLAW_COPILOT_AGENT_LIVE_TEST"]);
 const AUTH_MODE = resolveLiveAuthMode();
@@ -350,7 +346,10 @@ async function createAttemptParams(params: {
     authProfileId: params.facts.authProfileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
-    hostCapabilities: createCopilotTestHostCapabilities(),
+    hostCapabilities: {
+      ...createCopilotTestHostCapabilities(),
+      createToolSurface: createLiveToolSurface,
+    },
     messages: [userMessage],
     model: params.facts.model,
     modelId: params.facts.model.id,

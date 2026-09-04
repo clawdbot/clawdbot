@@ -2,6 +2,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 import OpenClawKit
+import PeekabooAutomationKit
 
 /// Linearizes caller cancellation against action completion outside MainActor.
 /// The cancellation handler must record authority loss synchronously; its actor
@@ -19,6 +20,10 @@ private final class ComputerActionCancellationState: @unchecked Sendable {
 
     var isCancelled: Bool {
         self.lock.withLock { self.phase == .cancelled }
+    }
+
+    var isActive: Bool {
+        self.lock.withLock { self.phase == .active }
     }
 
     func requestCancellation() -> Bool {
@@ -46,38 +51,53 @@ private final class ComputerActionCancellationState: @unchecked Sendable {
     }
 }
 
-/// Serializes native computer actions and carries the runtime lifecycle epoch
-/// across the actor hop. A newer epoch releases held input and invalidates every
-/// older queued or suspended action before another action can start.
+/// One native admission owner, created before lazy desktop services initialize.
+/// It serializes effects and retains closed IDs for the lifetime of their route.
 @MainActor
 final class ComputerActionExecutionQueue {
-    typealias Operation = @MainActor (OpenClawComputerActParams, UInt64) async throws
-        -> OpenClawComputerActResult
     typealias CancellationHop = @Sendable (
         @escaping @MainActor @Sendable () -> Void) -> Void
 
-    private struct QueuedAction {
+    private final class Execution {
         let id: UUID
-        let params: OpenClawComputerActParams
-        let lifecycleGeneration: UInt64
-        let operation: Operation
-        let continuation: CheckedContinuation<OpenClawComputerActResult, Error>
-        let cancellationState: ComputerActionCancellationState
+        let route: GatewayNodeInvocationRoute
+        var closed = false
+        var cleanup: Task<Void, Error>?
+
+        init(id: UUID, route: GatewayNodeInvocationRoute) {
+            self.id = id
+            self.route = route
+        }
     }
 
-    private let onLifecycleRelease: @MainActor () -> Bool
+    private typealias Completion = @MainActor () async -> Void
+
+    private struct QueuedAction {
+        let id: UUID
+        let lifecycleGeneration: UInt64
+        let execution: Execution
+        let operation: @MainActor () async -> Completion
+        let reject: @MainActor (Error) -> Void
+        let cancellationState: ComputerActionCancellationState
+        let checkAuthority: @MainActor () throws -> Void
+    }
+
+    private var onLifecycleRelease: @MainActor () -> Bool
+    private var onExecutionCleanup: @MainActor () async throws -> Void = {}
     private let scheduleCancellationHop: CancellationHop
     private var lifecycleGeneration: UInt64 = 0
     private var pendingActions: [QueuedAction] = []
     private var drainTask: Task<Void, Never>?
-    private var currentActionID: UUID?
-    private var currentActionGeneration: UInt64?
-    private var currentActionCancellationState: ComputerActionCancellationState?
-    private var currentActionTask: Task<OpenClawComputerActResult, Error>?
+    private var currentAction: QueuedAction?
+    private var currentActionTask: Task<Void, Never>?
+    private var currentOperationTask: Task<Completion, Never>?
     private var lifecycleReleasePending = false
+    private var execution: Execution?
+    private var route: GatewayNodeInvocationRoute?
+    private var closedExecutionIDs: Set<UUID> = []
 
-    init(
-        onLifecycleRelease: @escaping @MainActor () -> Bool,
+    nonisolated init(
+        onLifecycleRelease: @escaping @MainActor @Sendable () -> Bool = { true },
         scheduleCancellationHop: @escaping CancellationHop = { operation in
             Task { @MainActor in operation() }
         })
@@ -86,23 +106,31 @@ final class ComputerActionExecutionQueue {
         self.scheduleCancellationHop = scheduleCancellationHop
     }
 
-    func perform(
-        _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64,
-        operation: @escaping Operation) async throws -> OpenClawComputerActResult
+    /// Installed by the single-flight service initializer, even when its caller
+    /// was canceled. Cleanup must own effects before that operation can settle.
+    func installCleanup(
+        release: @escaping @MainActor () -> Bool,
+        invalidate: @escaping @MainActor () async throws -> Void)
     {
+        self.onLifecycleRelease = release
+        self.onExecutionCleanup = invalidate
+    }
+
+    func perform<Value: Sendable>(
+        executionId: UUID,
+        route: GatewayNodeInvocationRoute,
+        checkAuthority: @escaping @MainActor () throws -> Void,
+        operation: @escaping @MainActor (UInt64) async throws -> Value) async throws -> Value
+    {
+        let lifecycleGeneration = self.lifecycleGeneration
+        try Task.checkCancellation()
+        try checkAuthority()
+        // Capture admission before any suspension. Work queued before close can
+        // never look up (or create) a replacement execution after the close.
+        let execution = try self.admit(executionId, route: route)
         let actionID = UUID()
         let cancellationState = ComputerActionCancellationState()
-        if lifecycleGeneration > self.lifecycleGeneration {
-            self.advanceLifecycle(to: lifecycleGeneration)
-        }
-        guard lifecycleGeneration == self.lifecycleGeneration else {
-            throw ComputerActionService.ComputerActionError.lifecycleChanged
-        }
-        try await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
-        try Task.checkCancellation()
         let scheduleCancellationHop = self.scheduleCancellationHop
-
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled, !cancellationState.isCancelled else {
@@ -111,42 +139,149 @@ final class ComputerActionExecutionQueue {
                 }
                 self.pendingActions.append(QueuedAction(
                     id: actionID,
-                    params: params,
                     lifecycleGeneration: lifecycleGeneration,
-                    operation: operation,
-                    continuation: continuation,
-                    cancellationState: cancellationState))
+                    execution: execution,
+                    operation: {
+                        let outcome: Result<Value, Error>
+                        do {
+                            try self.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+                            let value = try await operation(lifecycleGeneration)
+                            try self.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+                            outcome = .success(value)
+                        } catch {
+                            outcome = .failure(error)
+                        }
+                        // Native operations may ignore cancellation and post after
+                        // the immediate release. Drain this catch-up before close.
+                        if Task.isCancelled || cancellationState.isCancelled ||
+                            !self.isAllowed(execution, generation: lifecycleGeneration)
+                        {
+                            if self.attemptLifecycleRelease(), cancellationState.isCancelled {
+                                cancellationState.recordOperationReleaseSuccess()
+                            }
+                        }
+                        return {
+                            let cancellation = cancellationState.finish()
+                            if cancellation.needsRelease { self.attemptLifecycleRelease() }
+                            if cancellation.wasCancelled {
+                                try? await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
+                            }
+                            if !self.isAllowed(execution, generation: lifecycleGeneration) {
+                                continuation
+                                    .resume(throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
+                            } else if cancellation.wasCancelled {
+                                continuation.resume(throwing: CancellationError())
+                            } else {
+                                continuation.resume(with: outcome)
+                            }
+                        }
+                    },
+                    reject: { continuation.resume(throwing: $0) },
+                    cancellationState: cancellationState,
+                    checkAuthority: checkAuthority))
                 self.startDrainIfNeeded()
             }
         } onCancel: {
             guard cancellationState.requestCancellation() else { return }
-            scheduleCancellationHop { @MainActor [weak self] in
-                self?.cancelAction(id: actionID)
-            }
+            scheduleCancellationHop { @MainActor [weak self] in self?.cancelAction(id: actionID) }
         }
     }
 
-    func releaseHeldInput(lifecycleGeneration: UInt64) async {
-        guard lifecycleGeneration > self.lifecycleGeneration else { return }
-        let activeTask = self.currentActionTask
-        self.advanceLifecycle(to: lifecycleGeneration)
-        if let activeTask {
-            // Cancellation is cooperative. Do not let a replacement route install
-            // while an old operation can still post input. The operation task's
-            // lifecycle defer performs the scoped catch-up button release.
-            _ = try? await activeTask.value
+    private func admit(_ id: UUID, route: GatewayNodeInvocationRoute) throws -> Execution {
+        try self.bindRoute(route)
+        if let execution {
+            guard !execution.closed, execution.id == id, execution.route === route else {
+                throw ComputerActionService.ComputerActionError.hostBusy
+            }
+            return execution
         }
-        try? await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
+        guard !self.closedExecutionIDs.contains(id) else {
+            throw ComputerActionService.ComputerActionError.lifecycleChanged
+        }
+        let execution = Execution(id: id, route: route)
+        self.execution = execution
+        return execution
+    }
+
+    private func bindRoute(_ route: GatewayNodeInvocationRoute) throws {
+        guard route.isActive else { throw ComputerActionService.ComputerActionError.lifecycleChanged }
+        if self.route !== route {
+            guard self.execution == nil, self.route?.isActive != true else {
+                throw ComputerActionService.ComputerActionError.lifecycleChanged
+            }
+            self.route = route
+            self.closedExecutionIDs.removeAll()
+        }
+    }
+
+    func closeExecution(
+        _ id: UUID, route: GatewayNodeInvocationRoute, retireUnowned: Bool) async throws -> Bool
+    {
+        if let execution, execution.id == id, execution.route === route {
+            try await self.retire(execution).value
+            return true
+        }
+        if retireUnowned {
+            // Gateway can close before policy dispatch. Retire that ID without
+            // creating resources, so a delayed first action cannot reopen it.
+            try self.bindRoute(route)
+            self.closedExecutionIDs.insert(id)
+        }
+        return false
+    }
+
+    private func retire(_ execution: Execution) -> Task<Void, Error> {
+        if let cleanup = execution.cleanup { return cleanup }
+        execution.closed = true
+        self.closedExecutionIDs.insert(execution.id)
+        let activeTask = self.currentActionTask
+        self.rejectPending { $0.execution === execution }
+        self.currentOperationTask?.cancel()
+        self.attemptLifecycleRelease()
+        let cleanup = Task { @MainActor in
+            await activeTask?.value
+            // Await the existing release retry owner; a failed mouse-up must not
+            // become a successful close or let a successor inherit held input.
+            try await self.waitForLifecycleRelease(lifecycleGeneration: nil)
+            try await self.onExecutionCleanup()
+            if self.execution === execution { self.execution = nil }
+        }
+        execution.cleanup = cleanup
+        return cleanup
+    }
+
+    func revoke(route: GatewayNodeInvocationRoute?) async {
+        // A delayed callback cannot release a same-ID successor on another route.
+        if let route, self.execution?.route !== route { return }
+        self.lifecycleGeneration &+= 1
+        if let execution { _ = await self.retire(execution).result }
+    }
+
+    func executionCheck(lifecycleGeneration: UInt64) -> @MainActor () throws -> Void {
+        let actionID = self.currentAction?.id
+        return {
+            // A retained callback cannot borrow the queue's next action, even
+            // when both actions use the same UUID or native lifecycle epoch.
+            guard let actionID, self.currentAction?.id == actionID else {
+                throw ComputerActionService.ComputerActionError.lifecycleChanged
+            }
+            try self.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+        }
     }
 
     func checkExecutionAllowed(lifecycleGeneration: UInt64) throws {
         try Task.checkCancellation()
-        guard self.currentActionCancellationState?.isCancelled != true else {
-            throw CancellationError()
-        }
-        guard lifecycleGeneration == self.lifecycleGeneration else {
+        guard let currentAction else { throw ComputerActionService.ComputerActionError.lifecycleChanged }
+        try currentAction.checkAuthority()
+        guard currentAction.cancellationState.isActive else { throw CancellationError() }
+        guard self.isAllowed(currentAction.execution, generation: lifecycleGeneration) else {
             throw ComputerActionService.ComputerActionError.lifecycleChanged
         }
+    }
+
+    private func isAllowed(_ execution: Execution, generation: UInt64) -> Bool {
+        guard generation == self.lifecycleGeneration else { return false }
+        return self.execution === execution && !execution.closed && execution.route.isActive
     }
 
     #if DEBUG
@@ -161,129 +296,62 @@ final class ComputerActionExecutionQueue {
 
     private func startDrainIfNeeded() {
         guard self.drainTask == nil else { return }
-        self.drainTask = Task { @MainActor [weak self] in
-            await self?.drain()
-        }
+        self.drainTask = Task { @MainActor [weak self] in await self?.drain() }
     }
 
     private func drain() async {
         while !self.pendingActions.isEmpty {
             let queued = self.pendingActions.removeFirst()
-            guard queued.lifecycleGeneration == self.lifecycleGeneration else {
-                _ = queued.cancellationState.finish()
-                queued.continuation.resume(
-                    throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
-                continue
-            }
             do {
                 try await self.waitForLifecycleRelease(
                     lifecycleGeneration: queued.lifecycleGeneration,
                     cancellationState: queued.cancellationState)
-            } catch {
-                _ = queued.cancellationState.finish()
-                queued.continuation.resume(throwing: error)
-                continue
-            }
-            guard !queued.cancellationState.isCancelled else {
-                _ = queued.cancellationState.finish()
-                queued.continuation.resume(throwing: CancellationError())
-                continue
-            }
-
-            self.currentActionID = queued.id
-            self.currentActionGeneration = queued.lifecycleGeneration
-            self.currentActionCancellationState = queued.cancellationState
-            let operationTask = Task { @MainActor [weak self] in
-                guard let self else { throw CancellationError() }
-                defer {
-                    // An operation can ignore cancellation and arm a button after
-                    // advanceLifecycle's immediate release. Catch it here, before
-                    // this task completes and the drain admits newer-generation work.
-                    let callerCancelled = queued.cancellationState.isCancelled
-                    if Task.isCancelled || callerCancelled
-                        || queued.lifecycleGeneration != self.lifecycleGeneration
-                    {
-                        let released = self.attemptLifecycleRelease()
-                        if callerCancelled, released {
-                            queued.cancellationState.recordOperationReleaseSuccess()
-                        }
-                    }
+                guard self.isAllowed(queued.execution, generation: queued.lifecycleGeneration) else {
+                    throw ComputerActionService.ComputerActionError.lifecycleChanged
                 }
                 guard !queued.cancellationState.isCancelled else { throw CancellationError() }
-                try Task.checkCancellation()
-                return try await queued.operation(queued.params, queued.lifecycleGeneration)
-            }
-            self.currentActionTask = operationTask
-
-            let outcome: Result<OpenClawComputerActResult, Error>
-            do {
-                outcome = try await .success(operationTask.value)
             } catch {
-                outcome = .failure(error)
+                _ = queued.cancellationState.finish()
+                queued.reject(error)
+                continue
             }
-
-            let cancellation = queued.cancellationState.finish()
-            if cancellation.needsRelease {
-                // Cancellation can win after the operation defer but before the
-                // result is committed. Release here so the actor hop cannot miss
-                // a just-finished left_mouse_down.
-                self.attemptLifecycleRelease()
+            self.currentAction = queued
+            let operationTask = Task { @MainActor in await queued.operation() }
+            self.currentOperationTask = operationTask
+            // Settlement/release runs outside the canceled effector task. Close
+            // joins this task, including failed-release retries, before ACK.
+            let settlement = Task { @MainActor in
+                let complete = await operationTask.value
+                await complete()
             }
-            if cancellation.wasCancelled {
-                // A failed synthetic mouse-up keeps lifecycleReleasePending set.
-                // Cancellation is not complete until the owned button is released
-                // or a newer lifecycle takes responsibility for the retry.
-                try? await self.waitForLifecycleRelease(
-                    lifecycleGeneration: queued.lifecycleGeneration)
-            }
-            let lifecycleChanged = queued.lifecycleGeneration != self.lifecycleGeneration
-            self.currentActionID = nil
-            self.currentActionGeneration = nil
-            self.currentActionCancellationState = nil
+            self.currentActionTask = settlement
+            await settlement.value
+            self.currentAction = nil
             self.currentActionTask = nil
-
-            if lifecycleChanged {
-                queued.continuation.resume(
-                    throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
-            } else if cancellation.wasCancelled {
-                queued.continuation.resume(throwing: CancellationError())
-            } else {
-                queued.continuation.resume(with: outcome)
-            }
+            self.currentOperationTask = nil
         }
         self.drainTask = nil
     }
 
-    private func advanceLifecycle(to generation: UInt64) {
-        guard generation > self.lifecycleGeneration else { return }
-        self.lifecycleGeneration = generation
-
-        if let currentActionGeneration, currentActionGeneration < generation {
-            self.currentActionTask?.cancel()
-        }
-        self.attemptLifecycleRelease()
-
-        let staleActions = self.pendingActions.filter { $0.lifecycleGeneration < generation }
-        self.pendingActions.removeAll { $0.lifecycleGeneration < generation }
-        for queued in staleActions {
+    private func rejectPending(where matches: (QueuedAction) -> Bool) {
+        let stale = self.pendingActions.filter(matches)
+        self.pendingActions.removeAll(where: matches)
+        for queued in stale {
             _ = queued.cancellationState.finish()
-            queued.continuation.resume(
-                throwing: ComputerActionService.ComputerActionError.lifecycleChanged)
+            queued.reject(ComputerActionService.ComputerActionError.lifecycleChanged)
         }
     }
 
     private func cancelAction(id: UUID) {
-        if let index = pendingActions.firstIndex(where: { $0.id == id }) {
+        if let index = self.pendingActions.firstIndex(where: { $0.id == id }) {
             let queued = self.pendingActions.remove(at: index)
             _ = queued.cancellationState.finish()
-            queued.continuation.resume(throwing: CancellationError())
+            queued.reject(CancellationError())
             return
         }
-        guard self.currentActionID == id else { return }
-        // A canceled action may already have posted left_mouse_down. Release now,
-        // and let the operation-task defer catch any later cancellation-ignoring post.
+        guard self.currentAction?.id == id else { return }
         self.attemptLifecycleRelease()
-        self.currentActionTask?.cancel()
+        self.currentOperationTask?.cancel()
     }
 
     @discardableResult
@@ -294,15 +362,13 @@ final class ComputerActionExecutionQueue {
     }
 
     private func waitForLifecycleRelease(
-        lifecycleGeneration: UInt64,
+        lifecycleGeneration: UInt64?,
         cancellationState: ComputerActionCancellationState? = nil) async throws
     {
         while self.lifecycleReleasePending {
             try Task.checkCancellation()
-            if cancellationState?.isCancelled == true {
-                throw CancellationError()
-            }
-            guard lifecycleGeneration == self.lifecycleGeneration else {
+            if cancellationState?.isCancelled == true { throw CancellationError() }
+            if let lifecycleGeneration, lifecycleGeneration != self.lifecycleGeneration {
                 throw ComputerActionService.ComputerActionError.lifecycleChanged
             }
             self.attemptLifecycleRelease()
@@ -404,8 +470,8 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
 /// Routes one `computer.act` request to the executor that owns it: screen
 /// coordinates go to `ComputerScreenActionExecutor`, window- and element-scoped
 /// requests to `ComputerWindowActionExecutor`. This type owns everything the two
-/// executors share — the serializing execution queue, the input-permission
-/// probe, and the `ComputerActionError` vocabulary both of them throw.
+/// executors share — owned snapshot cleanup, the input-permission probe, and
+/// the error vocabulary. Both use the runtime's single admission queue.
 @MainActor
 final class ComputerActionService {
     enum ComputerActionError: LocalizedError {
@@ -427,6 +493,7 @@ final class ComputerActionService {
         case buttonNotHeld
         case eventCreationFailed
         case lifecycleChanged
+        case hostBusy
         case invalidRequest(String)
         case staleObservation
         case unsupportedAction(OpenClawComputerAction)
@@ -468,6 +535,8 @@ final class ComputerActionService {
                 "left button is not held by computer control"
             case .eventCreationFailed:
                 "Failed to synthesize input event"
+            case .hostBusy:
+                "COMPUTER_HOST_BUSY: another execution owns this computer or is closing"
             case .lifecycleChanged:
                 "COMPUTER_STALE_OBSERVATION: provider generation changed; take a fresh observation and retry"
             case let .invalidRequest(message):
@@ -482,42 +551,26 @@ final class ComputerActionService {
         }
     }
 
+    private let snapshotManager: InMemorySnapshotManager
+    private let screenSnapshotManager: InMemorySnapshotManager
     private let screen: ComputerScreenActionExecutor
-    private lazy var window = ComputerWindowActionExecutor()
-    private lazy var executionQueue = ComputerActionExecutionQueue { [weak self] in
-        self?.screen.releaseCurrentHeldButton() ?? true
-    }
+    private var window: ComputerWindowActionExecutor?
+    private let executionQueue: ComputerActionExecutionQueue
 
-    init() {
-        self.screen = ComputerScreenActionExecutor()
+    init(executionQueue: ComputerActionExecutionQueue, snapshotManager: InMemorySnapshotManager) {
+        self.executionQueue = executionQueue
+        self.snapshotManager = snapshotManager
+        let screenSnapshots = InMemorySnapshotManager()
+        self.screenSnapshotManager = screenSnapshots
+        self.screen = ComputerScreenActionExecutor(snapshotManager: screenSnapshots)
     }
-
-    #if DEBUG
-    init(screen: ComputerScreenActionExecutor) {
-        self.screen = screen
-    }
-    #endif
 
     func perform(
         _ params: OpenClawComputerActParams,
         lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
     {
-        try await self.executionQueue.perform(
-            params,
-            lifecycleGeneration: lifecycleGeneration)
-        { [weak self] params, lifecycleGeneration in
-            guard let self else { throw CancellationError() }
-            return try await self.performImmediately(
-                params,
-                lifecycleGeneration: lifecycleGeneration)
-        }
-    }
-
-    private func performImmediately(
-        _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-    {
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+        let checkExecutionAllowed = self.executionQueue.executionCheck(lifecycleGeneration: lifecycleGeneration)
+        try checkExecutionAllowed()
         if params.deliveryMode == .background,
            params.windowRef == nil,
            !params.action.isWindowScopedOnly
@@ -529,20 +582,27 @@ final class ComputerActionService {
                     recommended: "window-pixel",
                     reasonCode: "no_window_target"))
         }
-        let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
-            guard let self else { throw CancellationError() }
-            try self.executionQueue.checkExecutionAllowed(
-                lifecycleGeneration: lifecycleGeneration)
-        }
         if params.isWindowScopedRequest {
-            return try await self.window.perform(
+            let window = self.window ?? ComputerWindowActionExecutor(snapshotManager: self.snapshotManager)
+            self.window = window
+            return try await window.perform(
                 params,
                 lifecycleGeneration: lifecycleGeneration,
                 checkExecutionAllowed: checkExecutionAllowed)
         }
-        return try await self.screen.perform(
-            params,
-            checkExecutionAllowed: checkExecutionAllowed)
+        return try await self.screen.perform(params, checkExecutionAllowed: checkExecutionAllowed)
+    }
+
+    func releaseHeldInput() -> Bool {
+        self.screen.releaseCurrentHeldButton()
+    }
+
+    func invalidateReferences() async throws {
+        self.window?.clearReferences()
+        // Keep coordinate and window snapshots separate, but retire both after
+        // queue settlement so a suspended observation cannot republish state.
+        _ = try await self.snapshotManager.cleanAllSnapshots()
+        _ = try await self.screenSnapshotManager.cleanAllSnapshots()
     }
 
     static func validateInputPermissions(_ permissions: ComputerControlPermissionSnapshot) throws {
@@ -557,36 +617,4 @@ final class ComputerActionService {
             throw ComputerActionError.postEventAccessDenied
         }
     }
-
-    /// Releases any outstanding synthetic left button immediately. Called on
-    /// lifecycle transitions (node disconnect, node stop, Computer Control
-    /// disabled) so a stranded left_mouse_down is not held until the idle
-    /// watchdog fires. Idempotent when nothing is held.
-    func releaseHeldInput(lifecycleGeneration: UInt64) async {
-        await self.executionQueue.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
-    }
-
-    #if DEBUG
-    var lifecycleGenerationForTesting: UInt64 {
-        self.executionQueue.lifecycleGenerationForTesting
-    }
-
-    func typeTextForTesting(
-        _ text: String,
-        lifecycleGeneration: UInt64 = 0) async throws -> OpenClawComputerActResult
-    {
-        let params = OpenClawComputerActParams(action: .type, text: text)
-        return try await self.executionQueue.perform(
-            params,
-            lifecycleGeneration: lifecycleGeneration)
-        { [weak self] _, generation in
-            guard let self else { throw CancellationError() }
-            try await self.screen.typeText(text) { [weak self] in
-                guard let self else { throw CancellationError() }
-                try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: generation)
-            }
-            return OpenClawComputerActResult(ok: true)
-        }
-    }
-    #endif
 }

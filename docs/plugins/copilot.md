@@ -296,13 +296,12 @@ doctor contract:
 ## Permissions and ask_user
 
 Permission enforcement for bridged OpenClaw tools happens **inside the tool
-wrapper**, not via the SDK's `onPermissionRequest` callback. The same
-`wrapToolWithBeforeToolCallHook` that PI uses
-(`src/agents/agent-tools.before-tool-call.ts`) is applied by
-`createOpenClawCodingTools` to every coding tool: loop detection, trusted
+wrapper**, not via the SDK's `onPermissionRequest` callback. The harness asks
+the host's `createToolSurface` capability to construct and bind tools to the
+exact admitted run. The host uses `createOpenClawCodingTools` and the same
+before-tool-call wrappers as the built-in harness: loop detection, trusted
 plugin policies, before-tool-call hooks, and two-phase plugin approvals via
-the gateway (`plugin.approval.request`) all run through the exact same code
-path as native PI attempts.
+the gateway (`plugin.approval.request`) share that enforcement path.
 
 Each SDK tool returned by the Copilot tool bridge is marked with:
 
@@ -356,6 +355,20 @@ lifecycle used by other agent harnesses. Local-model lean defaults,
 runtime-compatible schema filtering, directory hydration, and catalog
 cleanup all stay in the shared helper so Copilot and Codex-adjacent
 harnesses do not drift.
+
+### Attempt cleanup
+
+Bridged tools stop accepting work when the SDK turn settles, including on
+success, error, timeout, or cancellation. Cancellation also reaches active
+Code Mode calls and hidden catalog tools. The attempt waits for registered
+tool cleanup before releasing its active-run handle or returning a result;
+for a paired desktop, this includes closing its computer execution.
+
+Native background compaction has a separate lifetime. A retained SDK session
+does not keep the completed attempt's tools usable. If tool cleanup fails,
+the result retains that failure alongside the original error, marks replay
+unsafe, and reports the failure through `agent_end` rather than replaying
+the action. Timeout and cancellation keep their original terminal status.
 
 ### Session-level GitHub token
 

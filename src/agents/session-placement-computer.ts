@@ -9,6 +9,7 @@ type PlacementComputerContext = Readonly<{
   agentId: string;
   isActive(): boolean;
   sandboxToolPolicy?: SandboxToolPolicy;
+  computerUse: NonNullable<ComputerToolTransport["computerUse"]> | null;
   bind(run: OperationalRunInstanceRef): ComputerToolTransport | null;
 }>;
 
@@ -17,14 +18,38 @@ const placementComputer = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PlacementComputerContext>(),
 );
 
-/** Absence means ordinary node routing; null explicitly withholds an unavailable placed desktop. */
-export function resolveSessionPlacementComputer(run: OperationalRunInstanceRef | undefined) {
+export type CapturedSessionPlacementComputer = Readonly<{
+  computerUse: NonNullable<ComputerToolTransport["computerUse"]>;
+  bind(run: OperationalRunInstanceRef): ComputerToolTransport | null;
+}>;
+
+/** Capture the prepared owner without binding authority or consulting another request's ALS later. */
+export function captureSessionPlacementComputer(scope: {
+  runId?: string;
+  agentId?: string;
+}): CapturedSessionPlacementComputer | null | undefined {
   const context = placementComputer.getStore();
-  return context
-    ? run && run.runId === context.runId && context.isActive()
-      ? context.bind(run)
-      : null
-    : undefined;
+  if (!context) {
+    return undefined;
+  }
+  const isCurrent = () =>
+    scope.runId === context.runId &&
+    (scope.agentId === undefined || scope.agentId === context.agentId) &&
+    context.isActive();
+  if (!isCurrent() || context.computerUse === null) {
+    return null;
+  }
+  return Object.freeze({
+    computerUse: context.computerUse,
+    bind: (run: OperationalRunInstanceRef) =>
+      isCurrent() && run.runId === context.runId ? context.bind(run) : null,
+  });
+}
+
+/** Absence means ordinary routing; null withholds an unavailable or stale placed desktop. */
+export function resolveSessionPlacementComputer(run: OperationalRunInstanceRef | undefined) {
+  const owner = captureSessionPlacementComputer({ runId: run?.runId });
+  return owner && run ? owner.bind(run) : owner === undefined ? undefined : null;
 }
 
 /** Select policy facts without opening a transport or activating a dormant sandbox. */

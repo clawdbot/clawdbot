@@ -63,8 +63,48 @@ struct ComputerRefLifecycleContractTests {
         }
     }
 
+    @Test func `execution close clears only the native owners snapshot manager`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let manager = InMemorySnapshotManager()
+            let sibling = InMemorySnapshotManager()
+            let queue = ComputerActionExecutionQueue()
+            let service = ComputerActionService(executionQueue: queue, snapshotManager: manager)
+            queue.installCleanup(
+                release: { service.releaseHeldInput() },
+                invalidate: { try await service.invalidateReferences() })
+            let executionId = UUID()
+            let owned = try await queue.perform(
+                executionId: executionId,
+                route: route,
+                checkAuthority: {},
+                operation: { _ in try await manager.createSnapshot() })
+            let unrelated = try await sibling.createSnapshot()
+            #expect(try await manager.ownsSnapshot(snapshotId: owned))
+
+            #expect(try await queue.closeExecution(executionId, route: route, retireUnowned: true))
+
+            #expect(try await !manager.ownsSnapshot(snapshotId: owned))
+            #expect(await manager.getMostRecentSnapshot() == nil)
+            #expect(try await sibling.ownsSnapshot(snapshotId: unrelated))
+        }
+    }
+
+    @Test func `execution cleanup invalidates window and observation references without a generation change`() throws {
+        let executor = ComputerWindowActionExecutor(snapshotManager: InMemorySnapshotManager())
+        executor.adoptLifecycleGeneration(1)
+        let window = executor.issueWindowRef(
+            app: Self.app,
+            window: Self.window(windowID: 77, bounds: Self.originalBounds))
+        let observation = executor.issueObservation(windowRef: window, snapshotId: "synthetic-snapshot", elements: [])
+        executor.clearReferences()
+        #expect(throws: ComputerActionService.ComputerActionError.self) { try executor.resolveWindow(window) }
+        #expect(throws: ComputerActionService.ComputerActionError.self) {
+            try executor.resolveObservation(observation.id, windowRef: window)
+        }
+    }
+
     private func run(_ testCase: Case) async -> Error? {
-        let service = ComputerWindowActionExecutor()
+        let service = ComputerWindowActionExecutor(snapshotManager: InMemorySnapshotManager())
         service.adoptLifecycleGeneration(1)
         let windowRef = service.issueWindowRef(
             app: Self.app,

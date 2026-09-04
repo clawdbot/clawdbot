@@ -353,6 +353,19 @@ eligible node; it never redirects to another device. When several eligible nodes
 are connected, select one explicitly. When local execution is allowed by policy,
 use the CLI's native shell for local work.
 
+Executable Gateway MCP tool state belongs to the active CLI attempt, not the
+short-lived tool-schema cache. Multiple actions in that attempt share the same
+tool session. For a placed session, computer control stays bound to its captured
+desktop; if that desktop is unavailable, the computer tool is withheld rather
+than routed to another node. Screenshot and frame references retain their own
+validity rules.
+
+When an attempt ends or is canceled, OpenClaw stops admitting new tool actions
+and awaits tool cleanup before releasing its execution slot. A tool-cleanup
+failure is terminal: OpenClaw preserves completed output and reports the failure
+without automatically retrying the CLI or falling back to another model. Tool
+actions may already have occurred; verify their effects before retrying manually.
+
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,

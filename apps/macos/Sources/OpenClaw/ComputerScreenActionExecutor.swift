@@ -66,8 +66,8 @@ final class ComputerScreenActionExecutor {
     /// this bounded cleanup.
     private static let buttonHoldIdleTimeoutNanoseconds: UInt64 = 120 * 1_000_000_000
 
-    init() {
-        self.automation = UIAutomationService()
+    init(snapshotManager: InMemorySnapshotManager) {
+        self.automation = UIAutomationService(snapshotManager: snapshotManager)
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -76,7 +76,7 @@ final class ComputerScreenActionExecutor {
 
     #if DEBUG
     init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
-        self.automation = UIAutomationService()
+        self.automation = UIAutomationService(snapshotManager: InMemorySnapshotManager())
         self.mouseButtonEventPoster = mouseButtonEventPoster
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -87,7 +87,7 @@ final class ComputerScreenActionExecutor {
         mouseEventFactory: @escaping MouseEventFactory,
         mouseEventPoster: @escaping MouseEventPoster)
     {
-        self.automation = UIAutomationService()
+        self.automation = UIAutomationService(snapshotManager: InMemorySnapshotManager())
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = mouseEventFactory
         self.mouseEventPoster = mouseEventPoster
@@ -95,7 +95,7 @@ final class ComputerScreenActionExecutor {
     }
 
     init(textGraphemePoster: @escaping TextGraphemePoster) {
-        self.automation = UIAutomationService()
+        self.automation = UIAutomationService(snapshotManager: InMemorySnapshotManager())
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -168,7 +168,11 @@ final class ComputerScreenActionExecutor {
             let to = try requiredPoint(params, display: display)
             let from = try point(params.fromX, params.fromY, params: params, display: display)
                 ?? to
-            try await self.rawDrag(from: from, to: to, flags: modifiers.flags)
+            try await self.rawDrag(
+                from: from,
+                to: to,
+                flags: modifiers.flags,
+                checkExecutionAllowed: checkExecutionAllowed)
         case .leftMouseDown, .leftMouseUp:
             // Coordinate is optional: press/release at the current cursor when omitted.
             let mappedPoint = try self.point(params.x, params.y, params: params, display: display)
@@ -574,7 +578,12 @@ final class ComputerScreenActionExecutor {
         }
     }
 
-    private func rawDrag(from: CGPoint, to: CGPoint, flags: CGEventFlags) async throws {
+    private func rawDrag(
+        from: CGPoint,
+        to: CGPoint,
+        flags: CGEventFlags,
+        checkExecutionAllowed: @MainActor () throws -> Void = { try Task.checkCancellation() }) async throws
+    {
         let down = try self.mouseEventFactory(.leftMouseDown, from, .left, 1, flags)
         let moves = try (1...Self.dragSteps).map { step in
             let fraction = Double(step) / Double(Self.dragSteps)
@@ -594,7 +603,7 @@ final class ComputerScreenActionExecutor {
         }
         let stepDelay = UInt64(Self.dragDurationMs) * 1_000_000 / UInt64(Self.dragSteps)
         for move in moves {
-            try Task.checkCancellation()
+            try checkExecutionAllowed()
             try self.mouseEventPoster(move)
             try await Task.sleep(nanoseconds: stepDelay)
         }

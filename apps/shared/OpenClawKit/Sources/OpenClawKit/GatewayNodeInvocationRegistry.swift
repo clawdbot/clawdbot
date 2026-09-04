@@ -35,6 +35,7 @@ struct GatewayNodeInvocationRegistry {
 
     mutating func register(requestID: String, command: String, admissionGeneration: UInt64) -> UUID? {
         let waitsForRouteTeardown = command == OpenClawComputerCommand.act.rawValue ||
+            command == OpenClawScreenCommand.snapshot.rawValue ||
             command == OpenClawCameraCommand.ptzControl.rawValue ||
             OpenClawTalkCommand(rawValue: command) != nil
         guard waitsForRouteTeardown || command == OpenClawSystemCommand.notify.rawValue ||

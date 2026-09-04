@@ -1111,6 +1111,27 @@ describe("runCopilotAttempt", () => {
     expect(cfg.hooks?.onPreToolUse).toEqual(expect.any(Function));
   });
 
+  it("keeps cancellation during sandbox preparation when tool construction also rejects", async () => {
+    const controller = new AbortController();
+    const cleanup = vi.fn(async () => {});
+    const sdk = makeFakeSdk();
+    const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+      pool: makeFakePool(sdk),
+      resolveSandboxContextOverride: async () => {
+        controller.abort();
+        return null;
+      },
+      createToolBridge: async (input) => {
+        input.registerRunCleanup?.(cleanup);
+        input.abortSignal?.throwIfAborted();
+        return createStubToolBridge();
+      },
+    });
+    expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith("cancel");
+    expect(sdk.createSession).not.toHaveBeenCalled();
+  });
+
   it("does not emit llm_output when cancellation happens before the SDK turn starts", async () => {
     const llmOutput = vi.fn();
     initializeGlobalHookRunner(
@@ -1649,7 +1670,11 @@ describe("runCopilotAttempt", () => {
       sessionCreated.resolve(session);
     });
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => createStubToolBridge());
+    let toolSignal: AbortSignal | undefined;
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      toolSignal = input.abortSignal;
+      return createStubToolBridge();
+    });
 
     const runPromise = runCopilotAttempt(makeParams(), {
       createToolBridge,
@@ -1666,7 +1691,9 @@ describe("runCopilotAttempt", () => {
     expect(activeRunHandle.isAborted?.()).toBe(false);
 
     gatewayQuestionMock.cancelError = new Error("gateway unavailable");
+    expect(toolSignal?.aborted).toBe(false);
     expect(abortAgentHarnessRun("session-1")).toBe(true);
+    expect(toolSignal?.aborted).toBe(true);
     expect(activeRunHandle.isAborted?.()).toBe(true);
     expect(session.abort).toHaveBeenCalledTimes(1);
     sendDeferred.resolve(undefined);
@@ -1736,7 +1763,7 @@ describe("runCopilotAttempt", () => {
     expect(createToolBridge).toHaveBeenCalledTimes(1);
     expect(createToolBridge).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: undefined,
+        abortSignal: expect.objectContaining({ aborted: true }),
         agentDir: "C:\\copilot-home",
         agentId: "agent-1",
         modelId: "gpt-4o",
@@ -1959,19 +1986,28 @@ describe("runCopilotAttempt", () => {
     expect(result.yieldDetected).toBe(false);
   });
 
-  it("tool bridge failures become prompt errors", async () => {
-    const agentEnd = vi.fn();
+  it("drains tools registered before construction fails before reporting the prompt error", async () => {
+    const events: string[] = [];
+    const cleanup = vi.fn(async () => {
+      events.push("cleanup");
+    });
+    const agentEnd = vi.fn(() => {
+      events.push("agent_end");
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(async () => {
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      input.registerRunCleanup?.(cleanup);
       throw new Error("bridge failed");
     });
 
     const result = await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
+    expect(events).toEqual(["cleanup", "agent_end"]);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith("error");
     expect(getPromptErrorCode(result)).toBe("tool_bridge_failure");
     expect(
       (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
@@ -3093,6 +3129,193 @@ describe("runCopilotAttempt", () => {
       expect.objectContaining({ provider: "github-copilot", timestamp: 123 }),
     );
   });
+
+  it.each([false, true])(
+    "fences settled SDK actions before delivery drains and awaits cleanup (timeout: %s)",
+    async (timedOut) => {
+      const { createCopilotToolBridge: createRealBridge } = await import("./tool-bridge.js");
+      const send = createDeferred<SessionEventShape | undefined>();
+      const deliveryEntered = createDeferred<void>();
+      const releaseDelivery = createDeferred<void>();
+      const releaseCleanup = createDeferred<void>();
+      const cleanup = vi.fn(async () => releaseCleanup.promise);
+      const execute = vi.fn(async () => ({ content: [], details: null }));
+      const completed = vi.fn();
+      const onDeferredCompaction = vi.fn();
+      const clearActiveRun = vi.spyOn(agentHarnessRuntime, "clearActiveEmbeddedRun");
+      let toolSignal: AbortSignal | undefined;
+      let sdkTool: SdkTool | undefined;
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("assistant.message_delta", { deltaContent: "done", messageId: "msg-1" });
+          if (timedOut) {
+            session.emit("session.compaction_start", {});
+          }
+          return await send.promise;
+        });
+      });
+      const pool = makeFakePool(sdk);
+      const run = runCopilotAttempt(
+        makeParams({
+          disableTools: false,
+          onAssistantDelta: async () => {
+            deliveryEntered.resolve();
+            await releaseDelivery.promise;
+          },
+        }),
+        {
+          createToolBridge: async (input: CopilotToolBridgeInput) => {
+            toolSignal = input.abortSignal;
+            const bridge = await createRealBridge({
+              ...input,
+              attemptParams: {
+                ...input.attemptParams,
+                hostCapabilities: {
+                  ...input.attemptParams.hostCapabilities,
+                  createToolSurface: (options) => {
+                    options.registerRunCleanup?.(cleanup);
+                    return [
+                      {
+                        name: "settlement_probe",
+                        label: "Probe",
+                        description: "Synthetic settlement probe",
+                        parameters: { type: "object", properties: {} },
+                        catalogMode: "direct-only",
+                        execute,
+                      },
+                    ];
+                  },
+                },
+              },
+            });
+            sdkTool = bridge.promptToolPolicy
+              .apply()
+              .tools.find((tool) => tool.name === "settlement_probe");
+            return bridge;
+          },
+          onDeferredCompaction,
+          pool,
+        },
+      ).then((result) => {
+        completed();
+        return result;
+      });
+      try {
+        await deliveryEntered.promise;
+        if (timedOut) {
+          send.reject(new Error("Timeout after 5000ms waiting for session.idle"));
+        } else {
+          send.resolve(makeAssistantMessageEvent("done"));
+        }
+        await waitForEventLoopTurn();
+        const lateResult = await expectDefined(sdkTool?.handler, "retained SDK handler")(
+          {},
+          {
+            arguments: {},
+            sessionId: requireSession(sdk).sessionId,
+            toolCallId: "late-call",
+            toolName: "settlement_probe",
+          },
+        );
+        expect(execute).not.toHaveBeenCalled();
+        expect(lateResult).toMatchObject({ resultType: "failure" });
+        expect(toolSignal?.aborted).toBe(true);
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(clearActiveRun).not.toHaveBeenCalled();
+        releaseDelivery.resolve();
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+        expect(completed).not.toHaveBeenCalled();
+        expect(clearActiveRun).not.toHaveBeenCalled();
+        expect(onDeferredCompaction).not.toHaveBeenCalled();
+        expect(pool.release).not.toHaveBeenCalled();
+      } finally {
+        send.resolve(undefined);
+        releaseDelivery.resolve();
+        releaseCleanup.resolve();
+        await run;
+        const session = requireSession(sdk);
+        session.emit("session.compaction_complete", { success: true });
+        session.emit("session.idle", {});
+        await vi.waitFor(() => expect(session.disconnect).toHaveBeenCalledOnce());
+      }
+      expect(requireSession(sdk).abort).not.toHaveBeenCalled();
+      expect(clearActiveRun).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(timedOut ? "timeout" : "completion");
+      expect(pool.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["completion", "error", "timeout", "cancel"] as const)(
+    "retains tool cleanup failures without replaying the attempt (%s)",
+    async (outcome) => {
+      const primaryError = new Error("Synthetic prompt failure");
+      const cleanupError = new Error("401 Unauthorized: close execution request timed out");
+      const cleanup = vi.fn(async () => {
+        throw cleanupError;
+      });
+      const siblingCleanup = vi.fn(async () => {});
+      const controller = new AbortController();
+      const agentEnd = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+      );
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          if (outcome === "error") {
+            throw primaryError;
+          }
+          if (outcome === "timeout") {
+            throw new Error("Timeout after 5000ms waiting for session.idle");
+          }
+          if (outcome === "cancel") {
+            controller.abort();
+          }
+          return makeAssistantMessageEvent("done");
+        });
+      });
+      const pool = makeFakePool(sdk);
+      const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+        createToolBridge: async (input: CopilotToolBridgeInput) => {
+          input.registerRunCleanup?.(cleanup);
+          input.registerRunCleanup?.(siblingCleanup);
+          return createStubToolBridge();
+        },
+        pool,
+      });
+      const session = requireSession(sdk);
+      session.emit("session.idle", {});
+      await vi.waitFor(() => expect(session.disconnect).toHaveBeenCalledOnce());
+
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(siblingCleanup).toHaveBeenCalledOnce();
+      expect(result.terminal.kind).toBe(
+        outcome === "cancel" ? "aborted" : outcome === "timeout" ? "timeout" : "failed",
+      );
+      const error = projectAgentRunAttemptTerminal(result.terminal).promptError;
+      if (outcome === "error") {
+        expect(error).toBeInstanceOf(AggregateError);
+        if (!(error instanceof AggregateError)) {
+          throw new Error("Expected primary and cleanup failures");
+        }
+        expect(error.errors).toHaveLength(2);
+        expect(error.errors[0]).toBe(primaryError);
+        expect(error.errors[1]).toBe(cleanupError);
+      } else {
+        expect(error).toBe(cleanupError);
+      }
+      expect(result.replayMetadata.replaySafe).toBe(false);
+      expect(agentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining(cleanupError.message),
+        }),
+        expect.anything(),
+      );
+      expect(session.sendAndWait).toHaveBeenCalledOnce();
+      expect(session.abort).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 0);
+      expect(pool.release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("cleanup on success", async () => {
     const sdk = makeFakeSdk();

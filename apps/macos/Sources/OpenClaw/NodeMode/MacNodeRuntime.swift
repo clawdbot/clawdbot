@@ -118,7 +118,8 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
-    private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
+    private let makeMainActorServices: @Sendable (ComputerActionExecutionQueue) async
+        -> any MacNodeRuntimeMainActorServices
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
     private let computerControlProvider: @Sendable () -> ComputerControlProvider
@@ -134,17 +135,16 @@ actor MacNodeRuntime {
     /// Single-flight lazy initialization. Separate service instances would split
     /// ownership of held computer input and make lifecycle release incomplete.
     private var mainActorServicesInitializationTask: Task<any MacNodeRuntimeMainActorServices, Never>?
-    /// Invalidates computer actions admitted before a lifecycle release, including
-    /// the first action while the shared main-actor services are still initializing.
-    private var computerInputReleaseGeneration: UInt64 = 0
+    private let computerActions = ComputerActionExecutionQueue()
     private var mainSessionKey: String = "main"
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         cameraPTZ: any CameraPTZServicing = CameraPTZService(),
-        makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
-            await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
-        },
+        makeMainActorServices: @escaping @Sendable (ComputerActionExecutionQueue) async
+            -> any MacNodeRuntimeMainActorServices = { queue in
+                await MainActor.run { LiveMacNodeRuntimeMainActorServices(computerActions: queue) }
+            },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
             MacNodeRuntime.computerControlEnabledDefault()
         },
@@ -200,10 +200,15 @@ actor MacNodeRuntime {
         if let rejection = Self.canvasCommandRejection(req) {
             return rejection
         }
-        if let cuaResponse = await handleCuaInvokeIfSelected(req) {
-            return cuaResponse
-        }
         do {
+            if command == OpenClawComputerCommand.act.rawValue {
+                return try await handleComputerActInvoke(req)
+            }
+            if let cuaResponse = await handleCuaInvokeIfSelected(
+                req, provider: self.computerControlProvider(), route: GatewayNodeSession.invocationRoute)
+            {
+                return cuaResponse
+            }
             switch command {
             case OpenClawCanvasCommand.present.rawValue,
                  OpenClawCanvasCommand.hide.rawValue,
@@ -221,8 +226,6 @@ actor MacNodeRuntime {
                 return try await handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
-            case OpenClawComputerCommand.act.rawValue:
-                return try await handleComputerActInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
@@ -287,8 +290,12 @@ actor MacNodeRuntime {
         return nil
     }
 
-    private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
-        guard self.computerControlProvider() == .cua,
+    private func handleCuaInvokeIfSelected(
+        _ req: BridgeInvokeRequest,
+        provider: ComputerControlProvider,
+        route: GatewayNodeInvocationRoute?) async -> BridgeInvokeResponse?
+    {
+        guard provider == .cua,
               Self.cuaOwnedCommands.contains(req.command)
         else { return nil }
         guard self.computerControlEnabled() else {
@@ -297,11 +304,23 @@ actor MacNodeRuntime {
                 code: .unavailable,
                 message: "COMPUTER_DISABLED: enable Computer Control in Settings")
         }
+        guard let route, route.isActive else {
+            return Self.errorResponse(
+                req, code: .unavailable, message: "UNAVAILABLE: computer control requires a live node route")
+        }
         guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
                 message: "UNAVAILABLE: selected CUA provider is not ready")
+        }
+        guard route.isActive, !Task.isCancelled,
+              self.computerControlEnabled(), self.computerControlProvider() == .cua
+        else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: computer control lifecycle changed")
         }
         return await nodeHostWorker.invoke(req)
     }
@@ -565,6 +584,53 @@ extension MacNodeRuntime {
     }
 
     private func handleComputerActInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let provider = self.computerControlProvider()
+        let route = GatewayNodeSession.invocationRoute
+        let invocation: OpenClawComputerActInvocation
+        do {
+            invocation = try Self.decodeParams(OpenClawComputerActInvocation.self, from: req.paramsJSON)
+        } catch {
+            return Self.errorResponse(
+                req, code: .invalidRequest, message: "INVALID_REQUEST: invalid computer.act params")
+        }
+        guard let route else {
+            return Self.errorResponse(
+                req, code: .unavailable, message: "UNAVAILABLE: computer control requires a live node route")
+        }
+        if case let .close(executionId) = invocation {
+            // Cleanup stays with its captured native owner after policy/route revocation.
+            // An unowned native close retires the ID but reports no resource cleanup;
+            // an unowned CUA close belongs only to the captured provider below.
+            do {
+                let closed = try await self.computerActions.closeExecution(
+                    executionId, route: route, retireUnowned: provider == .peekaboo)
+                if closed || provider == .peekaboo {
+                    let result = OpenClawComputerActResult(
+                        ok: true, details: ["executionClosed": AnyCodable(closed)])
+                    return try BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: Self.encodePayload(result))
+                }
+            } catch {
+                // Match the native status diagnostic bound; keep the cleanup cause,
+                // not arbitrary NSError userInfo or snapshot contents.
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: native computer cleanup failed: \(error.localizedDescription.prefix(360))")
+            }
+        }
+        if let response = await self.handleCuaInvokeIfSelected(req, provider: provider, route: route) {
+            return response
+        }
+        guard case let .action(executionId) = invocation, route.isActive else {
+            throw ComputerActionService.ComputerActionError.lifecycleChanged
+        }
+        let params: OpenClawComputerActParams
+        do {
+            params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
+        } catch {
+            return Self.errorResponse(
+                req, code: .invalidRequest, message: "INVALID_REQUEST: invalid computer.act params")
+        }
         guard self.computerControlEnabled() else {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -573,28 +639,26 @@ extension MacNodeRuntime {
                     code: .unavailable,
                     message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
         }
-        let params: OpenClawComputerActParams
         do {
-            params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
-        } catch {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: invalid computer.act params")
-        }
-        let releaseGenerationAtStart = self.computerInputReleaseGeneration
-        let services = await mainActorServices()
-        guard self.computerInputReleaseGeneration == releaseGenerationAtStart else {
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "UNAVAILABLE: computer control lifecycle changed")
-        }
-        try Task.checkCancellation()
-        do {
-            let result = try await services.performComputerAct(
-                params,
-                lifecycleGeneration: releaseGenerationAtStart)
+            let queue = self.computerActions
+            let enabled = self.computerControlEnabled
+            let provider = self.computerControlProvider
+            let result = try await queue.perform(
+                executionId: executionId,
+                route: route,
+                checkAuthority: {
+                    guard enabled(), provider() == .peekaboo else {
+                        throw ComputerActionService.ComputerActionError.lifecycleChanged
+                    }
+                },
+                operation: { generation in
+                    let check = queue.executionCheck(lifecycleGeneration: generation)
+                    let services = await self.mainActorServices()
+                    try check()
+                    return try await services.performComputerAct(
+                        params,
+                        lifecycleGeneration: generation)
+                })
             let payload = try Self.encodePayload(result)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         } catch let error as ComputerActionService.ComputerActionError {
@@ -626,7 +690,7 @@ extension MacNodeRuntime {
                     message: error.localizedDescription.hasPrefix("COMPUTER_")
                         ? error.localizedDescription
                         : "INVALID_REQUEST: \(error.localizedDescription)")
-            case .eventCreationFailed, .lifecycleChanged, .refused:
+            case .eventCreationFailed, .lifecycleChanged, .hostBusy, .refused:
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
@@ -687,15 +751,52 @@ extension MacNodeRuntime {
         } else {
             params = MacNodeScreenSnapshotParams()
         }
-        let services = await mainActorServices()
+        let route = GatewayNodeSession.invocationRoute
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let res: ScreenSnapshotResult
         do {
-            res = try await services.snapshotScreen(
-                screenIndex: params.screenIndex,
-                maxWidth: params.maxWidth,
-                quality: params.quality,
-                format: params.format)
+            if let executionId = params.executionId {
+                guard let route, route.isActive else {
+                    throw ComputerActionService.ComputerActionError.lifecycleChanged
+                }
+                let queue = self.computerActions
+                let enabled = self.computerControlEnabled
+                let provider = self.computerControlProvider
+                res = try await queue.perform(
+                    executionId: executionId,
+                    route: route,
+                    checkAuthority: {
+                        guard enabled(), provider() == .peekaboo else {
+                            throw ComputerActionService.ComputerActionError.lifecycleChanged
+                        }
+                    },
+                    operation: { generation in
+                        let check = queue.executionCheck(lifecycleGeneration: generation)
+                        let services = await self.mainActorServices()
+                        try check()
+                        return try await services.snapshotScreen(
+                            screenIndex: params.screenIndex,
+                            maxWidth: params.maxWidth,
+                            quality: params.quality,
+                            format: params.format,
+                            checkExecutionAllowed: check)
+                    })
+            } else {
+                let services = await self.mainActorServices()
+                try Task.checkCancellation()
+                guard route?.isActive != false else { throw CancellationError() }
+                res = try await services.snapshotScreen(
+                    screenIndex: params.screenIndex,
+                    maxWidth: params.maxWidth,
+                    quality: params.quality,
+                    format: params.format,
+                    checkExecutionAllowed: {
+                        try Task.checkCancellation()
+                        guard route?.isActive != false else { throw CancellationError() }
+                    })
+                try Task.checkCancellation()
+                guard route?.isActive != false else { throw CancellationError() }
+            }
         } catch let error as ScreenSnapshotService.ScreenSnapshotError {
             switch error {
             case .noDisplays:
@@ -714,6 +815,8 @@ extension MacNodeRuntime {
                     code: .unavailable,
                     message: "UNAVAILABLE: screen snapshot failed")
             }
+        } catch let error as ComputerActionService.ComputerActionError {
+            return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         } catch {
             return Self.errorResponse(
                 req,
@@ -760,12 +863,15 @@ extension MacNodeRuntime {
         } else {
             let makeMainActorServices = self.makeMainActorServices
             let initializationTask = Task {
-                await makeMainActorServices()
+                await makeMainActorServices(self.computerActions)
             }
             self.mainActorServicesInitializationTask = initializationTask
             task = initializationTask
         }
         let services = await task.value
+        await self.computerActions.installCleanup(
+            release: { services.releaseHeldInput() },
+            invalidate: { try await services.invalidateComputerReferences() })
         if cachedMainActorServices == nil {
             cachedMainActorServices = services
             self.mainActorServicesInitializationTask = nil
@@ -773,15 +879,10 @@ extension MacNodeRuntime {
         return cachedMainActorServices ?? services
     }
 
-    /// Releases any synthetic input the computer.act service is still holding
-    /// (a left_mouse_down without its matching up) on lifecycle transitions:
-    /// node disconnect, node stop, or Computer Control disabled. Uses the cached
-    /// services directly so it never spins up services just to release nothing.
+    /// Coordinator revocation is scoped when called by a Gateway route callback;
+    /// explicit local stop/pause also invalidates pending service initialization.
     func releaseHeldComputerInput() async {
-        self.computerInputReleaseGeneration &+= 1
-        let lifecycleGeneration = self.computerInputReleaseGeneration
-        await self.cachedMainActorServices?.releaseHeldInput(
-            lifecycleGeneration: lifecycleGeneration)
+        await self.computerActions.revoke(route: GatewayNodeSession.invocationRoute)
     }
 
     func shutdown() async {

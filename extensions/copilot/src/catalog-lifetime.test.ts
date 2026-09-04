@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
@@ -9,12 +10,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
 import { createCopilotFaultPeer } from "./catalog-lifetime.test-support.js";
 import { createCopilotClientPool } from "./runtime.js";
-import { createCopilotToolBridge } from "./tool-bridge.js";
-import * as toolBridgeModule from "./tool-bridge.js";
 
 it("cancels a resumed Code Mode cell during real SDK session.error cleanup before host closure", async () => {
   const state = await createOpenClawTestState({ label: "copilot-catalog-lifetime" });
@@ -28,9 +27,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   let aborts = 0;
   let nestedSignal: AbortSignal | undefined;
   type ToolOptions = NonNullable<
-    Parameters<
-      NonNullable<Parameters<typeof createCopilotToolBridge>[0]["createOpenClawCodingTools"]>
-    >[0]
+    Parameters<NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurface"]>>[0]
   >;
   let catalog: ToolOptions["toolSearchCatalogRef"];
   let contextSignal: AbortSignal | undefined;
@@ -57,6 +54,9 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   const sessionId = "catalog-lifetime-session";
   const sessionKey = "agent:main:catalog-lifetime";
   const runId = "catalog-lifetime-run";
+  const observeTerminal = createContractToolTerminalObserver(runId);
+  const terminalFailures: Array<{ toolName: string; error?: string; executionStarted?: boolean }> =
+    [];
   const providerFailure = "deterministic non-timeout provider failure";
   const target = {
     agentId: "main",
@@ -101,21 +101,18 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     abortSignal: callController.signal,
   });
   let attempt: ReturnType<typeof harness.runAttempt> | undefined;
-  const realCreateToolBridge = createCopilotToolBridge;
-  const constructBridge = vi
-    .spyOn(toolBridgeModule, "createCopilotToolBridge")
-    .mockImplementation(async (input) => {
-      const bridge = await realCreateToolBridge({
-        ...input,
-        createOpenClawCodingTools: (options) => {
-          catalog = options?.toolSearchCatalogRef;
-          contextSignal = options?.abortSignal;
-          return [fixtureTool];
-        },
-      });
-      retained = bridge.sourceTools;
-      return bridge;
-    });
+  const capabilities: AgentHarnessAttemptParamsV2["hostCapabilities"] = {
+    ...host.hostCapabilities,
+    createToolSurface: (options, binding) => {
+      catalog = options.toolSearchCatalogRef;
+      contextSignal = options.abortSignal;
+      return host.hostCapabilities.bindToolSurface([fixtureTool], binding);
+    },
+    bindToolSurface: (tools, binding) => {
+      retained = host.hostCapabilities.bindToolSurface(tools, binding);
+      return retained;
+    },
+  };
   try {
     await state.writeConfig(config);
     await upsertSessionEntry({ ...target, entry: { sessionId, updatedAt: Date.now() } });
@@ -130,7 +127,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       sessionFile: path.join(state.sessionsDir(), "catalog-lifetime.jsonl"),
       runId,
       config,
-      hostCapabilities: host.hostCapabilities,
+      hostCapabilities: capabilities,
       auth: { useLoggedInUser: true },
       provider: "github-copilot",
       modelId: "auto",
@@ -153,7 +150,16 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       prompt: userMessage.content,
       timeoutMs: 60_000,
       abortSignal: callController.signal,
-      observeToolTerminal: createContractToolTerminalObserver(runId),
+      observeToolTerminal: (observation) => {
+        if (observation.outcome === "failure") {
+          terminalFailures.push({
+            toolName: observation.toolName,
+            error: observation.failure?.error,
+            executionStarted: observation.executionStarted,
+          });
+        }
+        return observeTerminal(observation);
+      },
       userTurnTranscriptRecorder: recorder,
       onAgentToolResult: (event: { toolName: string; result: unknown }) => {
         observed.push(event);
@@ -186,7 +192,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     expect(catalog?.current).toBeUndefined();
     host.hostCapabilities.assertActive();
     expect(callController.signal.aborted).toBe(false);
-    expect(contextSignal?.aborted).toBe(false);
+    expect(contextSignal?.aborted).toBe(true);
     const abortsBeforeGateRelease = aborts;
     const nestedAbortedBeforeGateRelease = nestedSignal?.aborted;
     gate.resolve();
@@ -266,18 +272,27 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       errorMessage: providerFailure,
     });
     expect(callController.signal.aborted).toBe(false);
-    expect(attemptResult.lastToolError).toMatchObject({
-      toolName: "wait",
-      error: "code mode execution aborted",
-      executionStarted: true,
-    });
+    expect(terminalFailures).toHaveLength(2);
+    expect(terminalFailures).toEqual(
+      expect.arrayContaining([
+        { toolName: "wait", error: "code mode execution aborted", executionStarted: true },
+        {
+          toolName: "fixture_gate",
+          error: expect.stringMatching(/abort/i),
+          executionStarted: true,
+        },
+      ]),
+    );
+    // Control cancellation can settle before the nested adapter unwinds; retain the latest fact.
+    expect(attemptResult.lastToolError).toMatchObject(
+      expectDefined(terminalFailures.at(-1), "latest observed terminal failure"),
+    );
   } finally {
     gate.resolve();
     peer.releaseDestroy();
     await attempt;
     host.closeHost();
     host.closeAdmission();
-    constructBridge.mockRestore();
     await harness.dispose?.();
     await pool.dispose();
     await peer.close();

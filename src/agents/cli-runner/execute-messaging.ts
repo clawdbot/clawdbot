@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { extractMessagingToolSend } from "../embedded-agent-messaging-extraction.js";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
@@ -95,4 +96,34 @@ export function appendUniqueCliMessagingEvidence(
     values.push(addition);
     valueKeys.add(addition);
   }
+}
+
+export async function isCliInternalSourceReply(
+  context: PreparedCliRunContext,
+  call: { toolName: string; args: Record<string, unknown> },
+): Promise<boolean> {
+  if (
+    context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    normalizeCliMessagingToolName(call.toolName) !== "message" ||
+    call.args.action !== "send" ||
+    !context.params.config
+  ) {
+    return false;
+  }
+  return await shouldUseInternalSourceReplySink(
+    {
+      cfg: context.params.config,
+      action: "send",
+      sessionKey: context.params.sessionKey,
+      sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+      toolContext: {
+        currentChannelProvider: context.params.messageChannel ?? context.params.messageProvider,
+        currentChannelId: context.params.currentChannelId,
+        currentThreadTs: context.params.currentThreadTs,
+        currentMessageId: context.params.currentMessageId,
+        replyToMode: context.params.replyToMode,
+      },
+    },
+    call.args,
+  );
 }

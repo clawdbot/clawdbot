@@ -159,8 +159,19 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        await withCheckedContinuation { continuation in
+        let invocationRoute = GatewayNodeSession.invocationRoute
+        return await withCheckedContinuation { continuation in
             self.queue.async {
+                // Carry dispatch authority across the queue hop; never stamp an old
+                // computer invocation with the replacement route's generation.
+                if request.command == OpenClawComputerCommand.act.rawValue ||
+                    request.command == OpenClawScreenCommand.snapshot.rawValue,
+                    invocationRoute?.matches(self.route) != true
+                {
+                    continuation.resume(returning: Self.unavailableResponse(
+                        request.id, "UNAVAILABLE: computer control node route changed"))
+                    return
+                }
                 guard self.process?.isRunning == true, self.manifest != nil else {
                     continuation.resume(returning: Self.unavailableResponse(
                         request.id,

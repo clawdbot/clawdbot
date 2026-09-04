@@ -17,6 +17,8 @@ const lifecycle = vi.hoisted(() => ({
     params: args.params,
   })),
   handled: vi.fn(),
+  cleanup: vi.fn(async (_reason: string) => {}),
+  warn: vi.fn(),
   execute: vi.fn(async (_toolCallId: string, _args: unknown, _signal?: AbortSignal) => ({
     ok: true,
   })),
@@ -28,17 +30,24 @@ vi.mock("./http-utils.js", async (importOriginal) => ({
 }));
 
 vi.mock("./tool-resolution.js", () => ({
-  resolveGatewayScopedTools: () => ({
-    agentId: "main",
-    tools: [
-      {
-        name: "abort_probe",
-        parameters: { type: "object", properties: {} },
-        execute: lifecycle.execute,
-      },
-    ],
-  }),
+  resolveGatewayScopedTools: (params: {
+    registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+  }) => {
+    params.registerRunCleanup?.(lifecycle.cleanup);
+    return {
+      agentId: "main",
+      tools: [
+        {
+          name: "abort_probe",
+          parameters: { type: "object", properties: {} },
+          execute: lifecycle.execute,
+        },
+      ],
+    };
+  },
 }));
+
+vi.mock("../logger.js", () => ({ logWarn: lifecycle.warn }));
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: lifecycle.beforeHook,
@@ -92,6 +101,8 @@ beforeEach(() => {
   lifecycle.authorize.mockResolvedValue({ cfg: {}, requestAuth: { ok: true } });
   lifecycle.beforeHook.mockClear();
   lifecycle.handled.mockReset();
+  lifecycle.cleanup.mockReset().mockResolvedValue(undefined);
+  lifecycle.warn.mockReset();
   lifecycle.execute.mockReset();
   lifecycle.execute.mockResolvedValue({ ok: true });
 });
@@ -169,6 +180,79 @@ describe("POST /tools/invoke request cancellation", () => {
     );
   });
 
+  it("fences the request and drains owned cleanup before sending success", async () => {
+    let releaseCleanup: (() => void) | undefined;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    lifecycle.cleanup.mockImplementationOnce(async () => await cleanupGate);
+    let responded = false;
+    const pending = invokeAbortProbe().then((response) => {
+      responded = true;
+      return response;
+    });
+
+    try {
+      await vi.waitFor(() =>
+        expect(lifecycle.cleanup).toHaveBeenCalledExactlyOnceWith("completion"),
+      );
+      expect(lifecycle.execute.mock.calls[0]?.[2]?.aborted).toBe(true);
+      expect(responded).toBe(false);
+      expect(lifecycle.handled).not.toHaveBeenCalled();
+      releaseCleanup?.();
+      const response = await pending;
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+    } finally {
+      releaseCleanup?.();
+      await pending.catch(() => undefined);
+    }
+  });
+
+  it.each([false, true])(
+    "returns a sanitized server failure for rejected cleanup (input error: %s)",
+    async (inputError) => {
+      const error = new Error("synthetic cleanup failure");
+      if (inputError) {
+        error.name = "ToolInputError";
+      }
+      lifecycle.cleanup.mockRejectedValueOnce(error);
+
+      const response = await invokeAbortProbe();
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: {
+          type: "tool_error",
+          message: "tool cleanup failed; inspect current state before retrying",
+        },
+      });
+      expect(lifecycle.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
+      expect(lifecycle.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    },
+  );
+
+  it("records both execution and cleanup failures without exposing them in the response", async () => {
+    lifecycle.execute.mockRejectedValueOnce(new Error("synthetic execution failure"));
+    lifecycle.cleanup.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
+
+    const response = await invokeAbortProbe();
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        type: "tool_error",
+        message: "tool cleanup failed; inspect current state before retrying",
+      },
+    });
+    expect(lifecycle.cleanup).toHaveBeenCalledExactlyOnceWith("error");
+    const diagnostics = lifecycle.warn.mock.calls.flat().join("\n");
+    expect(diagnostics).toContain("synthetic execution failure");
+    expect(diagnostics).toContain("synthetic cleanup failure");
+  });
+
   it("aborts the running tool when its HTTP client disconnects", async () => {
     let reportStarted: ((signal: AbortSignal | undefined) => void) | undefined;
     let releaseExecution: (() => void) | undefined;
@@ -195,6 +279,7 @@ describe("POST /tools/invoke request cancellation", () => {
       requestController.abort();
       await expect(response).rejects.toThrow();
       await expect.poll(() => toolSignal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(lifecycle.cleanup).toHaveBeenCalledExactlyOnceWith("cancel"));
     } finally {
       requestController.abort();
       releaseExecution?.();

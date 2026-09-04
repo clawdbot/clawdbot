@@ -330,8 +330,8 @@ type CliPreparedBackend = {
     adoptProcessToken: (processToken: string) => void;
     /** Revoke the bearer when the child process that holds it exits. */
     revokeProcessToken: () => void;
-    activate: (captureKey: string) => void;
-    deactivate: (captureKey: string) => void;
+    /** Returns the exact attempt closer; its owner must fence and await it before queue release. */
+    activate: (captureKey: string) => (reason: string) => Promise<void>;
   };
   mcpConfigHash?: string;
   mcpResumeHash?: string;

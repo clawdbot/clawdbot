@@ -36,6 +36,18 @@ private actor StringCapture {
     }
 }
 
+private actor InvocationRouteCapture {
+    private var routes: [String: GatewayNodeInvocationRoute] = [:]
+
+    func record(_ name: String, route: GatewayNodeInvocationRoute?) {
+        self.routes[name] = route
+    }
+
+    func get(_ name: String) -> GatewayNodeInvocationRoute? {
+        self.routes[name]
+    }
+}
+
 /// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
 /// task racing the gate would surface as a spurious timeout.
 private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
@@ -1481,6 +1493,7 @@ struct GatewayNodeSessionTests {
         let allowAdmission = AsyncGate()
         let invocations = DisconnectProbe()
         let disconnects = DisconnectProbe()
+        let invocationRoutes = InvocationRouteCapture()
         let options = nodeConnectOptions(
             caps: ["computer"],
             commands: ["computer.act"],
@@ -1491,10 +1504,15 @@ struct GatewayNodeSessionTests {
             testURL("ws://first.example.invalid"),
             options: options,
             session: session,
-            onDisconnected: { reason in await disconnects.record(reason) },
+            onDisconnected: { reason in
+                await invocationRoutes.record("disconnected", route: GatewayNodeSession.invocationRoute)
+                await disconnects.record(reason)
+            },
             onInvoke: { request in
+                await invocationRoutes.record("invoke", route: GatewayNodeSession.invocationRoute)
                 await invokeStarted.wait()
                 await allowAdmission.wait()
+                await invocationRoutes.record("resumed", route: GatewayNodeSession.invocationRoute)
                 guard !Task.isCancelled else {
                     return BridgeInvokeResponse(
                         id: request.id,
@@ -1505,6 +1523,9 @@ struct GatewayNodeSessionTests {
                 }
                 await invocations.record(request.id)
                 return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: {
+                await invocationRoutes.record("invalidated", route: GatewayNodeSession.invocationRoute)
             })
         let firstTask = try #require(session.latestTask())
         try await waitUntil("receive loop armed before delayed invoke") {
@@ -1514,6 +1535,8 @@ struct GatewayNodeSessionTests {
         try await waitUntil("delayed invoke started") {
             await invokeStarted.hasStarted()
         }
+        let invocationRoute = try #require(await invocationRoutes.get("invoke"))
+        #expect(invocationRoute.isActive)
         await invokeStarted.release()
         try await waitUntil("receive loop rearmed before disconnect") {
             firstTask.hasPendingReceiveHandler()
@@ -1523,7 +1546,14 @@ struct GatewayNodeSessionTests {
         try await waitUntil("disconnect callback ran") {
             await !(disconnects.values()).isEmpty
         }
+        #expect(!invocationRoute.isActive)
+        #expect(await invocationRoutes.get("invalidated") === invocationRoute)
+        #expect(await invocationRoutes.get("disconnected") === invocationRoute)
         await allowAdmission.release()
+        try await waitUntil("old invoke resumed with its retired route") {
+            await invocationRoutes.get("resumed") != nil
+        }
+        #expect(await invocationRoutes.get("resumed") === invocationRoute)
         try await waitUntil("replacement socket created") {
             session.snapshotMakeCount() >= 2
         }
@@ -1535,6 +1565,7 @@ struct GatewayNodeSessionTests {
 
     @Test(arguments: [
         OpenClawComputerCommand.act.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawCameraCommand.ptzControl.rawValue,
         OpenClawTalkCommand.pttStart.rawValue,
     ])
@@ -1543,48 +1574,82 @@ struct GatewayNodeSessionTests {
         let gateway = GatewayNodeSession()
         let invokeGate = AsyncGate()
         let cancellations = DisconnectProbe()
+        let invocationRoutes = InvocationRouteCapture()
         let options = nodeConnectOptions(commands: [command], clientId: "openclaw-macos")
+        var replacement: Task<Void, Error>?
 
-        try await gateway.connectForTest(
-            testURL("ws://first.example.invalid"),
-            options: options,
-            session: session,
-            onInvoke: { request in
-                await invokeGate.wait()
-                if Task.isCancelled {
-                    await cancellations.record(request.id)
-                }
-                return BridgeInvokeResponse(
-                    id: request.id,
-                    ok: false,
-                    error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
-            })
-        let socket = try #require(session.latestTask())
-        socket.emitInvokeRequest(id: "queued-device-work", command: command)
-        try await waitUntil("invoke queued before device admission") {
-            await invokeGate.hasStarted()
-        }
-
-        let replacement = Task {
+        do {
             try await gateway.connectForTest(
-                testURL("ws://replacement.example.invalid"),
+                testURL("ws://first.example.invalid"),
                 options: options,
-                session: session)
-        }
-        try await waitUntil("replacement detached old device route") {
-            await gateway.currentRoute() == nil
-        }
-        #expect(session.snapshotMakeCount() == 1)
+                session: session,
+                onInvoke: { request in
+                    await invocationRoutes.record("old", route: GatewayNodeSession.invocationRoute)
+                    await invokeGate.wait()
+                    await invocationRoutes.record("resumed", route: GatewayNodeSession.invocationRoute)
+                    if Task.isCancelled {
+                        await cancellations.record(request.id)
+                    }
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+                })
+            let oldSocket = try #require(session.latestTask())
+            oldSocket.emitInvokeRequest(id: "queued-device-work", command: command)
+            try await waitUntil("invoke queued before device admission") {
+                await invokeGate.hasStarted()
+            }
+            let oldInvocationRoute = try #require(await invocationRoutes.get("old"))
+            #expect(oldInvocationRoute.isActive)
 
-        await invokeGate.release()
-        try await replacement.value
-        #expect(await cancellations.values() == ["queued-device-work"])
-        #expect(session.snapshotMakeCount() == 2)
-        await gateway.disconnect()
+            replacement = Task {
+                try await gateway.connectForTest(
+                    testURL("ws://replacement.example.invalid"),
+                    options: options,
+                    session: session,
+                    onInvoke: { request in
+                        await invocationRoutes.record("successor", route: GatewayNodeSession.invocationRoute)
+                        return BridgeInvokeResponse(id: request.id, ok: true)
+                    })
+            }
+            try await waitUntil("replacement detached old device route") {
+                await gateway.currentRoute() == nil
+            }
+            #expect(!oldInvocationRoute.isActive)
+            #expect(session.snapshotMakeCount() == 1)
+
+            await invokeGate.release()
+            try await replacement?.value
+            #expect(await cancellations.values() == ["queued-device-work"])
+            #expect(await invocationRoutes.get("resumed") === oldInvocationRoute)
+            #expect(session.snapshotMakeCount() == 2)
+            #expect(oldSocket.sentRequestCount(method: "node.invoke.result") == 0)
+            let replacementSocket = try #require(session.latestTask())
+            replacementSocket.emitInvokeRequest(id: "successor", command: command)
+            try await waitUntil("successor invoke completed") {
+                replacementSocket.sentRequestCount(method: "node.invoke.result") == 1
+            }
+            let result = try #require(replacementSocket.sentRequests(method: "node.invoke.result").first)
+            let params = try #require(result["params"] as? [String: Any])
+            #expect(params["id"] as? String == "successor")
+            #expect(params["ok"] as? Bool == true)
+            let successorInvocationRoute = try #require(await invocationRoutes.get("successor"))
+            #expect(successorInvocationRoute !== oldInvocationRoute)
+            #expect(successorInvocationRoute.isActive)
+            await gateway.disconnect()
+            #expect(!successorInvocationRoute.isActive)
+        } catch {
+            await invokeGate.release()
+            _ = try? await replacement?.value
+            await gateway.disconnect()
+            throw error
+        }
     }
 
     @Test(arguments: [
         OpenClawComputerCommand.act.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawCameraCommand.ptzControl.rawValue,
         OpenClawTalkCommand.pttStart.rawValue,
         OpenClawSystemCommand.notify.rawValue,
@@ -1643,13 +1708,17 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `node invoke cancellation before detached admission prevents the side effect`() async throws {
+    @Test(arguments: [
+        OpenClawCameraCommand.ptzControl.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
+    ])
+    func `node invoke cancellation before detached admission prevents the side effect`(
+        command: String) async throws
+    {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let cancellation = InvokeCancellationFlag()
         let admissions = DisconnectProbe()
-        let command = OpenClawCameraCommand.ptzControl.rawValue
         try await gateway.connectForTest(
             testURL("ws://gateway.example.invalid"),
             options: nodeConnectOptions(commands: [command], clientId: "openclaw-macos"),
@@ -2438,47 +2507,76 @@ struct GatewayNodeSessionTests {
     func `invoke result is discarded after target switch`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
-        let invokeStarted = AsyncStream<Void>.makeStream()
-        let invokeRelease = AsyncStream<Void>.makeStream()
-        var startedIterator = invokeStarted.stream.makeAsyncIterator()
+        let invokeGate = AsyncGate()
+        let invocationRoutes = InvocationRouteCapture()
         let options = nodeConnectOptions(commands: ["camera.snap"])
+        var replacement: Task<Void, Error>?
 
-        try await gateway.connectForTest(
-            testURL("ws://first.example.invalid"),
-            credentials: .init(token: "first-token"),
-            options: options,
-            session: session,
-            onInvoke: { request in
-                invokeStarted.continuation.yield()
-                for await _ in invokeRelease.stream {
+        do {
+            try await gateway.connectForTest(
+                testURL("ws://first.example.invalid"),
+                credentials: .init(token: "first-token"),
+                options: options,
+                session: session,
+                onInvoke: { request in
+                    await invocationRoutes.record("old", route: GatewayNodeSession.invocationRoute)
+                    await invokeGate.wait()
+                    await invocationRoutes.record("resumed", route: GatewayNodeSession.invocationRoute)
                     return BridgeInvokeResponse(
                         id: request.id,
                         ok: true,
-                        payloadJSON: #"{"sensitive":"camera-result"}"#,
-                        error: nil)
-                }
-                return BridgeInvokeResponse(id: request.id, ok: false, payloadJSON: nil, error: nil)
-            })
-        let firstTask = try #require(session.latestTask())
-        firstTask.emitInvokeRequest(id: "invoke-old", command: "camera.snap")
-        _ = await startedIterator.next()
+                        payloadJSON: #"{"sensitive":"camera-result"}"#)
+                })
+            let oldSocket = try #require(session.latestTask())
+            oldSocket.emitInvokeRequest(id: "invoke-old", command: "camera.snap")
+            try await waitUntil("unregistered invoke suspended") { await invokeGate.hasStarted() }
+            let oldInvocationRoute = try #require(await invocationRoutes.get("old"))
+            #expect(oldInvocationRoute.isActive)
 
-        try await gateway.connectForTest(
-            testURL("ws://replacement.example.invalid"),
-            credentials: .init(token: "replacement-token"),
-            options: options,
-            session: session)
-        let replacementTask = try #require(session.latestTask())
+            replacement = Task {
+                try await gateway.connectForTest(
+                    testURL("ws://replacement.example.invalid"),
+                    credentials: .init(token: "replacement-token"),
+                    options: options,
+                    session: session,
+                    onInvoke: { request in
+                        await invocationRoutes.record("successor", route: GatewayNodeSession.invocationRoute)
+                        return BridgeInvokeResponse(id: request.id, ok: true)
+                    })
+            }
+            try await waitUntil("replacement does not join unregistered device work") {
+                session.snapshotMakeCount() == 2
+            }
+            try await replacement?.value
+            #expect(!oldInvocationRoute.isActive)
+            #expect(await invocationRoutes.get("resumed") == nil)
+            let replacementSocket = try #require(session.latestTask())
 
-        invokeRelease.continuation.yield()
-        invokeRelease.continuation.finish()
-        for _ in 0..<100 {
-            await Task.yield()
+            await invokeGate.release()
+            try await waitUntil("unregistered invoke resumed on its retired route") {
+                await invocationRoutes.get("resumed") != nil
+            }
+            #expect(await invocationRoutes.get("resumed") === oldInvocationRoute)
+            replacementSocket.emitInvokeRequest(id: "successor", command: "camera.snap")
+            try await waitUntil("unregistered successor invoke completed") {
+                replacementSocket.sentRequestCount(method: "node.invoke.result") == 1
+            }
+            let result = try #require(replacementSocket.sentRequests(method: "node.invoke.result").first)
+            let params = try #require(result["params"] as? [String: Any])
+            #expect(params["id"] as? String == "successor")
+            #expect(params["ok"] as? Bool == true)
+            #expect(oldSocket.sentRequestCount(method: "node.invoke.result") == 0)
+            let successorInvocationRoute = try #require(await invocationRoutes.get("successor"))
+            #expect(successorInvocationRoute !== oldInvocationRoute)
+            #expect(successorInvocationRoute.isActive)
+            await gateway.disconnect()
+            #expect(!successorInvocationRoute.isActive)
+        } catch {
+            await invokeGate.release()
+            _ = try? await replacement?.value
+            await gateway.disconnect()
+            throw error
         }
-
-        #expect(firstTask.sentRequestCount(method: "node.invoke.result") == 0)
-        #expect(replacementTask.sentRequestCount(method: "node.invoke.result") == 0)
-        await gateway.disconnect()
     }
 
     @Test

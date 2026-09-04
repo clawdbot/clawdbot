@@ -9,6 +9,7 @@ import {
 import { createServer as createTcpServer, type Server, type Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyCliCronMcpLoopbackPreflight } from "./gateway-cli-backend.live-probe-helpers.js";
+import { resolveMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   setActiveMcpLoopbackRuntime,
@@ -20,7 +21,6 @@ function activateLoopbackRuntime(port: number): void {
   setActiveMcpLoopbackRuntime({
     port,
     ownerToken,
-    nonOwnerToken: "test-non-owner-token",
   });
 }
 
@@ -74,8 +74,21 @@ describe("gateway CLI backend live probe helpers", () => {
     "checks read-only loopback discovery with automations present=%s",
     async (present) => {
       const methods: string[] = [];
+      const admitted: NonNullable<ReturnType<typeof resolveMcpLoopbackClientGrant>>[] = [];
       const server = createHttpServer((request, response) => {
         void (async () => {
+          const token = request.headers.authorization?.slice("Bearer ".length) ?? "";
+          const captureKey = String(request.headers["x-openclaw-cli-capture-key"] ?? "");
+          const grant = resolveMcpLoopbackClientGrant({
+            token,
+            captureKey,
+            runtimeOwnerToken: ownerToken,
+          });
+          if (!grant || token === ownerToken) {
+            writeJson(response, 401, {});
+            return;
+          }
+          admitted.push(grant);
           const body = JSON.parse(await readRequestBody(request)) as {
             id?: unknown;
             method?: string;
@@ -124,6 +137,9 @@ describe("gateway CLI backend live probe helpers", () => {
           );
         }
         expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
+        expect(admitted).toHaveLength(3);
+        expect(new Set(admitted.map((grant) => grant.capture)).size).toBe(1);
+        expect(admitted.every((grant) => !grant.isCurrent())).toBe(true);
       } finally {
         server.close();
       }

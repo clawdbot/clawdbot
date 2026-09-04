@@ -221,6 +221,9 @@ export async function executeCliProcess(params: {
       onNoOutputTimeout: (error) => {
         pluginTimeout.error = error;
       },
+      onTurnClosed: () => {
+        void params.toolTracking.retireCapture("runtime-closed");
+      },
       onInterrupted: (reason) => {
         streamingParser?.finish();
         const partialOutput = streamingParser?.getOutput();

@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import OpenClawKit
+import PeekabooAutomationKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
@@ -8,7 +9,8 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         screenIndex: Int?,
         maxWidth: Int?,
         quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
+        format: OpenClawScreenSnapshotFormat?,
+        checkExecutionAllowed: @MainActor () throws -> Void) async throws
         -> ScreenSnapshotResult
 
     func recordScreen(
@@ -28,7 +30,8 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
     func performComputerAct(
         _ params: OpenClawComputerActParams,
         lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-    func releaseHeldInput(lifecycleGeneration: UInt64) async
+    func releaseHeldInput() -> Bool
+    func invalidateComputerReferences() async throws
 }
 
 @MainActor
@@ -36,20 +39,27 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
-    private let computerAction = ComputerActionService()
+    private let computerAction: ComputerActionService
+
+    init(computerActions: ComputerActionExecutionQueue) {
+        self.computerAction = ComputerActionService(
+            executionQueue: computerActions, snapshotManager: InMemorySnapshotManager())
+    }
 
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
         quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
+        format: OpenClawScreenSnapshotFormat?,
+        checkExecutionAllowed: @MainActor () throws -> Void) async throws
         -> ScreenSnapshotResult
     {
         try await self.screenSnapshotter.snapshot(
             screenIndex: screenIndex,
             maxWidth: maxWidth,
             quality: quality,
-            format: format)
+            format: format,
+            checkExecutionAllowed: checkExecutionAllowed)
     }
 
     func recordScreen(
@@ -95,7 +105,11 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             lifecycleGeneration: lifecycleGeneration)
     }
 
-    func releaseHeldInput(lifecycleGeneration: UInt64) async {
-        await self.computerAction.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
+    func releaseHeldInput() -> Bool {
+        self.computerAction.releaseHeldInput()
+    }
+
+    func invalidateComputerReferences() async throws {
+        try await self.computerAction.invalidateReferences()
     }
 }

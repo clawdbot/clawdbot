@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
@@ -6,7 +7,6 @@ import {
   type McpLoopbackToolCallTerminalOutcome,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
-import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
@@ -47,6 +47,7 @@ import {
   extractCliMessagingContent,
   extractCliMessagingTarget,
   normalizeCliMessagingToolName,
+  isCliInternalSourceReply,
 } from "./execute-messaging.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -77,6 +78,9 @@ type ActiveCliTool = {
 
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
+  let gatewayCapture: ReturnType<typeof beginMcpLoopbackToolCallCapture>;
+  let closeGatewayCapture: ((reason: string) => Promise<void>) | undefined;
+  let captureCleanup: Promise<Result<void, unknown>> | undefined;
   let yielded = false;
   let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
@@ -325,32 +329,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     messagingToolSentTargets.push(targetWithContent);
     messagingToolSentTargetKeys.add(evidenceKey);
   };
-  const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
-    if (
-      context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
-      normalizeCliMessagingToolName(call.toolName) !== "message" ||
-      call.args.action !== "send" ||
-      !context.params.config
-    ) {
-      return false;
-    }
-    return await shouldUseInternalSourceReplySink(
-      {
-        cfg: context.params.config,
-        action: "send",
-        sessionKey: context.params.sessionKey,
-        sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-        toolContext: {
-          currentChannelProvider: context.params.messageChannel ?? context.params.messageProvider,
-          currentChannelId: context.params.currentChannelId,
-          currentThreadTs: context.params.currentThreadTs,
-          currentMessageId: context.params.currentMessageId,
-          replyToMode: context.params.replyToMode,
-        },
-      },
-      call.args,
-    );
-  };
   const beginGatewayCapture = (captureKey: string | undefined) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
       return;
@@ -358,14 +336,14 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     if (gatewayCaptureKey) {
       throw new Error("CLI MCP capture key changed during an active attempt");
     }
-    context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+    closeGatewayCapture = context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
     gatewayCaptureKey = captureKey;
     const isPotentialDelivery = (toolName: string) =>
       isMessagingTool(normalizeCliMessagingToolName(toolName));
     const isPreparedDelivery = (toolName: string, toolArgs: Record<string, unknown>) =>
       toolArgs.dryRun !== true &&
       isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
-    beginMcpLoopbackToolCallCapture({
+    gatewayCapture = beginMcpLoopbackToolCallCapture({
       captureKey,
       onYield: (_message, acknowledgment) => {
         yielded = true;
@@ -578,7 +556,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     try {
       if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
         const calls = Array.from(pendingMessagingCalls.values());
-        const internalStates = await Promise.all(calls.map(isPreparedInternalSourceReply));
+        const internalStates = await Promise.all(
+          calls.map((call) => isCliInternalSourceReply(context, call)),
+        );
         if (internalStates.some((internal) => !internal)) {
           didSendViaMessagingTool = true;
           params.recordRunError(
@@ -593,7 +573,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       if (!gatewayCaptureKey) {
         return;
       }
-      const captureBecameIdle = await waitForMcpLoopbackToolCallCaptureIdle(gatewayCaptureKey, {
+      const captureBecameIdle = await waitForMcpLoopbackToolCallCaptureIdle(gatewayCapture, {
         timeoutMs: CLI_MCP_DELIVERY_DRAIN_GRACE_MS,
         admissionGraceMs: CLI_MCP_REQUEST_ADMISSION_GRACE_MS,
       });
@@ -606,7 +586,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
-        Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),
+        Array.from(inFlightPreparedMessagingCalls).map((call) =>
+          isCliInternalSourceReply(context, call),
+        ),
       );
       const internalCount = internalStates.filter(Boolean).length;
       const hasPotentialVisibleSend = inFlightMessagingToolCalls > internalCount;
@@ -628,22 +610,21 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
   };
 
-  const finalizeCapture = (finalizeParsedTools: () => void) => {
-    // Captured MCP calls may settle after the attempt returns. Drain first so
-    // finalization can use their trusted terminal outcomes.
-    try {
-      finalizeParsedTools();
-    } finally {
-      if (gatewayCaptureKey) {
-        // Fence this exact grant generation before clearing observers; otherwise
-        // a late request escapes accounting.
-        try {
-          context.preparedBackend.mcpClientGrantCapture?.deactivate(gatewayCaptureKey);
-        } finally {
-          clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
-        }
-      }
+  const retireCapture = (reason: string): Promise<Result<void, unknown>> => {
+    if (captureCleanup) {
+      return captureCleanup;
     }
+    // Fence synchronously, but retain failure as a value until the outer attempt
+    // joins both cleanup and outcome observers after native iterator shutdown.
+    try {
+      captureCleanup = Promise.resolve(closeGatewayCapture?.(reason)).then(
+        () => ok<void, unknown>(undefined),
+        (error: unknown) => err<void, unknown>(error),
+      );
+    } catch (error) {
+      captureCleanup = Promise.resolve(err<void, unknown>(error));
+    }
+    return captureCleanup;
   };
 
   const evidence = () => ({
@@ -660,11 +641,28 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
+    retireCapture,
+    async finishCapture(params: {
+      reason: string;
+      useManagedClaudeLiveSession: boolean;
+      recordRunError: (error: unknown) => void;
+      finalizeParsedTools: () => void;
+    }): Promise<Result<void, unknown>> {
+      const cleanup = retireCapture(params.reason);
+      await finishDeliveryTracking(params);
+      const result = await cleanup;
+      try {
+        params.finalizeParsedTools();
+      } catch (error) {
+        params.recordRunError(error);
+      } finally {
+        clearMcpLoopbackToolCallCapture(gatewayCapture);
+      }
+      return result;
+    },
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,
-    finishDeliveryTracking,
-    finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {
       const current = evidence();
       return {

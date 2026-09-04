@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import OpenClawKit
+import PeekabooAutomationKit
 import Testing
 @testable import OpenClaw
 
@@ -39,12 +40,7 @@ struct ComputerActionServiceTests {
         private(set) var activeActionCount = 0
         private(set) var maximumActiveActionCount = 0
 
-        func perform(
-            _ params: OpenClawComputerActParams,
-            lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
-        {
-            _ = lifecycleGeneration
-            let actionID = Int(params.x ?? -1)
+        func perform(_ actionID: Int) async throws -> OpenClawComputerActResult {
             self.enteredActionIDs.append(actionID)
             self.activeActionCount += 1
             self.maximumActiveActionCount = max(
@@ -132,6 +128,19 @@ struct ComputerActionServiceTests {
             return error
         } catch {
             return nil
+        }
+    }
+
+    private func typeText(
+        _ text: String,
+        screen: ComputerScreenActionExecutor,
+        queue: ComputerActionExecutionQueue,
+        route: GatewayNodeInvocationRoute) async throws
+    {
+        try await queue.perform(executionId: UUID(), route: route, checkAuthority: {}) { generation in
+            try await screen.typeText(
+                text,
+                checkExecutionAllowed: queue.executionCheck(lifecycleGeneration: generation))
         }
     }
 
@@ -329,28 +338,31 @@ struct ComputerActionServiceTests {
             leftButtonDown: true)
     }
 
-    @Test func `lifecycle release retries event creation failure before returning`() async {
-        let flags: CGEventFlags = [.maskCommand, .maskShift]
-        var attempts = 0
-        var postedFlags: [CGEventFlags] = []
-        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
-            #expect(!down)
-            attempts += 1
-            postedFlags.append(eventFlags)
-            if attempts == 1 {
-                throw ComputerActionService.ComputerActionError.eventCreationFailed
+    @Test func `lifecycle release retries event creation failure before returning`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let flags: CGEventFlags = [.maskCommand, .maskShift]
+            var attempts = 0
+            var postedFlags: [CGEventFlags] = []
+            let screen = ComputerScreenActionExecutor { down, _, eventFlags in
+                #expect(!down)
+                attempts += 1
+                postedFlags.append(eventFlags)
+                if attempts == 1 {
+                    throw ComputerActionService.ComputerActionError.eventCreationFailed
+                }
             }
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: screen.releaseCurrentHeldButton)
+            try await queue.perform(executionId: UUID(), route: route, checkAuthority: {}) { _ in () }
+            screen.holdLeftButtonForTesting(flags: flags)
+
+            await queue.revoke(route: nil)
+
+            #expect(!screen.isLeftButtonDownForTesting)
+            #expect(screen.heldButtonFlagsForTesting.isEmpty)
+            #expect(!screen.buttonWatchdogArmedForTesting)
+            #expect(attempts == 2)
+            #expect(postedFlags == [flags, flags])
         }
-        let service = ComputerActionService(screen: screen)
-        screen.holdLeftButtonForTesting(flags: flags)
-
-        await service.releaseHeldInput(lifecycleGeneration: 1)
-
-        #expect(!screen.isLeftButtonDownForTesting)
-        #expect(screen.heldButtonFlagsForTesting.isEmpty)
-        #expect(!screen.buttonWatchdogArmedForTesting)
-        #expect(attempts == 2)
-        #expect(postedFlags == [flags, flags])
     }
 
     @Test func `watchdog release retains ownership and rearms after post failure`() {
@@ -414,34 +426,38 @@ struct ComputerActionServiceTests {
     }
 
     @Test func `computer actions execute in FIFO order without overlap`() async throws {
-        let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
-        let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
-        let secondParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let probe = ActionProbe()
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+            let executionId = UUID()
+            let first = Task { @MainActor in
+                try await queue.perform(executionId: executionId, route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(1)
+                }
+            }
+            await probe.firstStarted.wait()
+            let second = Task { @MainActor in
+                try await queue.perform(executionId: executionId, route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(2)
+                }
+            }
+            while queue.pendingActionCountForTesting != 1 {
+                await Task.yield()
+            }
 
-        let first = Task { @MainActor in
-            try await queue.perform(firstParams, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        await probe.firstStarted.wait()
-        let second = Task { @MainActor in
-            try await queue.perform(secondParams, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        while queue.pendingActionCountForTesting != 1 {
-            await Task.yield()
-        }
+            #expect(probe.enteredActionIDs == [1])
+            #expect(probe.maximumActiveActionCount == 1)
+            await probe.releaseFirst.signal()
+            _ = try await first.value
+            _ = try await second.value
 
-        #expect(probe.enteredActionIDs == [1])
-        #expect(probe.maximumActiveActionCount == 1)
-        await probe.releaseFirst.signal()
-        _ = try await first.value
-        _ = try await second.value
-
-        #expect(probe.enteredActionIDs == [1, 2])
-        #expect(probe.maximumActiveActionCount == 1)
+            #expect(probe.enteredActionIDs == [1, 2])
+            #expect(probe.maximumActiveActionCount == 1)
+        }
     }
 
     @Test func `window authority rejects a result after lifecycle revocation`() async {
-        let service = ComputerWindowActionExecutor()
+        let service = ComputerWindowActionExecutor(snapshotManager: InMemorySnapshotManager())
         var checks = 0
         let outcomeError: Error?
         do {
@@ -494,7 +510,7 @@ struct ComputerActionServiceTests {
     }
 
     @Test func `window executor rejects foreground accessibility-only actions`() async {
-        let service = ComputerWindowActionExecutor()
+        let service = ComputerWindowActionExecutor(snapshotManager: InMemorySnapshotManager())
         for action in [OpenClawComputerAction.setValue, .invokeMenu] {
             let outcomeError: Error?
             do {
@@ -511,245 +527,281 @@ struct ComputerActionServiceTests {
     }
 
     @Test func `cancelled queued action never executes`() async throws {
-        let probe = ActionProbe()
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
-        let firstParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
-        let cancelledParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
-
-        let first = Task { @MainActor in
-            try await queue.perform(firstParams, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        await probe.firstStarted.wait()
-        let cancelled = Task { @MainActor in
-            try await queue.perform(cancelledParams, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        while queue.pendingActionCountForTesting != 1 {
-            await Task.yield()
-        }
-
-        cancelled.cancel()
-        let cancellationError: Error?
-        do {
-            _ = try await cancelled.value
-            cancellationError = nil
-        } catch {
-            cancellationError = error
-        }
-        #expect(cancellationError is CancellationError)
-        #expect(probe.enteredActionIDs == [1])
-
-        await probe.releaseFirst.signal()
-        _ = try await first.value
-        #expect(probe.enteredActionIDs == [1])
-    }
-
-    @Test func `cancelled active action releases held input before it settles`() async {
-        let probe = ActionProbe()
-        let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
-        let params = OpenClawComputerActParams(action: .leftMouseDown, x: 1, y: 0, refWidth: 1280)
-        let action = Task { @MainActor in
-            try await queue.perform(params, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        await probe.firstStarted.wait()
-
-        action.cancel()
-        while releaseProbe.attempts == 0 {
-            await Task.yield()
-        }
-        #expect(releaseProbe.attempts == 1)
-        await probe.releaseFirst.signal()
-        _ = try? await action.value
-        #expect(releaseProbe.attempts == 2)
-    }
-
-    @Test func `cancellation retries failed release before its main actor hop`() async {
-        let cancellationHop = CancellationHopProbe()
-        var releaseAttempts = 0
-        let queue = ComputerActionExecutionQueue(
-            onLifecycleRelease: {
-                releaseAttempts += 1
-                return releaseAttempts >= 2
-            },
-            scheduleCancellationHop: cancellationHop.schedule)
-        let taskBox = ActionTaskBox()
-        let params = OpenClawComputerActParams(
-            action: .leftMouseDown,
-            x: 1,
-            y: 0,
-            refWidth: 1280)
-        let action = Task { @MainActor in
-            try await queue.perform(params, lifecycleGeneration: 0) { _, _ in
-                taskBox.task?.cancel()
-                return OpenClawComputerActResult(ok: true)
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let probe = ActionProbe()
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: { true })
+            let executionId = UUID()
+            let first = Task { @MainActor in
+                try await queue.perform(executionId: executionId, route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(1)
+                }
             }
-        }
-        taskBox.task = action
+            await probe.firstStarted.wait()
+            let cancelled = Task { @MainActor in
+                try await queue.perform(executionId: executionId, route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(2)
+                }
+            }
+            while queue.pendingActionCountForTesting != 1 {
+                await Task.yield()
+            }
 
-        let cancellationError: Error?
-        do {
-            _ = try await action.value
-            cancellationError = nil
-        } catch {
-            cancellationError = error
-        }
+            cancelled.cancel()
+            let cancellationError: Error?
+            do {
+                _ = try await cancelled.value
+                cancellationError = nil
+            } catch {
+                cancellationError = error
+            }
+            #expect(cancellationError is CancellationError)
+            #expect(probe.enteredActionIDs == [1])
 
-        #expect(cancellationError is CancellationError)
-        #expect(cancellationHop.pendingCount == 1)
-        #expect(releaseAttempts == 2)
-        cancellationHop.runAll()
-        #expect(cancellationHop.pendingCount == 0)
-        #expect(releaseAttempts == 2)
+            await probe.releaseFirst.signal()
+            _ = try await first.value
+            #expect(probe.enteredActionIDs == [1])
+        }
+    }
+
+    @Test func `cancelled active action releases held input before it settles`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let probe = ActionProbe()
+            let releaseProbe = LifecycleReleaseProbe(allowed: true)
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+            let action = Task { @MainActor in
+                try await queue.perform(executionId: UUID(), route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(1)
+                }
+            }
+            await probe.firstStarted.wait()
+
+            action.cancel()
+            while releaseProbe.attempts == 0 {
+                await Task.yield()
+            }
+            #expect(releaseProbe.attempts == 1)
+            await probe.releaseFirst.signal()
+            _ = try? await action.value
+            #expect(releaseProbe.attempts == 2)
+        }
+    }
+
+    @Test func `cancellation retries failed release before its main actor hop`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let cancellationHop = CancellationHopProbe()
+            var releaseAttempts = 0
+            let queue = ComputerActionExecutionQueue(
+                onLifecycleRelease: {
+                    releaseAttempts += 1
+                    return releaseAttempts >= 2
+                },
+                scheduleCancellationHop: cancellationHop.schedule)
+            let taskBox = ActionTaskBox()
+            let action = Task { @MainActor in
+                try await queue.perform(executionId: UUID(), route: route, checkAuthority: {}) { _ in
+                    taskBox.task?.cancel()
+                    return OpenClawComputerActResult(ok: true)
+                }
+            }
+            taskBox.task = action
+
+            let cancellationError: Error?
+            do {
+                _ = try await action.value
+                cancellationError = nil
+            } catch {
+                cancellationError = error
+            }
+
+            #expect(cancellationError is CancellationError)
+            #expect(cancellationHop.pendingCount == 1)
+            #expect(releaseAttempts == 2)
+            cancellationHop.runAll()
+            #expect(cancellationHop.pendingCount == 0)
+            #expect(releaseAttempts == 2)
+        }
     }
 
     @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
-        var posted: [Character] = []
-        let service = ComputerActionService(
-            screen: ComputerScreenActionExecutor(textGraphemePoster: { posted.append($0) }))
-        let text = "A👨‍👩‍👧‍👦e\u{301}\n\t"
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            var posted: [Character] = []
+            let screen = ComputerScreenActionExecutor(textGraphemePoster: { posted.append($0) })
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: screen.releaseCurrentHeldButton)
+            let text = "A👨‍👩‍👧‍👦e\u{301}\n\t"
 
-        _ = try await service.typeTextForTesting(text)
+            try await self.typeText(text, screen: screen, queue: queue, route: route)
 
-        #expect(posted == Array(text))
+            #expect(posted == Array(text))
+        }
     }
 
-    @Test func `caller cancellation stops typing before the next grapheme`() async {
-        let firstPosted = AsyncSignal()
-        let resumePoster = AsyncSignal()
-        var posted: [Character] = []
-        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
-            textGraphemePoster: { grapheme in
-                posted.append(grapheme)
-                guard posted.count == 1 else { return }
-                await firstPosted.signal()
-                await resumePoster.wait()
-            }))
-        let action = Task { @MainActor in
-            try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
-        }
-        await firstPosted.wait()
+    @Test func `caller cancellation stops typing before the next grapheme`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let firstPosted = AsyncSignal()
+            let resumePoster = AsyncSignal()
+            var posted: [Character] = []
+            let screen = ComputerScreenActionExecutor(
+                textGraphemePoster: { grapheme in
+                    posted.append(grapheme)
+                    guard posted.count == 1 else { return }
+                    await firstPosted.signal()
+                    await resumePoster.wait()
+                })
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: screen.releaseCurrentHeldButton)
+            let action = Task { @MainActor in
+                try await self.typeText("A👨‍👩‍👧‍👦B", screen: screen, queue: queue, route: route)
+            }
+            await firstPosted.wait()
 
-        action.cancel()
-        await resumePoster.signal()
+            action.cancel()
+            await resumePoster.signal()
 
-        let cancellationError: Error?
-        do {
-            _ = try await action.value
-            cancellationError = nil
-        } catch {
-            cancellationError = error
+            let cancellationError: Error?
+            do {
+                _ = try await action.value
+                cancellationError = nil
+            } catch {
+                cancellationError = error
+            }
+            #expect(cancellationError is CancellationError)
+            #expect(posted == ["A"])
         }
-        #expect(cancellationError is CancellationError)
-        #expect(posted == ["A"])
     }
 
-    @Test func `lifecycle replacement stops typing before the next grapheme`() async {
-        let firstPosted = AsyncSignal()
-        let resumePoster = AsyncSignal()
-        var posted: [Character] = []
-        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
-            textGraphemePoster: { grapheme in
-                posted.append(grapheme)
-                guard posted.count == 1 else { return }
-                await firstPosted.signal()
-                await resumePoster.wait()
-            }))
-        let action = Task { @MainActor in
-            try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
-        }
-        await firstPosted.wait()
+    @Test func `lifecycle replacement stops typing before the next grapheme`() async throws {
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let firstPosted = AsyncSignal()
+            let resumePoster = AsyncSignal()
+            var posted: [Character] = []
+            let screen = ComputerScreenActionExecutor(
+                textGraphemePoster: { grapheme in
+                    posted.append(grapheme)
+                    guard posted.count == 1 else { return }
+                    await firstPosted.signal()
+                    await resumePoster.wait()
+                })
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: screen.releaseCurrentHeldButton)
+            let action = Task { @MainActor in
+                try await self.typeText("A👨‍👩‍👧‍👦B", screen: screen, queue: queue, route: route)
+            }
+            await firstPosted.wait()
 
-        let release = Task { @MainActor in
-            await service.releaseHeldInput(lifecycleGeneration: 1)
-        }
-        while service.lifecycleGenerationForTesting != 1 {
-            await Task.yield()
-        }
-        await resumePoster.signal()
-        await release.value
+            let release = Task { @MainActor in
+                await queue.revoke(route: route)
+            }
+            while queue.lifecycleGenerationForTesting != 1 {
+                await Task.yield()
+            }
+            await resumePoster.signal()
+            await release.value
 
-        let lifecycleError: Error?
-        do {
-            _ = try await action.value
-            lifecycleError = nil
-        } catch {
-            lifecycleError = error
+            let lifecycleError: Error?
+            do {
+                _ = try await action.value
+                lifecycleError = nil
+            } catch {
+                lifecycleError = error
+            }
+            #expect(self.isLifecycleChanged(lifecycleError))
+            #expect(posted == ["A"])
         }
-        #expect(self.isLifecycleChanged(lifecycleError))
-        #expect(posted == ["A"])
     }
 
     @Test func `new lifecycle generation cancels old work before fresh action`() async throws {
-        let probe = ActionProbe()
-        let releaseProbe = LifecycleReleaseProbe(allowed: true)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
-        let oldParams = OpenClawComputerActParams(action: .leftClick, x: 1, y: 0, refWidth: 1280)
-        let freshParams = OpenClawComputerActParams(action: .leftClick, x: 2, y: 0, refWidth: 1280)
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let probe = ActionProbe()
+            let releaseProbe = LifecycleReleaseProbe(allowed: true)
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+            let oldExecutionId = UUID()
+            let old = Task { @MainActor in
+                try await queue.perform(executionId: oldExecutionId, route: route, checkAuthority: {}) { _ in
+                    try await probe.perform(1)
+                }
+            }
+            await probe.firstStarted.wait()
+            let release = Task { @MainActor in
+                await queue.revoke(route: route)
+            }
+            while releaseProbe.attempts == 0 {
+                await Task.yield()
+            }
+            let immediateReleaseAttempts = releaseProbe.attempts
+            await probe.releaseFirst.signal()
+            await release.value
+            #expect(releaseProbe.attempts == immediateReleaseAttempts + 1)
 
-        let old = Task { @MainActor in
-            try await queue.perform(oldParams, lifecycleGeneration: 0, operation: probe.perform)
-        }
-        await probe.firstStarted.wait()
-        let release = Task { @MainActor in
-            await queue.releaseHeldInput(lifecycleGeneration: 1)
-        }
-        await Task.yield()
-        #expect(releaseProbe.attempts == 1)
-        await probe.releaseFirst.signal()
-        await release.value
-        #expect(releaseProbe.attempts == 2)
+            let oldError: Error?
+            do {
+                _ = try await old.value
+                oldError = nil
+            } catch {
+                oldError = error
+            }
+            #expect(self.isLifecycleChanged(oldError))
 
-        let oldError: Error?
-        do {
-            _ = try await old.value
-            oldError = nil
-        } catch {
-            oldError = error
-        }
-        #expect(self.isLifecycleChanged(oldError))
-
-        _ = try await queue.perform(
-            freshParams,
-            lifecycleGeneration: 1,
-            operation: probe.perform)
-        #expect(probe.enteredActionIDs == [1, 2])
-
-        let staleError: Error?
-        do {
             _ = try await queue.perform(
-                oldParams,
-                lifecycleGeneration: 0,
-                operation: probe.perform)
-            staleError = nil
-        } catch {
-            staleError = error
+                executionId: UUID(), route: route, checkAuthority: {})
+            { _ in
+                try await probe.perform(2)
+            }
+            #expect(probe.enteredActionIDs == [1, 2])
+
+            await queue.revoke(route: route)
+
+            let staleError: Error?
+            do {
+                _ = try await queue.perform(
+                    executionId: oldExecutionId, route: route, checkAuthority: {})
+                { _ in
+                    try await probe.perform(1)
+                }
+                staleError = nil
+            } catch {
+                staleError = error
+            }
+            #expect(self.isLifecycleChanged(staleError))
+            #expect(probe.enteredActionIDs == [1, 2])
         }
-        #expect(self.isLifecycleChanged(staleError))
-        #expect(probe.enteredActionIDs == [1, 2])
     }
 
     @Test func `failed lifecycle mouse up blocks newer generation until retry succeeds`() async throws {
-        let probe = ActionProbe()
-        let releaseProbe = LifecycleReleaseProbe(allowed: false)
-        let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
-        let params = OpenClawComputerActParams(action: .type, x: 2, y: 0, refWidth: 1280)
+        try await MacNodeComputerExecutionFixture.runWithRoute { route in
+            let probe = ActionProbe()
+            let releaseProbe = LifecycleReleaseProbe(allowed: false)
+            let queue = ComputerActionExecutionQueue(onLifecycleRelease: releaseProbe.attempt)
+            // A local stop without an admitted owner must not release successor input.
+            await queue.revoke(route: nil)
+            #expect(releaseProbe.attempts == 0)
+            try await queue.perform(executionId: UUID(), route: route, checkAuthority: {}) { _ in () }
+            defer { releaseProbe.allowed = true }
+            let release = Task { @MainActor in await queue.revoke(route: nil) }
+            while releaseProbe.attempts < 2 {
+                await Task.yield()
+            }
+            let successorId = UUID()
+            do {
+                _ = try await queue.perform(
+                    executionId: successorId, route: route, checkAuthority: {})
+                { _ in
+                    try await probe.perform(2)
+                }
+                Issue.record("successor unexpectedly entered while input release was pending")
+            } catch ComputerActionService.ComputerActionError.hostBusy {
+                // The closing execution retains ownership until its release succeeds.
+            }
+            #expect(probe.enteredActionIDs.isEmpty)
 
-        let action = Task { @MainActor in
-            try await queue.perform(
-                params,
-                lifecycleGeneration: 1,
-                operation: probe.perform)
+            releaseProbe.allowed = true
+            await release.value
+            _ = try await queue.perform(
+                executionId: successorId, route: route, checkAuthority: {})
+            { _ in
+                try await probe.perform(2)
+            }
+
+            #expect(releaseProbe.attempts >= 3)
+            #expect(probe.enteredActionIDs == [2])
         }
-        while releaseProbe.attempts < 2 {
-            await Task.yield()
-        }
-        #expect(probe.enteredActionIDs.isEmpty)
-
-        releaseProbe.allowed = true
-        _ = try await action.value
-
-        #expect(releaseProbe.attempts >= 3)
-        #expect(probe.enteredActionIDs == [2])
     }
 
     @Test func `raw click preconstructs up before posting down`() throws {

@@ -8,7 +8,7 @@ import {
 } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
-import { buildBlockedCliRunResult, buildCliRunResult } from "./cli-run-settlement.js";
+import { buildBlockedCliRunResult, buildCliRunResult } from "./cli-run-results.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -146,7 +146,6 @@ describe("CLI native continuity projection", () => {
           ? buildBlockedCliRunResult({
               context,
               message: "Blocked by the test policy",
-              preparedContextAgentMeta: {},
               sessionBindingDisabled: false,
             })
           : buildCliRunResult({
@@ -157,7 +156,6 @@ describe("CLI native continuity projection", () => {
               usedHistoryPrompt: false,
               userTurnHandled: true,
               sessionBindingDisabled: kind === "stateless",
-              preparedContextAgentMeta: {},
             });
       const entry: SessionEntry = {
         sessionId: context.params.sessionId,

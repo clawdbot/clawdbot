@@ -16,7 +16,6 @@ import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
-  deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
@@ -30,6 +29,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -123,9 +123,11 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { captureSessionPlacementComputer } from "../session-placement-computer.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import type { ComputerToolTransport } from "../tools/computer-tool.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -192,7 +194,6 @@ const defaultPrepareDeps = {
   createMcpLoopbackServerConfig,
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
-  deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
@@ -1084,6 +1085,38 @@ export async function prepareCliRunContext(
     mcpContextBase && requestedLoopbackToolsAllow !== undefined
       ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
       : mcpContextBase;
+  const computerOwner = captureSessionPlacementComputer({
+    runId: params.runId,
+    agentId: sessionAgentId,
+  });
+  const projectionComputer = computerOwner
+    ? (() => {
+        const run =
+          params.admittedRunContext?.operationalRunInstance ??
+          params.preparedRunAdmission?.operationalRunInstance;
+        let bound: ComputerToolTransport | undefined;
+        const transport = () => {
+          if (!bound) {
+            if (!run) {
+              throw new Error("Session computer requires an admitted run");
+            }
+            const selected = computerOwner.bind(run);
+            if (!selected) {
+              throw new Error("Session computer is unavailable");
+            }
+            bound = selected;
+          }
+          return bound;
+        };
+        // Schema construction must not admit or bind a run. If this projection
+        // is ever executed, the captured owner still requires exact live authority.
+        return {
+          computerUse: computerOwner.computerUse,
+          resolveNode: (query, signal) => transport().resolveNode(query, signal),
+          invoke: (request) => transport().invoke(request),
+        } satisfies ComputerToolTransport;
+      })()
+    : computerOwner;
   const resolveProjectedTools =
     runtimeToolsAllowPolicy !== undefined
       ? prepareDeps.resolveMcpLoopbackPolicyTools
@@ -1096,6 +1129,7 @@ export async function prepareCliRunContext(
             cfg: runConfig,
             signal: params.abortSignal,
             ...mcpProjectionContext,
+            computerTransport: projectionComputer,
             ...(skillWorkshop ? { skillWorkshop } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
             ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
@@ -1247,6 +1281,7 @@ export async function prepareCliRunContext(
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             admittedRunContext: params.admittedRunContext,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+            ...(computerOwner !== undefined ? { computerOwner } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
@@ -1258,6 +1293,7 @@ export async function prepareCliRunContext(
         mcpLoopbackRuntime &&
         !prepareDeps.bindMcpLoopbackClientGrantAdmission({
           token: mcpClientGrant.token,
+          expectedOwner: mcpClientGrant,
           runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
           admittedRunContext,
         })
@@ -1265,64 +1301,64 @@ export async function prepareCliRunContext(
         throw new Error("CLI MCP client grant is no longer valid for this admitted run");
       }
     };
-    const mcpClientGrantCapture =
+    const managedMcpGrant =
       mcpClientGrant && mcpLoopbackRuntime
         ? (() => {
             let activeToken = mcpClientGrant.token;
+            let closing: Promise<void> | undefined;
+            const cleanup = () =>
+              (closing ??= (async () => {
+                await prepareDeps.revokeMcpLoopbackClientGrant(activeToken, mcpClientGrant);
+              })());
             return {
-              transportToken: mcpClientGrant.token,
-              adoptProcessToken: (processToken: string) => {
-                if (activeToken === processToken) {
-                  return;
-                }
-                if (
-                  !prepareDeps.transferMcpLoopbackClientGrant({
-                    sourceToken: mcpClientGrant.token,
-                    targetToken: processToken,
+              cleanup,
+              capture: {
+                transportToken: mcpClientGrant.token,
+                adoptProcessToken: (processToken: string) => {
+                  if (
+                    !prepareDeps.transferMcpLoopbackClientGrant({
+                      sourceToken: activeToken,
+                      targetToken: processToken,
+                      expectedOwner: mcpClientGrant,
+                      runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                    })
+                  ) {
+                    throw new Error(
+                      "CLI MCP client grant could not transfer onto the live process bearer",
+                    );
+                  }
+                  activeToken = processToken;
+                },
+                revokeProcessToken: () => {
+                  void cleanup().catch((error: unknown) => {
+                    cliBackendLog.warn(
+                      `CLI process tool cleanup failed: ${formatErrorMessageForDisplay(error)}`,
+                    );
+                  });
+                },
+                activate: (captureKey: string) => {
+                  const capture = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                    token: activeToken,
+                    expectedOwner: mcpClientGrant,
                     runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                  })
-                ) {
-                  throw new Error(
-                    "CLI MCP client grant could not transfer onto the live process bearer",
-                  );
-                }
-                activeToken = processToken;
-              },
-              revokeProcessToken: () => {
-                prepareDeps.revokeMcpLoopbackClientGrant(activeToken);
-              },
-              activate: (captureKey: string) => {
-                const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
-                  token: activeToken,
-                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                  captureKey,
-                });
-                if (!activated) {
-                  throw new Error(
-                    "CLI MCP client grant is no longer valid for this Gateway runtime",
-                  );
-                }
-              },
-              deactivate: (captureKey: string) => {
-                prepareDeps.deactivateMcpLoopbackClientGrantCapture({
-                  token: activeToken,
-                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                  captureKey,
-                });
+                    captureKey,
+                    signal: params.abortSignal,
+                  });
+                  if (!capture) {
+                    throw new Error(
+                      "CLI MCP client grant is no longer valid for this Gateway runtime",
+                    );
+                  }
+                  // Each attempt retains its own closer. A late finally cannot
+                  // rediscover a successor through the warm process's bearer/key.
+                  return capture.close;
+                },
               },
             };
           })()
         : undefined;
-    let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
-          }
-          mcpClientGrantRevoked = true;
-          prepareDeps.revokeMcpLoopbackClientGrant(mcpClientGrant.token);
-        }
-      : undefined;
+    const mcpClientGrantCapture = managedMcpGrant?.capture;
+    const cleanupMcpClientGrant = managedMcpGrant?.cleanup;
     cleanupPreparedResources = cleanupMcpClientGrant;
     const loopbackServerConfig = mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)

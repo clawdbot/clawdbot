@@ -99,6 +99,7 @@ describe.each([false, true])(
               runId: "run-computer",
               agentId: "main",
               isActive: () => true,
+              computerUse: transport.computerUse!,
               sandboxToolPolicy: resolveSandboxToolPolicyForAgent(config, "main", {
                 containedToolNames: ["computer"],
               }),
@@ -134,7 +135,13 @@ describe.each([false, true])(
             },
           );
           await withSessionPlacementComputer(
-            { runId: "run-computer", agentId: "main", isActive: () => true, bind: () => null },
+            {
+              runId: "run-computer",
+              agentId: "main",
+              isActive: () => true,
+              computerUse: null,
+              bind: () => null,
+            },
             async () => {
               expect(
                 host.hostCapabilities
@@ -162,6 +169,7 @@ it("scopes placement policy to the active run and agent without binding a deskto
       runId: "placement-run",
       agentId: "main",
       isActive: () => active,
+      computerUse: transport.computerUse!,
       sandboxToolPolicy: contained,
       bind,
     },

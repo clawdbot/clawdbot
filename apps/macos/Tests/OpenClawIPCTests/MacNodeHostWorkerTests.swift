@@ -49,6 +49,15 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
+    private func invokeComputer(
+        _ runtime: MacNodeRuntime, _ request: BridgeInvokeRequest) async throws -> BridgeInvokeResponse
+    {
+        try await MacNodeComputerExecutionFixture().run { fixture in
+            try await fixture.connect(runtime: runtime)
+            return try await fixture.invoke(request)
+        }
+    }
+
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
@@ -141,31 +150,31 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test(arguments: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
-    func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async {
+    func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async throws {
         let worker = StubMacNodeHostWorker(commands: [command])
         let runtime = MacNodeRuntime(
             nodeHostWorker: worker,
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
 
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+        let response = try await self.invokeComputer(runtime, BridgeInvokeRequest(
             id: "cua-owned",
             command: command,
-            paramsJSON: "{}"))
+            paramsJSON: #"{"action":"left_click","executionId":"11111111-1111-4111-8111-111111111111"}"#))
 
         #expect(response.ok)
         #expect(response.payloadJSON == #"{"owner":"cli"}"#)
         #expect(await worker.invokedCommands() == [command])
     }
 
-    @Test func `selected CUA provider never falls back to native snapshot`() async {
+    @Test func `selected CUA provider never falls back to native snapshot`() async throws {
         let worker = StubMacNodeHostWorker(commands: [])
         let runtime = MacNodeRuntime(
             nodeHostWorker: worker,
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
 
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+        let response = try await self.invokeComputer(runtime, BridgeInvokeRequest(
             id: "cua-unavailable",
             command: MacNodeScreenCommand.snapshot.rawValue))
 
@@ -240,7 +249,7 @@ struct MacNodeHostWorkerTests {
             OpenClawComputerCommand.act.rawValue,
             "COMPUTER_DISABLED: enable Computer Control in Settings"),
     ])
-    func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async {
+    func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async throws {
         let worker = StubMacNodeHostWorker(commands: [command])
         let runtime = MacNodeRuntime(
             nodeHostWorker: worker,
@@ -248,9 +257,14 @@ struct MacNodeHostWorkerTests {
             codexThreadCatalogEnabled: { false },
             claudeSessionCatalogEnabled: { false })
 
-        let response = await runtime.handleInvoke(BridgeInvokeRequest(
-            id: "native-disabled",
-            command: command))
+        let request = BridgeInvokeRequest(
+            id: "native-disabled", command: command,
+            paramsJSON: #"{"action":"left_click","executionId":"11111111-1111-4111-8111-111111111111"}"#)
+        let response = if command == OpenClawComputerCommand.act.rawValue {
+            try await self.invokeComputer(runtime, request)
+        } else {
+            await runtime.handleInvoke(request)
+        }
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
@@ -379,6 +393,49 @@ struct MacNodeHostWorkerTests {
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 4, currentGeneration: 4))
         #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 5, currentGeneration: 4))
         #expect(!MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 3, currentGeneration: 4))
+    }
+
+    @Test @MainActor func `computer forwarding cannot adopt a replacement worker route`() async throws {
+        try await MacNodeComputerExecutionFixture().run { fixture in
+            let worker = MacNodeHostWorker(session: fixture.session)
+            // This child only echoes invoke receipts. It never starts a driver or desktop service.
+            let script = #"""
+            printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":["computer"],"commands":["computer.act"],"pathEnv":"/usr/bin:/bin"}}'
+            while IFS= read -r line; do
+              case "$line" in
+                *'"type":"invoke"'*)
+                  generation=$(printf '%s' "$line" | sed -E 's/.*"generation":([0-9]+).*/\1/')
+                  id=$(printf '%s' "$line" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+                  printf '{"type":"invoke-result","generation":%s,"result":{"id":"%s","ok":true}}\n' "$generation" "$id"
+                  ;;
+              esac
+            done
+            """#
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script]))
+            do {
+                try await fixture.connect()
+                try await fixture.sendSnapshot("old-route")
+                _ = try await fixture.response("old-route")
+                let oldRoute = try #require(fixture.routes["old-route"])
+                #expect(await worker.setRoute(fixture.session.currentRoute(), authorityGeneration: 1))
+                let params = #"{"action":"__close_execution","executionId":"11111111-1111-4111-8111-111111111111","reason":"completed"}"#
+                let live = await GatewayNodeSession.$invocationRoute.withValue(oldRoute) {
+                    await worker.invoke(BridgeInvokeRequest(id: "live", command: "computer.act", paramsJSON: params))
+                }
+                #expect(live.ok)
+                try await fixture.connect()
+                #expect(await worker.setRoute(fixture.session.currentRoute(), authorityGeneration: 2))
+                let stale = await GatewayNodeSession.$invocationRoute.withValue(oldRoute) {
+                    await worker.invoke(BridgeInvokeRequest(id: "stale", command: "computer.act", paramsJSON: params))
+                }
+                #expect(!stale.ok)
+                #expect(stale.error?.message == "UNAVAILABLE: computer control node route changed")
+                await worker.stop()
+            } catch {
+                await worker.stop()
+                throw error
+            }
+        }
     }
 
     @Test func `worker forces app exec host without fallback or startup respawn`() async throws {

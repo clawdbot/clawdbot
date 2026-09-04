@@ -1,5 +1,6 @@
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -43,6 +44,9 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+type RegisterRunCleanup = NonNullable<
+  Parameters<typeof resolveGatewayScopedTools>[0]["registerRunCleanup"]
+>;
 
 /** Protocol input shape accepted by gateway tool invocation surfaces. */
 export type ToolsInvokeInput = {
@@ -189,26 +193,16 @@ type InvokeGatewayToolParams = {
 };
 
 async function invokeGatewayToolWithSignal(
-  params: InvokeGatewayToolParams & { signal: AbortSignal },
+  params: InvokeGatewayToolParams & {
+    signal: AbortSignal;
+    toolName: string;
+    registerRunCleanup: RegisterRunCleanup;
+  },
 ): Promise<ToolsInvokeOutcome> {
+  const { toolName } = params;
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
-  const requestedToolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
-  // "cron" is a permanently accepted inbound alias for the scheduler tool
-  // (owner decision, RFC 0026; same contract as bash -> exec). Canonicalize
-  // before core-id checks and exact-name dispatch below.
-  const toolName = isAutomationsToolName(requestedToolName)
-    ? AUTOMATIONS_TOOL_NAME
-    : requestedToolName;
-  if (!toolName) {
-    return {
-      ok: false,
-      status: 400,
-      toolName: "",
-      error: { type: "invalid_request", message: "tools.invoke requires name" },
-    };
-  }
 
   if (process.env.VITEST && MEMORY_TOOL_NAMES.has(toolName)) {
     const reasons = resolveMemoryToolDisableReasons(params.cfg);
@@ -250,6 +244,17 @@ async function invokeGatewayToolWithSignal(
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
+  const withAuthority = <T>(operation: () => Promise<T>): Promise<T> =>
+    authenticatedUserProfile
+      ? withOperatorToolGatewayAuthority(
+          {
+            authenticatedUserProfile,
+            operatorRoleActor: params.operatorRoleActor,
+            scopes: params.operatorScopes ?? [],
+          },
+          operation,
+        )
+      : operation();
   // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
@@ -354,6 +359,9 @@ async function invokeGatewayToolWithSignal(
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
+      registerRunCleanup: (cleanup) => {
+        params.registerRunCleanup((reason) => withAuthority(() => cleanup(reason)));
+      },
       disablePluginTools,
       gatewayRequestedTools,
     });
@@ -384,99 +392,141 @@ async function invokeGatewayToolWithSignal(
     };
   }
 
-  try {
-    const gatewayTool: AnyAgentTool = tool;
-    const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
-    const toolCallId = idempotencyKey
-      ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
-      : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
-    const toolArgs = mergeActionIntoArgsIfSupported({
-      toolSchema: gatewayTool.parameters,
-      action,
-      args,
-    });
-    const hookResult = await runBeforeToolCallHook({
-      toolName,
-      params: toolArgs,
-      toolCallId,
-      ctx: {
-        agentId,
-        config: params.cfg,
-        sessionKey,
-        workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
-      },
-      signal: params.signal,
-      approvalMode: params.approvalMode,
-    });
-    if (hookResult.blocked) {
-      return {
-        ok: false,
-        status: 403,
-        toolName,
-        error: {
-          type: "tool_call_blocked",
-          message: hookResult.reason,
-          requiresApproval: hookResult.deniedReason === "plugin-approval",
-        },
-      };
-    }
-    params.signal?.throwIfAborted();
-    const executeTool = async () =>
-      await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
-    const result = authenticatedUserProfile
-      ? await withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile,
-            operatorRoleActor: params.operatorRoleActor,
-            scopes: params.operatorScopes ?? [],
-          },
-          executeTool,
-        )
-      : await executeTool();
-    return {
-      ok: true,
-      status: 200,
-      toolName,
-      source: resolveToolSource(gatewayTool),
-      result,
-    };
-  } catch (err) {
-    const inputStatus = resolveToolInputErrorStatus(err);
-    if (inputStatus !== null) {
-      return {
-        ok: false,
-        status: inputStatus === 403 ? 403 : 400,
-        toolName,
-        error: {
-          type: "tool_error",
-          message: formatErrorMessage(err) || "invalid tool arguments",
-        },
-      };
-    }
-    if (!params.signal?.aborted) {
-      logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
-    }
+  const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
+  const toolCallId = idempotencyKey
+    ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
+    : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
+  const toolArgs = mergeActionIntoArgsIfSupported({
+    toolSchema: tool.parameters,
+    action,
+    args,
+  });
+  const hookResult = await runBeforeToolCallHook({
+    toolName,
+    params: toolArgs,
+    toolCallId,
+    ctx: {
+      agentId,
+      config: params.cfg,
+      sessionKey,
+      workspaceDir,
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
+    },
+    signal: params.signal,
+    approvalMode: params.approvalMode,
+  });
+  if (hookResult.blocked) {
     return {
       ok: false,
-      status: 500,
+      status: 403,
       toolName,
-      error: { type: "tool_error", message: "tool execution failed" },
+      error: {
+        type: "tool_call_blocked",
+        message: hookResult.reason,
+        requiresApproval: hookResult.deniedReason === "plugin-approval",
+      },
     };
   }
+  params.signal.throwIfAborted();
+  const result = await withAuthority(async () =>
+    tool.execute?.(toolCallId, hookResult.params, params.signal),
+  );
+  return {
+    ok: true,
+    status: 200,
+    toolName,
+    source: resolveToolSource(tool),
+    result,
+  };
 }
 
 /** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
 export async function invokeGatewayTool(
   params: InvokeGatewayToolParams,
 ): Promise<ToolsInvokeOutcome> {
+  const requestedToolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
+  // "cron" is a permanently accepted inbound alias (RFC 0026). Normalize it
+  // before dispatch so execution and cleanup failures report the same tool.
+  const toolName = isAutomationsToolName(requestedToolName)
+    ? AUTOMATIONS_TOOL_NAME
+    : requestedToolName;
+  if (!toolName) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: { type: "invalid_request", message: "tools.invoke requires name" },
+    };
+  }
+  const runCleanups: Array<Parameters<RegisterRunCleanup>[0]> = [];
   const requestAbort = new AbortController();
   const signal = params.signal
     ? AbortSignal.any([params.signal, requestAbort.signal])
     : requestAbort.signal;
+  let outcome: Result<ToolsInvokeOutcome, unknown>;
   try {
-    return await invokeGatewayToolWithSignal({ ...params, signal });
+    const value = await invokeGatewayToolWithSignal({
+      ...params,
+      signal,
+      toolName,
+      registerRunCleanup: (cleanup) => {
+        runCleanups.push(cleanup);
+      },
+    });
+    outcome = { ok: true, value };
+  } catch (error) {
+    outcome = { ok: false, error };
   } finally {
+    // This endpoint constructs one tool bundle per request. Fence it before
+    // cleanup, and do not acknowledge success while its resources remain owned.
     requestAbort.abort();
   }
+  const cleanupReason = params.signal?.aborted
+    ? "cancel"
+    : outcome.ok && outcome.value.ok
+      ? "completion"
+      : "error";
+  const cleanupResults = await Promise.allSettled(
+    runCleanups.map(async (cleanup) => cleanup(cleanupReason)),
+  );
+  const cleanupErrors = cleanupResults.flatMap((result): unknown[] =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (cleanupErrors.length > 0) {
+    if (!outcome.ok) {
+      cleanupErrors.unshift(outcome.error);
+    }
+    outcome = {
+      ok: false,
+      error: new AggregateError(cleanupErrors, "Tool execution cleanup failed"),
+    };
+  }
+  if (outcome.ok) {
+    return outcome.value;
+  }
+  const inputStatus = resolveToolInputErrorStatus(outcome.error);
+  if (inputStatus !== null) {
+    return {
+      ok: false,
+      status: inputStatus === 403 ? 403 : 400,
+      toolName,
+      error: {
+        type: "tool_error",
+        message: formatErrorMessage(outcome.error) || "invalid tool arguments",
+      },
+    };
+  }
+  if (!params.signal?.aborted || cleanupErrors.length > 0) {
+    logWarn(`tools-invoke: tool execution failed: ${formatErrorMessage(outcome.error)}`);
+  }
+  const message =
+    cleanupErrors.length > 0
+      ? "tool cleanup failed; inspect current state before retrying"
+      : "tool execution failed";
+  return {
+    ok: false,
+    status: 500,
+    toolName,
+    error: { type: "tool_error", message },
+  };
 }

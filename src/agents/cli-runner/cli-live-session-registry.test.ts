@@ -56,8 +56,7 @@ async function createOwner(
         transportToken: options.capture.token,
         adoptProcessToken: vi.fn(),
         revokeProcessToken: vi.fn(),
-        activate: vi.fn(),
-        deactivate: vi.fn(),
+        activate: vi.fn(() => async () => {}),
       }
     : undefined;
   if (grant) {
@@ -285,8 +284,8 @@ describe("generic plugin-owned live session registry", () => {
 
     resumed.capability.remove(original.session);
     resumed.capability.remove(original.session);
-    expect(original.grant?.revokeProcessToken).toHaveBeenCalledOnce();
-    expect(resumed.grant?.revokeProcessToken).not.toHaveBeenCalled();
+    expect(original.grant?.revokeProcessToken).not.toHaveBeenCalled();
+    expect(resumed.grant?.revokeProcessToken).toHaveBeenCalledOnce();
     expect(original.capability.current()).toBeUndefined();
   });
 

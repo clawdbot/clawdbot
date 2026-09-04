@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type PreparedAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrantsForRuntime,
+} from "./mcp-grant-store.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -32,6 +42,16 @@ function scopedToolFixture(names: string[]) {
   };
 }
 
+function nodeExecToolFixture(
+  params: Parameters<typeof import("./tool-resolution.js").resolveGatewayScopedTools>[0],
+) {
+  const project = (available = params.nodeExecAvailable) =>
+    scopedToolFixture(
+      params.includeNodeExecTool && available?.(params.execOverrides?.node) ? ["exec"] : [],
+    ).tools;
+  return { agentId: "main", tools: project(), refreshNodeExecTools: project };
+}
+
 function scopeParams(overrides: Record<string, unknown> = {}) {
   return {
     cfg: {} as OpenClawConfig,
@@ -58,8 +78,13 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+const admissions: PreparedAgentRunAdmission[] = [];
+afterEach(async () => {
   vi.useRealTimers();
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
+  await revokeMcpLoopbackClientGrantsForRuntime("cache-test");
 });
 
 describe("node execution discovery", () => {
@@ -80,6 +105,34 @@ describe("node execution discovery", () => {
     await expect(loadNodeExecAvailability(controller.signal)).rejects.toBe(reason);
   });
 });
+
+async function clientCapture(params: ReturnType<typeof scopeParams>) {
+  const runId = `cache-${admissions.length}`;
+  const admission = prepareAgentRunAdmission({
+    cfg: params.cfg,
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "system", boundary: "mcp-cache-test", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+  });
+  admissions.push(admission);
+  const { cfg: _cfg, ...context } = params;
+  const grant = mintMcpLoopbackClientGrant({
+    context: { ...context, senderIsOwner: params.senderIsOwner ?? false },
+    runtimeOwnerToken: "cache-test",
+    admittedRunContext: await admission.admit("gateway", runId),
+  });
+  const capture = activateMcpLoopbackClientGrantCapture({
+    token: grant.token,
+    expectedOwner: grant,
+    runtimeOwnerToken: "cache-test",
+    captureKey: "reused-key",
+  })!;
+  await capture.ready;
+  return capture;
+}
 
 describe("resolveMcpLoopbackScopedTools", () => {
   it.each([
@@ -307,76 +360,114 @@ describe("McpLoopbackToolCache", () => {
   it("rechecks execution availability before reusing cached schemas", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ senderIsOwner: true, nodeExecAllowed: true });
-    resolveGatewayScopedTools.mockImplementation(({ includeNodeExecTool, nodeExecAvailable }) =>
-      scopedToolFixture(includeNodeExecTool && nodeExecAvailable?.() ? ["exec"] : []),
-    );
+    resolveGatewayScopedTools.mockImplementation(nodeExecToolFixture);
+    const capture = await clientCapture(params);
     for (const connected of [false, true, false]) {
       listNodes.mockResolvedValue([{ nodeId: "worker", connected, commands: ["system.run"] }]);
-      const result = await cache.resolve(params);
+      const result = await cache.resolve(params, capture);
       expect(result.tools.map((tool) => tool.name)).toEqual(connected ? ["exec"] : []);
     }
   });
 
-  it.each(["evict", "clear"])(
-    "does not resurrect cache rows when %s overtakes discovery",
+  it.each(["capture-close", "runtime-close"] as const)(
+    "does not resurrect executable bundles when %s overtakes discovery",
     async (action) => {
       const cache = new McpLoopbackToolCache();
-      const params = scopeParams({ nodeExecAllowed: true, grantToken: "pending-grant" });
+      const params = scopeParams({ nodeExecAllowed: true });
+      const capture = await clientCapture(params);
       const entered = createDeferred();
       const inventory = createDeferred<unknown[]>();
       listNodes.mockImplementationOnce(() => {
         entered.resolve();
         return inventory.promise;
       });
-      const pending = cache.resolve(params);
+      const pending = cache.resolve(params, capture);
       await entered.promise;
-      if (action === "evict") {
-        cache.evictGrant("pending-grant");
+      if (action === "capture-close") {
+        await capture.close("completion");
       } else {
+        await revokeMcpLoopbackClientGrantsForRuntime("cache-test");
         cache.clear();
       }
+      const rejected = expect(pending).rejects.toBe(capture.signal.reason);
       inventory.resolve([]);
-      await pending;
-      expect(cache.evictGrant("pending-grant")).toBe(false);
-      await cache.resolve(params);
-      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+      await rejected;
+      expect(resolveGatewayScopedTools).not.toHaveBeenCalled();
+      await expect(cache.resolve(params, capture)).rejects.toBe(capture.signal.reason);
+      await cache.resolve(params, await clientCapture(params));
+      expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
     },
   );
 
-  it("does not cache tools when cancellation overtakes discovery", async () => {
+  it("does not resurrect attachment metadata when clear overtakes resolution", async () => {
     const cache = new McpLoopbackToolCache();
-    const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
+    const params = scopeParams();
+    const pending = cache.resolve(params);
+    cache.clear();
+    await pending;
+    await cache.resolve(params);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache canceled discovery or poison the next request", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams({ nodeExecAllowed: true });
+    const capture = await clientCapture(params);
     const controller = new AbortController();
-    const reason = new Error("synthetic request cancelled");
+    const reason = new Error("synthetic request canceled");
+    const entered = createDeferred<AbortSignal>();
+    const inventory = createDeferred<unknown[]>();
+    listNodes.mockImplementationOnce((signal: AbortSignal) => {
+      entered.resolve(signal);
+      return inventory.promise;
+    });
+    const rejected = expect(
+      cache.resolve({ ...params, signal: controller.signal }, capture),
+    ).rejects.toBe(reason);
+    const discoverySignal = await entered.promise;
+    controller.abort(reason);
+    expect(discoverySignal.aborted).toBe(true);
+    expect(discoverySignal.reason).toBe(reason);
+    inventory.resolve([]);
+    await rejected;
+    expect(resolveGatewayScopedTools).not.toHaveBeenCalled();
+    const next = new AbortController();
+    const bundle = await cache.resolve({ ...params, signal: next.signal }, capture);
+    next.abort();
+    expect(await cache.resolve({ ...params, signal: new AbortController().signal }, capture)).toBe(
+      bundle,
+    );
+    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+  });
+
+  it("keeps another capture's bundle when retirement overtakes its discovery", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams({ nodeExecAllowed: true });
+    const first = await clientCapture(params);
+    await cache.resolve(params, first);
+    const next = await clientCapture(params);
     const entered = createDeferred();
     const inventory = createDeferred<unknown[]>();
     listNodes.mockImplementationOnce(() => {
       entered.resolve();
       return inventory.promise;
     });
-    const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
-      reason,
-    );
+    const pending = cache.resolve(params, next);
     await entered.promise;
-    expect(listNodes).toHaveBeenCalledWith(controller.signal);
-    controller.abort(reason);
+    await first.close("completion");
     inventory.resolve([]);
-    await rejected;
-    expect(cache.evictGrant("cancelled-grant")).toBe(false);
-    const next = new AbortController();
-    await cache.resolve({ ...params, signal: next.signal });
-    next.abort();
-    await cache.resolve({ ...params, signal: new AbortController().signal });
-    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    const bundle = await pending;
+    cache.clear();
+    expect(await cache.resolve(params, next)).toBe(bundle);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes cached bound tools when node matching preferences change", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
-    resolveGatewayScopedTools.mockImplementation(({ nodeExecAvailable, execOverrides }) =>
-      scopedToolFixture(nodeExecAvailable(execOverrides.node) ? ["exec"] : []),
-    );
+    resolveGatewayScopedTools.mockImplementation(nodeExecToolFixture);
+    const capture = await clientCapture(params);
     for (const eligibleIsCurrent of [false, true, false]) {
       listNodes.mockResolvedValue([
         {
@@ -394,7 +485,7 @@ describe("McpLoopbackToolCache", () => {
           clientId: eligibleIsCurrent ? "openclaw-node" : "clawdbot-node",
         },
       ]);
-      const scoped = await cache.resolve(params);
+      const scoped = await cache.resolve(params, capture);
       expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleIsCurrent ? ["exec"] : []);
     }
   });
@@ -419,137 +510,63 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
-  it("does not share cache rows across different grant allowlists", async () => {
+  it.each([
+    ["allowlist", { toolsAllow: ["memory_search"] }],
+    ["empty allowlist", { toolsAllow: [] }],
+    ["runtime policy agent", { runtimePolicyAgentId: "worker" }],
+    ["vision", { modelHasVision: true }],
+    ["reply mode", { replyToMode: "all" }],
+    ["source-only reply", { sourceReplyOnly: true }],
+    ["delegation", { delegationCapability: "report_only" }],
+    ["client capabilities", { clientCaps: ["inline-widgets"] }],
+    [
+      "elevated permission",
+      { bashElevated: { enabled: true, allowed: true, defaultLevel: "full" } },
+    ],
+    [
+      "exec defaults",
+      { execSession: { execHost: "node", execNode: "fixture-node" }, nodeExecAllowed: true },
+    ],
+    ["exec mode", { execOverrides: { mode: "full" } }],
+    ["owner", { senderIsOwner: true }],
+  ])("isolates and forwards %s through distinct real CLI captures", async (_name, fields) => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;
-
-    const unrestricted = await cache.resolve(scopeParams({ cfg }));
-    const restricted = await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
-    const denied = await cache.resolve(scopeParams({ cfg, toolsAllow: [] }));
-
-    expect(unrestricted.tools).toHaveLength(4);
-    expect(restricted.tools).toHaveLength(1);
-    expect(denied.tools).toHaveLength(0);
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
-
-    // Same allowlist reuses the cached row.
-    await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not share cache rows across different runtime policy agents", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
-    await cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
-
+    const firstParams = scopeParams({ cfg });
+    const nextParams = scopeParams({ cfg, ...fields });
+    const first = await clientCapture(firstParams);
+    const next = await clientCapture(nextParams);
+    const firstTools = await cache.resolve(firstParams, first);
+    const nextTools = await cache.resolve(nextParams, next);
+    expect(nextTools).not.toBe(firstTools);
+    expect(await cache.resolve(firstParams, first)).toBe(firstTools);
+    expect(await cache.resolve(nextParams, next)).toBe(nextTools);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not share loopback tools across prepared vision capabilities", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
-    await cache.resolve(scopeParams({ cfg, modelHasVision: false }));
-    await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
-      modelHasVision: true,
-    });
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
-      modelHasVision: false,
-    });
-  });
-
-  it("does not share loopback message tools across prepared reply modes", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
-    await cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
-    await cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
-  });
-
-  it("evicts only the revoked grant's cached tool closures", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-
-    expect(cache.evictGrant("grant-a")).toBe(true);
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
-  });
-
-  it("preserves the global 256-entry cache cap across grants", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    for (let index = 0; index < 256; index += 1) {
-      await cache.resolve(
-        scopeParams({ cfg, grantToken: "grant-a", currentMessageId: `message-${index}` }),
-      );
+    const { toolsAllow, nodeExecAllowed, ...forwarded } = fields as Partial<
+      ReturnType<typeof scopeParams>
+    >;
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject(forwarded);
+    if (toolsAllow) {
+      expect(nextTools.tools.map((tool) => tool.name)).toEqual(toolsAllow);
     }
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    if (nodeExecAllowed) {
+      expect(resolveGatewayScopedTools.mock.calls[1]?.[0].includeNodeExecTool).toBe(true);
+    }
+    await first.close("completion");
+    await expect(cache.resolve(firstParams, first)).rejects.toBe(first.signal.reason);
+    expect(await cache.resolve(nextParams, next)).toBe(nextTools);
+  });
+
+  it("caps attachment metadata at 256 session-owner partitions", async () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+    for (let index = 0; index < 257; index++) {
+      await cache.resolve(scopeParams({ cfg, sessionKey: `agent:main:attachment-${index}` }));
+    }
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(257);
-
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-a", currentMessageId: "message-0" }));
+    await cache.resolve(scopeParams({ cfg, sessionKey: "agent:main:attachment-0" }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
-
-    await cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    await cache.resolve(scopeParams({ cfg, sessionKey: "agent:main:attachment-256" }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
-  });
-
-  it("never reuses ordinary private-mode tools for a source-reply-only grant", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-    const params = scopeParams({
-      cfg,
-      messageProvider: "telegram",
-      currentChannelId: "telegram:chat123",
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolsAllow: ["message"],
-    });
-
-    await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
-    await cache.resolve(params);
-    await cache.resolve({ ...params, sourceReplyOnly: true });
-
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
-  });
-
-  it("does not share cache rows across delegation capabilities", async () => {
-    const cache = new McpLoopbackToolCache();
-    const cfg = {} as OpenClawConfig;
-
-    await cache.resolve(scopeParams({ cfg }));
-    await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
-
-    // A restricted attempt must neither read nor seed the full-capability row
-    // for the same session context.
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
-      delegationCapability: "report_only",
-    });
-
-    await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 });

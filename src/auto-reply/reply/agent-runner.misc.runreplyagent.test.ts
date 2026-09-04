@@ -1947,20 +1947,6 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
-        executionTrace: {
-          winnerProvider: "claude-cli",
-          winnerModel: "opus-4.5",
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "opus-4.5",
-              result: "error",
-              reason: "before_agent_run blocked the run",
-            },
-          ],
-          fallbackUsed: false,
-          runner: "cli",
-        },
       },
     });
 
@@ -1988,6 +1974,20 @@ describe("runReplyAgent claude-cli routing", () => {
         agentMeta: {
           provider: "claude-cli",
           model: "opus-4.5",
+        },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
         },
       },
     });
@@ -2032,7 +2032,10 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
-    expect(texts).toContain("fallbackUsed=no");
+    expect(texts).toContain("Summary: fallback=no attempts=1");
+    expect(texts).not.toContain("winner=");
+    expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
+    expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
 

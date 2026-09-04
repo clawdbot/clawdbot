@@ -5,7 +5,10 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { asNullableRecord as asLoopbackSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { sleep } from "../utils/sleep.js";
@@ -23,6 +26,11 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+} from "./mcp-grant-store.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -176,27 +184,17 @@ function assertLoopbackObjectSchemasHaveProperties(params: {
 }
 
 async function callLoopbackJsonRpc(params: {
-  sessionKey: string;
-  messageProvider?: string;
-  accountId?: string;
+  port: number;
+  token: string;
+  captureKey: string;
   body: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
 }): Promise<LoopbackJsonRpcResponse> {
-  const runtime = getActiveMcpLoopbackRuntime();
-  if (!runtime) {
-    throw new Error("mcp loopback runtime is not active");
-  }
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${runtime.ownerToken}`,
+  const headers = {
+    Authorization: `Bearer ${params.token}`,
     "Content-Type": "application/json",
-    "x-session-key": params.sessionKey,
+    "x-openclaw-cli-capture-key": params.captureKey,
   };
-  if (params.messageProvider) {
-    headers["x-openclaw-message-channel"] = params.messageProvider;
-  }
-  if (params.accountId) {
-    headers["x-openclaw-account-id"] = params.accountId;
-  }
   const timeoutMs = parsePositiveInt(
     params.env?.OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS,
     CLI_CRON_MCP_LOOPBACK_REQUEST_TIMEOUT_MS,
@@ -212,7 +210,7 @@ async function callLoopbackJsonRpc(params: {
   let response: Response | undefined;
   let text;
   try {
-    response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+    response = await fetch(`http://127.0.0.1:${params.port}/mcp`, {
       method: "POST",
       headers,
       body: JSON.stringify(params.body),
@@ -252,53 +250,81 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     sessionKey: params.sessionKey,
   });
 
-  await callLoopbackJsonRpc({
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    accountId: params.accountId,
-    env: params.env,
-    body: {
-      jsonrpc: "2.0",
-      id: "init",
-      method: "initialize",
-      params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "vitest" } },
-    },
-  });
-  await callLoopbackJsonRpc({
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    accountId: params.accountId,
-    env: params.env,
-    body: { jsonrpc: "2.0", method: "notifications/initialized" },
-  });
-  const toolsList = await callLoopbackJsonRpc({
-    sessionKey: params.sessionKey,
-    messageProvider: params.messageProvider,
-    accountId: params.accountId,
-    env: params.env,
-    body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
-  });
-  const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
-    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as LoopbackToolListEntry[])
-    : [];
-  assertLoopbackObjectSchemasHaveProperties({
-    tools,
-    expectedSchemaProbeToolName: params.expectedSchemaProbeToolName,
-  });
-  const toolNames = tools
-    .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
-    .filter(Boolean);
-  logCliCronProbe("loopback-preflight:tools", {
-    toolCount: toolNames.length,
-    cronVisible: toolNames.includes(AUTOMATIONS_TOOL_NAME),
-  });
-  if (!toolNames.includes(AUTOMATIONS_TOOL_NAME)) {
-    throw new Error(`mcp loopback tools/list did not expose ${AUTOMATIONS_TOOL_NAME}`);
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error("mcp loopback runtime is not active");
   }
+  const cfg = getRuntimeConfig();
+  const runId = randomUUID();
+  const agentId = resolveSessionAgentId({ config: cfg, sessionKey: params.sessionKey });
+  const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "cli-mcp-discovery-probe");
+  let grant: ReturnType<typeof mintMcpLoopbackClientGrant> | undefined;
+  try {
+    grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: params.sessionKey,
+        agentId,
+        senderIsOwner: true,
+        messageProvider: params.messageProvider,
+        accountId: params.accountId,
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await admission.admit("gateway", runId),
+    });
+    const captureKey = randomUUID();
+    const capture = activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      expectedOwner: grant,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    });
+    if (!capture) {
+      throw new Error("mcp probe grant could not activate");
+    }
+    const connection = { port: runtime.port, token: grant.token, captureKey, env: params.env };
+    await callLoopbackJsonRpc({
+      ...connection,
+      body: {
+        jsonrpc: "2.0",
+        id: "init",
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "vitest" } },
+      },
+    });
+    await callLoopbackJsonRpc({
+      ...connection,
+      body: { jsonrpc: "2.0", method: "notifications/initialized" },
+    });
+    const toolsList = await callLoopbackJsonRpc({
+      ...connection,
+      body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
+    });
+    const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
+      ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as LoopbackToolListEntry[])
+      : [];
+    assertLoopbackObjectSchemasHaveProperties({
+      tools,
+      expectedSchemaProbeToolName: params.expectedSchemaProbeToolName,
+    });
+    const toolNames = tools
+      .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
+      .filter(Boolean);
+    logCliCronProbe("loopback-preflight:tools", {
+      toolCount: toolNames.length,
+      cronVisible: toolNames.includes(AUTOMATIONS_TOOL_NAME),
+    });
+    if (!toolNames.includes(AUTOMATIONS_TOOL_NAME)) {
+      throw new Error(`mcp loopback tools/list did not expose ${AUTOMATIONS_TOOL_NAME}`);
+    }
 
-  // The owner token permits discovery but carries no admitted agent turn.
-  // verifyCliCronMcpProbe proves mutations through the real agent's live MCP grant.
-  logCliCronProbe("loopback-preflight:done");
+    // This probe owns discovery only; the agent probe below proves real tool mutations.
+    logCliCronProbe("loopback-preflight:done");
+  } finally {
+    admission.close();
+    if (grant) {
+      await revokeMcpLoopbackClientGrant(grant.token, grant);
+    }
+  }
 }
 
 function getCliBackendProbeThinking(providerId: string): "low" | undefined {

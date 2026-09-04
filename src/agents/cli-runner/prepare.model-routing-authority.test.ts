@@ -96,7 +96,7 @@ describe("CLI model-routing receipt authority", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
+      revokeMcpLoopbackClientGrant: vi.fn(async () => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),

@@ -1,5 +1,6 @@
 /** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
 import crypto from "node:crypto";
+import type { Result } from "@openclaw/normalization-core/result";
 import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
@@ -27,6 +28,7 @@ import {
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
   acceptsCliLiveSession,
@@ -67,6 +69,7 @@ import {
 } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
+import { createCliToolCleanupError } from "./tool-cleanup-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function normalizeCliBackendThinkingLevel(
@@ -374,6 +377,7 @@ export async function executePreparedCliRun(
     let runOutput: CliOutput | undefined;
     let runError: unknown;
     let runFailed = false;
+    let toolCleanup: Result<void, unknown>;
     const recordRunError = (error: unknown) => {
       if (!runFailed) {
         runFailed = true;
@@ -595,11 +599,12 @@ export async function executePreparedCliRun(
     } catch (error) {
       recordRunError(error);
     } finally {
-      await toolTracking.finishDeliveryTracking({
+      toolCleanup = await toolTracking.finishCapture({
+        reason: params.abortSignal?.aborted ? "cancel" : runFailed ? "error" : "completion",
         useManagedClaudeLiveSession,
         recordRunError,
+        finalizeParsedTools: events.finalizeParsedTools,
       });
-      toolTracking.finalizeCapture(events.finalizeParsedTools);
       try {
         await cleanupMcpCaptureAttempt?.();
       } catch (error) {
@@ -610,6 +615,29 @@ export async function executePreparedCliRun(
       } catch (error) {
         recordRunError(error);
       }
+    }
+    if (!toolCleanup.ok) {
+      // Only the primary execution error/signal establishes interruption. A
+      // provider-looking cleanup cause must never manufacture timeout or retry.
+      const terminal = resolveCliToolTerminalReason({
+        error: runError,
+        abortSignal: params.abortSignal,
+      });
+      const terminalInterruption =
+        runOutput?.terminalInterruption ??
+        (terminal === "failed"
+          ? undefined
+          : {
+              reason: terminal === "timed_out" ? ("timeout" as const) : ("aborted" as const),
+            });
+      const output = toolTracking.withExecutionEvidence({
+        ...runOutput,
+        text: runOutput?.text ?? "",
+        terminalInterruption,
+        toolSummary: events.getToolSummary(),
+      });
+      const failures = [...(runFailed ? [runError] : []), toolCleanup.error];
+      throw toolTracking.attachDeliveryEvidence(createCliToolCleanupError(output, failures));
     }
     if (runFailed) {
       throw toolTracking.attachDeliveryEvidence(runError);

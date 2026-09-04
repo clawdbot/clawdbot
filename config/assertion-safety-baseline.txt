@@ -1631,7 +1631,6 @@ src/agents/agent-run-terminal-receipt.ts	1
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	7
 src/agents/agent-tool-definition-adapter.ts	4
-src/agents/agent-tool-metadata.ts	2
 src/agents/agent-tools.abort.ts	1
 src/agents/agent-tools.before-tool-call.diagnostics.ts	1
 src/agents/agent-tools.before-tool-call.wrapper.ts	4

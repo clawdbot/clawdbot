@@ -7,6 +7,7 @@ export function createCopilotTestHostCapabilities(): AgentHarnessAttemptParamsV2
     version: 1,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
+    createToolSurface: () => [],
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,

@@ -225,6 +225,75 @@ describe("resolveGatewayScopedTools", () => {
     );
   });
 
+  it("binds executable computer tools to the requesting cleanup owner", async () => {
+    let cleanup: ((reason: string) => Promise<void>) | undefined;
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: { allow: ["computer"] },
+        gateway: { tools: { allow: ["computer"] } },
+      },
+      sessionKey: "agent:main:main",
+      surface: "http",
+      senderIsOwner: true,
+      modelHasVision: true,
+      registerRunCleanup: (registered) => {
+        cleanup = registered;
+      },
+    });
+    const computer = result.tools.find((tool) => tool.name === "computer");
+    expect(computer).toBeDefined();
+    expect(cleanup).toBeTypeOf("function");
+
+    await cleanup?.("completion");
+
+    await expect(computer?.execute("retained-call", { action: "list_windows" })).rejects.toThrow(
+      "computer: execution is closed",
+    );
+  });
+
+  it.each([false, true])(
+    "reprojects node exec without replacing cleanup-owned computer state (denied: %s)",
+    async (denyExec) => {
+      const cleanups: Array<(reason: string) => Promise<void>> = [];
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          plugins: { enabled: false },
+          tools: {
+            allow: ["computer", "exec"],
+            exec: { node: "worker-node" },
+            ...(denyExec ? { deny: ["exec"] } : {}),
+          },
+        },
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        senderIsOwner: true,
+        includeNodeExecTool: true,
+        nodeExecAvailable: () => false,
+        registerRunCleanup: (cleanup) => {
+          cleanups.push(cleanup);
+        },
+      });
+      const computer = result.tools.find((tool) => tool.name === "computer");
+      const refresh = result.refreshNodeExecTools;
+      if (!computer || !refresh) {
+        throw new Error("expected the loopback computer and node-exec projection");
+      }
+      expect(result.tools.some((tool) => tool.name === "exec")).toBe(false);
+      for (const connected of [true, false, true]) {
+        const available = vi.fn((node?: string) => connected && node === "worker-node");
+        const view = refresh(available);
+        expect(available).toHaveBeenCalledWith("worker-node");
+        expect(view.some((tool) => tool.name === "exec")).toBe(connected && !denyExec);
+        expect(view.find((tool) => tool.name === "computer")).toBe(computer);
+        expect(cleanups).toHaveLength(1);
+      }
+      await cleanups[0]!("completion");
+      await expect(computer.execute("retained", { action: "list_windows" })).rejects.toThrow(
+        "computer: execution is closed",
+      );
+    },
+  );
+
   it("passes loopback yield context into sessions_yield", async () => {
     const registry = await import("../agents/subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi

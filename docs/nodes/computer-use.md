@@ -207,7 +207,11 @@ The `cua-computer` fulfiller surfaces typed error codes in the tool result and n
 
 Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
 
-Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
+Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. Direct callers also own cleanup: send `computer.act` with `action: "__close_execution"`, the same `executionId`, and a non-empty `reason` of at most 64 characters. This is lifecycle control, not an advertised model action. The built-in `computer` tool supplies the execution ID and cleanup automatically.
+
+Native Peekaboo binds each execution to its Gateway connection. Only one execution can own native desktop input at a time; another receives `COMPUTER_HOST_BUSY`, while non-computer tools remain usable. Closing an execution cancels queued input, waits for active operations to settle, releases only input it owns, and invalidates its window, element, and observation references. A stale or mismatched close cannot release a successor execution. A close that finds no owned resources reports `details.executionClosed: false` and retires that UUID against late requests. Use a fresh UUID for a new execution.
+
+For native Mac control, update the Gateway and companion app together. Older Peekaboo builds did not implement execution close. If cleanup rejects `__close_execution`, update the companion and inspect the desktop before retrying; the preceding input may already have run.
 
 For CUA, use the same `executionId` for the preceding `screen.snapshot` call. Copy its `displayFrameId` into the action and its returned `width` into `refWidth`; coordinates refer to pixels within that returned bitmap. CUA limits both image dimensions to `maxWidth` without enlarging smaller displays, so direct snapshots and the built-in tool share one coordinate space.
 

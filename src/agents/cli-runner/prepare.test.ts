@@ -18,6 +18,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import * as mcpGrants from "../../gateway/mcp-grant-store.js";
+import {
+  McpLoopbackToolCache,
+  resolveMcpLoopbackScopedTools as resolveRealMcpLoopbackScopedTools,
+} from "../../gateway/mcp-http.runtime.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecuteContext,
@@ -64,6 +69,7 @@ import {
   setCliAuthEpochTestDeps,
 } from "../cli-auth-epoch.test-support.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { runPreparedCliAgent as runRealPreparedCliAgent } from "../cli-runner.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
@@ -76,17 +82,20 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
+import { runEmbeddedAgentEntry } from "../embedded-agent-runner/run-entry.js";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import { withSessionPlacementComputer } from "../session-placement-computer.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
   createModelRoutingTestAdmission,
 } from "../test-helpers/model-routing-decision-e2e-fixtures.js";
+import type { ComputerToolTransport } from "../tools/computer-tool.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -120,13 +129,24 @@ function installTestPluginRegistry() {
   return builder;
 }
 
+const nodeExecAvailabilityMock = vi.hoisted(() =>
+  vi.fn(async (_signal?: AbortSignal) => ({
+    cacheKey: "offline",
+    isAvailable: (_node?: string): boolean => false,
+  })),
+);
+vi.mock("../node-exec-availability.js", () => ({
+  loadNodeExecAvailability: nodeExecAvailabilityMock,
+}));
+
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
   vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
 );
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: getRuntimeConfigMock,
-}));
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return { ...actual, getRuntimeConfig: getRuntimeConfigMock };
+});
 
 vi.mock("../sandbox.js", () => ({
   ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
@@ -186,9 +206,8 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     getActiveMcpLoopbackRuntime: vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     })),
-    resolveMcpLoopbackScopedTools: vi.fn(() => ({
+    resolveMcpLoopbackScopedTools: vi.fn(async () => ({
       agentId: "main",
       tools: [
         {
@@ -482,6 +501,9 @@ describe("prepareCliRunContext", () => {
   });
 
   beforeEach(() => {
+    nodeExecAvailabilityMock
+      .mockReset()
+      .mockResolvedValue({ cacheKey: "offline", isAvailable: () => false });
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
     defaultTestCliBackend = buildDefaultTestCliBackend();
@@ -501,9 +523,9 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
-      resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      revokeMcpLoopbackClientGrant: vi.fn(async () => true),
+      resolveMcpLoopbackPolicyTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
@@ -1391,9 +1413,8 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       })),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({
         agentId: "main",
         tools: [
           {
@@ -1423,7 +1444,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const prepareExecution = vi.fn(async (_ctx: unknown) => ({
       env: {
@@ -1449,7 +1469,7 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
     });
 
     let cleanup: (() => Promise<void>) | undefined;
@@ -1514,14 +1534,13 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const prepareExecution = vi.fn(async (ctx: unknown) => {
       generatedSystemSettingsPath = (ctx as { env?: Record<string, string> }).env
         ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMcpLoopbackClientGrant = vi.fn(async () => true);
     setRawCliBackendForPrepareTest({
       id: "google-gemini-cli",
       pluginId: "google",
@@ -1542,7 +1561,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       revokeMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
     });
 
     await expect(
@@ -1556,7 +1575,10 @@ describe("prepareCliRunContext", () => {
 
     expect(generatedSystemSettingsPath).toBeTruthy();
     expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+      "loopback-token",
+      expect.objectContaining({ token: "loopback-token" }),
+    );
   });
 
   it("cleans prepared execution resources when auth epoch resolution fails", async () => {
@@ -1604,7 +1626,7 @@ describe("prepareCliRunContext", () => {
     const skillsCleanup = vi.fn(async () => {
       fs.rmSync(skillsPluginDir, { recursive: true, force: true });
     });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMcpLoopbackClientGrant = vi.fn(async () => true);
     fs.mkdirSync(tempRoot, { recursive: true });
     fs.mkdirSync(skillsPluginDir, { recursive: true });
     setTestEnvValue("TMPDIR", tempRoot);
@@ -1613,7 +1635,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -1621,7 +1642,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       revokeMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: ["--plugin-dir", skillsPluginDir],
         cleanup: skillsCleanup,
@@ -1640,7 +1661,10 @@ describe("prepareCliRunContext", () => {
       ).rejects.toThrow("reference path lookup failed");
 
       expect(skillsCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        "loopback-token",
+        expect.objectContaining({ token: "loopback-token" }),
+      );
       expect(fs.existsSync(skillsPluginDir)).toBe(false);
       expect(
         fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
@@ -1694,7 +1718,7 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({
         agentId: "main",
         tools: [
           {
@@ -2739,9 +2763,8 @@ describe("prepareCliRunContext", () => {
         const getActiveMcpLoopbackRuntime = vi.fn(() => ({
           port: 31783,
           ownerToken: "loopback-owner-token",
-          nonOwnerToken: "loopback-non-owner-token",
         }));
-        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        const resolveMcpLoopbackScopedTools = vi.fn(async () => ({
           agentId: "main",
           tools: [
             {
@@ -2890,9 +2913,8 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
-    const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
+    const resolveMcpLoopbackScopedTools = vi.fn(async (scope: { senderIsOwner?: boolean }) => ({
       agentId: "main",
       tools: [
         {
@@ -3088,7 +3110,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
@@ -3111,11 +3132,351 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.backend.args).toEqual(["--print"]);
   });
 
+  it.each(["available", "withheld", "sandboxed", "cleanup-error"] as const)(
+    "carries prepared placement into real CLI computer tools without early admission: %s",
+    async (mode) => {
+      const runId = `placed-cli-${mode}`;
+      const ownerToken = `runtime-${runId}`;
+      const computerUse = {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["get_cursor_position"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["accessibility"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      } satisfies NonNullable<ComputerToolTransport["computerUse"]>;
+      const onAdmitted = vi.fn();
+      const syntheticSecret = "fixtureDesktopBearer1234567890Secret";
+      const closeFailure = new Error(
+        `401 fixture desktop cleanup failed Authorization: Bearer ${syntheticSecret} ` +
+          "cleanup detail ".repeat(1_000),
+      );
+      const invocations: Array<Record<string, unknown>> = [];
+      const bind = vi.fn(
+        (
+          run: Parameters<Parameters<typeof withSessionPlacementComputer>[0]["bind"]>[0],
+        ): ComputerToolTransport | null => {
+          expect(onAdmitted).toHaveBeenCalledOnce();
+          expect(run.runId).toBe(runId);
+          if (mode === "withheld") {
+            return null;
+          }
+          let closed = false;
+          return {
+            computerUse,
+            resolveNode: async () => ({ nodeId: "placed-desktop", computerUse }),
+            invoke: async ({ commandParams }) => {
+              if (closed) {
+                throw new Error("old binding reused");
+              }
+              invocations.push(commandParams);
+              if (commandParams.action === "__close_execution") {
+                closed = true;
+                if (mode === "cleanup-error") {
+                  throw closeFailure;
+                }
+              }
+              return { ok: true };
+            },
+          };
+        },
+      );
+      const config = {
+        ...createCliBackendConfig({ bundleMcp: true }),
+        ...(mode === "sandboxed"
+          ? { agents: { defaults: { sandbox: { mode: "all" as const } } } }
+          : {}),
+        plugins: { enabled: false },
+        tools: { allow: mode === "available" ? ["computer", "exec"] : ["computer"] },
+      } satisfies OpenClawConfig;
+      const admission = prepareAgentRunAdmission({
+        cfg: config,
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "placed-cli-test", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        onAdmitted,
+      });
+      const mint = vi.fn(mcpGrants.mintMcpLoopbackClientGrant);
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: () => ({ port: 31783, ownerToken }),
+        mintMcpLoopbackClientGrant: mint,
+        bindMcpLoopbackClientGrantAdmission: mcpGrants.bindMcpLoopbackClientGrantAdmission,
+        activateMcpLoopbackClientGrantCapture: mcpGrants.activateMcpLoopbackClientGrantCapture,
+        revokeMcpLoopbackClientGrant: mcpGrants.revokeMcpLoopbackClientGrant,
+        resolveMcpLoopbackScopedTools: resolveRealMcpLoopbackScopedTools,
+      });
+      const placement = {
+        runId,
+        agentId: "main",
+        isActive: () => true,
+        computerUse: mode === "withheld" ? null : computerUse,
+        bind,
+      };
+      try {
+        const prepared = await withSessionPlacementComputer(
+          placement,
+          async () =>
+            await fixture.prepare({
+              runId,
+              config,
+              sessionKey: "agent:main:main",
+              preparedRunAdmission: admission,
+              senderIsOwner: true,
+            }),
+        );
+        expect(bind).not.toHaveBeenCalled();
+        expect(onAdmitted).toHaveBeenCalledOnce();
+        const grant = mint.mock.results[0]?.value;
+        expect(grant).toBeDefined();
+        const cache = new McpLoopbackToolCache();
+        const executeCapture = async (captureKey: string, cfg: OpenClawConfig) => {
+          const capture = mcpGrants.activateMcpLoopbackClientGrantCapture({
+            token: grant!.token,
+            expectedOwner: grant!,
+            runtimeOwnerToken: ownerToken,
+            captureKey,
+          });
+          await capture!.ready;
+          const resolved = mcpGrants.resolveMcpLoopbackClientGrant({
+            token: grant!.token,
+            runtimeOwnerToken: ownerToken,
+            captureKey,
+          });
+          expect(resolved).toBeDefined();
+          const tools = await cache.resolve({ ...resolved!.context, cfg }, resolved!.capture);
+          const computer = tools.tools.find((tool) => tool.name === "computer");
+          if (mode === "withheld") {
+            expect(computer).toBeUndefined();
+          } else {
+            expect(computer).toBeDefined();
+            expect(computer?.parameters).not.toHaveProperty("properties.node");
+            await computer?.execute("observe", { action: "get_cursor_position" });
+          }
+          return capture;
+        };
+        if (mode === "cleanup-error") {
+          prepared.preparedBackend.backend.command = process.execPath;
+          prepared.preparedBackend.backend.output = "jsonl";
+          prepared.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+          prepared.executionTarget = {
+            kind: "plugin",
+            async *execute(input) {
+              const resolved = mcpGrants.resolveMcpLoopbackClientGrant({
+                token: expectDefined(input.env.OPENCLAW_MCP_TOKEN, "CLI grant token"),
+                runtimeOwnerToken: ownerToken,
+                captureKey: expectDefined(
+                  input.env.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+                  "CLI capture key",
+                ),
+              });
+              expect(resolved).toBeDefined();
+              await resolved!.capture.ready;
+              const tools = await cache.resolve(
+                { ...resolved!.context, cfg: config },
+                resolved!.capture,
+              );
+              const computer = tools.tools.find((tool) => tool.name === "computer");
+              expect(computer).toBeDefined();
+              await computer!.execute("observe", { action: "get_cursor_position" });
+              yield {
+                type: "result",
+                subtype: "success",
+                result: "desktop observed",
+                session_id: "completed-desktop-session",
+                usage: { input_tokens: 11, output_tokens: 7 },
+              };
+            },
+          };
+          const agentEnd = vi.fn(async (_event: { success: boolean; error?: string }) => {});
+          vi.mocked(getGlobalHookRunner).mockReturnValue({
+            hasHooks: (name: string) => name === "agent_end",
+            runAgentEnd: agentEnd,
+          } as never);
+          const runCandidate = vi.fn(async () => await runRealPreparedCliAgent(prepared));
+          const result = await runEmbeddedAgentEntry({
+            selection: {
+              cfg: config,
+              provider: "fixture-provider",
+              model: "fixture-model",
+              manifestPlugins: [],
+              fallbacksOverride: ["fixture-next/fixture-model"],
+            },
+            identity: { runId, agentId: "main", sessionId: prepared.params.sessionId },
+            harness: {
+              workspaceDir: prepared.workspaceDir,
+              preparation: { kind: "direct" },
+              resolveRuntimeOverride: () => undefined,
+            },
+            behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+            sessionOverride: { kind: "preserve" },
+            runCandidate,
+          });
+          expect(runCandidate).toHaveBeenCalledOnce();
+          expect(result.terminal.outcome).toMatchObject({ reason: "failed", status: "error" });
+          expect(result.result.meta).toMatchObject({
+            replayInvalid: true,
+            error: { kind: "incomplete_turn", fallbackSafe: false },
+            agentMeta: {
+              usage: { input: 11, output: 7 },
+              cliSessionBinding: { sessionId: "completed-desktop-session" },
+            },
+          });
+          expect(result.result.payloads).toContainEqual(
+            expect.objectContaining({ text: "desktop observed" }),
+          );
+          expect(result.result.meta.error?.message).toContain("401 fixture desktop cleanup failed");
+          expect(JSON.stringify(result)).not.toContain(syntheticSecret);
+          expect(agentEnd).toHaveBeenCalledOnce();
+          const hookEvent = agentEnd.mock.calls[0]?.[0] as { success: boolean; error: string };
+          expect(hookEvent.success).toBe(false);
+          expect(hookEvent.error).toContain("Tool actions may already have run");
+          expect(hookEvent.error).not.toContain(syntheticSecret);
+          expect(hookEvent.error.length).toBeLessThanOrEqual(2_048);
+          expect(invocations.map((request) => request.action)).toEqual([
+            "get_cursor_position",
+            "__close_execution",
+          ]);
+          return;
+        }
+        const first = await executeCapture("capture", config);
+        if (mode === "sandboxed") {
+          const resolved = mcpGrants.resolveMcpLoopbackClientGrant({
+            token: grant!.token,
+            runtimeOwnerToken: ownerToken,
+            captureKey: "capture",
+          })!;
+          const deniedConfig = {
+            ...config,
+            tools: { ...config.tools, sandbox: { tools: { deny: ["computer"] } } },
+          };
+          expect(
+            (
+              await cache.resolve({ ...resolved.context, cfg: deniedConfig }, resolved.capture)
+            ).tools.some((tool) => tool.name === "computer"),
+          ).toBe(false);
+        }
+        if (mode === "available") {
+          const resolved = mcpGrants.resolveMcpLoopbackClientGrant({
+            token: grant!.token,
+            runtimeOwnerToken: ownerToken,
+            captureKey: "capture",
+          })!;
+          const originalTools = await cache.resolve(
+            { ...resolved.context, cfg: config },
+            resolved.capture,
+          );
+          const originalComputer = originalTools.tools.find((tool) => tool.name === "computer")!;
+          for (const connected of [false, true, false]) {
+            nodeExecAvailabilityMock.mockResolvedValue({
+              cacheKey: String(connected),
+              isAvailable: () => connected,
+            });
+            const view = await cache.resolve(
+              { ...resolved.context, cfg: config },
+              resolved.capture,
+            );
+            expect(view.tools.some((tool) => tool.name === "exec")).toBe(connected);
+            expect(view.tools.find((tool) => tool.name === "computer")).toBe(originalComputer);
+            await originalComputer.execute(`inventory-${connected}`, {
+              action: "get_cursor_position",
+            });
+            expect(bind).toHaveBeenCalledOnce();
+          }
+          const executionIds = invocations.map((request) => request.executionId);
+          expect(executionIds.every((id) => typeof id === "string")).toBe(true);
+          expect(new Set(executionIds).size).toBe(1);
+          expect(invocations.some((request) => request.action === "__close_execution")).toBe(false);
+          const tools = await cache.resolve(
+            { ...resolved.context, cfg: { ...config } },
+            resolved.capture,
+          );
+          const computer = tools.tools.find((tool) => tool.name === "computer")!;
+          await computer.execute("second-config", { action: "get_cursor_position" });
+          expect(bind).toHaveBeenCalledTimes(2);
+        }
+        await first!.close("completion");
+        await (await executeCapture("capture", config))!.close("completion");
+        expect(bind).toHaveBeenCalledTimes(mode === "withheld" ? 0 : 3);
+        if (mode !== "withheld") {
+          expect(invocations.some((request) => request.action === "__close_execution")).toBe(true);
+        }
+      } finally {
+        admission.close();
+        await mcpGrants.revokeMcpLoopbackClientGrantsForRuntime(ownerToken).catch(() => undefined);
+      }
+    },
+  );
+
+  it("fences retained prepared callbacks after a successor adopts their bearer", async () => {
+    const ownerToken = "runtime-prepared-succession";
+    const mint = vi.fn(mcpGrants.mintMcpLoopbackClientGrant);
+    const config = createCliBackendConfig({ bundleMcp: true });
+    const admissions = ["prepared-first", "prepared-next"].map((runId) =>
+      prepareAgentRunAdmission({
+        cfg: config,
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "prepared-succession-test", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+      }),
+    );
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: () => ({ port: 31783, ownerToken }),
+      mintMcpLoopbackClientGrant: mint,
+      bindMcpLoopbackClientGrantAdmission: mcpGrants.bindMcpLoopbackClientGrantAdmission,
+      activateMcpLoopbackClientGrantCapture: mcpGrants.activateMcpLoopbackClientGrantCapture,
+      transferMcpLoopbackClientGrant: mcpGrants.transferMcpLoopbackClientGrant,
+      revokeMcpLoopbackClientGrant: mcpGrants.revokeMcpLoopbackClientGrant,
+    });
+    try {
+      const first = await fixture.prepare({
+        config,
+        runId: "prepared-first",
+        preparedRunAdmission: admissions[0],
+        sessionKey: "agent:main:main",
+      });
+      const token = mint.mock.results[0]!.value.token;
+      first.preparedBackend.mcpClientGrantCapture?.activate("same-key");
+      const next = await fixture.prepare({
+        config,
+        runId: "prepared-next",
+        preparedRunAdmission: admissions[1],
+        sessionKey: "agent:main:main",
+      });
+      next.preparedBackend.mcpClientGrantCapture?.adoptProcessToken(token);
+      next.preparedBackend.mcpClientGrantCapture?.activate("same-key");
+      const current = mcpGrants.resolveMcpLoopbackClientGrant({
+        token,
+        runtimeOwnerToken: ownerToken,
+        captureKey: "same-key",
+      });
+      expect(current?.isCurrent()).toBe(true);
+      expect(() => first.preparedBackend.mcpClientGrantCapture?.activate("same-key")).toThrow();
+      expect(() =>
+        first.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("other-process-token"),
+      ).toThrow();
+      await first.preparedBackend.cleanup?.();
+      expect(current?.isCurrent()).toBe(true);
+      await next.preparedBackend.cleanup?.();
+      expect(current?.isCurrent()).toBe(false);
+    } finally {
+      for (const admission of admissions) {
+        admission.close();
+      }
+      await mcpGrants.revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
+    }
+  });
+
   it("binds the exact late prepared admission to the CLI MCP grant", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const bindMcpLoopbackClientGrantAdmission = vi.fn(() => true);
     setCliRunnerPrepareTestDeps({
@@ -3138,6 +3499,7 @@ describe("prepareCliRunContext", () => {
     );
     expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
       token: "loopback-token",
+      expectedOwner: expect.objectContaining({ token: "loopback-token" }),
       runtimeOwnerToken: "loopback-owner-token",
       admittedRunContext: context.params.admittedRunContext,
     });
@@ -3159,15 +3521,22 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-    const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-    const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+    const activateMcpLoopbackClientGrantCapture = vi.fn(
+      ({ captureKey }: Parameters<typeof mcpGrants.activateMcpLoopbackClientGrantCapture>[0]) => ({
+        key: captureKey,
+        signal: new AbortController().signal,
+        ready: Promise.resolve(),
+        registerRunCleanup: vi.fn(),
+        createComputerTransport: () => undefined,
+        close: vi.fn(async () => {}),
+      }),
+    );
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    const resolveMcpLoopbackScopedTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const revokeMcpLoopbackClientGrant = vi.fn(async () => true);
+    const resolveMcpLoopbackScopedTools = vi.fn(async (_scope: Record<string, unknown>) => ({
       agentId: "main",
       tools: [
         {
@@ -3184,7 +3553,6 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer,
       createMcpLoopbackServerConfig,
       activateMcpLoopbackClientGrantCapture,
-      deactivateMcpLoopbackClientGrantCapture,
       mintMcpLoopbackClientGrant,
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
@@ -3293,7 +3661,7 @@ describe("prepareCliRunContext", () => {
       throw new Error("loopback unavailable");
     });
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+    const resolveMcpLoopbackScopedTools = vi.fn(async () => ({
       agentId: "main",
       tools: [
         {
@@ -3346,14 +3714,23 @@ describe("prepareCliRunContext", () => {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       }));
-      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-      const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const activateMcpLoopbackClientGrantCapture = vi.fn(
+        ({
+          captureKey,
+        }: Parameters<typeof mcpGrants.activateMcpLoopbackClientGrantCapture>[0]) => ({
+          key: captureKey,
+          signal: new AbortController().signal,
+          ready: Promise.resolve(),
+          registerRunCleanup: vi.fn(),
+          createComputerTransport: () => undefined,
+          close: vi.fn(async () => {}),
+        }),
+      );
       const transferMcpLoopbackClientGrant = vi.fn(() => true);
       const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-      const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+      const revokeMcpLoopbackClientGrant = vi.fn(async () => true);
+      const resolveMcpLoopbackScopedTools = vi.fn(async () => ({
         agentId: "main",
         tools: [
           {
@@ -3368,7 +3745,6 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
         activateMcpLoopbackClientGrantCapture,
-        deactivateMcpLoopbackClientGrantCapture,
         transferMcpLoopbackClientGrant,
         mintMcpLoopbackClientGrant,
         revokeMcpLoopbackClientGrant,
@@ -3505,25 +3881,29 @@ describe("prepareCliRunContext", () => {
       });
       expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
       context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
-      context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
-      context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+      const closeCapture = context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
+      await closeCapture?.("completion");
       expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
         sourceToken: "loopback-token",
+        expectedOwner: mintMcpLoopbackClientGrant.mock.results.at(-1)!.value,
         targetToken: "stable-loopback-token",
         runtimeOwnerToken: "loopback-owner-token",
       });
       expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
         token: "stable-loopback-token",
+        expectedOwner: mintMcpLoopbackClientGrant.mock.results.at(-1)!.value,
+        signal: undefined,
         runtimeOwnerToken: "loopback-owner-token",
         captureKey: "capture-test",
       });
-      expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-        token: "stable-loopback-token",
-        runtimeOwnerToken: "loopback-owner-token",
-        captureKey: "capture-test",
-      });
+      expect(
+        activateMcpLoopbackClientGrantCapture.mock.results.at(-1)!.value.close,
+      ).toHaveBeenCalledExactlyOnceWith("completion");
       context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        "stable-loopback-token",
+        expect.objectContaining({ token: "loopback-token" }),
+      );
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3568,8 +3948,10 @@ describe("prepareCliRunContext", () => {
       );
       expect(context.systemPrompt).not.toContain("current source is default target");
       await context.preparedBackend.cleanup?.();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        "stable-loopback-token",
+        mintMcpLoopbackClientGrant.mock.results.at(-1)!.value,
+      );
     },
   );
 
@@ -3578,7 +3960,6 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       })),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
     });
@@ -3611,7 +3992,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -3632,7 +4012,7 @@ describe("prepareCliRunContext", () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
-    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const resolveMcpLoopbackPolicyTools = vi.fn(async (_scope: Record<string, unknown>) => ({
       agentId: "main",
       tools: ["write", "apply_patch"].map((name) => ({ name })),
     }));
@@ -3674,7 +4054,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
     setRawCliBackendForPrepareTest({
@@ -3902,7 +4281,7 @@ describe("prepareCliRunContext", () => {
         bind: vi.fn(),
         invoke: vi.fn(),
       };
-      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+      const resolveMcpLoopbackScopedTools = vi.fn(async () => ({
         agentId: "main",
         tools: [
           {
@@ -4048,11 +4427,10 @@ describe("prepareCliRunContext", () => {
         getActiveMcpLoopbackRuntime: vi.fn(() => ({
           port: 31783,
           ownerToken: "loopback-owner-token",
-          nonOwnerToken: "loopback-non-owner-token",
         })),
         createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
         mintMcpLoopbackClientGrant,
-        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+        resolveMcpLoopbackScopedTools: vi.fn(async () => ({
           agentId: "main",
           tools: projectedToolNames.map((name) => ({ name })),
         })),
@@ -4123,7 +4501,7 @@ describe("prepareCliRunContext", () => {
       ...context.baseArgs,
     ]);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+    const resolveMcpLoopbackPolicyTools = vi.fn(async (_scope: Record<string, unknown>) => ({
       agentId: "main",
       tools: ["write", "apply_patch"].map((name) => ({ name })),
     }));
@@ -4148,7 +4526,6 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       })),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
@@ -4243,12 +4620,11 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       })),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackScopedTools: vi.fn(async () => ({ agentId: "main", tools: [] })),
     });
 
     let cleanup: (() => Promise<void>) | undefined;
@@ -4378,7 +4754,6 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -4995,7 +5370,7 @@ describe("prepareCliRunContext", () => {
     const { dir } = fixture.session;
     const skill = createWeatherSkillFixture(dir, true);
     const preparedExecutionCleanup = vi.fn(async () => undefined);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMcpLoopbackClientGrant = vi.fn(async () => true);
     setCliBackendForPrepareTest({
       id: "claude-cli",
       pluginId: "anthropic",
@@ -5007,7 +5382,6 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       })),
       revokeMcpLoopbackClientGrant,
     });
@@ -5037,7 +5411,10 @@ describe("prepareCliRunContext", () => {
       await context.preparedBackend.cleanup?.();
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        "loopback-token",
+        expect.objectContaining({ token: "loopback-token" }),
+      );
 
       const nextTurn = await fixture.prepare({
         provider: "claude-cli",

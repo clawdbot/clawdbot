@@ -399,6 +399,7 @@ export async function executePluginOwnedProcess(params: {
   activeToolCount?: () => number;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
+  onTurnClosed?: () => void;
   liveSession?: {
     captureKey?: string;
     beginCapture: (captureKey: string | undefined) => void;
@@ -621,11 +622,12 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
-    // Permission callbacks can be retained by the plugin or its subprocess.
-    // Closing the turn fences those capabilities before any outer cleanup runs.
+    // Native permissions and Gateway MCP calls can outlive the iterator.
+    // Fence both before awaiting its cleanup; the outer attempt joins tool cleanup.
     if (!controller.signal.aborted) {
       controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     }
+    params.onTurnClosed?.();
     if (replyBackendHandle) {
       run.replyOperation?.detachBackend(replyBackendHandle);
     }

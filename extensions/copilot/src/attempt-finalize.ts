@@ -31,7 +31,7 @@ export async function completeCopilotAttempt(params: {
   input: AttemptParamsLike;
   lastToolError: AgentHarnessAttemptResult["lastToolError"];
   messages: AgentMessage[];
-  nativeSessionHistoryUnvalidated: boolean;
+  nativeReplayInvalid: boolean;
   transcriptJournal: AttemptTranscriptJournal | undefined;
   modelRef: ModelRef;
   now: () => number;
@@ -60,7 +60,7 @@ export async function completeCopilotAttempt(params: {
     input,
     lastToolError,
     messages,
-    nativeSessionHistoryUnvalidated,
+    nativeReplayInvalid,
     transcriptJournal,
     modelRef,
     now,
@@ -117,7 +117,7 @@ export async function completeCopilotAttempt(params: {
       !aborted &&
       !timedOut &&
       promptError === undefined &&
-      !nativeSessionHistoryUnvalidated &&
+      !nativeReplayInvalid &&
       transcriptJournal?.hasFailed() !== true &&
       !transcript?.replayInvalid &&
       (!sentTurnStarted || settledToolFinalization || transcript.initialSdkUserValidated),
@@ -125,7 +125,7 @@ export async function completeCopilotAttempt(params: {
     assistantTranscriptOwned: transcript?.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
     contextEngineTerminalAnchor: transcript?.terminalAnchor,
-    nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
+    nativeReplayInvalid: transcript?.replayInvalid === true || nativeReplayInvalid,
     now,
     promptError,
     resumeFailureRecovered,

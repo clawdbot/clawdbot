@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
-import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
+import { buildCliRunResult } from "../../agents/cli-runner/cli-run-results.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
@@ -107,7 +107,6 @@ describe("executeAgentTurn: CLI admission", () => {
             usedHistoryPrompt: false,
             userTurnHandled: true,
             sessionBindingDisabled: false,
-            preparedContextAgentMeta: {},
           })
         : candidateResult,
     );
@@ -172,6 +171,91 @@ describe("executeAgentTurn: CLI admission", () => {
       uninstall();
     }
   });
+
+  it.each(["ordinary", "rejected-clear", "room-event"] as const)(
+    "retains the %s reply after its continuity write loses ownership",
+    async (kind) => {
+      const sessionKey = "agent:main:cli-owner-loss";
+      const storePath = makeTestSessionStorePath();
+      const binding = { sessionId: "previous-native-session" };
+      const entry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": binding },
+      };
+      await replaceSessionEntry({ sessionKey, storePath }, entry);
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "claude-sonnet-4-6";
+      if (kind === "room-event") {
+        followupRun.currentInboundEventKind = "room_event";
+      }
+      state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+      const candidate = buildCliRunResult({
+        context: buildPreparedCliRunContext(),
+        output: {
+          text: kind === "rejected-clear" ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "Captured reply",
+        },
+        effectiveCliSessionId: "replacement-native-session",
+        bindingFlushOk: kind !== "rejected-clear",
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: false,
+      });
+      const provider: Parameters<typeof installSessionPlacementAdmissionProvider>[0] = {
+        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+        executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+        executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+      };
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      let uninstallReplacement: (() => void) | undefined;
+      state.runCliAgentMock.mockImplementationOnce(async () => {
+        uninstallReplacement = installSessionPlacementAdmissionProvider({ ...provider });
+        return candidate;
+      });
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => {
+          const result = await params.run(
+            "claude-cli",
+            "claude-sonnet-4-6",
+            initialFallbackAttemptOptions(params),
+          );
+          expect(result).toMatchObject({
+            classification: null,
+            result: {
+              payloads: expect.arrayContaining(candidate.payloads ?? []),
+              meta: {
+                replayInvalid: true,
+                error: {
+                  message: expect.stringContaining("CLI session continuity could not be saved"),
+                  fallbackSafe: false,
+                },
+              },
+            },
+          });
+          return { result, provider: "claude-cli", model: "claude-sonnet-4-6", attempts: [] };
+        },
+      );
+      try {
+        const executeAgentTurn = await getExecuteAgentTurnForTest();
+        await executeAgentTurn({
+          ...createMinimalRunAgentTurnParams({ followupRun }),
+          sessionKey,
+          storePath,
+          activeSessionStore: { [sessionKey]: entry },
+          getActiveSessionEntry: () => entry,
+        });
+        expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+        expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.["claude-cli"],
+        ).toEqual(binding);
+      } finally {
+        uninstallReplacement?.();
+        uninstall();
+      }
+    },
+  );
 
   it("carries the admitted session permission and placement into the CLI grant", async () => {
     state.isCliProviderMock.mockReturnValue(true);

@@ -229,6 +229,9 @@ export function createCliLiveSessionCapability(params: {
         // Transfer the exact current admission before activating the original
         // child capture header; copied bearers never carry authority alone.
         grant.adoptProcessToken(record.capture.token);
+        // The same child now carries this prepared owner, not its first turn's
+        // grant. Process exit must revoke the current exact owner only.
+        record.capture.revoke = grant.revokeProcessToken;
         requireRegisteredRecord(handle);
         params.beginCapture(record.capture.key);
       }

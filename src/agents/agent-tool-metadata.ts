@@ -43,6 +43,8 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  // Hook rebuilds retain control ownership so abort wrappers await its cancellation outcome.
+  copyCodeModeControlToolIdentity(source, target);
   copyAgentToolActionDescriptor(source, target);
 }
 
@@ -67,13 +69,9 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(source: AnyAgentTo
   if (source === target) {
     return target;
   }
-  copyPluginToolMeta(source, target);
-  copyChannelAgentToolMeta(source as never, target as never);
+  copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallHookMarker(source, target);
-  copyToolTerminalPresentation(source, target);
-  copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
-  copyAgentToolActionDescriptor(source, target);
   return target;
 }

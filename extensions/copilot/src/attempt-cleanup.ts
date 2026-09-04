@@ -1,8 +1,10 @@
+import type { Result } from "openclaw/plugin-sdk/agent-core";
 import {
   awaitAgentEndSideEffects,
+  formatErrorMessage,
   runAgentEndSideEffects,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { toCopilotError } from "./attempt-config.js";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
   type AgentHarnessAttemptResult,
@@ -31,7 +33,7 @@ export async function finalizeCopilotAttempt(
       messages: result.messagesSnapshot,
       success: !aborted && !failure && !timedOut,
       ...(failure
-        ? { error: toCopilotError(failure.error).message }
+        ? { error: formatErrorMessage(failure.error) }
         : timedOut
           ? { error: "Copilot SDK turn timed out." }
           : {}),
@@ -46,6 +48,39 @@ export async function finalizeCopilotAttempt(
   }
   return result;
 }
+/** Drain attempt-owned tools without masking the primary failure or enabling replay. */
+export async function closeCopilotTools(
+  cleanups: Array<(reason: string) => Promise<void>>,
+  state: { timedOut: boolean; aborted: boolean; promptError: Error | undefined },
+): Promise<Result<void, Error>> {
+  const reason = state.timedOut
+    ? "timeout"
+    : state.aborted
+      ? "cancel"
+      : state.promptError
+        ? "error"
+        : "completion";
+  const results = await Promise.allSettled(
+    cleanups.splice(0).map(async (cleanup) => cleanup(reason)),
+  );
+  const errors = results.flatMap((result): unknown[] =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (errors.length === 0) {
+    return { ok: true, value: undefined };
+  }
+  if (state.promptError) {
+    errors.unshift(state.promptError);
+  }
+  return {
+    ok: false,
+    error:
+      errors.length === 1
+        ? toStringifiedError(errors[0])
+        : new AggregateError(errors, "Copilot attempt and tool cleanup failed"),
+  };
+}
+
 export function deferBackgroundCompactionCleanup(params: {
   abortSignal: AbortSignal | undefined;
   awaitSessionIdle: boolean;

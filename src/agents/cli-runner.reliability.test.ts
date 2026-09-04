@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
@@ -19,6 +20,12 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  resolveMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+} from "../gateway/mcp-grant-store.js";
 import {
   markMcpLoopbackRequestClassified,
   markMcpLoopbackRequestFinished,
@@ -66,6 +73,7 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
+import { buildCliRunResult } from "./cli-runner/cli-run-results.js";
 import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
 import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import {
@@ -75,8 +83,10 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
+import { createCliToolCleanupError } from "./cli-runner/tool-cleanup-error.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
+import { runEmbeddedAgentEntry } from "./embedded-agent-runner/run-entry.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
@@ -93,7 +103,7 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
+      captureKey: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[0],
       options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
     ) =>
       actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
@@ -450,6 +460,334 @@ describe("runCliAgent reliability", () => {
     cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();
   });
+
+  it("retires the real MCP grant before awaiting plugin iterator drain", async () => {
+    const context = buildPreparedContext({ runId: "plugin-iterator-fence" });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      context.params.runId,
+      "main",
+      "iterator-fence-test",
+    );
+    context.params.admittedRunContext = await admission.admit("plugin-harness");
+    const ownerToken = "iterator-fence-runtime";
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:iterator-fence", senderIsOwner: true },
+      runtimeOwnerToken: ownerToken,
+      admittedRunContext: context.params.admittedRunContext,
+    });
+    let capture: ReturnType<typeof activateMcpLoopbackClientGrantCapture>;
+    context.mcpDeliveryCapture = true;
+    context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: grant.token,
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
+      activate: (captureKey) => {
+        capture = activateMcpLoopbackClientGrantCapture({
+          token: grant.token,
+          expectedOwner: grant,
+          runtimeOwnerToken: ownerToken,
+          captureKey,
+        });
+        if (!capture) {
+          throw new Error("expected active grant capture");
+        }
+        return capture.close;
+      },
+    };
+    context.preparedBackend.backend.command = process.execPath;
+    context.preparedBackend.backend.output = "jsonl";
+    context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+    const returnStarted = createDeferred();
+    const releaseReturn = createDeferred();
+    let nativeSignal: AbortSignal | undefined;
+    context.executionTarget = {
+      kind: "plugin",
+      execute(input) {
+        nativeSignal = input.abortSignal;
+        let yielded = false;
+        const iterator: AsyncIterableIterator<Record<string, unknown>> = {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next() {
+            if (yielded) {
+              return { done: true as const, value: undefined };
+            }
+            yielded = true;
+            return {
+              done: false as const,
+              value: { type: "result", subtype: "success", result: "done" },
+            };
+          },
+          async return() {
+            returnStarted.resolve();
+            await releaseReturn.promise;
+            return { done: true as const, value: undefined };
+          },
+        };
+        return iterator;
+      },
+    };
+    let settled = false;
+    const attempt = executePreparedCliRun(context).finally(() => {
+      settled = true;
+    });
+    try {
+      await returnStarted.promise;
+      expect(nativeSignal?.aborted).toBe(true);
+      expect(capture?.signal.aborted).toBe(true);
+      expect(
+        resolveMcpLoopbackClientGrant({
+          token: grant.token,
+          runtimeOwnerToken: ownerToken,
+          captureKey: capture!.key,
+        }),
+      ).toBeUndefined();
+      expect(settled).toBe(false);
+    } finally {
+      releaseReturn.resolve();
+      await attempt;
+      admission.close();
+      await revokeMcpLoopbackClientGrant(grant.token, grant);
+    }
+  });
+
+  it.each(["success", "error", "abort"] as const)(
+    "joins capture tool cleanup before settling %s or releasing its queue",
+    async (outcome) => {
+      const release = createDeferred();
+      const closing = createDeferred();
+      const context = buildPreparedContext({ runId: `capture-cleanup-${outcome}` });
+      context.mcpDeliveryCapture = true;
+      const controller = new AbortController();
+      context.params.abortSignal = controller.signal;
+      const cleanup = vi.fn(async () => {
+        closing.resolve();
+        await release.promise;
+      });
+      context.preparedBackend.mcpClientGrantCapture = {
+        transportToken: "test-grant",
+        adoptProcessToken: vi.fn(),
+        revokeProcessToken: vi.fn(),
+        activate: () => cleanup,
+      };
+      supervisorSpawnMock.mockImplementationOnce(() => {
+        if (outcome === "abort") {
+          controller.abort();
+        }
+        return Promise.resolve(
+          makeManagedRun({
+            stdout: outcome === "success" ? "completed" : "",
+            ...(outcome === "error" ? { exitCode: 1, stderr: "execution failed" } : {}),
+            ...(outcome === "abort" ? { reason: "manual-cancel", exitCode: null } : {}),
+          }),
+        );
+      });
+      let settled = false;
+      const first = executePreparedCliRun(context).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await closing.promise;
+      const next = buildPreparedContext({ runId: `capture-next-${outcome}` });
+      const nextStarted = vi.fn(async () => {});
+      next.preparedBackend.beforeExecution = nextStarted;
+      supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "next" }));
+      const second = executePreparedCliRun(next);
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        expect(nextStarted).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await first;
+        await second;
+      }
+      expect(cleanup).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { message: "401 unauthorized", outcome: "success" },
+    { message: "request timeout", outcome: "success" },
+    { message: "close failed", outcome: "error" },
+    { message: "close failed", outcome: "abort" },
+    { message: "close failed", outcome: "timeout" },
+    { message: "close failed", outcome: "late-cleanup" },
+  ])(
+    "does not replay a capture cleanup failure containing $message after $outcome",
+    async ({ message, outcome }) => {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:cleanup-no-replay",
+        cliSessionId: "existing-session",
+        openClawHistoryPrompt: "previous conversation",
+      });
+      context.mcpDeliveryCapture = true;
+      const cleanupError = new Error(message);
+      context.preparedBackend.mcpClientGrantCapture = {
+        transportToken: "test-grant",
+        adoptProcessToken: vi.fn(),
+        revokeProcessToken: vi.fn(),
+        activate: () => async () => {
+          throw cleanupError;
+        },
+      };
+      const retry = vi.fn(async () => true);
+      context.params.onBeforeFreshCliSessionRetry = retry;
+      const controller = new AbortController();
+      context.params.abortSignal = controller.signal;
+      supervisorSpawnMock.mockImplementation(async () => {
+        if (outcome === "abort") {
+          controller.abort();
+        }
+        return makeManagedRun({
+          stdout: outcome === "success" || outcome === "late-cleanup" ? "completed output" : "",
+          ...(outcome === "error" ? { exitCode: 1, stderr: "primary process failed" } : {}),
+          ...(outcome === "abort" ? { reason: "manual-cancel", exitCode: null } : {}),
+          ...(outcome === "timeout"
+            ? { reason: "overall-timeout", exitCode: null, timedOut: true }
+            : {}),
+        });
+      });
+      if (outcome === "late-cleanup") {
+        context.preparedBackend.cleanup = async () => {
+          throw new Error("artifact cleanup failed");
+        };
+      }
+      const run = vi.fn(async () => await runPreparedCliAgent(context));
+      const result = await runEmbeddedAgentEntry({
+        selection: {
+          cfg: {},
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+        },
+        identity: {
+          runId: context.params.runId,
+          agentId: "main",
+          sessionId: context.params.sessionId,
+        },
+        harness: {
+          workspaceDir: context.workspaceDir,
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+        },
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: run,
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(retry).not.toHaveBeenCalled();
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+      const stopReason =
+        outcome === "abort" ? "aborted" : outcome === "timeout" ? "timeout" : "error";
+      expect(result.terminal.outcome.reason).toBe(
+        outcome === "abort" ? "aborted" : outcome === "timeout" ? "hard_timeout" : "failed",
+      );
+      expect(result.result.meta).toMatchObject({
+        stopReason,
+        replayInvalid: true,
+        error: { kind: "incomplete_turn", fallbackSafe: false },
+      });
+      expect(result.result.payloads).toEqual(
+        expect.arrayContaining([
+          ...(outcome === "success" || outcome === "late-cleanup"
+            ? [expect.objectContaining({ text: "completed output" })]
+            : []),
+          expect.objectContaining({ isError: true, text: expect.stringContaining(message) }),
+        ]),
+      );
+      expect(result.result.didSendViaMessagingTool).not.toBe(true);
+      if (outcome === "error") {
+        expect(result.result.meta.error?.message).toContain("primary process failed");
+      }
+      if (outcome === "late-cleanup") {
+        expect(result.result.meta.error?.message).toContain("artifact cleanup failed");
+      }
+    },
+  );
+
+  it.each([undefined, "aborted", "timeout"] as const)(
+    "preserves cleanup-failure terminal precedence and bounded diagnostics: %s",
+    async (reason) => {
+      const context = buildPreparedContext();
+      const secret = "fixtureBearerToken1234567890Secret";
+      const cause = new Error(`Authorization: Bearer ${secret} ` + "long failure ".repeat(2_000));
+      const output = {
+        text: "completed output",
+        sessionId: "finished-session",
+        usage: { input: 13, output: 7 },
+        ...(reason ? { terminalInterruption: { reason } } : {}),
+      };
+      const error = createCliToolCleanupError(output, [cause]);
+      expect((error as AggregateError).errors).toEqual([cause]);
+      const runCandidate = vi.fn(async () =>
+        buildCliRunResult({
+          context,
+          output,
+          toolCleanupFailure: { error, output },
+          effectiveCliSessionId: output.sessionId,
+          usedHistoryPrompt: false,
+          userTurnHandled: false,
+          sessionBindingDisabled: false,
+        }),
+      );
+      const result = await runEmbeddedAgentEntry({
+        selection: {
+          cfg: {},
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+        },
+        identity: {
+          runId: context.params.runId,
+          agentId: "main",
+          sessionId: context.params.sessionId,
+        },
+        harness: {
+          workspaceDir: context.workspaceDir,
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+        },
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate,
+      });
+      expect(runCandidate).toHaveBeenCalledOnce();
+      expect(result.terminal.outcome.reason).toBe(
+        reason === "timeout" ? "hard_timeout" : (reason ?? "failed"),
+      );
+      const meta = result.result.meta;
+      expect(meta.replayInvalid).toBe(true);
+      expect(meta.stopReason).toBe(reason ?? "error");
+      expect(meta.completion?.finishReason).toBe(reason ?? "error");
+      expect(meta.executionTrace?.attempts?.[0]?.result).toBe(reason ?? "error");
+      expect(meta.agentMeta?.usage).toEqual(output.usage);
+      if (!reason) {
+        expect(meta.agentMeta?.cliSessionBinding?.sessionId).toBe("finished-session");
+      }
+      expect(JSON.stringify(result)).not.toContain(secret);
+      for (const message of [
+        meta.error?.message,
+        meta.executionTrace?.attempts?.[0]?.reason,
+        result.result.payloads?.find((payload) => payload.isError)?.text,
+      ]) {
+        expect(message).toContain("Tool actions may already have run");
+        expect(message!.length).toBeLessThanOrEqual(2_048);
+      }
+    },
+  );
 
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -2224,7 +2562,7 @@ describe("runCliAgent reliability", () => {
             payloads: [{ text: "Gemini recovered" }],
             meta: { cliSessionId: attempt.sessionId },
           }) as never,
-        finishDeliveredFailure: async () => undefined,
+        finishTerminalFailure: async () => undefined,
         onTerminalFailure: async () => {},
       });
 

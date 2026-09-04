@@ -63,7 +63,7 @@ export async function runCliRecovery<TAttempt>(params: {
     attempt: TAttempt,
     fallbackCliSessionId?: string,
   ) => Promise<EmbeddedAgentRunResult>;
-  finishDeliveredFailure: (error: unknown) => Promise<EmbeddedAgentRunResult | undefined>;
+  finishTerminalFailure: (error: unknown) => Promise<EmbeddedAgentRunResult | undefined>;
   onTerminalFailure: (error: unknown) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
   const { context } = params;
@@ -94,7 +94,7 @@ export async function runCliRecovery<TAttempt>(params: {
       reusableCliSessionId,
     );
   } catch (err) {
-    const deliveredFailure = await params.finishDeliveredFailure(err);
+    const deliveredFailure = await params.finishTerminalFailure(err);
     if (deliveredFailure) {
       return deliveredFailure;
     }
@@ -138,7 +138,7 @@ export async function runCliRecovery<TAttempt>(params: {
             }),
           );
         } catch (forkError) {
-          const deliveredForkFailure = await params.finishDeliveredFailure(forkError);
+          const deliveredForkFailure = await params.finishTerminalFailure(forkError);
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
@@ -184,7 +184,7 @@ export async function runCliRecovery<TAttempt>(params: {
             }),
           );
         } catch (retryErr) {
-          const deliveredRetryFailure = await params.finishDeliveredFailure(retryErr);
+          const deliveredRetryFailure = await params.finishTerminalFailure(retryErr);
           if (deliveredRetryFailure) {
             return deliveredRetryFailure;
           }

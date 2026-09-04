@@ -18,8 +18,10 @@ import {
 } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
@@ -81,6 +83,8 @@ export function resolveGatewayScopedTools(params: {
   modelProvider?: string;
   modelId?: string;
   modelHasVision?: boolean;
+  registerRunCleanup?: OpenClawToolsOptions["registerRunCleanup"];
+  computerTransport?: OpenClawToolsOptions["computerTransport"];
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
@@ -234,7 +238,15 @@ export function resolveGatewayScopedTools(params: {
     classificationSessionKey: runtimePolicySessionKey,
     classificationAgentId: policyAgentId,
   });
-  const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
+  // A host-bound desktop is contained by its placement. Recompute only defaults
+  // against this config, so a later partition's explicit denies cannot be widened.
+  const sandboxPolicy = sandboxRuntime.sandboxed
+    ? params.computerTransport
+      ? resolveSandboxToolPolicyForAgent(params.cfg, policyAgentId, {
+          containedToolNames: ["computer"],
+        })
+      : sandboxRuntime.toolPolicy
+    : undefined;
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
@@ -338,6 +350,8 @@ export function resolveGatewayScopedTools(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     modelHasVision: params.modelHasVision,
+    registerRunCleanup: params.registerRunCleanup,
+    computerTransport: params.computerTransport,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
@@ -371,16 +385,6 @@ export function resolveGatewayScopedTools(params: {
           sandboxAvailable: sandboxRuntime.sandboxed,
         })
       : undefined;
-  const nodeExecDefaults =
-    nodeExecSurface &&
-    execDefaults?.canRequestNode === true &&
-    params.nodeExecAvailable?.(execDefaults.node) === true
-      ? execDefaults
-      : undefined;
-  const includeNodeExecTool = nodeExecDefaults !== undefined;
-  const execConfig = includeNodeExecTool
-    ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
-    : undefined;
   const includeMediatedBaseCodingTools = ["read", "write", "edit"].some((name) =>
     mediatedToolNames.has(name),
   );
@@ -461,124 +465,143 @@ export function resolveGatewayScopedTools(params: {
     ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolPolicyName(tool.name))),
     ...mediatedCodingTools,
   ];
-  const allTools = nodeExecDefaults
-    ? [
-        ...toolsWithMediatedCoding,
-        createLazyExecTool(
-          {
-            host: "node",
-            mode: nodeExecDefaults.mode,
-            security: nodeExecDefaults.security,
-            ask: nodeExecDefaults.ask,
-            trigger: params.trigger,
-            node: nodeExecDefaults.node,
-            pathPrepend: execConfig?.pathPrepend,
-            safeBins: execConfig?.safeBins,
-            strictInlineEval: execConfig?.strictInlineEval,
-            commandHighlighting: execConfig?.commandHighlighting,
-            safeBinTrustedDirs: execConfig?.safeBinTrustedDirs,
-            safeBinProfiles: execConfig?.safeBinProfiles,
-            reviewer: execConfig?.reviewer,
-            config: params.cfg,
-            agentId: policyAgentId,
-            elevated: params.bashElevated,
-            cwd: workspaceDir,
-            allowBackground: false,
-            scopeKey: params.sessionKey,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            sessionStore: params.cfg.session?.store,
-            mainKey: params.cfg.session?.mainKey,
-            sessionScope: params.cfg.session?.scope,
-            eventRouting: resolveEventSessionRoutingPolicy({
-              cfg: params.cfg,
+  // Inventory can change within an attempt. Reproject its node-only exec view
+  // without constructing another computer session or replacing captured tool state.
+  const projectTools = (nodeExecAvailable = params.nodeExecAvailable) => {
+    const nodeExecDefaults =
+      nodeExecSurface &&
+      execDefaults?.canRequestNode === true &&
+      nodeExecAvailable?.(execDefaults.node) === true
+        ? execDefaults
+        : undefined;
+    const includeNodeExecTool = nodeExecDefaults !== undefined;
+    const execConfig = includeNodeExecTool
+      ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
+      : undefined;
+    const allTools = nodeExecDefaults
+      ? [
+          ...toolsWithMediatedCoding,
+          createLazyExecTool(
+            {
+              host: "node",
+              mode: nodeExecDefaults.mode,
+              security: nodeExecDefaults.security,
+              ask: nodeExecDefaults.ask,
+              trigger: params.trigger,
+              node: nodeExecDefaults.node,
+              pathPrepend: execConfig?.pathPrepend,
+              safeBins: execConfig?.safeBins,
+              strictInlineEval: execConfig?.strictInlineEval,
+              commandHighlighting: execConfig?.commandHighlighting,
+              safeBinTrustedDirs: execConfig?.safeBinTrustedDirs,
+              safeBinProfiles: execConfig?.safeBinProfiles,
+              reviewer: execConfig?.reviewer,
+              config: params.cfg,
+              agentId: policyAgentId,
+              elevated: params.bashElevated,
+              cwd: workspaceDir,
+              allowBackground: false,
+              scopeKey: params.sessionKey,
               sessionKey: params.sessionKey,
-              channel: params.messageProvider,
+              sessionId: params.sessionId,
+              sessionStore: params.cfg.session?.store,
+              mainKey: params.cfg.session?.mainKey,
+              sessionScope: params.cfg.session?.scope,
+              eventRouting: resolveEventSessionRoutingPolicy({
+                cfg: params.cfg,
+                sessionKey: params.sessionKey,
+                channel: params.messageProvider,
+                accountId: params.accountId,
+              }),
+              messageProvider: params.messageProvider,
+              currentChannelId: params.currentChannelId ?? params.agentTo,
+              currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
+              channelContext: params.channelContext,
               accountId: params.accountId,
-            }),
-            messageProvider: params.messageProvider,
-            currentChannelId: params.currentChannelId ?? params.agentTo,
-            currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
-            channelContext: params.channelContext,
-            accountId: params.accountId,
-            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-            backgroundMs: execConfig?.backgroundMs,
-            timeoutSec: execConfig?.timeoutSec,
-            approvalRunningNoticeMs: execConfig?.approvalRunningNoticeMs,
-            notifyOnExit: execConfig?.notifyOnExit,
-            notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
-          },
-          {
-            description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands when it is available. Commands run synchronously. The sole connected node that can execute commands is selected automatically; set node when several can.",
-            displaySummary: "Run commands on a connected node",
-            parameters: nodeExecSchema,
-          },
-        ),
-      ]
-    : toolsWithMediatedCoding;
+              approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+              backgroundMs: execConfig?.backgroundMs,
+              timeoutSec: execConfig?.timeoutSec,
+              approvalRunningNoticeMs: execConfig?.approvalRunningNoticeMs,
+              notifyOnExit: execConfig?.notifyOnExit,
+              notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
+            },
+            {
+              description:
+                "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands when it is available. Commands run synchronously. The sole connected node that can execute commands is selected automatically; set node when several can.",
+              displaySummary: "Run commands on a connected node",
+              parameters: nodeExecSchema,
+            },
+          ),
+        ]
+      : toolsWithMediatedCoding;
 
-  const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
-  const policyFiltered = applyToolPolicyPipeline({
-    tools: toolsForMessageProvider,
-    toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
-    warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        senderPolicy,
-        agentId: policyAgentId,
+    const toolsForMessageProvider = filterToolsByMessageProvider(allTools, params.messageProvider);
+    const policyFiltered = applyToolPolicyPipeline({
+      tools: toolsForMessageProvider,
+      toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
+      warn: logWarn,
+      steps: [
+        ...buildDefaultToolPolicyPipelineSteps({
+          profilePolicy: profilePolicyWithAlsoAllow,
+          profile,
+          profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+          providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+          providerProfile,
+          providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+          globalPolicy,
+          globalProviderPolicy,
+          agentPolicy,
+          agentProviderPolicy,
+          groupPolicy,
+          senderPolicy,
+          agentId: policyAgentId,
+        }),
+        { policy: sandboxPolicy, label: "sandbox tools.allow" },
+        { policy: subagentPolicy, label: "subagent tools.allow" },
+        { policy: inheritedToolPolicy, label: "inherited tools" },
+      ],
+      declaredToolAllowlist: buildDeclaredToolAllowlistContext({
+        config: params.cfg,
+        workspaceDir,
+        toolDenylist: explicitDenylist,
       }),
-      { policy: sandboxPolicy, label: "sandbox tools.allow" },
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-      { policy: inheritedToolPolicy, label: "inherited tools" },
-    ],
-    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
-      config: params.cfg,
-      workspaceDir,
-      toolDenylist: explicitDenylist,
-    }),
-  });
+    });
 
-  const gatewayDenySet = new Set(
-    [
-      ...defaultGatewayDeny,
-      ...ownerOnlyGatewayDeny,
-      ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-      ...excludedToolNames,
-    ].map(normalizeToolPolicyName),
-  );
-  const tools = applyToolAvailabilityDescriptions(
-    applyDelegationCapability(
-      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-      params.delegationCapability,
-    ),
-  );
-  // The loopback exec tool is node-only. Do not let a raw `exec` capability get
-  // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
-  const inheritableTools = includeNodeExecTool
-    ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
-    : tools;
-  if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
-  }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
-    getPluginToolMeta(tool),
-  );
+    const gatewayDenySet = new Set(
+      [
+        ...defaultGatewayDeny,
+        ...ownerOnlyGatewayDeny,
+        ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+        ...excludedToolNames,
+      ].map(normalizeToolPolicyName),
+    );
+    const tools = applyToolAvailabilityDescriptions(
+      applyDelegationCapability(
+        policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+        params.delegationCapability,
+      ),
+    );
+    // The loopback exec tool is node-only. Do not let a raw `exec` capability get
+    // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
+    const inheritableTools = includeNodeExecTool
+      ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
+      : tools;
+    if (shouldInheritEffectiveToolAllowlist) {
+      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
+    }
+    replaceWithEffectiveCronCreatorToolAllowlist(
+      cronCreatorToolAllowlist,
+      inheritableTools,
+      (tool) => getPluginToolMeta(tool),
+    );
+
+    return tools;
+  };
 
   return {
     agentId: sessionAgentId,
-    tools,
+    tools: projectTools(),
     workspaceDir,
+    ...(nodeExecSurface ? { refreshNodeExecTools: projectTools } : {}),
   };
 }

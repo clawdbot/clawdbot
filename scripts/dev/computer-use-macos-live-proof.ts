@@ -65,7 +65,13 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({ modelHasVision: true });
+let cleanup: ((reason: string) => Promise<void>) | undefined;
+const tool = createComputerTool({
+  modelHasVision: true,
+  registerRunCleanup: (registered) => {
+    cleanup = registered;
+  },
+});
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
@@ -243,104 +249,122 @@ function structuredOutcome(outcome: ActionOutcome): boolean {
   return raw.ok === false && typeof error?.code === "string" && error.code.length > 0;
 }
 
-await mkdir(artifactDirectory, { recursive: true });
-const screenshot = await call("screenshot");
-const listed = await call("list_windows");
-const windows = records(record(wireResult(listed).details)?.windows);
-const target = windows.find((window) => stringValue(window.title).includes(windowTitle));
-if (!target || typeof target.windowRef !== "string") {
-  throw new Error(`window containing ${JSON.stringify(windowTitle)} was not found`);
-}
+async function runProof(targetTitle: string): Promise<void> {
+  await mkdir(artifactDirectory, { recursive: true });
+  const screenshot = await call("screenshot");
+  const listed = await call("list_windows");
+  const windows = records(record(wireResult(listed).details)?.windows);
+  const target = windows.find((window) => stringValue(window.title).includes(targetTitle));
+  if (!target || typeof target.windowRef !== "string") {
+    throw new Error(`window containing ${JSON.stringify(targetTitle)} was not found`);
+  }
 
-const before = await call("get_window_state", { windowRef: target.windowRef });
-const beforeImage = await saveImage("window-before", before);
-const beforeObservation = observation(before);
-const beforeElement = selectElement(before);
-const observationId = beforeObservation.observationId;
-if (typeof observationId !== "string" || typeof beforeElement.elementRef !== "string") {
-  throw new Error("target observation did not provide stable element references");
-}
+  const before = await call("get_window_state", { windowRef: target.windowRef });
+  const beforeImage = await saveImage("window-before", before);
+  const beforeObservation = observation(before);
+  const beforeElement = selectElement(before);
+  const observationId = beforeObservation.observationId;
+  if (typeof observationId !== "string" || typeof beforeElement.elementRef !== "string") {
+    throw new Error("target observation did not provide stable element references");
+  }
 
-const targetFields = {
-  windowRef: target.windowRef,
-  elementRef: beforeElement.elementRef,
-  observationId,
-  deliveryMode: "background",
-};
-const frontmostBefore = await frontmostState();
-if (isTargetFrontmost(frontmostBefore, target)) {
-  throw new Error(
-    `target ${frontmostBefore.kind} ${frontmostBefore.name || "<unknown>"} is frontmost; foreground another window and retry`,
-  );
-}
-const cursorBeforeResult = await call("get_cursor_position");
-const click = await attempt("left_click", targetFields);
-const typed = await attempt("type", { ...targetFields, text });
-
-let confirmation: ActionOutcome | undefined;
-if (typed.kind === "error" || wireResult(typed.result).effect !== "confirmed") {
-  const refreshed = await call("get_window_state", { windowRef: target.windowRef });
-  const refreshedObservation = observation(refreshed);
-  const refreshedElement = selectElement(refreshed);
-  confirmation = await attempt("set_value", {
+  const targetFields = {
     windowRef: target.windowRef,
-    elementRef: refreshedElement.elementRef,
-    observationId: refreshedObservation.observationId,
+    elementRef: beforeElement.elementRef,
+    observationId,
     deliveryMode: "background",
-    value: text,
-  });
-}
+  };
+  const frontmostBefore = await frontmostState();
+  if (isTargetFrontmost(frontmostBefore, target)) {
+    throw new Error(
+      `target ${frontmostBefore.kind} ${frontmostBefore.name || "<unknown>"} is frontmost; foreground another window and retry`,
+    );
+  }
+  const cursorBeforeResult = await call("get_cursor_position");
+  const click = await attempt("left_click", targetFields);
+  const typed = await attempt("type", { ...targetFields, text });
 
-const cursorAfterResult = await call("get_cursor_position");
-const frontmostAfter = await frontmostState();
-const after = await call("get_window_state", { windowRef: target.windowRef });
-const afterImage = await saveImage("window-after", after);
-const afterElement = selectElement(after);
-const cursorBefore = cursor(cursorBeforeResult);
-const cursorAfter = cursor(cursorAfterResult);
-const finalOutcome = confirmation ?? typed;
+  let confirmation: ActionOutcome | undefined;
+  if (typed.kind === "error" || wireResult(typed.result).effect !== "confirmed") {
+    const refreshed = await call("get_window_state", { windowRef: target.windowRef });
+    const refreshedObservation = observation(refreshed);
+    const refreshedElement = selectElement(refreshed);
+    confirmation = await attempt("set_value", {
+      windowRef: target.windowRef,
+      elementRef: refreshedElement.elementRef,
+      observationId: refreshedObservation.observationId,
+      deliveryMode: "background",
+      value: text,
+    });
+  }
 
-const evidence = {
-  route: "agent computer tool -> Gateway node.invoke -> paired node -> selected provider",
-  platform: process.platform,
-  provider: { expected: expectedProviderId, advertised: advertisedProvider },
-  screenshot: resultText(screenshot),
-  target: {
-    windowRef: target.windowRef,
-    appName: target.appName,
-    title: target.title,
-    bounds: target.bounds,
-  },
-  frontmost: { before: frontmostBefore, after: frontmostAfter },
-  cursor: { before: cursorBefore, after: cursorAfter },
-  values: { before: beforeElement.value, after: afterElement.value },
-  results: {
-    listWindows: {
-      action: wireResult(listed).action,
-      ok: wireResult(listed).ok,
-      windowCount: windows.length,
+  const cursorAfterResult = await call("get_cursor_position");
+  const frontmostAfter = await frontmostState();
+  const after = await call("get_window_state", { windowRef: target.windowRef });
+  const afterImage = await saveImage("window-after", after);
+  const afterElement = selectElement(after);
+  const cursorBefore = cursor(cursorBeforeResult);
+  const cursorAfter = cursor(cursorAfterResult);
+  const finalOutcome = confirmation ?? typed;
+
+  const evidence = {
+    route: "agent computer tool -> Gateway node.invoke -> paired node -> selected provider",
+    platform: process.platform,
+    provider: { expected: expectedProviderId, advertised: advertisedProvider },
+    screenshot: resultText(screenshot),
+    target: {
+      windowRef: target.windowRef,
+      appName: target.appName,
+      title: target.title,
+      bounds: target.bounds,
     },
-    before: summarizeResult(before),
-    click: summarizeOutcome(click),
-    type: summarizeOutcome(typed),
-    confirmation: confirmation ? summarizeOutcome(confirmation) : undefined,
-    after: summarizeResult(after),
-  },
-  artifacts: { beforeImage, afterImage },
-  assertions: {
-    targetWasNotFrontmost: !isTargetFrontmost(frontmostBefore, target),
-    frontmostUnchanged:
-      frontmostBefore.kind === frontmostAfter.kind && frontmostBefore.name === frontmostAfter.name,
-    cursorUnchanged: cursorBefore.x === cursorAfter.x && cursorBefore.y === cursorAfter.y,
-    targetContentChanged: beforeElement.value !== afterElement.value,
-    confirmedEffectOrStructuredRefusal: structuredOutcome(finalOutcome),
-  },
-};
+    frontmost: { before: frontmostBefore, after: frontmostAfter },
+    cursor: { before: cursorBefore, after: cursorAfter },
+    values: { before: beforeElement.value, after: afterElement.value },
+    results: {
+      listWindows: {
+        action: wireResult(listed).action,
+        ok: wireResult(listed).ok,
+        windowCount: windows.length,
+      },
+      before: summarizeResult(before),
+      click: summarizeOutcome(click),
+      type: summarizeOutcome(typed),
+      confirmation: confirmation ? summarizeOutcome(confirmation) : undefined,
+      after: summarizeResult(after),
+    },
+    artifacts: { beforeImage, afterImage },
+    assertions: {
+      targetWasNotFrontmost: !isTargetFrontmost(frontmostBefore, target),
+      frontmostUnchanged:
+        frontmostBefore.kind === frontmostAfter.kind &&
+        frontmostBefore.name === frontmostAfter.name,
+      cursorUnchanged: cursorBefore.x === cursorAfter.x && cursorBefore.y === cursorAfter.y,
+      targetContentChanged: beforeElement.value !== afterElement.value,
+      confirmedEffectOrStructuredRefusal: structuredOutcome(finalOutcome),
+    },
+  };
 
-const output = path.join(artifactDirectory, "result.json");
-await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`);
-console.log(JSON.stringify(evidence, null, 2));
+  const output = path.join(artifactDirectory, "result.json");
+  await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify(evidence, null, 2));
 
-if (!Object.values(evidence.assertions).every(Boolean)) {
-  process.exitCode = 1;
+  if (!Object.values(evidence.assertions).every(Boolean)) {
+    process.exitCode = 1;
+  }
 }
+
+// Settle the entire proof before closing its execution, never individual actions.
+await runProof(windowTitle).then(
+  () => cleanup?.("completion"),
+  async (error: unknown) => {
+    try {
+      await cleanup?.("error");
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Computer-use proof and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  },
+);

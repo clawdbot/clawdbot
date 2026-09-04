@@ -125,6 +125,50 @@ struct ComputerCommandsWireDecodeTests {
         }
     }
 
+    @Test func `managed close decodes separately and actions retain execution ownership`() throws {
+        let id = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        for action in ["left_mouse_down", "__close_execution"] {
+            let data = Data(
+                #"{"action":"\#(action)","executionId":"\#(id.uuidString.lowercased())","reason":"completed"}"#
+                    .utf8)
+            let invocation = try JSONDecoder().decode(OpenClawComputerActInvocation.self, from: data)
+            switch invocation {
+            case let .close(decoded), let .action(decoded): #expect(decoded == id)
+            }
+        }
+        let ordinary = Data(#"{"action":"left_mouse_down","executionId":"\#(id.uuidString)"}"#.utf8)
+        #expect(try JSONDecoder().decode(OpenClawComputerActParams.self, from: ordinary).executionId == id)
+        #expect(!OpenClawComputerAction.allCases.contains { $0.rawValue == "__close_execution" })
+    }
+
+    @Test func `managed close enforces the existing closed bounded worker envelope`() throws {
+        let fields = [
+            "action": "__close_execution",
+            "executionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "reason": "completed",
+        ]
+        for (key, value) in [
+            ("reason", nil), ("reason", ""), ("reason", String(repeating: "x", count: 65)),
+            ("extra", "ignored"), ("executionId", nil), ("executionId", "invalid"),
+            ("executionId", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
+            ("executionId", "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"),
+        ] as [(String, String?)] {
+            var invalid = fields
+            invalid[key] = value
+            let data = try JSONEncoder().encode(invalid)
+            #expect(throws: DecodingError.self) {
+                _ = try JSONDecoder().decode(OpenClawComputerActInvocation.self, from: data)
+            }
+        }
+        var boundary = fields
+        boundary["reason"] = String(repeating: "\u{1F99E}", count: 64)
+        _ = try JSONDecoder().decode(OpenClawComputerActInvocation.self, from: JSONEncoder().encode(boundary))
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(
+                OpenClawComputerActInvocation.self, from: Data(#"{"action":"left_mouse_down"}"#.utf8))
+        }
+    }
+
     @Test func `action raw values match the frozen computer use v2 contract`() {
         let frozenActionNames = [
             "screenshot", "left_click", "right_click", "middle_click", "double_click",

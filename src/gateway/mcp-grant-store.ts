@@ -8,12 +8,14 @@ import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import type { CapturedSessionPlacementComputer } from "../agents/session-placement-computer.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -112,25 +114,141 @@ type McpLoopbackToolAuth = {
 };
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
+  owner: McpLoopbackClientGrant;
+  state: "active" | "retired";
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  activeCaptureKey?: string;
+  activeCapture?: McpLoopbackClientCapture;
+  computerOwner?: CapturedSessionPlacementComputer | null;
+  predecessorCleanup?: Promise<void>;
   toolAuth?: McpLoopbackToolAuth;
 };
 
-type McpLoopbackClientGrantRevocation = {
-  token: string;
-  runtimeOwnerToken: string;
-};
+/** Private attempt owner; a reused bearer or capture string never revives this object. */
+export type McpLoopbackClientCapture = Readonly<{
+  key: string;
+  signal: AbortSignal;
+  ready: Promise<void>;
+  registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => void;
+  createComputerTransport: () => ReturnType<CapturedSessionPlacementComputer["bind"]> | undefined;
+  close: (reason: string) => Promise<void>;
+}>;
 
-const clientGrantRevocationListeners = new Set<(event: McpLoopbackClientGrantRevocation) => void>();
+const runtimeCaptures = resolveGlobalMap<string, Set<McpLoopbackClientCapture>>(
+  Symbol.for("openclaw.mcpLoopbackRuntimeCaptures"),
+  async (captures) => {
+    await drainMcpCaptureCleanup([...captures.keys()].map(revokeMcpLoopbackClientGrantsForRuntime));
+  },
+);
 
-function notifyMcpLoopbackClientGrantRevoked(event: McpLoopbackClientGrantRevocation): void {
-  for (const listener of clientGrantRevocationListeners) {
-    listener(event);
+async function drainMcpCaptureCleanup(work: Iterable<Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(new Set(work));
+  const failures = [
+    ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
+  ];
+  if (failures.length === 1) {
+    throw failures[0];
   }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "MCP tool cleanup failed");
+  }
+}
+
+function closeGrantCaptures(
+  grants: Array<StoredMcpLoopbackClientGrant | undefined>,
+): Promise<void> {
+  const pending = drainMcpCaptureCleanup(
+    grants.flatMap((grant) => [
+      ...(grant?.predecessorCleanup ? [grant.predecessorCleanup] : []),
+      ...(grant?.activeCapture ? [grant.activeCapture.close("grant-retired")] : []),
+    ]),
+  );
+  // Synchronous transfer retains this promise for the successor's ready/close
+  // joins; an early rejection must not escape before either owner can await it.
+  void pending.catch(() => {});
+  return pending;
+}
+
+function createMcpClientCapture(
+  grant: StoredMcpLoopbackClientGrant,
+  key: string,
+  inputSignal?: AbortSignal,
+): McpLoopbackClientCapture {
+  const controller = new AbortController();
+  const cleanups: Array<(reason: string) => Promise<void>> = [];
+  const ready = closeGrantCaptures([grant]);
+  let closing: Promise<void> | undefined;
+  let stopAuthorityObserver: (() => void) | undefined;
+  const captures = runtimeCaptures.get(grant.runtimeOwnerToken) ?? new Set();
+  runtimeCaptures.set(grant.runtimeOwnerToken, captures);
+  const onAbort = () => {
+    void capture.close("cancel");
+  };
+  const capture: McpLoopbackClientCapture = Object.freeze({
+    key,
+    signal: controller.signal,
+    ready,
+    registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => {
+      controller.signal.throwIfAborted();
+      cleanups.push(cleanup);
+    },
+    createComputerTransport: () => {
+      controller.signal.throwIfAborted();
+      if (!grant.computerOwner) {
+        return grant.computerOwner;
+      }
+      return grant.admittedRunContext
+        ? grant.computerOwner.bind(grant.admittedRunContext.operationalRunInstance)
+        : null;
+    },
+    close: (reason: string) => {
+      if (closing) {
+        return closing;
+      }
+      // Fence before any await; retained callbacks and dispatched requests observe
+      // cancellation while the CLI still retains outcome observers and its queue slot.
+      const callbacks = cleanups.splice(0);
+      closing = Promise.resolve().then(() =>
+        drainMcpCaptureCleanup([ready, ...callbacks.map(async (cleanup) => await cleanup(reason))]),
+      );
+      controller.abort();
+      stopAuthorityObserver?.();
+      inputSignal?.removeEventListener("abort", onAbort);
+      // Failed closes stay runtime-owned until shutdown joins them. The original
+      // rejecting promise is also returned to every attempt/revocation waiter.
+      void closing.then(
+        () => {
+          captures.delete(capture);
+          if (captures.size === 0 && runtimeCaptures.get(grant.runtimeOwnerToken) === captures) {
+            runtimeCaptures.delete(grant.runtimeOwnerToken);
+          }
+        },
+        () => {},
+      );
+      return closing;
+    },
+  });
+  captures.add(capture);
+  // Readiness failures remain observable by request admission and close(), even
+  // when a synchronous transfer precedes the next request or runtime shutdown.
+  void ready.catch(() => {});
+  const authority =
+    grant.admittedRunContext && getAdmittedRunDelegatedAuthority(grant.admittedRunContext);
+  if (authority) {
+    stopAuthorityObserver = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
+      if (closed === authority) {
+        void capture.close("authority-closed");
+      }
+    });
+  }
+  if (inputSignal?.aborted) {
+    onAbort();
+  } else {
+    inputSignal?.addEventListener("abort", onAbort, { once: true });
+  }
+  return capture;
 }
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1h
@@ -225,6 +343,7 @@ export function mintMcpLoopbackClientGrant(params: {
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  computerOwner?: CapturedSessionPlacementComputer | null;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
@@ -235,91 +354,93 @@ export function mintMcpLoopbackClientGrant(params: {
   if (!runtimeOwnerToken) {
     throw new Error("mintMcpLoopbackClientGrant: runtimeOwnerToken is required");
   }
-  const grant: StoredMcpLoopbackClientGrant = {
+  const owner: McpLoopbackClientGrant = {
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
+  };
+  const grant: StoredMcpLoopbackClientGrant = {
+    token: owner.token,
+    context: structuredClone(owner.context),
+    owner,
+    state: "active",
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
     ...(params.skillLibraryAuthoring
       ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
       : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
+    ...(params.computerOwner !== undefined ? { computerOwner: params.computerOwner } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
-  return structuredClone({
-    token: grant.token,
-    context: grant.context,
-  });
+  return owner;
 }
 
 /** Attaches the exact late CLI admission before the grant can execute tools. */
 export function bindMcpLoopbackClientGrantAdmission(params: {
   token: string;
+  expectedOwner: McpLoopbackClientGrant;
   runtimeOwnerToken: string;
   admittedRunContext: AdmittedRunContext;
 }): boolean {
   const grant = clientGrantsByToken.get(params.token);
   if (
     !grant ||
+    grant.state !== "active" ||
+    grant.owner !== params.expectedOwner ||
     grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
     (grant.admittedRunContext && grant.admittedRunContext !== params.admittedRunContext)
   ) {
     return false;
   }
+  const { activeCapture: _activeCapture, ...inactiveGrant } = grant;
   clientGrantsByToken.set(params.token, {
-    ...grant,
+    ...inactiveGrant,
+    predecessorCleanup: closeGrantCaptures([grant]),
     admittedRunContext: params.admittedRunContext,
   });
   return true;
 }
 
-/** Bind the active execution attempt's capture before its child process starts. */
+/** Bind a fresh private owner before the child starts, even when its header key repeats. */
 export function activateMcpLoopbackClientGrantCapture(params: {
   token: string;
+  expectedOwner: McpLoopbackClientGrant;
   runtimeOwnerToken: string;
   captureKey: string;
-}): boolean {
+  signal?: AbortSignal;
+}): McpLoopbackClientCapture | undefined {
   const captureKey = params.captureKey.trim();
   if (!captureKey) {
     throw new Error("activateMcpLoopbackClientGrantCapture: captureKey is required");
   }
   const grant = clientGrantsByToken.get(params.token);
-  if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
-    return false;
-  }
-  clientGrantsByToken.set(params.token, { ...grant, activeCaptureKey: captureKey });
-  return true;
-}
-
-/** Release only the attempt that still owns this grant's active capture. */
-export function deactivateMcpLoopbackClientGrantCapture(params: {
-  token: string;
-  runtimeOwnerToken: string;
-  captureKey: string;
-}): boolean {
-  const grant = clientGrantsByToken.get(params.token);
   if (
     !grant ||
-    grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
-    grant.activeCaptureKey !== params.captureKey
+    grant.state !== "active" ||
+    grant.owner !== params.expectedOwner ||
+    grant.runtimeOwnerToken !== params.runtimeOwnerToken
   ) {
-    return false;
+    return undefined;
   }
-  const { activeCaptureKey: _activeCaptureKey, ...inactiveGrant } = grant;
-  clientGrantsByToken.set(params.token, inactiveGrant);
-  return true;
+  const capture = createMcpClientCapture(grant, captureKey, params.signal);
+  const { predecessorCleanup: _predecessorCleanup, ...currentGrant } = grant;
+  clientGrantsByToken.set(params.token, { ...currentGrant, activeCapture: capture });
+  return capture;
 }
 
 /** Move one prepared turn onto the bearer already held by a warm CLI child. */
 export function transferMcpLoopbackClientGrant(params: {
   sourceToken: string;
   targetToken: string;
+  expectedOwner: McpLoopbackClientGrant;
   runtimeOwnerToken: string;
 }): boolean {
   const source = clientGrantsByToken.get(params.sourceToken);
   const target = clientGrantsByToken.get(params.targetToken);
   if (
     !source ||
+    source.state !== "active" ||
+    source.owner !== params.expectedOwner ||
     source.runtimeOwnerToken !== params.runtimeOwnerToken ||
     (target && target.runtimeOwnerToken !== params.runtimeOwnerToken)
   ) {
@@ -331,23 +452,13 @@ export function transferMcpLoopbackClientGrant(params: {
   // The child cannot replace its bearer after launch. Turn cleanup may already
   // have revoked that bearer, so recreate it only from this fresh admitted grant.
   // An existing bearer owned by another runtime is never replaceable.
-  const { activeCaptureKey: _activeCaptureKey, ...inactiveSource } = source;
+  const { activeCapture: _activeCapture, ...inactiveSource } = source;
   clientGrantsByToken.set(params.targetToken, {
     ...inactiveSource,
     token: params.targetToken,
+    predecessorCleanup: closeGrantCaptures([source, target]),
   });
   clientGrantsByToken.delete(params.sourceToken);
-  // Both tokens may own cached server projections. Evict them only after the
-  // map swap so a request can observe either the old grant or the new grant,
-  // never a partially updated authority.
-  notifyMcpLoopbackClientGrantRevoked({
-    token: params.targetToken,
-    runtimeOwnerToken: params.runtimeOwnerToken,
-  });
-  notifyMcpLoopbackClientGrantRevoked({
-    token: params.sourceToken,
-    runtimeOwnerToken: params.runtimeOwnerToken,
-  });
   return true;
 }
 
@@ -359,6 +470,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
+      capture: McpLoopbackClientCapture;
       admittedRunContext: AdmittedRunContext;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       isCurrent: () => boolean;
@@ -372,11 +484,13 @@ export function resolveMcpLoopbackClientGrant(params: {
     admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext);
   if (
     !grant ||
+    grant.state !== "active" ||
     grant.runtimeOwnerToken !== runtimeOwnerToken ||
     !admittedRunContext ||
     !delegatedAuthority ||
-    !grant.activeCaptureKey ||
-    grant.activeCaptureKey !== captureKey
+    !grant.activeCapture ||
+    grant.activeCapture.signal.aborted ||
+    grant.activeCapture.key !== captureKey
   ) {
     return undefined;
   }
@@ -384,42 +498,64 @@ export function resolveMcpLoopbackClientGrant(params: {
   // grant; cloning on each request would discard refreshed credentials.
   return {
     context: structuredClone(grant.context),
-    captureKey: grant.activeCaptureKey,
+    captureKey: grant.activeCapture.key,
+    capture: grant.activeCapture,
     admittedRunContext,
     ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
     // Every bind, capture change, and transfer replaces the row, fencing even same-reference reuse.
     isCurrent: () =>
       clientGrantsByToken.get(token) === grant &&
+      !grant.activeCapture?.signal.aborted &&
       getAdmittedRunDelegatedAuthority(admittedRunContext) === delegatedAuthority,
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }
 
-/** Registers cleanup tied to the exact lifetime of loopback client grants. */
-export function registerMcpLoopbackClientGrantRevocationListener(
-  listener: (event: McpLoopbackClientGrantRevocation) => void,
-): () => void {
-  clientGrantRevocationListeners.add(listener);
-  return () => clientGrantRevocationListeners.delete(listener);
-}
-
-export function revokeMcpLoopbackClientGrant(token: string): boolean {
+export function revokeMcpLoopbackClientGrant(
+  token: string,
+  expectedOwner: McpLoopbackClientGrant,
+): Promise<boolean> {
   const grant = clientGrantsByToken.get(token);
-  if (!grant || !clientGrantsByToken.delete(token)) {
-    return false;
+  if (!grant || grant.owner !== expectedOwner) {
+    return Promise.resolve(false);
   }
-  // Revocation must also release server-owned projections whose closures retain
-  // this grant's prepared credentials.
-  notifyMcpLoopbackClientGrantRevoked({ token, runtimeOwnerToken: grant.runtimeOwnerToken });
-  return true;
+  const newlyRetired = grant.state === "active";
+  const retired: StoredMcpLoopbackClientGrant = newlyRetired
+    ? { ...grant, state: "retired" }
+    : grant;
+  // Keep the fenced owner discoverable during cleanup: a warm-token transfer
+  // must inherit its pending drain. Late deletion must never remove a successor.
+  clientGrantsByToken.set(token, retired);
+  return closeGrantCaptures([grant])
+    .finally(() => {
+      if (clientGrantsByToken.get(token) === retired) {
+        clientGrantsByToken.delete(token);
+      }
+    })
+    .then(() => newlyRetired);
 }
 
-export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: string): number {
-  let removed = 0;
+export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: string): Promise<void> {
+  const grants: StoredMcpLoopbackClientGrant[] = [];
   for (const [token, grant] of clientGrantsByToken) {
     if (grant.runtimeOwnerToken === runtimeOwnerToken) {
-      removed += revokeMcpLoopbackClientGrant(token) ? 1 : 0;
+      clientGrantsByToken.delete(token);
+      grants.push(grant);
     }
   }
-  return removed;
+  // Include retired/replaced owners: their grant row may be gone while its
+  // cleanup is still pending or failed. Snapshot before close mutates the set.
+  const captures = [...(runtimeCaptures.get(runtimeOwnerToken) ?? [])];
+  return drainMcpCaptureCleanup([
+    closeGrantCaptures(grants),
+    ...captures.map((capture) => capture.close("runtime-shutdown")),
+  ]).finally(() => {
+    const remaining = runtimeCaptures.get(runtimeOwnerToken);
+    for (const capture of captures) {
+      remaining?.delete(capture);
+    }
+    if (remaining?.size === 0) {
+      runtimeCaptures.delete(runtimeOwnerToken);
+    }
+  });
 }

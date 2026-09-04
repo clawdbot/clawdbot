@@ -54,7 +54,7 @@ export type CliOutput = {
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
-  /** A caller interruption that ended the turn after usable assistant text was streamed. */
+  /** An interruption preserved with partial output or a terminal tool-cleanup failure. */
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
     process?: CliProcessDiagnostics;

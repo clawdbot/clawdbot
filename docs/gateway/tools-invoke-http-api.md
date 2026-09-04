@@ -70,6 +70,8 @@ Fields:
 - `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.
 
+Each invocation creates a fresh tool set and awaits its registered cleanup before responding. The endpoint does not retain tool-local state between requests. Use a managed agent turn for multi-step [computer use](/nodes/computer-use); separate HTTP requests do not share screenshot frames or held input.
+
 ## Policy + routing behavior
 
 Tool availability is filtered through the same policy chain used by Gateway agents:
@@ -90,22 +92,28 @@ Important boundary notes:
 
 Gateway HTTP also applies a hard deny list by default (even if session policy allows the tool):
 
-| Tool             | Reason                                                    |
-| ---------------- | --------------------------------------------------------- |
-| `exec`           | Direct command execution (RCE surface)                    |
-| `spawn`          | Arbitrary child process creation (RCE surface)            |
-| `shell`          | Shell command execution (RCE surface)                     |
-| `fs_write`       | Arbitrary file mutation on the host                       |
-| `fs_delete`      | Arbitrary file deletion on the host                       |
-| `fs_move`        | Arbitrary file move/rename on the host                    |
-| `apply_patch`    | Patch application can rewrite arbitrary files             |
-| `sessions_spawn` | Session orchestration; spawning agents remotely is RCE    |
-| `sessions_send`  | Cross-session message injection                           |
-| `cron`           | Persistent automation control plane                       |
-| `gateway`        | Gateway control plane; prevents reconfiguration via HTTP  |
-| `nodes`          | Node command relay can reach `system.run` on paired hosts |
+| Tool                                                             | Reason                                                               |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `exec`                                                           | Direct command execution (RCE surface)                               |
+| `spawn`                                                          | Arbitrary child process creation (RCE surface)                       |
+| `shell`                                                          | Shell command execution (RCE surface)                                |
+| `fs_write`                                                       | Arbitrary file mutation on the host                                  |
+| `fs_delete`                                                      | Arbitrary file deletion on the host                                  |
+| `fs_move`                                                        | Arbitrary file move/rename on the host                               |
+| `apply_patch`                                                    | Patch application can rewrite arbitrary files                        |
+| `terminal`                                                       | Interactive terminal input and host scrollback                       |
+| `portal`                                                         | Local HTTP application exposure                                      |
+| `sessions_spawn`                                                 | Session orchestration; spawning agents remotely is RCE               |
+| `sessions_send`                                                  | Cross-session message injection                                      |
+| `conversations_list`, `conversations_send`, `conversations_turn` | External conversation access through server-held channel credentials |
+| `automations` (`cron` alias)                                     | Persistent automation control plane                                  |
+| `gateway`                                                        | Gateway control plane; prevents reconfiguration via HTTP             |
+| `nodes`                                                          | Node command relay can reach `system.run` on paired hosts            |
+| `computer`                                                       | Paired desktop input and screen reads                                |
+| `mobile_ui`                                                      | Android accessibility and cross-app UI control                       |
+| `openclaw`                                                       | Privileged OpenClaw execution                                        |
 
-`cron`, `gateway`, and `nodes` are also owner-only: even outside this default deny list, non-owner callers cannot invoke them on this surface.
+The owner-only tools are `automations` (`cron` alias), `computer`, `conversations_list`, `conversations_send`, `conversations_turn`, `gateway`, `mobile_ui`, `nodes`, `openclaw`, `portal`, `screen`, `sessions`, and `terminal`. Non-owner callers cannot invoke them even when the default deny is lifted.
 
 Customize the general deny list via `gateway.tools`:
 
@@ -122,7 +130,7 @@ Customize the general deny list via `gateway.tools`:
 }
 ```
 
-`gateway.tools.allow` is an exposure override, not a scope upgrade. In identity-bearing HTTP modes, `cron`, `gateway`, and `nodes` remain unavailable to callers without owner/admin identity (`operator.admin`) even when listed in `gateway.tools.allow`. Shared-secret bearer auth still follows the full trusted-operator rule above.
+`gateway.tools.allow` is an exposure override, not a scope upgrade. In identity-bearing HTTP modes, the owner-only tools listed above remain unavailable to callers without owner/admin identity (`operator.admin`) even when listed in `gateway.tools.allow`. Shared-secret bearer auth still follows the full trusted-operator rule above.
 
 To help group policies resolve context, you can optionally set:
 
@@ -145,6 +153,8 @@ To help group policies resolve context, you can optionally set:
 | `413`  | Request body exceeded the max payload size                                                     |
 | `429`  | Auth rate-limited (`Retry-After` set)                                                          |
 | `500`  | `{ ok: false, error: { type, message } }` (unexpected tool execution error; sanitized message) |
+
+Cleanup can fail after a tool has already acted. A cleanup failure returns `500` with a sanitized message advising inspection before retrying; it is not evidence that the action was never performed.
 
 ## Example
 

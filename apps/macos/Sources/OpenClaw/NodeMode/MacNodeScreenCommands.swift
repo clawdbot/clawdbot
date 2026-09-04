@@ -7,6 +7,7 @@ enum MacNodeScreenCommand: String, Codable {
 }
 
 struct MacNodeScreenSnapshotParams: Codable, Equatable {
+    var executionId: UUID?
     var screenIndex: Int?
     var maxWidth: Int?
     var quality: Double?

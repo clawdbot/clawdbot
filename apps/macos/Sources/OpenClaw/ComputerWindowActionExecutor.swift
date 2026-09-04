@@ -85,8 +85,7 @@ final class ComputerWindowActionExecutor {
     private var observation: ObservationState?
     private var executionAuthority: ComputerActionExecutionAuthority?
 
-    init() {
-        let snapshotManager = InMemorySnapshotManager()
+    init(snapshotManager: InMemorySnapshotManager) {
         let automation = UIAutomationService(snapshotManager: snapshotManager)
         let applications = ApplicationService()
         let menu = MenuService(applicationService: applications)
@@ -607,6 +606,10 @@ final class ComputerWindowActionExecutor {
     func adoptLifecycleGeneration(_ generation: UInt64) {
         guard self.lifecycleGeneration != generation else { return }
         self.lifecycleGeneration = generation
+        self.clearReferences()
+    }
+
+    func clearReferences() {
         self.appRefs.removeAll()
         self.windowRefs.removeAll()
         self.observation = nil
