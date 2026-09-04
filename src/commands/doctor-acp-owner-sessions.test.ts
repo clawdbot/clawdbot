@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAcpDatabaseSessionKey,
   selectAcpSessionRow,
@@ -11,6 +11,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  ensureTranscriptGenerationsForCanonicalRepair,
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
@@ -21,6 +22,27 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { migrateLegacyAcpOwnerSessions } from "./doctor-acp-owner-sessions.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+
+const sessionAccessorTestHooks = vi.hoisted(() => ({
+  ensureTranscriptGenerations: vi.fn(),
+  ensureTranscriptGenerationsDelegate: undefined as
+    | typeof ensureTranscriptGenerationsForCanonicalRepair
+    | undefined,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  sessionAccessorTestHooks.ensureTranscriptGenerationsDelegate =
+    actual.ensureTranscriptGenerationsForCanonicalRepair;
+  sessionAccessorTestHooks.ensureTranscriptGenerations.mockImplementation((sources) =>
+    actual.ensureTranscriptGenerationsForCanonicalRepair(sources),
+  );
+  return {
+    ...actual,
+    ensureTranscriptGenerationsForCanonicalRepair:
+      sessionAccessorTestHooks.ensureTranscriptGenerations,
+  };
+});
 
 const sourceKey = "agent:codex:acp:legacy";
 const targetKey = "agent:reviewer:acp:legacy";
@@ -70,7 +92,13 @@ function seedLegacySession(params: {
   return storePath;
 }
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  sessionAccessorTestHooks.ensureTranscriptGenerations.mockReset();
+  sessionAccessorTestHooks.ensureTranscriptGenerations.mockImplementation((sources) =>
+    sessionAccessorTestHooks.ensureTranscriptGenerationsDelegate!(sources),
+  );
+});
 
 describe("Doctor ACP owner migration", () => {
   it("moves one eligible harness-owned session exactly once", async () => {
@@ -290,6 +318,49 @@ describe("Doctor ACP owner migration", () => {
           storePath: sourceStorePath,
         }),
       ).toBeDefined();
+    });
+  });
+
+  it("keeps the legacy row when the canonical target appears during migration preparation", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-race-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      const sourceStorePath = seedLegacySession({ cfg, env });
+      const targetStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "reviewer",
+        env,
+      });
+      const concurrentEntry = { sessionId: "concurrent-session", updatedAt: 20 };
+      sessionAccessorTestHooks.ensureTranscriptGenerations.mockImplementationOnce(
+        async (sources) => {
+          await sessionAccessorTestHooks.ensureTranscriptGenerationsDelegate!(sources);
+          replaceSessionEntrySync(
+            { agentId: "reviewer", env, sessionKey: targetKey, storePath: targetStorePath },
+            concurrentEntry,
+          );
+        },
+      );
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ conflicts: 1, eligible: 1, migrated: 0 });
+      expect(report.warnings.join("\n")).toContain("changed during migration");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        })?.entry,
+      ).toMatchObject(entry);
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: targetStorePath,
+        })?.entry,
+      ).toMatchObject(concurrentEntry);
     });
   });
 

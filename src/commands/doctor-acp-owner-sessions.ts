@@ -13,6 +13,7 @@ import {
   loadCanonicalSessionRepairEntries,
   loadExactSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { SessionEntryLifecycleUpsertConflictError } from "../config/sessions/session-accessor.lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -87,14 +88,17 @@ async function moveSessionEntry(params: {
   targetAgentId: string;
   targetKey: string;
   targetStorePath: string;
-}): Promise<void> {
-  const target = loadExactSessionEntryReadOnly({
+}): Promise<"conflict" | "moved"> {
+  const targetBeforePreparation = loadExactSessionEntryReadOnly({
     agentId: params.targetAgentId,
     env: params.env,
     sessionKey: params.targetKey,
     storePath: params.targetStorePath,
   })?.entry;
-  if (!target) {
+  if (targetBeforePreparation && !sameSessionIdentity(targetBeforePreparation, params.entry)) {
+    return "conflict";
+  }
+  if (!targetBeforePreparation) {
     await ensureTranscriptGenerationsForCanonicalRepair([
       {
         agentId: params.sourceAgentId,
@@ -103,10 +107,17 @@ async function moveSessionEntry(params: {
         storePath: params.sourceStorePath,
       },
     ]);
+  }
+  let copyOwnedState = false;
+  let targetConflict = false;
+  try {
     await applySessionEntryLifecycleMutation({
       agentId: params.targetAgentId,
       allowCanonicalRepair: true,
       afterUpsertsInTransaction: (database) => {
+        if (!copyOwnedState) {
+          return;
+        }
         copySessionOwnedStateForCanonicalRepair({
           canonicalKey: params.targetKey,
           destinationDatabase: database,
@@ -119,8 +130,31 @@ async function moveSessionEntry(params: {
       },
       skipMaintenance: true,
       storePath: params.targetStorePath,
-      upserts: [{ entry: params.entry, sessionKey: params.targetKey }],
+      upserts: [
+        {
+          buildEntry: ({ currentEntry }) => {
+            if (currentEntry && !sameSessionIdentity(currentEntry, params.entry)) {
+              targetConflict = true;
+              return null;
+            }
+            copyOwnedState = currentEntry === undefined;
+            return currentEntry ?? params.entry;
+          },
+          sessionKey: params.targetKey,
+        },
+      ],
     });
+  } catch (error) {
+    if (
+      error instanceof SessionEntryLifecycleUpsertConflictError &&
+      error.sessionKey === params.targetKey
+    ) {
+      return "conflict";
+    }
+    throw error;
+  }
+  if (targetConflict) {
+    return "conflict";
   }
   await applySessionEntryLifecycleMutation({
     agentId: params.sourceAgentId,
@@ -137,6 +171,7 @@ async function moveSessionEntry(params: {
     skipMaintenance: true,
     storePath: params.sourceStorePath,
   });
+  return "moved";
 }
 
 /** Doctor-only ACP owner migration. Runtime never reads or promotes legacy harness rows. */
@@ -234,7 +269,7 @@ export async function migrateLegacyAcpOwnerSessions(params: {
         );
         continue;
       }
-      await moveSessionEntry({
+      const move = await moveSessionEntry({
         env,
         entry,
         sourceAgentId: harnessAgentId,
@@ -244,6 +279,13 @@ export async function migrateLegacyAcpOwnerSessions(params: {
         targetKey,
         targetStorePath,
       });
+      if (move === "conflict") {
+        conflicts += 1;
+        warnings.push(
+          `Canonical ACP session "${targetKey}" changed during migration; legacy source "${sourceKey}" was left unchanged.`,
+        );
+        continue;
+      }
       migrated += 1;
     }
   }

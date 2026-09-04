@@ -116,8 +116,6 @@ it("runs a configured alias through real ACPX and rejects a foreign resume befor
       agentRegistry: createAgentRegistry({
         overrides: { [harness]: [process.execPath, script, peerDirectory] },
       }),
-      pluginToolsMcpBridgeEnabled: true,
-      openclawToolsMcpBridgeEnabled: true,
       mcpServers: [],
       permissionMode: "deny-all",
       timeoutMs: 5_000,
