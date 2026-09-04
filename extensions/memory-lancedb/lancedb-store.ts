@@ -124,6 +124,19 @@ export class MemoryDB {
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) {
+      // Lance is a versioned table format: openTable() pins this handle to the
+      // version current at that moment, and reads never advance it. Without this
+      // checkout a long-lived process keeps answering from the version it first
+      // opened, and never observes rows committed by anyone else -- another
+      // process writing the same directory, or a second store in this one.
+      //
+      // The staleness is easy to miss because a write THROUGH this handle
+      // silently pulls it forward to latest, so recall appears to self-heal
+      // whenever anything is stored and then goes stale again immediately.
+      //
+      // It also matters for delete(), whose predicate would otherwise be
+      // evaluated against a snapshot that predates the rows being removed.
+      await this.table.checkoutLatest();
       return;
     }
     if (this.initPromise) {
