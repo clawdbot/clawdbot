@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   createMemorySearchDeadlineError,
+  formatMemorySearchTimeout,
   isMemorySearchDeadlineError,
   resolveMemorySearchAbortError,
 } from "./memory/search-deadline.js";
@@ -105,7 +106,7 @@ export async function runMemoryCorpusDeadline<T>(params: {
   const timer = setTimeout(() => {
     controller.abort(
       createMemorySearchDeadlineError(
-        `${params.operation} timed out after ${Math.round(params.timeoutMs / 1000)}s`,
+        `${params.operation} timed out after ${formatMemorySearchTimeout(params.timeoutMs)}`,
       ),
     );
   }, params.timeoutMs);

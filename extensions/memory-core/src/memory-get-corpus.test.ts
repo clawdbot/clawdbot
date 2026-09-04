@@ -338,13 +338,13 @@ describe("memory_get corpus outcomes", () => {
     setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
     const tool = createMemoryGetToolOrThrow(
       asOpenClawConfig({
-        memory: { search: { timeoutMs: 45_000 } },
+        memory: { search: { timeoutMs: 1_501 } },
         agents: { list: [{ id: "main", default: true }] },
       }),
     );
 
     const pending = tool.execute("call_get_configured_deadline", { path: lookup });
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(1_500);
     let settled = false;
     void pending.then(() => {
       settled = true;
@@ -352,13 +352,13 @@ describe("memory_get corpus outcomes", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(pending).resolves.toMatchObject({
       details: {
         path: lookup,
         text: "",
         disabled: true,
-        error: "memory_get timed out after 45s",
+        error: "memory_get timed out after 1501ms",
       },
     });
   });

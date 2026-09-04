@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  formatMemorySearchTimeout,
   isMemorySearchDeadlineError,
   normalizeMemorySearchTimeoutMs,
   runMemorySearchWithDeadline,
@@ -11,6 +12,13 @@ describe("normalizeMemorySearchTimeoutMs", () => {
     expect(normalizeMemorySearchTimeoutMs(500)).toBe(1_000);
     expect(normalizeMemorySearchTimeoutMs(45_999.9)).toBe(45_999);
     expect(normalizeMemorySearchTimeoutMs(180_000)).toBe(120_000);
+  });
+});
+
+describe("formatMemorySearchTimeout", () => {
+  it("preserves exact milliseconds for non-whole-second deadlines", () => {
+    expect(formatMemorySearchTimeout(15_000)).toBe("15s");
+    expect(formatMemorySearchTimeout(1_501)).toBe("1501ms");
   });
 });
 
@@ -53,6 +61,18 @@ describe("runMemorySearchWithDeadline", () => {
     expect(taskSignal?.aborted).toBe(true);
     expect(taskSignal?.reason).toEqual(new Error("memory_search timed out after 15s"));
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a non-whole-second deadline without rounding", async () => {
+    vi.useFakeTimers();
+    const result = runMemorySearchWithDeadline({
+      timeoutMs: 1_501,
+      run: async () => await new Promise(() => {}),
+    });
+    const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 1501ms");
+    await vi.advanceTimersByTimeAsync(1_501);
+
+    await resultAssertion;
   });
 
   it("marks its own deadline error and nothing that merely reads like one", async () => {
