@@ -21,12 +21,10 @@ import {
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
-  cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
-  removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
@@ -43,6 +41,10 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  removeMemoryDatabaseFiles,
+} from "./manager-reindex-temp-files.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import { MEMORY_INDEX_META_KEY, type MemorySyncProgressState } from "./manager-sync-base.js";
 import {

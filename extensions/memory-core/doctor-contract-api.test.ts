@@ -1505,6 +1505,40 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("removes aged legacy reindex shadows after the sidecar was already archived", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const archivedPath = `${legacyPath}.migrated`;
+    const agedShadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const youngShadow = `${legacyPath}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const aged = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(archivedPath, "archived");
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await fs.writeFile(`${agedShadow}${suffix}`, "orphan");
+      await fs.utimes(`${agedShadow}${suffix}`, aged, aged);
+      await fs.writeFile(`${youngShadow}${suffix}`, "active");
+    }
+
+    const migration = legacyMemoryIndexMigration();
+    const preview = await migration.detectLegacyState(migrationParams());
+    expect(preview?.preview).toEqual([`- Aged Memory Core legacy reindex shadow: ${agedShadow}`]);
+
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result).toEqual({
+      changes: [
+        `Removed 1 aged Memory Core legacy reindex shadow database(s) beside ${legacyPath}`,
+      ],
+      warnings: [],
+    });
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await expect(fs.access(`${agedShadow}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${youngShadow}${suffix}`)).resolves.toBeUndefined();
+    }
+    await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe("archived");
+  });
+
   it("removes an empty legacy memory sidecar placeholder without warning", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");

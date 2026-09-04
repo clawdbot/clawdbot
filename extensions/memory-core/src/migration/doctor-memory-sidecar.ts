@@ -13,6 +13,13 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveLegacyMemoryReindexDatabaseBaseName } from "../memory/manager-reindex-temp-files.js";
+import {
+  cleanupLegacyMemoryReindexShadows,
+  collectAgedLegacyMemoryReindexShadows,
+  formatLegacyMemoryReindexShadowPreviews,
+  type LegacyMemoryReindexOrphan,
+} from "./doctor-memory-reindex-shadows.js";
 // sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
 // enumeration does not cold-load it with this closure.
 import {
@@ -164,18 +171,28 @@ async function isCanonicalAgentDatabaseSymlink(params: {
   }
 }
 
-async function collectLegacyMemorySidecarSources(params: {
+async function collectLegacyMemorySidecarState(params: {
   config: unknown;
   env: NodeJS.ProcessEnv;
   stateDir: string;
-}): Promise<LegacyMemorySidecarSource[]> {
+}): Promise<{
+  reindexOrphans: LegacyMemoryReindexOrphan[];
+  sources: LegacyMemorySidecarSource[];
+}> {
   const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
   const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
+  const reindexCandidatePaths = new Set<string>();
   try {
     const entries = await fs.readdir(legacyDir, { withFileTypes: true });
     for (const entry of entries) {
+      const reindexDatabaseBaseName = entry.isFile()
+        ? resolveLegacyMemoryReindexDatabaseBaseName(entry.name)
+        : undefined;
+      if (reindexDatabaseBaseName) {
+        reindexCandidatePaths.add(path.join(legacyDir, reindexDatabaseBaseName));
+      }
       if (entry.isFile() && entry.name.endsWith(".sqlite")) {
         const stem = entry.name.slice(0, -".sqlite".length);
         const retryMarker = ".retry-";
@@ -192,6 +209,9 @@ async function collectLegacyMemorySidecarSources(params: {
   const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
   const sources: LegacyMemorySidecarSource[] = [];
   const seen = new Set<string>();
+  function addReindexCandidate(legacyPath: string): void {
+    reindexCandidatePaths.add(path.resolve(legacyPath));
+  }
   async function addSource(agentId: string, legacyPath: string): Promise<void> {
     const normalizedPath = path.resolve(legacyPath);
     const key = `${agentId}\0${normalizedPath}`;
@@ -220,17 +240,23 @@ async function collectLegacyMemorySidecarSources(params: {
   }
   for (const agentId of agentIds) {
     for (const configuredPath of readLegacyMemorySearchStorePaths(params.config, agentId)) {
-      await addSource(
-        agentId,
-        resolveUserPath(configuredPath.replaceAll("{agentId}", agentId), migrationEnv),
+      const legacyPath = resolveUserPath(
+        configuredPath.replaceAll("{agentId}", agentId),
+        migrationEnv,
       );
+      addReindexCandidate(legacyPath);
+      await addSource(agentId, legacyPath);
     }
-    await addSource(agentId, path.join(legacyDir, `${agentId}.sqlite`));
+    const defaultLegacyPath = path.join(legacyDir, `${agentId}.sqlite`);
+    addReindexCandidate(defaultLegacyPath);
+    await addSource(agentId, defaultLegacyPath);
   }
   for (const retrySidecar of retrySidecars) {
+    addReindexCandidate(retrySidecar.legacyPath);
     await addSource(retrySidecar.agentId, retrySidecar.legacyPath);
   }
-  return sources;
+  const reindexOrphans = collectAgedLegacyMemoryReindexShadows(reindexCandidatePaths);
+  return { reindexOrphans, sources };
 }
 
 async function archiveLegacyMemorySidecar(params: {
@@ -535,34 +561,39 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
   async detectLegacyState(params) {
-    const sources = await collectLegacyMemorySidecarSources({
+    const { reindexOrphans, sources } = await collectLegacyMemorySidecarState({
       config: params.config,
       env: params.env,
       stateDir: params.stateDir,
     });
-    if (sources.length === 0) {
+    if (sources.length === 0 && reindexOrphans.length === 0) {
       return null;
     }
     return {
-      preview: sources.map(
-        (source) =>
-          `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
-      ),
+      preview: [
+        ...sources.map(
+          (source) =>
+            `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
+        ),
+        ...formatLegacyMemoryReindexShadowPreviews(reindexOrphans),
+      ],
     };
   },
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    const groups = groupLegacyMemorySidecarSourcesByPath(
-      await collectLegacyMemorySidecarSources({
-        config: params.config,
-        env: params.env,
-        stateDir: params.stateDir,
-      }),
-    );
-    for (const sources of groups) {
+    const { reindexOrphans, sources } = await collectLegacyMemorySidecarState({
+      config: params.config,
+      env: params.env,
+      stateDir: params.stateDir,
+    });
+    const reindexCleanup = await cleanupLegacyMemoryReindexShadows(reindexOrphans);
+    changes.push(...reindexCleanup.changes);
+    warnings.push(...reindexCleanup.warnings);
+    const groups = groupLegacyMemorySidecarSourcesByPath(sources);
+    for (const sourceGroup of groups) {
       let archiveReady = true;
-      for (const source of sources) {
+      for (const source of sourceGroup) {
         try {
           const result = await migrateLegacyMemorySidecarSource({
             source,
@@ -580,9 +611,9 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
           );
         }
       }
-      if (archiveReady && sources[0]) {
+      if (archiveReady && sourceGroup[0]) {
         await archiveLegacyMemorySidecar({
-          source: sources[0],
+          source: sourceGroup[0],
           changes,
           warnings,
         });

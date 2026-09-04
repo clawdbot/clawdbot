@@ -1,4 +1,5 @@
 // Memory Core tests cover shared agent database publication and shadow cleanup.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,13 +8,12 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import {
-  cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
@@ -22,6 +22,10 @@ import {
   resetMemoryDatabase,
 } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
+import {
+  cleanupAgedLegacyMemoryReindexTempFiles,
+  cleanupAgedMemoryReindexTempFiles,
+} from "./manager-reindex-temp-files.js";
 
 function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
   ensureMemoryIndexSchema({
@@ -521,5 +525,45 @@ describe("memory manager database publication", () => {
     await expectPathMissing(`${oldShadow}-wal`);
     await expectPathMissing(`${oldShadow}-journal`);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+  });
+
+  it("preserves a current-format shadow when the primary database is missing", async () => {
+    const databasePath = path.join(fixtureRoot, "missing.sqlite");
+    const shadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.writeFile(shadow, "orphan");
+    await fs.utimes(shadow, old, old);
+
+    cleanupAgedMemoryReindexTempFiles(databasePath);
+
+    await expect(fs.access(shadow)).resolves.toBeUndefined();
+  });
+
+  it("does not report a legacy shadow as removed when a file deletion fails", async () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const shadow = `${databasePath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const failedPath = `${shadow}-wal`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    for (const filePath of [shadow, failedPath]) {
+      await fs.writeFile(filePath, "orphan");
+      await fs.utimes(filePath, old, old);
+    }
+    const remove = fsSync.rmSync;
+    vi.spyOn(fsSync, "rmSync").mockImplementation((filePath, options) => {
+      if (filePath === failedPath) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      remove(filePath, options);
+    });
+
+    try {
+      expect(cleanupAgedLegacyMemoryReindexTempFiles(databasePath)).toEqual({
+        removedBaseNames: [],
+        failedBaseNames: [path.basename(shadow)],
+      });
+      await expect(fs.access(failedPath)).resolves.toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
