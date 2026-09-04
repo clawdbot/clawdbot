@@ -1,4 +1,3 @@
-// Verifies backup archives, including payload paths and hardlink/symbolic-link targets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -83,8 +82,9 @@ async function listArchiveEntries(archivePath: string) {
     gzip: true,
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     onwarn: (code, message) => {
-      if (code === "TAR_BAD_ARCHIVE" && invalidReason === undefined) {
-        invalidReason = formatErrorMessage(message);
+      // tar skips invalid headers; a readable remainder is not a complete backup.
+      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
+        invalidReason ??= formatErrorMessage(message);
       }
     },
     onReadEntry: (entry) => {
