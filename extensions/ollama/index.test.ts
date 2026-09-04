@@ -470,6 +470,23 @@ describe("ollama plugin", () => {
     },
   );
 
+  it.each(["ollama", "ollama-cloud"])(
+    "treats missing stream error messages as non-failover for %s",
+    (providerId) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (candidate) => candidate.id === providerId,
+      );
+
+      // Stream error payloads may leave the message undefined (#137729).
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: undefined as unknown as string,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("registers node-local inference commands, policy, and agent tool", () => {
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
