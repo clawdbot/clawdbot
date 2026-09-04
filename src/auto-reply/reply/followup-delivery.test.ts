@@ -483,7 +483,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
+  it("delivers a yield acknowledgment despite private partial output in group message-tool-only mode", () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -500,7 +500,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       resolveFollowupDeliveryDecision({
         turn,
         execution,
-        accounting: createAccounting(),
+        accounting: createAccounting([{ text: "Private partial output." }]),
       }),
     ).toMatchObject({
       kind: "deliver",
@@ -879,6 +879,20 @@ describe("resolveFollowupDeliveryDecision", () => {
       }
     },
   );
+
+  it("keeps a private terminal diagnostic suppressed instead of creating an empty-reply failure", () => {
+    const turn = createTurn();
+    turn.queued.originatingChatType = "group";
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution(""),
+        accounting: createAccounting([{ text: "Private terminal diagnostic." }]),
+      }),
+    ).toEqual({ kind: "suppress", reason: "message-tool-only" });
+  });
 
   it("keeps a terminal failure when suppressed partial output is present", () => {
     const turn = createTurn();

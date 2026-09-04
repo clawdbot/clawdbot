@@ -258,7 +258,10 @@ export function resolveFollowupDeliveryDecision(params: {
   const hasTerminalPayload = payloads.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
-      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+      // Private terminal content is not an empty result. Source visibility is
+      // enforced below; genuine failures and yield acknowledgments still win.
+      ((!accounting.terminalFailurePayload && result.meta?.yielded !== true) ||
+        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && fallbackPayload) {
