@@ -1,0 +1,201 @@
+title: Telegram subagent completion waits for requester lane release
+
+scenario:
+  id: subagent-completion-busy-lane-telegram-live
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+      - channels.telegram
+  gatewayConfigPatch:
+    tools:
+      profile: full
+  objective: Prove a child that finishes while its requester is still running is delivered exactly once through Telegram only after the requester lane releases.
+  successCriteria:
+    - A real Telegram inbound turn spawns one native child, then keeps the requester lane occupied in a long-running exec call.
+    - The child reaches succeeded while that exec call is still in flight.
+    - The requester's ordinary turn reply reaches Telegram before the deferred child completion reply.
+    - The deferred child completion reaches Telegram exactly once after lane release.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/process/command-queue.ts
+    - src/agents/subagents/announce/subagent-announce.ts
+    - src/agents/subagents/registry/subagent-registry-lane-park.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Exercises a real Telegram transport and a live child completion while the requester session lane is occupied.
+    channel: telegram
+    retryCount: 0
+    summary: Hold the requester lane with exec, let a native child settle, and verify ordered exactly-once Telegram delivery after release.
+    config:
+      requiredProviderMode: live-frontier
+      childLabelPrefix: telegram-busy-lane-child
+      childResultPrefix: TELEGRAM_BUSY_CHILD_RESULT
+      childVisiblePrefix: TELEGRAM_BUSY_CHILD_VISIBLE
+      parentPrefix: TELEGRAM_BUSY_PARENT_DONE
+      holdMs: 60000
+      duplicateWindowMs: 8000
+
+flow:
+  steps:
+    - name: child completion waits for requester lane release
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 120000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`telegram-busy-lane-${randomUUID().slice(0, 8)}`"
+        - set: childLabel
+          value:
+            expr: "`${config.childLabelPrefix}-${randomUUID().slice(0, 8)}`"
+        - set: childResult
+          value:
+            expr: "`${config.childResultPrefix}:${randomUUID()}`"
+        - set: childVisible
+          value:
+            expr: "`${config.childVisiblePrefix}:${randomUUID()}`"
+        - set: parentMarker
+          value:
+            expr: "`${config.parentPrefix}:${randomUUID()}`"
+        - set: proofFile
+          value:
+            expr: "`telegram-busy-lane-${randomUUID()}.json`"
+        - set: proofPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, proofFile)
+        - set: holdCommand
+          value:
+            expr: |-
+              `node -e ${JSON.stringify(`const fs=require("node:fs");const startedAt=Date.now();setTimeout(()=>{fs.writeFileSync(${JSON.stringify(proofFile)},JSON.stringify({startedAt,finishedAt:Date.now()})+"\\n");process.stdout.write("lane released\\n");},${config.holdMs});`)}`
+        - set: attemptStartedAt
+          value:
+            expr: Date.now()
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: |-
+                `Telegram busy requester-lane probe. Follow these instructions exactly.
+                1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Reply with exactly ${childResult} and nothing else. Do not call any tools."
+                2. Immediately after sessions_spawn succeeds, call exec exactly once with this exact command: ${holdCommand}
+                3. After exec finishes, reply with exactly ${parentMarker} and nothing else.
+                4. If the child completion arrives in a later turn, reply with exactly ${childVisible} and nothing else. Do not call any more tools.`
+        - call: waitForOutboundMessage
+          saveAs: parentOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.accountId === transport.accountId && candidate.conversation.id === conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').trim() === parentMarker"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - call: waitForOutboundMessage
+          saveAs: childOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.accountId === transport.accountId && candidate.conversation.id === conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').trim() === childVisible"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - call: waitForCondition
+          saveAs: completedChild
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.createdAt >= attemptStartedAt && typeof task.requesterSessionKey === 'string' && task.requesterSessionKey.length > 0 && typeof task.childSessionKey === 'string' && task.childSessionKey.length > 0 && typeof task.endedAt === 'number' && Number.isFinite(task.endedAt) && task.status === 'succeeded' && task.deliveryStatus === 'delivered'); })()"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - call: readSessionTranscriptSummary
+          saveAs: parentTranscript
+          args:
+            - ref: env
+            - expr: completedChild.requesterSessionKey
+        - call: readSessionTranscriptSummary
+          saveAs: childTranscript
+          args:
+            - ref: env
+            - expr: completedChild.childSessionKey
+        - set: parentToolEvents
+          value:
+            expr: parentTranscript.successfulToolCallEvents ?? []
+        - set: spawnEvent
+          value:
+            expr: "parentToolEvents.find((event) => event.name === 'sessions_spawn')"
+        - set: execEvent
+          value:
+            expr: "parentToolEvents.find((event) => event.name === 'exec')"
+        - call: fs.stat
+          saveAs: proofStat
+          args:
+            - ref: proofPath
+        - set: proofContents
+          value:
+            expr: "JSON.parse(await fs.readFile(proofPath, 'utf8'))"
+        - assert:
+            expr: "(parentTranscript.successfulToolCallCounts.sessions_spawn ?? 0) === 1 && (parentTranscript.successfulToolCallCounts.exec ?? 0) === 1"
+            message:
+              expr: "`requester did not use exactly one sessions_spawn and one exec; tools=${JSON.stringify(parentTranscript.successfulToolCallCounts ?? {})}`"
+        - assert:
+            expr: "parentToolEvents.length === 2 && spawnEvent?.timestamp >= attemptStartedAt && spawnEvent.timestamp <= execEvent?.timestamp"
+            message: requester tool timeline was incomplete or out of order
+        - assert:
+            expr: "execEvent.timestamp <= completedChild.endedAt && completedChild.endedAt <= proofStat.mtimeMs"
+            message:
+              expr: "`child did not finish while exec held the requester lane; execStarted=${String(execEvent?.timestamp)} childEnded=${String(completedChild.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
+        - assert:
+            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofContents.finishedAt"
+            message: exec proof interval did not contain child completion
+        - assert:
+            expr: "String(childTranscript.finalText ?? '').trim() === childResult"
+            message: child did not produce the exact isolated result marker
+        - assert:
+            expr: "Object.values(childTranscript.successfulToolCallCounts ?? {}).every((count) => count === 0)"
+            message: child unexpectedly called a tool
+        - set: orderedOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === conversationId)"
+        - set: parentOutboundIndex
+          value:
+            expr: "orderedOutbound.findIndex((message) => String(message.text ?? '').trim() === parentMarker)"
+        - set: childOutboundIndex
+          value:
+            expr: "orderedOutbound.findIndex((message) => String(message.text ?? '').trim() === childVisible)"
+        - assert:
+            expr: "parentOutboundIndex >= 0 && childOutboundIndex > parentOutboundIndex"
+            message:
+              expr: "`deferred completion did not follow requester reply; outbound=${JSON.stringify(orderedOutbound.map((message) => String(message.text ?? '')))}`"
+        - call: sleep
+          args:
+            - expr: config.duplicateWindowMs
+        - set: duplicateMatches
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() === childVisible)"
+        - assert:
+            expr: duplicateMatches.length === 1
+            message:
+              expr: "`expected one deferred child completion during duplicate window, saw ${duplicateMatches.length}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: execEvent.timestamp, childEndedAt: completedChild.endedAt, execFinishedAt: proofContents.finishedAt, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"

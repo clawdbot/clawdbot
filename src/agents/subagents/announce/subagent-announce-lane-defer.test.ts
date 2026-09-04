@@ -38,7 +38,10 @@ function createGatewayMock() {
 
 function createInProcessGatewayMock() {
   return vi.fn(async () => ({
-    result: { payloads: [{ text: "requester voice completion" }] },
+    result: {
+      payloads: [{ text: "requester voice completion" }],
+      deliveryStatus: { status: "sent", resultCount: 1 },
+    },
   })) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
 }
 
