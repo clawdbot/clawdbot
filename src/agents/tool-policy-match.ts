@@ -118,8 +118,9 @@ function shortestWitnessRealization(witness: string, namespace: string): string 
   return suffix.startsWith(NAMESPACE_WITNESS) ? `${namespace}a${literal}` : undefined;
 }
 // Entries a provider-safe tool name could ever match once `expandToolGroups`
-// has trimmed and lowercased them; anything else (including one spelling the
-// placeholder) authorizes or denies no real tool.
+// has trimmed and lowercased them (letters, digits, `_`, interior `-`, and
+// `*`); anything else, including one spelling the placeholder, authorizes or
+// denies no real tool.
 const REALIZABLE_ENTRY_RE = /^[a-z0-9_*-]+$/;
 
 function realizableEntries(list: string[] | undefined): string[] {

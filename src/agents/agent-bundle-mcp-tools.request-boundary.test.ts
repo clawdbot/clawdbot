@@ -508,6 +508,18 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "an allowlist naming a hyphenated memos tool",
+      tools: { allow: ["memos__read-note"] },
+      toolNames: ["read-note", "write-note"],
+      visible: true,
+    },
+    {
+      label: "an exact deny of a hyphenated memos tool beside its sibling",
+      tools: { profile: "coding", deny: ["memos__read-note"] },
+      toolNames: ["read-note", "write-note"],
+      visible: true,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
