@@ -536,6 +536,73 @@ describe("agentLoop streaming updates", () => {
     }
   });
 
+  it("drops bare text_delta exact replays at the accumulation boundary", async () => {
+    const phrase = "abcdefgh";
+    const streamFn: StreamFn = async () => {
+      const stream = createAssistantMessageEventStream();
+      const startMessage: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      const finalMessage: AssistantMessage = {
+        ...startMessage,
+        content: [{ type: "text", text: `${phrase}!` }],
+      };
+
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: startMessage });
+        stream.push({
+          type: "text_start",
+          contentIndex: 0,
+          partial: { ...startMessage, content: [] },
+        });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: phrase });
+        // Same wire shape as #136262 / deepseek live doubles: delta === accumulated.
+        stream.push({ type: "text_delta", contentIndex: 0, delta: phrase });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "!" });
+        stream.push({
+          type: "text_end",
+          contentIndex: 0,
+          content: `${phrase}!`,
+          partial: finalMessage,
+        });
+        stream.push({ type: "done", reason: "stop", message: finalMessage });
+      });
+
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      undefined,
+      streamFn,
+    );
+    const events = await collectEvents(stream);
+    const deltaUpdates = events.filter(
+      (event): event is Extract<AgentEvent, { type: "message_update" }> =>
+        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
+    );
+    expect(deltaUpdates.map((event) => event.message)).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: phrase }] },
+      { role: "assistant", content: [{ type: "text", text: `${phrase}!` }] },
+    ]);
+  });
+
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
     const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
       content: [{ type: "text", text: "should not run" }],

@@ -331,7 +331,26 @@ export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   return normalized !== "off" && normalized !== "none";
 }
 
-/** Turn cumulative OpenAI-compatible text snapshots into true increments. */
+/** Min length before treating exact/prefix/extension frames as cumulative replays. */
+const TEXT_REPLAY_MIN_CHARS = 8;
+
+function growthFromCumulativeExtension(accumulated: string, incoming: string): string {
+  const growth = incoming.slice(accumulated.length);
+  // Drop doubled snapshots where the "growth" is itself a replay of prior text.
+  if (growth === accumulated || growth.startsWith(accumulated)) {
+    return "";
+  }
+  return growth;
+}
+
+/**
+ * Normalize cumulative text snapshots into true increments.
+ *
+ * Field captures (issue #136262) show compatible providers occasionally emit a bare
+ * `text_delta` whose content equals the already-accumulated text. A length-gated
+ * monotonic-append contract (also used at the agent-loop accumulation boundary)
+ * drops those replays while keeping short intentional repeats like "Ha"×3.
+ */
 export function normalizeOpenAICompletionsTextDelta(
   accumulated: string,
   incoming: string,
@@ -343,18 +362,34 @@ export function normalizeOpenAICompletionsTextDelta(
   if (!accumulated) {
     return incoming;
   }
-  // Cumulative snapshot contract: a longer frame that extends prior text.
-  if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
-    return incoming.slice(accumulated.length);
+
+  const frameKind = options?.frameKind ?? "delta";
+  const longEnough = accumulated.length >= TEXT_REPLAY_MIN_CHARS;
+
+  // Message-shaped frames are snapshots even when short.
+  if (frameKind === "snapshot") {
+    if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
+      return growthFromCumulativeExtension(accumulated, incoming);
+    }
+    if (incoming === accumulated || accumulated.startsWith(incoming)) {
+      return "";
+    }
+    return incoming;
   }
-  // Exact/prefix replay only for message-shaped frames. Ordinary delta frames stay
-  // incremental so legitimate repeated completions are preserved.
-  if (
-    (options?.frameKind ?? "delta") === "snapshot" &&
-    (incoming === accumulated || accumulated.startsWith(incoming))
-  ) {
-    return "";
+
+  // Bare delta path: ≥8 monotonic-append contract from production mitigations.
+  if (longEnough) {
+    if (incoming === accumulated) {
+      return "";
+    }
+    if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
+      return growthFromCumulativeExtension(accumulated, incoming);
+    }
+    if (accumulated.startsWith(incoming) && incoming.length >= TEXT_REPLAY_MIN_CHARS) {
+      return "";
+    }
   }
+
   return incoming;
 }
 

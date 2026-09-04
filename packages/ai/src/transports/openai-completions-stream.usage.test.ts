@@ -14,16 +14,20 @@ import {
 } from "./openai-transport-shared.js";
 
 describe("normalizeOpenAICompletionsTextDelta", () => {
-  it("returns growth from cumulative snapshots and preserves ordinary repeated deltas", () => {
+  it("applies the >=8 monotonic-append contract for bare deltas", () => {
     expect(normalizeOpenAICompletionsTextDelta("", "abc")).toBe("abc");
-    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef")).toBe("def");
-    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("abcdefgh");
-    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh again")).toBe(" again");
-    expect(normalizeOpenAICompletionsTextDelta("ab", "cd")).toBe("cd");
+    // Below threshold: keep short intentional repeats / non-cumulative frames.
+    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef")).toBe("abcdef");
     expect(normalizeOpenAICompletionsTextDelta("Ha", "Ha")).toBe("Ha");
+    expect(normalizeOpenAICompletionsTextDelta("ab", "cd")).toBe("cd");
+    // At threshold: exact replay drop, cumulative growth, shrink-back drop.
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh again")).toBe(" again");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefghij", "abcdefgh")).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefghabcdefgh")).toBe("");
   });
 
-  it("suppresses exact and prefix replays only for message-shaped snapshot frames", () => {
+  it("treats message-shaped snapshot frames as cumulative even when short", () => {
     expect(
       normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh", { frameKind: "snapshot" }),
     ).toBe("");
@@ -387,7 +391,7 @@ describe("openai completions stream", () => {
     expect(output.content).toEqual([{ type: "text", text: `${prefix}uvw` }]);
   });
 
-  it("keeps intentional long repeated OpenAI-compatible delta text", async () => {
+  it("drops bare delta exact replays that match accumulated text (>=8)", async () => {
     const model = makeCompletionsModel({
       id: "dense-local",
       name: "Dense Local",
@@ -404,8 +408,9 @@ describe("openai completions stream", () => {
     await processCompletionsStream(
       streamChunks([
         makeCompletionsChunk({ role: "assistant" as const, content: phrase }),
-        // Ordinary delta equal to prior text must remain incremental.
+        // Wire shape from #136262: bare text_delta with delta === accumulated.
         makeCompletionsChunk({ content: phrase }),
+        makeCompletionsChunk({ content: "!" }),
       ]),
       output,
       model,
@@ -415,8 +420,8 @@ describe("openai completions stream", () => {
     const textDeltas = events
       .filter((event) => event.type === "text_delta")
       .map((event) => ("delta" in event ? event.delta : undefined));
-    expect(textDeltas).toEqual([phrase, phrase]);
-    expect(output.content).toEqual([{ type: "text", text: `${phrase}${phrase}` }]);
+    expect(textDeltas).toEqual([phrase, "!"]);
+    expect(output.content).toEqual([{ type: "text", text: `${phrase}!` }]);
   });
 
   it("treats a longer delta that extends prior text as cumulative growth", async () => {

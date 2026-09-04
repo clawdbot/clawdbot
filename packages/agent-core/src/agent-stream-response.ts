@@ -1,4 +1,7 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import {
+  normalizeOpenAICompletionsTextDelta,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -65,6 +68,30 @@ function appendTextDeltaToAssistantMessage(
   return { ...message, content };
 }
 
+function resolveAssistantTextDeltaUpdate(
+  event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>,
+  currentMessage: AssistantMessage,
+): {
+  message: AssistantMessage;
+  event: Extract<AssistantMessageUpdateEvent, { type: "text_delta" }>;
+} | null {
+  if ("partial" in event && event.partial) {
+    return { message: event.partial, event };
+  }
+  const currentContent = currentMessage.content[event.contentIndex];
+  const previousText = currentContent?.type === "text" ? currentContent.text : "";
+  // Transport-agnostic guard for bare text_delta cumulative replays (e.g. deepseek).
+  const normalizedDelta = normalizeOpenAICompletionsTextDelta(previousText, event.delta);
+  if (!normalizedDelta) {
+    return null;
+  }
+  const nextEvent = normalizedDelta === event.delta ? event : { ...event, delta: normalizedDelta };
+  return {
+    message: appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, normalizedDelta),
+    event: nextEvent,
+  };
+}
+
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
   currentMessage: AssistantMessage,
@@ -73,7 +100,7 @@ function resolveAssistantMessageUpdate(
     return event.partial;
   }
   if (event.type === "text_delta") {
-    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+    return resolveAssistantTextDeltaUpdate(event, currentMessage)?.message ?? currentMessage;
   }
   return currentMessage;
 }
@@ -272,8 +299,31 @@ export async function streamAgentResponse(
           break;
         }
 
-        case "text_start":
         case "text_delta":
+          if (partialMessage) {
+            const resolved = resolveAssistantTextDeltaUpdate(event, partialMessage);
+            if (!resolved) {
+              break;
+            }
+            partialMessage = resolved.message;
+            if (event.contentIndex < committedContentCount) {
+              break;
+            }
+            const fragment = await updatePartial(resolved.message);
+            const fragmentEvent = {
+              ...resolved.event,
+              contentIndex: resolved.event.contentIndex - committedContentCount,
+              ...("partial" in resolved.event ? { partial: fragment } : {}),
+            };
+            await emit({
+              type: "message_update",
+              assistantMessageEvent: fragmentEvent,
+              message: { ...fragment },
+            });
+          }
+          break;
+
+        case "text_start":
         case "text_end":
         case "thinking_start":
         case "thinking_delta":
