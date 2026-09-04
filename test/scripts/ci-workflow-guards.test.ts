@@ -16152,11 +16152,12 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(signAppImage.run).toContain(
     "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
   );
-  expect(signAppImage.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
-    signAppImage.run.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"'),
+  const signAppImageRun = expectDefined(signAppImage.run, "AppImage signing command");
+  expect(signAppImageRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signAppImageRun.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"'),
   );
-  expect(signAppImage.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
-    signAppImage.run.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"'),
+  expect(signAppImageRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signAppImageRun.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"'),
   );
   expect(signAppImage.run).toContain('before=$(sha256sum "$appimage")');
   expect(signAppImage.run).toContain('after=$(sha256sum "$appimage")');
@@ -16287,11 +16288,12 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(signDesktop.run).toContain(
     "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
   );
-  expect(signDesktop.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
-    signDesktop.run.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"'),
+  const signDesktopRun = expectDefined(signDesktop.run, "desktop updater signing command");
+  expect(signDesktopRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signDesktopRun.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"'),
   );
-  expect(signDesktop.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
-    signDesktop.run.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"'),
+  expect(signDesktopRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signDesktopRun.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"'),
   );
   expect(signDesktop.run).toContain('macos_before=$(sha256sum "$macos")');
   expect(signDesktop.run).toContain('windows_after=$(sha256sum "$windows")');
