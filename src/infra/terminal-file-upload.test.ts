@@ -18,6 +18,24 @@ vi.mock("node:fs/promises", async () => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const MARKER_NAME = ".openclaw-terminal-upload-v1";
+const MARKER_CONTENT = "openclaw-terminal-upload-v1\n";
+
+/** Writes one staged directory the way a previous process would have left it. */
+async function writeStagedDirectory(
+  directory: string,
+  fileName: string,
+  content: string,
+  mtime: Date,
+  options?: { marker?: boolean },
+): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (options?.marker !== false) {
+    await writeFile(path.join(directory, MARKER_NAME), MARKER_CONTENT);
+  }
+  await writeFile(path.join(directory, fileName), content);
+  await utimes(directory, mtime, mtime);
+}
 
 describe("terminal file upload", () => {
   it("stages arbitrary bytes under a private temporary directory", async () => {
@@ -76,9 +94,7 @@ describe("terminal file upload", () => {
   it("recovers expired upload directories after restart", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-recovery-test-");
     const directory = path.join(root, "openclaw-terminal-upload-stale");
-    await mkdir(directory, { mode: 0o700 });
-    await writeFile(path.join(directory, "report.pdf"), "stale");
-    await utimes(directory, new Date(0), new Date(0));
+    await writeStagedDirectory(directory, "report.pdf", "stale", new Date(0));
 
     await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
 
@@ -95,9 +111,7 @@ describe("terminal file upload", () => {
       await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1 });
 
       await rm(root);
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      await writeFile(path.join(directory, "report.pdf"), "stale");
-      await utimes(directory, new Date(0), new Date(0));
+      await writeStagedDirectory(directory, "report.pdf", "stale", new Date(0));
 
       await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
       await vi.waitFor(async () => {
@@ -165,6 +179,54 @@ describe("terminal file upload", () => {
     ).toHaveLength(64);
   });
 
+  it("writes the ownership marker before the payload and counts it against the byte budget", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-marker-");
+    const file = { name: "data.bin", contentBase64: Buffer.from("data").toString("base64") };
+
+    await expect(
+      stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000, maxRetainedBytes: 4 }),
+    ).rejects.toThrow("terminal upload staging limit reached");
+    expect(await readdir(root)).toEqual([]);
+
+    const result = await stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000 });
+    const markerPath = path.join(path.dirname(result.path), MARKER_NAME);
+    expect(await readFile(markerPath, "utf8")).toBe(MARKER_CONTENT);
+    if (process.platform !== "win32") {
+      expect((await stat(markerPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("does not count, schedule, or remove unmarked directories that share the prefix", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-unmarked-");
+    const foreign = path.join(root, "openclaw-terminal-upload-foreign");
+    const staleTime = new Date(Date.now() - 10_000);
+    await writeStagedDirectory(foreign, "keep.txt", "keep", staleTime, { marker: false });
+
+    await ensureTerminalUploadCleanup({
+      tempRoot: root,
+      retentionMs: 1,
+      nowMs: Date.now(),
+      maxRetainedDirectories: 1,
+    });
+    expect(await readFile(path.join(foreign, "keep.txt"), "utf8")).toBe("keep");
+
+    const file = { name: "n.bin", contentBase64: Buffer.from("x").toString("base64") };
+    const first = await stageTerminalUpload(file, {
+      tempRoot: root,
+      cleanupAfterMs: 60_000,
+      maxRetainedDirectories: 1,
+    });
+    await expect(
+      stageTerminalUpload(file, {
+        tempRoot: root,
+        cleanupAfterMs: 60_000,
+        maxRetainedDirectories: 1,
+      }),
+    ).rejects.toThrow("terminal upload staging limit reached");
+    expect(await readFile(first.path, "utf8")).toBe("x");
+    expect(await readFile(path.join(foreign, "keep.txt"), "utf8")).toBe("keep");
+  });
+
   it("still accepts one file under the 16 MiB per-file limit", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-single-file-");
     const content = Buffer.alloc(1024, 7);
@@ -185,16 +247,17 @@ describe("terminal file upload", () => {
       contentBase64: Buffer.alloc(size, 9).toString("base64"),
     });
 
+    // Each staged directory retains its 28-byte marker plus the 8-byte payload.
     const first = await stageTerminalUpload(file("a.bin", 8), {
       tempRoot: root,
       cleanupAfterMs: 60_000,
-      maxRetainedBytes: 20,
+      maxRetainedBytes: 100,
       maxRetainedDirectories: 2,
     });
     const second = await stageTerminalUpload(file("b.bin", 8), {
       tempRoot: root,
       cleanupAfterMs: 60_000,
-      maxRetainedBytes: 20,
+      maxRetainedBytes: 100,
       maxRetainedDirectories: 2,
     });
 
@@ -202,7 +265,7 @@ describe("terminal file upload", () => {
       stageTerminalUpload(file("c.bin", 8), {
         tempRoot: root,
         cleanupAfterMs: 60_000,
-        maxRetainedBytes: 20,
+        maxRetainedBytes: 100,
         maxRetainedDirectories: 2,
       }),
     ).rejects.toThrow("terminal upload staging limit reached");
@@ -216,9 +279,10 @@ describe("terminal file upload", () => {
 
   it("rejects a file that is under 16 MiB when retained bytes would exceed the budget", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-byte-bound-");
+    // 12 payload bytes plus the 28-byte marker retain 40 bytes per directory.
     const first = await stageTerminalUpload(
       { name: "kept.bin", contentBase64: Buffer.alloc(12, 3).toString("base64") },
-      { tempRoot: root, cleanupAfterMs: 60_000, maxRetainedBytes: 20, maxRetainedDirectories: 10 },
+      { tempRoot: root, cleanupAfterMs: 60_000, maxRetainedBytes: 70, maxRetainedDirectories: 10 },
     );
 
     await expect(
@@ -227,7 +291,7 @@ describe("terminal file upload", () => {
         {
           tempRoot: root,
           cleanupAfterMs: 60_000,
-          maxRetainedBytes: 20,
+          maxRetainedBytes: 70,
           maxRetainedDirectories: 10,
         },
       ),
@@ -273,18 +337,14 @@ describe("terminal file upload", () => {
     const root = tempDirs.make("openclaw-terminal-upload-recovery-quota-");
     const oldestDirectory = path.join(root, "openclaw-terminal-upload-oldest");
     const newestDirectory = path.join(root, "openclaw-terminal-upload-newest");
-    await mkdir(oldestDirectory, { mode: 0o700 });
-    await writeFile(path.join(oldestDirectory, "old.bin"), "old");
-    await mkdir(newestDirectory, { mode: 0o700 });
-    await writeFile(path.join(newestDirectory, "new.bin"), "new");
     const now = Date.now();
-    await utimes(oldestDirectory, new Date(now - 2_000), new Date(now - 2_000));
-    await utimes(newestDirectory, new Date(now - 1_000), new Date(now - 1_000));
+    await writeStagedDirectory(oldestDirectory, "old.bin", "old", new Date(now - 2_000));
+    await writeStagedDirectory(newestDirectory, "new.bin", "new", new Date(now - 1_000));
 
     await ensureTerminalUploadCleanup({
       tempRoot: root,
       nowMs: now,
-      maxRetainedBytes: 50,
+      maxRetainedBytes: 100,
       maxRetainedDirectories: 1,
     });
 

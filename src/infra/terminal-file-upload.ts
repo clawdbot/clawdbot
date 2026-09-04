@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -10,6 +10,12 @@ import {
 import { logWarn } from "../logger.js";
 
 const TERMINAL_UPLOAD_PREFIX = "openclaw-terminal-upload-";
+// Written before any payload byte. Recovery only counts, schedules, or removes a
+// directory that carries it, so a same-UID directory that merely shares the
+// prefix in a shared temp root is never handed to recursive removal.
+const TERMINAL_UPLOAD_MARKER_NAME = ".openclaw-terminal-upload-v1";
+const TERMINAL_UPLOAD_MARKER_CONTENT = "openclaw-terminal-upload-v1\n";
+const TERMINAL_UPLOAD_MARKER_BYTES = Buffer.byteLength(TERMINAL_UPLOAD_MARKER_CONTENT);
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const TERMINAL_UPLOAD_MAX_RETAINED_BYTES = 256 * 1024 * 1024;
@@ -151,6 +157,13 @@ async function readOwnedStagedUploads(tempRoot: string): Promise<OwnedStagedUplo
             return null;
           }
           if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
+            return null;
+          }
+          const marker = await readFile(
+            path.join(directory, TERMINAL_UPLOAD_MARKER_NAME),
+            "utf8",
+          ).catch(() => null);
+          if (marker !== TERMINAL_UPLOAD_MARKER_CONTENT) {
             return null;
           }
           return {
@@ -364,13 +377,21 @@ export async function stageTerminalUpload(
     const retainedBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
     if (
       retained.length >= limits.maxRetainedDirectories ||
-      retainedBytes + bytes.length > limits.maxRetainedBytes
+      retainedBytes + bytes.length + TERMINAL_UPLOAD_MARKER_BYTES > limits.maxRetainedBytes
     ) {
       throw new Error("terminal upload staging limit reached");
     }
     const directory = await mkdtemp(path.join(tempRoot, TERMINAL_UPLOAD_PREFIX));
     const targetPath = path.join(directory, sanitizeTerminalUploadName(file.name));
     try {
+      await writeFile(
+        path.join(directory, TERMINAL_UPLOAD_MARKER_NAME),
+        TERMINAL_UPLOAD_MARKER_CONTENT,
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      );
       await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });
     } catch (error) {
       await removeTerminalUploadDirectory(directory);
