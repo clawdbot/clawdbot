@@ -2,6 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { waitForever } from "../../src/cli/wait.ts";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import {
   resolveTestBrowserCache,
@@ -19,6 +20,8 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
+import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { signalExitCode } from "./managed-child-process.mts";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -61,6 +64,11 @@ export function spawnOwnedVitestProcess(spec: {
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
+    if (mode !== "tooling") {
+      // The tooling shim avoids the shared tsx cache. Test children have this owned
+      // temp namespace, so source subprocesses can reuse transforms until cleanup.
+      delete childEnv.TSX_DISABLE_CACHE;
+    }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);
@@ -121,4 +129,24 @@ export function spawnOwnedVitestProcess(spec: {
     }
   })();
   return { child, completion };
+}
+
+export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> {
+  process.kill(process.pid, signal);
+  // Dependency signal handlers may finish cleanup and re-raise asynchronously.
+  // A numeric return must not win that race.
+  await waitForever();
+}
+
+/** Only public invocations report; internal children propagate their settled outcome. */
+export function runVitestCli(
+  tool: string,
+  run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
+): Promise<void> {
+  return runWithFailedTrailer(tool, () =>
+    run(async (signal) => {
+      writeFailedTrailer(tool, signalExitCode(signal));
+      await exitVitestBySignal(signal);
+    }),
+  );
 }

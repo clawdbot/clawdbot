@@ -18,6 +18,7 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -324,12 +325,21 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listWorkspaceStateDirs({
-    cfg: params.cfg,
-    env,
-    homedir,
-    stateDir: params.stateDir,
-  })) {
+  const workspaceDirs = new Set(
+    listWorkspaceStateDirs({
+      cfg: params.cfg,
+      env,
+      homedir,
+      stateDir: params.stateDir,
+    }),
+  );
+  // Explicit fleets may use only subdirectories of this still-configured root.
+  // Doctor must discover its retired state without making it a runtime workspace.
+  const sharedWorkspace = params.cfg.agents?.defaults?.workspace?.trim();
+  if (sharedWorkspace) {
+    workspaceDirs.add(resolveUserPath(sharedWorkspace, env, homedir));
+  }
+  for (const workspaceDir of workspaceDirs) {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 

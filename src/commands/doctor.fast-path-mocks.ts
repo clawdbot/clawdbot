@@ -52,7 +52,8 @@ vi.mock("./doctor-claude-cli.js", () => ({
   noteClaudeCliHealth: vi.fn(),
 }));
 
-vi.mock("./doctor-command-owner.js", () => ({
+vi.mock("./doctor-command-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-command-owner.js")>()),
   noteCommandOwnerHealth: vi.fn(),
 }));
 

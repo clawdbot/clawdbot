@@ -68,6 +68,8 @@ export async function processResponsesStream<TApi extends Api>(
     ResponsesStreamOutputMessage,
     StreamingToolCallState
   >;
+  type ThinkingOutputSlot = Extract<ResponsesOutputSlot, { type: "thinking" }>;
+  type TextOutputSlot = Extract<ResponsesOutputSlot, { type: "text" }>;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const outputs = createResponsesOutputTracker();
@@ -177,6 +179,28 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
+  const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
+    slot.block.thinking += delta;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: slot.contentIndex,
+      delta,
+      partial: output,
+    });
+  };
+  const projectTextDelta = (slot: TextOutputSlot, delta: string): void => {
+    if (slot.pendingText !== null) {
+      appendResponsesPendingTextDelta(slot, delta, materializeDeferredTextSlot);
+    } else if (slot.block && slot.contentIndex !== undefined) {
+      slot.block.text += delta;
+      // llm-core makes text_delta.partial optional to avoid retaining a full snapshot per token.
+      stream.push({
+        type: "text_delta",
+        contentIndex: slot.contentIndex,
+        delta,
+      });
+    }
+  };
   const terminal = createResponsesTerminalController({
     output,
     stream,
@@ -217,7 +241,12 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     }
-    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, validated);
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, {
+      ...validated,
+      ...(options?.asyncToolExecution && isRecord(item) && item.async === true
+        ? { async: true as const }
+        : {}),
+    });
   };
   const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
     const prepared = new Map<number, () => void>();
@@ -344,14 +373,8 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += event.delta;
         lastPart.text += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.reasoning_summary_part.done") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
@@ -362,26 +385,14 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += "\n\n";
         lastPart.text += "\n\n";
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: "\n\n",
-          partial: output,
-        });
+        appendThinkingDelta(slot, "\n\n");
       } else if (event.type === "response.reasoning_text.delta") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.block.thinking += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -407,17 +418,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          // llm-core deliberately makes text_delta.partial optional to avoid a full snapshot per token.
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (isAzureResponsesTextDeltaEvent(event)) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -430,16 +431,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.refusal.delta") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -452,16 +444,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.refusal += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {

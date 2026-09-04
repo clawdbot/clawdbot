@@ -336,8 +336,6 @@ describe("session sharing policy", () => {
       expect(creatorEntryFilter?.(foreignKey, foreignEntry)).toBe(true);
       expect(
         entryFilter?.(ownKey, {
-          sessionId: "session-team-own",
-          updatedAt: 1,
           createdActor: { type: "human", source: "profile", id: restrictedId },
         }),
       ).toBe(true);
@@ -552,10 +550,13 @@ describe("session sharing policy", () => {
     ).toBe('Incognito session "requested-incognito-alias" was not found.');
   });
 
-  it("keeps identity-less solo mode owner-equivalent for restricted sessions", () => {
-    const role = resolveSessionSharingRole({ client: client({}), target: target() });
-    expect(role).toBe("owner");
-  });
+  it.each([false, true])(
+    "keeps identity-less solo mode owner-equivalent for restricted sessions (owner profile: %s)",
+    (withOwnerProfile) => {
+      const solo = client(withOwnerProfile ? { user: "gateway-owner" } : {});
+      expect(resolveSessionSharingRole({ client: solo, target: target() })).toBe("owner");
+    },
+  );
 
   it("uses only the trusted operator identity prepared during connection admission", () => {
     expect(
@@ -605,6 +606,7 @@ describe("session sharing policy", () => {
       const viewer = client({ user: "viewer@example.com" });
       const admin = client({ user: "admin@example.com", scopes: ["operator.admin"] });
       const solo = client({});
+      const profiledSolo = client({ user: "gateway-owner" });
       const cfg = {};
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
       const directRequests = (requestedKey: string) => [
@@ -619,6 +621,7 @@ describe("session sharing policy", () => {
       for (const [requestClient, visible] of [
         [admin, true],
         [solo, true],
+        [profiledSolo, true],
         [owner, false],
         [viewer, false],
       ] as const) {

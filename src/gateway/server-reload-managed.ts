@@ -10,7 +10,7 @@ import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { isNoopGatewayReloadPlan } from "./config-reload-plan.js";
-import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
+import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import {
   startGatewayConfigReloader,
   type GatewayConfigReloadTransactionOwnership,
@@ -20,7 +20,6 @@ import {
   GatewayConfigReloadSupersededError,
   GatewayHotReloadRecoveryError,
   GatewayHotReloadStaleSecretsError,
-  abortPendingChannelReloads,
   type AcceptedRestartTarget,
   type AcceptedRestartTargetOwnership,
   type CurrentRuntimeSecretsPreparation,
@@ -31,6 +30,7 @@ import {
   type ManagedGatewayConfigReloaderParams,
   type RuntimeSecretsPreflightParams,
 } from "./server-reload-contracts.js";
+import { abortPendingChannelReloads } from "./server-reload-generation.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 import {
   createManagedReloadSecretHandlers,
@@ -40,7 +40,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   restoreCanonicalSecretRefs,
 } from "./server-reload-utils.js";
-import { startGatewayChannelHealthMonitor } from "./server-runtime-services.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   disconnectStaleSharedGatewayAuthClients,
@@ -50,7 +49,7 @@ import {
 } from "./server-shared-auth-generation.js";
 
 function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): boolean {
-  return isNoopGatewayReloadPlan(plan) && !shouldRewarmProviderAuthState(plan);
+  return isNoopGatewayReloadPlan(plan) && !doesReloadAffectProviderAuth(plan);
 }
 
 export function startManagedGatewayConfigReloader(
@@ -184,8 +183,6 @@ export function startManagedGatewayConfigReloader(
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
       ),
     restartRecoveryAvailable,
-    createHealthMonitor: () =>
-      startGatewayChannelHealthMonitor({ channelManager: params.channelManager }),
   });
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
@@ -264,7 +261,7 @@ export function startManagedGatewayConfigReloader(
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
     try {
       assertCurrent();
-      params.reconcileTerminalSessions(plan, preparedRuntimeConfig);
+      await params.reconcileRuntimePolicy(preparedRuntimeConfig, "restart");
       assertCurrent();
       await beforeRestartRequest?.();
       assertCurrent();
@@ -371,6 +368,7 @@ export function startManagedGatewayConfigReloader(
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
       lastCommittedRuntimeConfig = committedRuntimeConfig;
+      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(committedRuntimeConfig);
       }
@@ -492,7 +490,6 @@ export function startManagedGatewayConfigReloader(
         applyLoggingConfig(nextConfig.logging);
       }
       resetSkillSnapshotConfigFingerprintCache();
-      params.commitTerminalConfig(nextConfig);
     },
     onConfigRevisionApplied: publishAppliedConfigHash,
     hasOutstandingGatewayRestart,

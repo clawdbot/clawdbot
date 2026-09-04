@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./web-awesome.ts";
 
@@ -271,22 +272,20 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
 
   it("keeps the new sibling focused when replacement interrupts an opening animation", async () => {
     const f = await fixture();
-    let replaced = false;
-    f.parent.submenuElement.addEventListener(
-      "animationstart",
+    let opening: Promise<void> | undefined;
+    let replacement: Promise<void> | undefined;
+    await duringElementAnimation(
+      f.parent.submenuElement,
+      "show",
       () => {
-        expect(
-          f.parent.submenuElement
-            .getAnimations()
-            .some((animation) => animation.playState === "running"),
-        ).toBe(true);
-        replaced = true;
-        void f.other.openSubmenu();
+        opening = f.parent.openSubmenu();
       },
-      { once: true },
+      () => {
+        expect(focused()).toBe(f.middle);
+        replacement = f.other.openSubmenu();
+      },
     );
-    await f.parent.openSubmenu();
-    await expect.poll(() => replaced).toBe(true);
+    await Promise.all([opening, replacement]);
     await hidden(f.parent);
     await expect.poll(() => focused()).toBe(f.otherLeaf);
     await back("ArrowLeft", f.other);
@@ -296,17 +295,19 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
     const f = await fixture();
     await f.parent.openSubmenu();
     await f.middle.openSubmenu();
-    let reopened: Promise<unknown> | undefined;
-    f.parent.submenuElement.addEventListener(
-      "animationstart",
+    let closing: Promise<void> | undefined;
+    let reopened: Promise<void> | undefined;
+    await duringElementAnimation(
+      f.parent.submenuElement,
+      "hide",
+      () => {
+        closing = f.parent.closeSubmenu();
+      },
       () => {
         reopened = f.parent.openSubmenu().then(() => f.middle.openSubmenu());
       },
-      { once: true },
     );
-    await f.parent.closeSubmenu();
-    await expect.poll(() => reopened !== undefined).toBe(true);
-    await reopened;
+    await Promise.all([closing, reopened]);
     expect(f.parent.submenuElement.matches(":popover-open")).toBe(true);
     expect(f.middle.submenuElement.matches(":popover-open")).toBe(true);
     expect(focused()).toBe(f.inner);
@@ -348,24 +349,20 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome submenu owner", 
   it("returns to the surviving level before a property hide animation finishes", async () => {
     const f = await fixture();
     await f.other.openSubmenu();
-    let navigation: { running: boolean; focused: Element | null } | undefined;
-    f.other.submenuElement.addEventListener(
-      "animationstart",
+    await duringElementAnimation(
+      f.other.submenuElement,
+      "hide",
+      () => (f.other.submenuOpen = false),
       () => {
-        const running = f.other.submenuElement
-          .getAnimations()
-          .some((animation) => animation.playState === "running");
         f.other.focus();
         f.other.dispatchEvent(
           new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, composed: true }),
         );
-        navigation = { running, focused: focused() };
+        expect(focused()).toBe(f.first);
       },
-      { once: true },
     );
-    f.other.submenuOpen = false;
     await hidden(f.other);
-    expect(navigation).toEqual({ running: true, focused: f.first });
+    expect(focused()).toBe(f.first);
   });
 
   it.each(["removal", "slot reassignment"] as const)(

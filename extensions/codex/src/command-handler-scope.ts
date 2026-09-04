@@ -59,7 +59,7 @@ export async function resolveCommandAppServerScope(
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const agentDir = target?.agentDir ?? fallback.agentDir;
-  const binding = target ? await deps.bindingStore.read(target.identity) : undefined;
+  const binding = target ? deps.bindingStore.read(target.identity) : undefined;
   const authProfileId =
     binding?.connectionScope === "supervision"
       ? undefined

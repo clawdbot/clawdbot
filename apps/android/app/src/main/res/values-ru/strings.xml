@@ -366,7 +366,6 @@
     <string name="native_34d29e78d246ae8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Служба подключена"</string>
     <string name="native_34e108c0896d0158" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отображение"</string>
     <string name="native_34ef570432852cd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Готовы, когда будете готовы"</string>
-    <string name="native_35054a374a0f2b14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось загрузить каталог провайдеров."</string>
     <string name="native_3514b4452a987ac0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Говорит · ожидание ответа"</string>
     <string name="native_352a5b4c1246d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не предоставлено"</string>
     <string name="native_35322b5bb5a218a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сохранить изменения"</string>
@@ -566,7 +565,6 @@
     <string name="native_53b7230f9bf052b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Я одобрил"</string>
     <string name="native_53c8ee5160e74bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проверка ИИ с резервным участием человека для дополнительного доступа."</string>
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подключите Gateway, чтобы загрузить готовность провайдеров."</string>
-    <string name="native_53f15ea2f2343351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не сопряжено"</string>
     <string name="native_53fb429d67bd4aab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Срок действия этого одобрения истёк до его разрешения."</string>
     <string name="native_541ff80fcb2f8e87" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наблюдение через %1$s с — переключитесь на целевое приложение"</string>
     <string name="native_542e9aa519c89605" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Промпт агента"</string>
@@ -880,6 +878,7 @@
     <string name="native_838337fd9ab30454" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подведите итоги недавних веток и предложите дальнейшие шаги."</string>
     <string name="native_83e2faed20a3cda4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Работает на устройстве, пока OpenClaw отображается на экране."</string>
     <string name="native_844e5b02f3ef05ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s работает"</string>
+    <string name="native_8477f18620f1ef69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Background Shell"</string>
     <string name="native_848123d14f84faa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Необработанные данные"</string>
     <string name="native_848f54e89660cea4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запуски"</string>
     <string name="native_849ccb784cf30af6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустить сейчас"</string>
@@ -1270,7 +1269,6 @@
     <string name="native_c2a2701582c4413a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Проверить доступ"</string>
     <string name="native_c2d60919f955cd83" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ход агента"</string>
     <string name="native_c2d66755e6d0b42f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"поместить в карантин"</string>
-    <string name="native_c31723ab330289fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Поиск…"</string>
     <string name="native_c34dd5eb8b0af56e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Где получить код настройки?"</string>
     <string name="native_c3546b39ecbbed8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не удалось включить навык."</string>
     <string name="native_c35b21d6ca39aa7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pdf"</string>

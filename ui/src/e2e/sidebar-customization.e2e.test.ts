@@ -34,29 +34,29 @@ function visibleDrawerButton(page: Page) {
   return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
 
-async function expectLobsterOnFooterLedge(sidebar: Locator) {
-  const footer = sidebar.locator(".sidebar-shell__footer");
-  const sprite = footer.locator(".lobster-pet:not(.lobster-pet--passer)").first();
+async function expectLobsterOnInviteLedge(sidebar: Locator) {
+  const invite = sidebar.locator(".sidebar-shell__invite");
+  const sprite = invite.locator(".lobster-pet:not(.lobster-pet--passer)").first();
   await sprite.waitFor();
 
   await expect
     .poll(async () => {
-      const [footerBox, spriteBox, borderTopWidth] = await Promise.all([
-        footer.boundingBox(),
+      const [inviteBox, spriteBox, borderTopWidth] = await Promise.all([
+        invite.boundingBox(),
         sprite.boundingBox(),
-        footer.evaluate((element) =>
+        invite.evaluate((element) =>
           Number.parseFloat(window.getComputedStyle(element).borderTopWidth),
         ),
       ]);
-      if (!footerBox || !spriteBox) {
+      if (!inviteBox || !spriteBox) {
         return null;
       }
       return {
-        bottomOverlap: Math.round(spriteBox.y + spriteBox.height - footerBox.y - borderTopWidth),
-        isAboveFooter: spriteBox.y < footerBox.y,
+        bottomOverlap: Math.round(spriteBox.y + spriteBox.height - inviteBox.y - borderTopWidth),
+        isAboveInvite: spriteBox.y < inviteBox.y,
       };
     })
-    .toEqual({ bottomOverlap: 3, isAboveFooter: true });
+    .toEqual({ bottomOverlap: 3, isAboveInvite: true });
 }
 
 async function captureUiProof(page: Page, fileName: string) {
@@ -250,7 +250,9 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -551,11 +553,11 @@ suite.define(() => {
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -571,7 +573,9 @@ suite.define(() => {
 
       await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
 
       // The sidebar header search button is the command palette entry point.
       const searchButton = page.locator(".sidebar-brand__search");
@@ -958,7 +962,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {
+  it("keeps the lobster on the community invite ledge across desktop and drawer layouts", async () => {
     const { context, page } = await openSidebarTestPage();
 
     try {
@@ -991,7 +995,7 @@ suite.define(() => {
       expect(movement.after).not.toBe(movement.before);
       expect(Number.parseFloat(movement.after)).toBeGreaterThanOrEqual(18);
       expect(Number.parseFloat(movement.after)).toBeLessThanOrEqual(50);
-      await expectLobsterOnFooterLedge(sidebar);
+      await expectLobsterOnInviteLedge(sidebar);
       // startle clears itself after LOBSTER_PET_ACT_DURATION_MS.startle (750ms), so
       // poking over one round trip and then polling for the class over another can
       // straddle the entire window on a loaded runner and never observe it. Poke and
@@ -1005,13 +1009,13 @@ suite.define(() => {
         return target?.getAttribute("class") ?? "";
       });
       expect(startleClasses).toContain("lobster-pet--act-startle");
-      await captureUiProof(page, "08-lobster-footer-ledge-desktop.png");
+      await captureUiProof(page, "08-lobster-invite-ledge-desktop.png");
 
       await page.setViewportSize({ height: 900, width: 900 });
       await visibleDrawerButton(page).click();
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expectLobsterOnFooterLedge(sidebar);
-      await captureUiProof(page, "09-lobster-footer-ledge-drawer.png");
+      await expectLobsterOnInviteLedge(sidebar);
+      await captureUiProof(page, "09-lobster-invite-ledge-drawer.png");
     } finally {
       await context.close();
     }

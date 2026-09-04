@@ -81,8 +81,13 @@ const gatewayRuntime: GatewayRecoveryRuntime = {
   })) as GatewayRecoveryRuntime["waitForAgent"],
   sendRecoveryNotice: vi.fn(),
 };
-const activateGatewayRuntime = () =>
-  activateSubagentRegistry(() => ({ recoveryRuntime: gatewayRuntime }) as never);
+const activateGatewayRuntime = () => {
+  const gatewayContext = {
+    recoveryRuntime: gatewayRuntime,
+    resolveGatewayContext: () => gatewayContext as never,
+  };
+  activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+};
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),

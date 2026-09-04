@@ -750,6 +750,12 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The `threading.resolveReplyTransport` hook receives the payload's optional
+`replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
+native API requires a thread root can resolve a current-message reply against
+the admitted thread without redirecting arbitrary explicit `replyToId` targets.
+Omitted intent keeps the existing explicit-target behavior.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports
@@ -929,7 +935,8 @@ unrelated inbound runtime helpers.
   <Step title="Build the channel plugin object">
     The `ChannelPlugin` interface has many optional adapter surfaces. Start with
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
-    them.
+    them. `createChatChannelPlugin` defaults omitted capabilities to direct
+    messages; declare `capabilities.chatTypes` when the channel supports more.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable
@@ -1132,12 +1139,13 @@ unrelated inbound runtime helpers.
     `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
     planning the catalog, merge its candidates with built-in and skill entries,
     and retain the winning candidate object in the registered handler closure.
-    Once the provider catalog is finalized, call
-    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
-    if listener registration can fail synchronously, call it after those
-    listeners are installed. This records the current channel-account lifecycle
-    so a registry reload restarts only accounts whose handlers retain that
-    registry generation.
+    A plugin registry replacement drains and restarts loaded channel accounts
+    so their handlers, command catalogs, and routes use the new generation.
+    Manually stopped accounts stay stopped. Ordinary channel config changes
+    still restart only the affected channel or accounts.
+    `retainNativeCatalog(provider)` is deprecated and will be removed in the
+    next breaking SDK release; existing calls only assert that the captured
+    registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.

@@ -606,7 +606,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
-        callableToolNames: allowed.map((tool) => tool.name),
+        hasCallableTools: allowed.length > 0,
         toolsEnabled: true,
       }),
     ).toBeNull();

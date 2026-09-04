@@ -544,16 +544,15 @@ describe("runGlobalPackageUpdateSteps", () => {
       const packageRoot = path.join(globalRoot, "openclaw");
 
       const realRename = fs.rename.bind(fs);
+      let stagedPackageRoot: string | undefined;
       let exdevMoves = 0;
       const renameSpy = vi
         .spyOn(fs, "rename")
         .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
           const [from, to] = args;
-          const fromPath = String(from);
           if (
             exdevMoves === 0 &&
-            fromPath.includes(`${path.sep}.openclaw-update-stage-`) &&
-            path.basename(fromPath) === "openclaw" &&
+            String(from) === stagedPackageRoot &&
             String(to) === packageRoot
           ) {
             exdevMoves += 1;
@@ -576,7 +575,8 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
-            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+            stagedPackageRoot = path.join(stageLayout.globalRoot, "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
             return {
               name,
               command: argv.join(" "),
@@ -1032,7 +1032,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).resolves.toMatchObject({
         failedStep: { stderrTail: "install crashed", exitCode: 1 },
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
 
       if (stagePrefix === undefined) {

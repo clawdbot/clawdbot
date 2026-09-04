@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -45,10 +46,7 @@ import {
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
-import {
-  createFallbackSessionEntry,
-  coerceSqliteNumber,
-} from "./session-accessor.sqlite-normalize.js";
+import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
   cloneSessionEntry,
   getSessionKysely,
@@ -60,8 +58,11 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  readSessionEntriesByStatus,
+  selectSessionEntryRows,
+} from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -133,15 +134,38 @@ export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntr
 }
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
-export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
-  const sessionKey = scope.sessionKey.trim();
+export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {
+  return loadExactSessionEntryCandidates({
+    ...scope,
+    sessionKeys: [scope.sessionKey],
+    readOnly: false,
+  })[0];
+}
+
+/** Reads exact candidates for one logical session through a single store admission. */
+export function loadExactSessionEntryCandidates(
+  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionKeys: readonly string[];
+    readOnly: boolean;
+  },
+): ExactSessionEntry[] {
+  const sessionKeys = scope.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  const [sessionKey] = sessionKeys;
   if (!sessionKey) {
-    return undefined;
+    return [];
   }
-  const resolved = resolveSqliteScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
-  return entry ? { sessionKey, entry } : undefined;
+  const resolved = resolveSqliteScope({ ...scope, sessionKey });
+  // Alias candidates share a store; fresh handles must not rescan canonical state per key.
+  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "db">) =>
+    sessionKeys.flatMap((key) => {
+      const entry = readExactSessionEntryRowValidated(database, key, scope.projection)?.entry;
+      return entry ? [{ sessionKey: key, entry }] : [];
+    });
+  if (!scope.readOnly) {
+    return read(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(read, toDatabaseOptions(resolved));
+  return result.found ? result.value : [];
 }
 
 /** Lists persisted session keys without materializing their entry JSON. */
@@ -161,36 +185,33 @@ export function listSessionEntryKeysReadOnly(
 
 /** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
 export function loadExactSessionEntryReadOnly(
-  scope: SessionAccessScope,
+  scope: SessionEntryReadScope,
 ): ExactSessionEntry | undefined {
-  const sessionKey = scope.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
-    toDatabaseOptions(resolved),
-  );
-  return result.found && result.value
-    ? {
-        sessionKey,
-        entry: result.value,
-      }
-    : undefined;
+  return loadExactSessionEntryCandidates({
+    ...scope,
+    sessionKeys: [scope.sessionKey],
+    readOnly: true,
+  })[0];
 }
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */
-export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): SessionEntrySummary[] {
+export function listSessionChildEntriesReadOnly(
+  scope: SessionEntryReadScope,
+): SessionEntrySummary[] {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const db = getSessionKysely(database.db);
+    const query =
+      scope.projection === "list"
+        ? selectSessionEntryRows(database, scope.projection).select([
+            "current_session_id",
+            "updated_at",
+          ])
+        : db.selectFrom("session_nodes").selectAll();
     const childRows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .selectAll()
+      query
         .where((expression) =>
           expression.or([
             expression("parent_session_key", "=", resolved.sessionKey),
@@ -204,7 +225,7 @@ export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): Sess
       if (isInternalSessionEffectsKey(row.session_key)) {
         return [];
       }
-      const entry = parseReadableSqliteSessionEntryRow(database, row);
+      const entry = parseReadableSqliteSessionEntryRow(database, row, scope.projection);
       return entry ? [{ sessionKey: row.session_key, entry }] : [];
     });
   }, toDatabaseOptions(resolved));
@@ -265,7 +286,7 @@ export function countSessionEntryRowsReadOnly(scope: SessionEntryListScope = {})
         .selectFrom("session_nodes")
         .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
     );
-    return row ? coerceSqliteNumber(row.count) : 0;
+    return row ? sqliteNumber(row.count) : 0;
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : 0;
 }
@@ -380,7 +401,7 @@ export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | un
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
-  return row ? coerceSqliteNumber(row.updated_at) : undefined;
+  return row ? sqliteNumber(row.updated_at) : undefined;
 }
 
 /** Applies a partial entry update to the additive SQLite session store. */
@@ -537,6 +558,7 @@ async function patchSqliteSessionEntrySnapshot(
       previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
+        ...(options.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedPreviousEntry,
       });
       wrote = true;

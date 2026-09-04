@@ -121,7 +121,7 @@ export const zh_CN = {
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
       profileNotWritable:
-        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
+        "Shell completion 自动安装失败（权限或只读错误位置：{profile}）。仅在当前 {shell} 会话中启用补全，请运行：\n{command}",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",

@@ -755,6 +755,29 @@ describe("initSessionState guarded initialization", () => {
 });
 
 describe("initSessionState thread forking", () => {
+  it("keeps an existing display name when the thread label changes", async () => {
+    const storePath = await createStorePath("openclaw-thread-title-");
+    const sessionKey = "agent:main:slack:channel:c1:thread:123";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "named-thread",
+        updatedAt: Date.now(),
+        displayName: "User title",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: sessionKey,
+        ThreadLabel: "Slack thread #general: changed starter",
+      },
+      cfg: { session: { store: storePath } },
+    });
+
+    expect(result.sessionEntry.displayName).toBe("User title");
+  });
+
   it("forks a new SQLite session from the parent session", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
@@ -5015,25 +5038,35 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("defers implicit daily rollover while the same session has an active run", async () => {
+  it.each([
+    {
+      label: "daily-stale session",
+      entry: {
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        sessionStartedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+      expectedUpdatedAt: new Date(2026, 0, 18, 5, 0, 0).getTime(),
+    },
+    {
+      label: "legacy pending-reset session",
+      entry: { updatedAt: 0 },
+      expectedUpdatedAt: 0,
+    },
+  ])("defers implicit rollover for a $label with an active run", async (scenario) => {
     vi.useFakeTimers();
-    const existingSessionId = "active-stale-session";
+    const existingSessionId = `active-${scenario.label.replaceAll(" ", "-")}`;
+    const sessionKey = `agent:main:telegram:dm:${existingSessionId}`;
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const storePath = await createStorePath("openclaw-active-stale-archive-");
-      const sessionKey = "agent:main:telegram:dm:active-stale-user";
-      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
-      const sessionStartedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
-
+      const storePath = await createStorePath("openclaw-active-stale-");
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
           sessionId: existingSessionId,
-          updatedAt: sessionStartedAt,
-          sessionStartedAt,
+          lifecycleRevision: "active-revision",
+          ...scenario.entry,
         },
       });
-      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
       operation = replyRunRegistry.begin({
         sessionKey,
         sessionId: existingSessionId,
@@ -5041,9 +5074,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = {
-        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello while active",
@@ -5056,19 +5086,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Provider: "telegram",
           Surface: "telegram",
         },
-        cfg,
+        cfg: {
+          session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+        } as OpenClawConfig,
       });
 
-      expect(result.isNewSession).toBe(false);
-      expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).toBe(existingSessionId);
-      expect(result.previousSessionEntry).toBeUndefined();
-      expect(result.sessionEntry.sessionStartedAt).toBe(sessionStartedAt);
-      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
-      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
-        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
-      );
-      expect(archived).toHaveLength(0);
+      expect(result).toMatchObject({
+        isNewSession: false,
+        previousSessionEntry: undefined,
+        sessionId: existingSessionId,
+        sessionEntry: {
+          lifecycleRevision: "active-revision",
+          updatedAt: scenario.expectedUpdatedAt,
+        },
+      });
+      expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+        lifecycleRevision: "active-revision",
+        updatedAt: scenario.expectedUpdatedAt,
+      });
     } finally {
       operation?.complete();
       vi.useRealTimers();
@@ -5588,7 +5623,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(readSessionStoreFast(storePath)[sessionKey]).not.toHaveProperty("agentHarnessId");
   });
 
-  it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
+  it("accounts exhausted-run usage without committing its model or native binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
@@ -5613,7 +5648,6 @@ describe("persistSessionUsageUpdate", () => {
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
       contextTokensUsed: 200_000,
-      cliSessionBinding: { sessionId: "exhausted-cli-session" },
       preserveRuntimeModel: true,
     });
 
@@ -5627,12 +5661,12 @@ describe("persistSessionUsageUpdate", () => {
       totalTokens: 100,
       totalTokensFresh: true,
       cliSessionBindings: {
-        "claude-cli": { sessionId: "exhausted-cli-session" },
+        "claude-cli": { sessionId: "existing-cli-session" },
       },
       cliSessionIds: {
-        "claude-cli": "exhausted-cli-session",
+        "claude-cli": "existing-cli-session",
       },
-      claudeCliSessionId: "exhausted-cli-session",
+      claudeCliSessionId: "existing-cli-session",
     });
   });
 
@@ -5708,101 +5742,20 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "persists heartbeat CLI binding while preserving displayed session model",
-      seed: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionBindings: { "claude-cli": { sessionId: "old-heartbeat-cli-session" } },
-        cliSessionIds: { "claude-cli": "old-heartbeat-cli-session" },
-        claudeCliSessionId: "old-heartbeat-cli-session",
-      },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100 },
-        lastCallUsage: { input: 1_200, output: 100 },
-        providerUsed: "claude-cli",
-        modelUsed: "claude-sonnet-4-6",
-        cliSessionBinding: {
-          sessionId: "new-heartbeat-cli-session",
-          authProfileId: "anthropic:heartbeat",
-        },
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: { "claude-cli": "new-heartbeat-cli-session" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "new-heartbeat-cli-session",
-            authProfileId: "anthropic:heartbeat",
-          },
-        },
-        claudeCliSessionId: "new-heartbeat-cli-session",
-      },
-    },
-    {
-      name: "honors heartbeat CLI binding clears while preserving displayed session model",
-      seed: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: {
-          "claude-cli": "old-heartbeat-cli-session",
-          "codex-cli": "codex-cli-session",
-        },
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-          "codex-cli": { sessionId: "codex-cli-session" },
-        },
-        claudeCliSessionId: "old-heartbeat-cli-session",
-      },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100 },
-        lastCallUsage: { input: 1_200, output: 100 },
-        providerUsed: "claude-cli",
-        modelUsed: "claude-sonnet-4-6",
-        clearCliSessionBinding: true,
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: { "codex-cli": "codex-cli-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
-        claudeCliSessionId: undefined,
-      },
-    },
-    {
       name: "treats CLI last-call usage as a fresh context snapshot",
       seed: {},
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
-        cliSessionBinding: {
-          sessionId: "cli-session-1",
-          authProfileId: "anthropic:default",
-          extraSystemPromptHash: "prompt-hash",
-          mcpConfigHash: "mcp-hash",
-        },
       },
       expected: {
         totalTokens: 32_000,
         totalTokensFresh: true,
-        cliSessionIds: { "claude-cli": "cli-session-1" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "cli-session-1",
-            authProfileId: "anthropic:default",
-            extraSystemPromptHash: "prompt-hash",
-            mcpConfigHash: "mcp-hash",
-          },
-        },
       },
     },
     {
-      name: "clears stale CLI binding when usage update reports an unflushed replacement",
+      name: "clears stale CLI binding with compaction accounting",
       seed: {
         cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
         cliSessionBindings: {
@@ -6226,11 +6179,6 @@ describe("persistSessionUsageUpdate", () => {
       lastCallUsage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
       providerUsed: "google",
       modelUsed: "gemini-2.5-flash",
-      cliSessionId: "internal-cli-session",
-      cliSessionBinding: {
-        sessionId: "internal-cli-session",
-        authProfileId: "anthropic:internal",
-      },
       contextTokensUsed: 1_000_000,
     });
     await persistSessionUsageUpdate({
@@ -6239,7 +6187,6 @@ describe("persistSessionUsageUpdate", () => {
       preserveUserFacingSessionModelState: true,
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
-      cliSessionId: "internal-cli-session-2",
       contextTokensUsed: 900_000,
     });
 

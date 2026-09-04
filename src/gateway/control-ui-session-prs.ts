@@ -2,7 +2,12 @@
 // UI chat view can pin PR status chips above the composer.
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -16,9 +21,6 @@ import {
   ControlUiGitHubError,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  isRecord,
-  optionalNumber,
-  readOptionalGitHubString,
   resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
 import {
@@ -327,7 +329,7 @@ async function resolveSessionBranch(
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (readOptionalGitHubString(value, "merged_at")) {
+  if (readNonBlankString(value.merged_at)) {
     return "merged";
   }
   if (value.state !== "open") {
@@ -340,20 +342,20 @@ function parsePullListItem(value: unknown): PullListItem | null {
   if (!isRecord(value)) {
     return null;
   }
-  const number = optionalNumber(value, "number");
-  const title = readOptionalGitHubString(value, "title");
-  const url = readOptionalGitHubString(value, "html_url");
+  const number = asFiniteNumber(value.number);
+  const title = readNonBlankString(value.title);
+  const url = readNonBlankString(value.html_url);
   const base = isRecord(value.base) ? value.base : {};
   const baseRepo = isRecord(base.repo) ? base.repo : {};
   const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = readOptionalGitHubString(baseOwner, "login");
-  const repo = readOptionalGitHubString(baseRepo, "name");
+  const owner = readNonBlankString(baseOwner.login);
+  const repo = readNonBlankString(baseRepo.name);
   const head = isRecord(value.head) ? value.head : {};
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
   const user = isRecord(value.user) ? value.user : {};
-  const authorLogin = readOptionalGitHubString(user, "login");
+  const authorLogin = readNonBlankString(user.login);
   return {
     number,
     title,
@@ -362,9 +364,9 @@ function parsePullListItem(value: unknown): PullListItem | null {
     repo,
     state: derivePullState(value),
     ...(authorLogin ? { author: { login: authorLogin } } : {}),
-    headSha: readOptionalGitHubString(head, "sha"),
-    baseRef: readOptionalGitHubString(base, "ref"),
-    mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
+    headSha: readNonBlankString(head.sha),
+    baseRef: readNonBlankString(base.ref),
+    mergeCommitSha: readNonBlankString(value.merge_commit_sha),
   };
 }
 
@@ -396,32 +398,11 @@ async function fetchParentRepo(
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
 // serves stale chips with the rate-limit flag); anything else just drops the
 // optional field the sub-fetch would have filled.
-function rethrowRateLimit(error: unknown): void {
+function rethrowRateLimit(error: unknown): undefined {
   if (error instanceof ControlUiGitHubError && error.statusCode === 429) {
     throw error;
   }
-}
-
-async function fetchDiffCounts(
-  item: PullListItem,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<{ additions?: number; deletions?: number; changedFiles?: number }> {
-  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
-  try {
-    const value = await fetchGitHubJson(url, fetchImpl, token);
-    if (!isRecord(value)) {
-      return {};
-    }
-    return {
-      additions: optionalNumber(value, "additions"),
-      deletions: optionalNumber(value, "deletions"),
-      changedFiles: optionalNumber(value, "changed_files"),
-    };
-  } catch (error) {
-    rethrowRateLimit(error);
-    return {};
-  }
+  return undefined;
 }
 
 const FAILING_CHECK_CONCLUSIONS = new Set([
@@ -431,37 +412,11 @@ const FAILING_CHECK_CONCLUSIONS = new Set([
   "action_required",
   "startup_failure",
 ]);
-
-function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] {
-  if (!isRecord(value) || !Array.isArray(value.check_runs) || value.check_runs.length === 0) {
-    return undefined;
-  }
-  let passed = 0;
-  let failed = 0;
-  let skipped = 0;
-  let running = 0;
-  for (const runValue of value.check_runs) {
-    const run = isRecord(runValue) ? runValue : {};
-    const conclusion = readOptionalGitHubString(run, "conclusion");
-    if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
-      failed += 1;
-      continue;
-    }
-    // "stale" means GitHub invalidated the run (for example a new push), so
-    // its old verdict must not read as green.
-    if (run.status !== "completed" || conclusion === "stale") {
-      running += 1;
-      continue;
-    }
-    if (conclusion === "skipped") {
-      skipped += 1;
-      continue;
-    }
-    passed += 1;
-  }
-  const state = failed > 0 ? "failing" : running > 0 ? "pending" : "passing";
-  return { state, passed, failed, skipped, running };
-}
+const CHECK_PAGE_SIZE = 100;
+const MAX_CHECK_PAGES = 10;
+// GitHub repeats verbose application/output metadata on every run. Keep that
+// budget local to checks; other JSON requests retain the shared 256 KiB cap.
+const CHECK_PAGE_BYTES = 1024 * 1024;
 
 async function fetchChecks(
   item: PullListItem,
@@ -471,13 +426,40 @@ async function fetchChecks(
   if (!item.headSha || !/^[0-9a-f]{40}$/i.test(item.headSha)) {
     return undefined;
   }
-  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/commits/${item.headSha}/check-runs?per_page=100`;
-  try {
-    return rollupCheckRuns(await fetchGitHubJson(url, fetchImpl, token));
-  } catch (error) {
-    rethrowRateLimit(error);
-    return undefined;
+  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/commits/${item.headSha}/check-runs?per_page=${CHECK_PAGE_SIZE}`;
+  const counts = { passed: 0, failed: 0, skipped: 0, running: 0 };
+  for (let page = 1; page <= MAX_CHECK_PAGES; page += 1) {
+    const value = await fetchGitHubJson(`${url}&page=${page}`, fetchImpl, token, CHECK_PAGE_BYTES);
+    if (
+      !isRecord(value) ||
+      !Array.isArray(value.check_runs) ||
+      value.check_runs.length > CHECK_PAGE_SIZE
+    ) {
+      return undefined;
+    }
+    for (const runValue of value.check_runs) {
+      const run = isRecord(runValue) ? runValue : {};
+      const conclusion = readNonBlankString(run.conclusion);
+      // GitHub's "stale" conclusion invalidates the previous verdict.
+      if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
+        counts.failed += 1;
+      } else if (run.status !== "completed" || conclusion === "stale") {
+        counts.running += 1;
+      } else {
+        counts[conclusion === "skipped" ? "skipped" : "passed"] += 1;
+      }
+    }
+    const seen = counts.passed + counts.failed + counts.skipped + counts.running;
+    if (seen > 0 && seen === value.total_count) {
+      const state = counts.failed > 0 ? "failing" : counts.running > 0 ? "pending" : "passing";
+      return { state, ...counts };
+    }
+    if (value.check_runs.length < CHECK_PAGE_SIZE) {
+      return undefined;
+    }
   }
+  // An incomplete page sequence must never advertise a partial green rollup.
+  return undefined;
 }
 
 /**
@@ -509,13 +491,20 @@ async function finishPullRequest(
   if (item.state !== "open" && item.state !== "draft") {
     return chip;
   }
-  const [counts, checks] = await Promise.all([
-    fetchDiffCounts(item, fetchImpl, token),
-    fetchChecks(item, fetchImpl, token),
+  const detailUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
+  const [details, checks] = await Promise.all([
+    fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
+    fetchChecks(item, fetchImpl, token).catch(rethrowRateLimit),
   ]);
   return {
     ...chip,
-    ...counts,
+    ...(isRecord(details)
+      ? {
+          additions: asFiniteNumber(details.additions),
+          deletions: asFiniteNumber(details.deletions),
+          changedFiles: asFiniteNumber(details.changed_files),
+        }
+      : {}),
     ...(checks ? { checks, checksUrl: `${item.url}/checks` } : {}),
   };
 }

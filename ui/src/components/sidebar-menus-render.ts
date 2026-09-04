@@ -29,9 +29,9 @@ import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
-import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
@@ -221,18 +221,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
   );
   const selfUser = context?.gateway.snapshot.selfUser ?? null;
-  const sessionsResult = [
-    host.sessionData.sessionsResult,
-    ...Object.values(host.sessionData.sessionResultsByAgent),
-  ].find((result) => result?.sessions.some((row) => row.key === session.key));
-  const ownerOptions = listAssignableSessionOwners({
-    facet: sessionsResult?.owners,
-    agents: context?.agents.state.agentsList?.agents,
-    self: selfUser,
-  });
-  const selfOwner = selfUser
-    ? (ownerOptions.find((owner) => owner.type === "human" && owner.id === selfUser.id) ?? null)
-    : null;
   const assignmentAccess = host.readSessionMutationAccess({
     method: "sessions.assignOwner",
     params: { key: session.key, owner: { type: "human", id: selfUser?.id ?? "profile" } },
@@ -281,9 +269,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
-        .ownerOptions=${ownerOptions}
-        .selfOwner=${selfOwner}
-        .currentOwnerId=${session.owner?.actor.id ?? null}
+        .currentOwner=${session.owner?.actor ?? null}
         .work=${batchRows ? null : controller.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => {
@@ -472,6 +458,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -527,6 +516,9 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

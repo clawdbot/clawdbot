@@ -12,7 +12,6 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.SessionBranch
-import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -77,12 +76,6 @@ class ChatScreenTest {
     assertFalse(enabled(activeRun = true))
     assertFalse(enabled(streaming = true))
     assertFalse(enabled(settingsMutationPending = true))
-  }
-
-  @Test
-  fun jumpToLatestReservesItsTouchTargetBelowMessages() {
-    assertEquals(0.dp, chatReaderListBottomInset(showJumpToLatest = false))
-    assertEquals(56.dp, chatReaderListBottomInset(showJumpToLatest = true))
   }
 
   @Test

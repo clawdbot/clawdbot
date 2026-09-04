@@ -30,7 +30,7 @@ struct SkillsSettings: View {
                     self.statusBanner
                     self.skillsList
                 } else {
-                    ClawHubSkillsBrowser(installedSkills: self.model.skills) { skills in
+                    ClawHubSkillsBrowser(gateway: self.model.gateway, installedSkills: self.model.skills) { skills in
                         self.model.acceptInstalledSkills(skills)
                     }
                 }
@@ -38,26 +38,15 @@ struct SkillsSettings: View {
             }
             .settingsDetailContent()
         }
-        .task {
-            // Subscribe before the first request so a remote-node invalidation cannot
-            // overtake the response and leave stale eligibility visible.
-            let pushes = await GatewayConnection.shared.subscribe()
-            let initialRefresh = Task { await self.model.refreshIfNeeded() }
-            defer { initialRefresh.cancel() }
-            for await push in pushes {
-                if Task.isCancelled { return }
-                self.model.handleGatewayPush(push)
-            }
-        }
+        .task { await self.model.run() }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
-                Task {
-                    await self.model.updateEnv(
-                        skillKey: editor.skillKey,
-                        envKey: editor.envKey,
-                        value: value,
-                        isPrimary: editor.isPrimary)
-                }
+                await self.model.updateEnv(
+                    skillKey: editor.skillKey,
+                    envKey: editor.envKey,
+                    value: value,
+                    isPrimary: editor.isPrimary,
+                    source: editor.source)
             }
         }
     }
@@ -169,7 +158,7 @@ struct SkillsSettings: View {
                     }
                 }
             }
-        } else {
+        } else if let catalog = self.model.catalog {
             SettingsCardGroup("Skills") {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(self.filteredSkills.enumerated()), id: \.element.id) { index, skill in
@@ -179,13 +168,20 @@ struct SkillsSettings: View {
                             connectionMode: self.state.connectionMode,
                             showsDivider: index != self.filteredSkills.count - 1,
                             onToggleEnabled: { enabled in
-                                Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
+                                Task {
+                                    await self.model.setEnabled(
+                                        skillKey: skill.skillKey, enabled: enabled, source: catalog.source)
+                                }
                             },
                             onInstall: { option, target in
-                                Task { await self.model.install(skill: skill, option: option, target: target) }
+                                Task {
+                                    await self.model.install(
+                                        skill: skill, source: catalog.source, option: option, target: target)
+                                }
                             },
                             onSetEnv: { envKey, isPrimary in
                                 self.envEditor = EnvEditorState(
+                                    source: catalog.source,
                                     skillKey: skill.skillKey,
                                     skillName: skill.name,
                                     envKey: envKey,
@@ -280,7 +276,7 @@ private enum SkillsFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private enum InstallTarget: String, CaseIterable {
+enum InstallTarget: String, CaseIterable {
     case gateway
     case local
 }
@@ -674,6 +670,7 @@ private struct SkillTag: View {
 }
 
 private struct EnvEditorState: Identifiable {
+    let source: GatewayConnection.ServerLease
     let skillKey: String
     let skillName: String
     let envKey: String
@@ -687,9 +684,11 @@ private struct EnvEditorState: Identifiable {
 
 private struct EnvEditorView: View {
     let editor: EnvEditorState
-    let onSave: (String) -> Void
+    let onSave: (String) async -> String?
     @Environment(\.dismiss) private var dismiss
     @State private var value: String = ""
+    @State private var isSaving = false
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -704,23 +703,34 @@ private struct EnvEditorView: View {
             }
             SecureField(self.editor.envKey, text: self.$value)
                 .textFieldStyle(.roundedBorder)
+                .disabled(self.isSaving)
             Text(String(
                 format: String(localized: "Saved to openclaw.json under skills.entries.%@"), self.editor.skillKey))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+            if let error = self.error {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
             HStack {
                 Button("Cancel") { self.dismiss() }
                 Spacer()
                 Button("Save") {
-                    self.onSave(self.value)
-                    self.dismiss()
+                    self.isSaving = true
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(self.isSaving || self.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)
         .frame(width: 420)
+        .task(id: self.isSaving) {
+            guard self.isSaving else { return }
+            let error = await self.onSave(self.value)
+            guard !Task.isCancelled else { return }
+            self.error = error
+            self.isSaving = false
+            if error == nil { self.dismiss() }
+        }
     }
 
     private var homepageUrl: URL? {
@@ -744,167 +754,6 @@ private struct EnvEditorView: View {
 
     private var subtitle: String {
         "Skill: \(self.editor.skillName)"
-    }
-}
-
-@MainActor
-@Observable
-final class SkillsSettingsModel {
-    var skills: [SkillStatus] = []
-    var isLoading = false
-    var error: String?
-    var statusMessage: String?
-    private var hasLoaded = false
-    private var hasAttemptedLoad = false
-    private var busySkills: Set<String> = []
-    private var pendingForcedRefresh = false
-    private var gatewayRefreshTask: Task<Void, Never>?
-    private let loadSkillsStatus: () async throws -> SkillsStatusReport
-
-    init() {
-        self.loadSkillsStatus = Self.defaultLoadSkillsStatus
-    }
-
-    init(loadSkillsStatus: @escaping () async throws -> SkillsStatusReport) {
-        self.loadSkillsStatus = loadSkillsStatus
-    }
-
-    private static func defaultLoadSkillsStatus() async throws -> SkillsStatusReport {
-        try await GatewayConnection.shared.skillsStatus()
-    }
-
-    func isBusy(skill: SkillStatus) -> Bool {
-        self.busySkills.contains(skill.skillKey)
-    }
-
-    func refreshIfNeeded() async {
-        guard !self.hasLoaded else { return }
-        await self.refresh()
-    }
-
-    func handleGatewayPush(_ push: GatewayPush) {
-        switch push {
-        case let .event(event) where event.event == "skills.changed":
-            break
-        case .seqGap:
-            break
-        default:
-            return
-        }
-        // The view subscribes before launching its initial request. If that request
-        // has not started yet, it will observe this invalidation without a duplicate.
-        guard self.hasAttemptedLoad || self.isLoading else { return }
-        self.pendingForcedRefresh = true
-        self.startPendingGatewayRefreshIfNeeded()
-    }
-
-    private func startPendingGatewayRefreshIfNeeded() {
-        guard self.pendingForcedRefresh, !self.isLoading, self.gatewayRefreshTask == nil else { return }
-        self.gatewayRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            await self.refresh(force: true)
-            self.gatewayRefreshTask = nil
-            // An invalidation can arrive after the drain ends but before this task
-            // releases its lease; start a successor instead of losing that signal.
-            self.startPendingGatewayRefreshIfNeeded()
-        }
-    }
-
-    func refresh(force: Bool = false) async {
-        if self.isLoading {
-            if force {
-                self.pendingForcedRefresh = true
-            }
-            return
-        }
-        if self.hasLoaded, !force {
-            return
-        }
-        self.hasAttemptedLoad = true
-        self.isLoading = true
-        defer { self.isLoading = false }
-
-        repeat {
-            self.pendingForcedRefresh = false
-            await self.runRefresh()
-        } while self.pendingForcedRefresh
-    }
-
-    private func runRefresh() async {
-        self.error = nil
-        do {
-            let report = try await self.loadSkillsStatus()
-            self.skills = report.skills.sorted { $0.name < $1.name }
-            self.hasLoaded = true
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    func acceptInstalledSkills(_ skills: [SkillStatus]) {
-        self.skills = skills.sorted { $0.name < $1.name }
-        self.hasLoaded = true
-        self.error = nil
-    }
-
-    fileprivate func install(skill: SkillStatus, option: SkillInstallOption, target: InstallTarget) async {
-        await self.withBusy(skill.skillKey) {
-            do {
-                if target == .local, AppStateStore.shared.connectionMode != .local {
-                    AppStateStore.shared.connectionMode = .local
-                    self.statusMessage = "Switched to Local mode to install on this Mac"
-                }
-                let result = try await GatewayConnection.shared.skillsInstall(
-                    name: skill.name,
-                    installId: option.id,
-                    timeoutMs: 300_000)
-                self.statusMessage = result.message
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    func setEnabled(skillKey: String, enabled: Bool) async {
-        await self.withBusy(skillKey) {
-            do {
-                _ = try await GatewayConnection.shared.skillsUpdate(
-                    skillKey: skillKey,
-                    enabled: enabled)
-                self.statusMessage = enabled ? "Skill enabled" : "Skill disabled"
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    func updateEnv(skillKey: String, envKey: String, value: String, isPrimary: Bool) async {
-        await self.withBusy(skillKey) {
-            do {
-                if isPrimary {
-                    _ = try await GatewayConnection.shared.skillsUpdate(
-                        skillKey: skillKey,
-                        apiKey: value)
-                    self.statusMessage = "Saved API key — stored in openclaw.json (skills.entries.\(skillKey))"
-                } else {
-                    _ = try await GatewayConnection.shared.skillsUpdate(
-                        skillKey: skillKey,
-                        env: [envKey: value])
-                    self.statusMessage = "Saved \(envKey) — stored in openclaw.json (skills.entries.\(skillKey).env)"
-                }
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    private func withBusy(_ id: String, _ work: @escaping () async -> Void) async {
-        self.busySkills.insert(id)
-        defer { self.busySkills.remove(id) }
-        await work()
     }
 }
 

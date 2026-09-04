@@ -26,17 +26,10 @@ vi.mock("../../plugins/bundle-commands.js", () => ({
   loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
 }));
 
-vi.mock("../loading/workspace-skill-loader.js", async () => {
-  const actual = await vi.importActual<typeof import("../loading/workspace-skill-loader.js")>(
-    "../loading/workspace-skill-loader.js",
-  );
-  return {
-    filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
-    loadMergedWorkspaceSkills: () => [],
-    loadVisibleSkills: () => [],
-    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
-  };
-});
+vi.mock("../loading/workspace-skill-loader.js", () => ({
+  filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
+  loadVisibleSkills: () => [],
+}));
 
 beforeEach(() => {
   vi.resetModules();

@@ -99,7 +99,10 @@ function validateArtifactParent(request, parent, env) {
       parent.head_repository?.full_name === request.repository &&
       parent.head_sha === request.toolingSha &&
       parent.head_branch === request.workflowRef &&
-      parent.status === "in_progress" &&
+      // GitHub reports a parent as "queued" whenever any of its jobs is still
+      // waiting for a runner, even while this producer runs from it; both mean
+      // the parent is live and unfinished. A completed parent stays rejected.
+      (parent.status === "in_progress" || parent.status === "queued") &&
       parent.conclusion === null &&
       env.GITHUB_SHA === request.toolingSha &&
       env.GITHUB_REF_NAME === request.workflowRef,

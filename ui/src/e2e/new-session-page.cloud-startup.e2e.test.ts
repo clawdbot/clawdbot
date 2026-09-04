@@ -97,7 +97,7 @@ suite.define(() => {
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     } finally {
       await context.close();
     }

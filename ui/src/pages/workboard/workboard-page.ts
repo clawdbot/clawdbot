@@ -360,28 +360,34 @@ class WorkboardPage extends OpenClawLightDomElement {
       <section class="content-header content-header--page">
         <div>
           <div class="page-title workboard-page-title">
-            ${selectedBoard
-              ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-              : nothing}
+            ${
+              selectedBoard
+                ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+                : nothing
+            }
             <span
-              >${selectedBoard
-                ? workboardBoardName(selectedBoard)
-                : titleForRoute("workboard")}</span
+              >${
+                selectedBoard ? workboardBoardName(selectedBoard) : titleForRoute("workboard")
+              }</span
             >
-            ${selectedBoard?.automationJobId
-              ? html`<a
-                  class="chip workboard-automation-chip"
-                  href=${pathForRoute("cron", context.basePath)}
-                  title=${t("workboard.automationAttachedTitle")}
-                  aria-label=${t("workboard.automationAttachedTitle")}
-                >
-                  ${icons.calendarClock}<span>${t("workboard.automationAttached")}</span>
-                </a>`
-              : nothing}
+            ${
+              selectedBoard?.automationJobId
+                ? html`<a
+                    class="chip workboard-automation-chip"
+                    href=${pathForRoute("cron", context.basePath)}
+                    title=${t("workboard.automationAttachedTitle")}
+                    aria-label=${t("workboard.automationAttachedTitle")}
+                  >
+                    ${icons.calendarClock}<span>${t("workboard.automationAttached")}</span>
+                  </a>`
+                : nothing
+            }
           </div>
-          ${selectedBoard
-            ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`
-            : nothing}
+          ${
+            selectedBoard
+              ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`
+              : nothing
+          }
         </div>
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],

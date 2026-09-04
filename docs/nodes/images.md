@@ -60,6 +60,9 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 - When media is present, the web sender resolves local paths or URLs using the same pipeline as `openclaw message send`.
 - Multiple media entries are sent sequentially if provided.
 
+Generated attachments stay separate from later tool-error warnings. Image references
+in errors or reasoning do not select or discard generated attachments.
+
 When a channel converts Markdown image links into attachments, image syntax inside
 code blocks or inline code, and escaped image syntax, stays in the text. Inline
 image destinations retain their URL punctuation.
@@ -87,7 +90,7 @@ image destinations retain their URL punctuation.
 - Images: up to `channels.whatsapp.mediaMaxMb` (default 50MB) after optimization.
 - Audio/video: 16MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
 - Documents: 100MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
-- Oversize or unreadable media produces a clear error in logs, and the reply is skipped.
+- Oversize or unreadable media produces a clear error in logs, and the reply is skipped. Size errors use readable byte units rather than rounding fractional caps to a whole MB.
 
 **Media understanding caps (transcription/description)**
 

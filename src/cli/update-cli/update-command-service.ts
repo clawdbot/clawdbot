@@ -150,7 +150,7 @@ export async function tryInstallShellCompletion(opts: {
     const message = formatErrorMessage(err);
     defaultRuntime.log(
       theme.warn(
-        `Shell completion refresh failed: ${message}. Update will continue; retry with: ${replaceCliName(formatCliCommand("openclaw completion --write-state --install"), CLI_NAME)}`,
+        `Shell completion refresh failed: ${message}. Update will continue. Resolve the reported error before retrying: ${replaceCliName(formatCliCommand("openclaw completion --write-state --install"), CLI_NAME)}`,
       ),
     );
   }
@@ -226,6 +226,7 @@ export async function maybeRestartService(params: {
         ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
         env: activation.serviceEnv,
         requireRunningService: opts.requireRunningService,
+        settle: { probes: 12 },
         supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
           service,
           env: activation.serviceEnv,
@@ -356,6 +357,7 @@ export async function maybeRestartService(params: {
               requireRunningService: true,
               attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
               delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
+              settle: { probes: 12 },
             });
             refreshedGatewayAlreadyHealthy = health.healthy;
             if (refreshedGatewayAlreadyHealthy && !activation.opts.json) {

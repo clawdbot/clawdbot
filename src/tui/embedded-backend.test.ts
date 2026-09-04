@@ -1,6 +1,7 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -1876,6 +1877,30 @@ describe("EmbeddedTuiBackend", () => {
 
     first.resolve({ payloads: [{ text: "done" }], meta: {} });
     await flushMicrotasks();
+  });
+
+  it("surfaces uncertain question input without queuing it again", async () => {
+    const first = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+    const error = new QuestionAnswerUnconfirmedError("synthetic-question");
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockRejectedValue(error);
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await sendMainChat(backend, "first", "run-local-first");
+    try {
+      await expect(
+        backend.sendChat({
+          sessionKey: "agent:main:main",
+          message: "answer",
+          runId: "run-local-second",
+        }),
+      ).rejects.toBe(error);
+    } finally {
+      first.resolve({ payloads: [{ text: "done" }], meta: {} });
+      await flushMicrotasks();
+    }
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
   });
 
   it("queues local sends when active-runtime steering rejects them", async () => {

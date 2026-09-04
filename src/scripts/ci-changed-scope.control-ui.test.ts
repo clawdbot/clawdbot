@@ -85,10 +85,17 @@ it.each([
   "scripts/control-ui-mock-isolation.ts",
   "scripts/control-ui-mock-preview.ts",
   "scripts/control-ui-mock-attachments.ts",
+  "scripts/check-control-ui-performance.mts",
+  "scripts/check-control-ui-performance-base.mts",
+  "scripts/check-control-ui-precompressed-assets.mts",
+  "scripts/ui.mts",
+  "scripts/ui.js",
+  "config/control-ui-startup-budget-baseline.json",
   "scripts/lib/ci-test-timings.mts",
   "scripts/lib/ci-test-timings-schema.mts",
   "config/ci-test-timings.json",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ])("runs Chromium UI tests when %s changes browser test inputs", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
 });

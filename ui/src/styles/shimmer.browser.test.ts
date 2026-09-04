@@ -29,6 +29,7 @@ describeShimmer("Control UI shimmer", () => {
       await page.setContent(`<!doctype html><html><head><style>
         ${readStyleSheet("ui/src/styles/base.css")}
         ${readStyleSheet("ui/src/styles/chat/layout.css")}
+        ${readStyleSheet("ui/src/styles/chat/composer.css")}
         ${readStyleSheet("ui/src/styles/memory-import.css")}
         ${readStyleSheet("ui/src/styles/usage.css")}
       </style></head><body>
@@ -93,6 +94,7 @@ describeShimmer("Control UI shimmer", () => {
       await page.setContent(`<!doctype html><html><head><style>
         ${readStyleSheet("ui/src/styles/base.css")}
         ${readStyleSheet("ui/src/styles/chat/layout.css")}
+        ${readStyleSheet("ui/src/styles/chat/composer.css")}
         ${readStyleSheet("ui/src/styles/memory-import.css")}
         ${readStyleSheet("ui/src/styles/usage.css")}
       </style></head><body>

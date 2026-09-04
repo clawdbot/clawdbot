@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import {
   listSessionEntriesCore,
@@ -39,6 +41,29 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+
+/** Set the invocation's execution receipt without replacing its admission state. */
+export function setHeartbeatAgentTurnStatus(
+  options: object | undefined,
+  status: "ok" | "failed" | "superseded" | "cancelled",
+) {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.agentTurn = status === "superseded" ? "cancelled" : status;
+  if (status === "superseded") {
+    const operation = createReplyOperation({
+      sessionKey: "heartbeat-test-superseded",
+      sessionId: "heartbeat-test-superseded",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    operation.supersede();
+    operation.complete();
+    runState.agentTurnOwner = operation;
+  }
 }
 
 /** Seed one system heartbeat monitor and its private scratch in the test state DB. */

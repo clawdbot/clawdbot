@@ -194,6 +194,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;
@@ -202,7 +203,8 @@ export type OpenAIResponsesRequestParams = {
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

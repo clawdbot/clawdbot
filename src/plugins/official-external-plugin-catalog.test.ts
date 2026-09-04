@@ -2166,7 +2166,7 @@ describe("official external plugin catalog", () => {
     expect(manifest?.providerEndpoints).toEqual([
       {
         endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        baseUrls: ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"],
       },
     ]);
   });
@@ -2186,8 +2186,8 @@ describe("official external plugin catalog", () => {
     expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode-go"]);
     expect(manifest?.providerEndpoints).toEqual([
       {
-        endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        endpointClass: "opencode-go-native",
+        baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
       },
     ]);
   });

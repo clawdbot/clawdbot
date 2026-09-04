@@ -969,10 +969,6 @@ export function resolveChannelProgressDraftMaxLineChars(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
-function sliceCodePoints(value: string, start: number, end?: number): string {
-  return Array.from(value).slice(start, end).join("");
-}
-
 function compactProgressLineDetail(detail: string, maxChars: number): string {
   const chars = Array.from(detail);
   if (chars.length <= maxChars) {
@@ -990,7 +986,7 @@ function compactProgressLineDetail(detail: string, maxChars: number): string {
 }
 
 function removeUnbalancedInlineBackticks(value: string): string {
-  const backtickCount = Array.from(value).filter((char) => char === "`").length;
+  const backtickCount = value.match(/`/g)?.length ?? 0;
   if (backtickCount % 2 === 0) {
     return value;
   }
@@ -1003,7 +999,7 @@ function repairCompactedProgressMarkdown(value: string): string {
   if (!trimmedStart.startsWith("_") || trimmedStart.endsWith("_")) {
     return withoutDanglingBackticks;
   }
-  const underscoreCount = Array.from(trimmedStart).filter((char) => char === "_").length;
+  const underscoreCount = trimmedStart.match(/_/g)?.length ?? 0;
   if (underscoreCount % 2 === 0) {
     return withoutDanglingBackticks;
   }
@@ -1016,14 +1012,18 @@ function repairCompactedProgressMarkdown(value: string): string {
 
 function compactChannelProgressDraftNarration(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  if (Array.from(normalized).length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
+  const chars = Array.from(normalized);
+  if (chars.length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
     return normalized;
   }
-  return compactPlainProgressLine(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
+  return compactPlainProgressLine(chars, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
 }
 
-function compactPlainProgressLine(line: string, maxChars: number): string {
-  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
+function compactPlainProgressLine(chars: readonly string[], maxChars: number): string {
+  const head = chars
+    .slice(0, maxChars - 1)
+    .join("")
+    .trimEnd();
   const boundary = head.search(/\s+\S*$/u);
   if (boundary > Math.floor(maxChars * 0.6)) {
     return `${head.slice(0, boundary).trimEnd()}…`;
@@ -1075,7 +1075,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return repairCompactedProgressMarkdown(compactPlainProgressLine(normalized, maxChars));
+  return repairCompactedProgressMarkdown(compactPlainProgressLine(chars, maxChars));
 }
 
 export function formatPlanChecklistLines(

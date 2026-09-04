@@ -56,16 +56,19 @@ function isAuthoredProgressLine(line: ChannelProgressDraftLine): boolean {
 
 function resolveProgressAttention(
   lines: readonly ChannelProgressDraftLine[],
+  finalStatus?: "complete" | "error",
 ): SlackPlanTask | undefined {
   const approval = lines.findLast(
     (line) => line.kind === "approval" && line.status === "requested",
   );
   if (approval) {
-    return {
-      id: "openclaw_attention",
-      title: compactTitle(`Approval required: ${approval.detail || approval.label}`),
-      status: "pending",
-    };
+    return finalStatus
+      ? undefined
+      : {
+          id: "openclaw_attention",
+          title: compactTitle(`Approval required: ${approval.detail || approval.label}`),
+          status: "pending",
+        };
   }
   const failure = lines.findLast((line) => {
     const status = line.status?.trim().toLowerCase();
@@ -79,12 +82,14 @@ function resolveProgressAttention(
   if (!failure) {
     return undefined;
   }
+  const title = [...new Set([failure.label, failure.detail, failure.status].filter(Boolean))].join(
+    " — ",
+  );
+  // Native rows cannot be removed; successful turns retain failures as recovered history.
   return {
     id: "openclaw_attention",
-    title: compactTitle(
-      [...new Set([failure.label, failure.detail, failure.status].filter(Boolean))].join(" — "),
-    ),
-    status: "error",
+    title: compactTitle(finalStatus === "complete" ? `Recovered: ${title}` : title),
+    status: finalStatus ?? "error",
   };
 }
 
@@ -115,7 +120,7 @@ export function buildSlackProgressStreamChunks(params: {
         status: entry.status === "completed" ? "complete" : entry.status,
       }))
     : [{ id: "openclaw_summary", title: compactTitle(title), status: "in_progress" }];
-  let attention = resolveProgressAttention(params.lines);
+  let attention = resolveProgressAttention(params.lines, params.finalInProgressStatus);
   if (
     params.finalInProgressStatus === "error" &&
     !tasks.some((task) => task.status === "in_progress")
@@ -126,7 +131,7 @@ export function buildSlackProgressStreamChunks(params: {
       status: "error",
     };
   }
-  if (attention && !(params.finalInProgressStatus && attention.status === "pending")) {
+  if (attention) {
     tasks.push(attention);
   }
   const finalTaskIndex = tasks.length - 1;
@@ -148,6 +153,12 @@ export function buildSlackProgressStreamChunks(params: {
 
 type SlackProgressCardState = "working" | "success" | "error";
 
+// Card text is transient status: render authored Markdown as mrkdwn, but never
+// let it ping anyone or nest the card's own bold/italic wrapper.
+function renderProgressCardText(text: string, enclosingStyle?: "bold" | "italic"): string {
+  return normalizeSlackOutboundText(text, { mentions: "escape", enclosingStyle });
+}
+
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
   title: string;
@@ -164,25 +175,28 @@ export function buildSlackProgressCardBlocks(params: {
   const statusLabels = { completed: "Completed", in_progress: "In progress", pending: "Pending" };
   const planLines = (params.plan ?? [])
     .slice(-SLACK_MAX_BLOCKS)
-    .map((entry) => `${statusLabels[entry.status]}: ${compactDetail(entry.step, maxLineChars)}`);
+    .map(
+      (entry) =>
+        `${statusLabels[entry.status]}: ${renderProgressCardText(compactDetail(entry.step, maxLineChars))}`,
+    );
   const narration = params.narration?.replace(/\s+/g, " ").trim();
   const authoredText = params.lines
     .filter(isAuthoredProgressLine)
     .map((line) => line.text.trim())
     .filter((text, index, values) => text && text !== narration && values.indexOf(text) === index)
-    .map((text) => normalizeSlackOutboundText(compactDetail(text, maxLineChars)))
+    .map((text) => renderProgressCardText(compactDetail(text, maxLineChars)))
     .join("\n");
-  const attention = resolveProgressAttention(params.lines);
+  const finalStatus =
+    params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
+  const attention = resolveProgressAttention(params.lines, finalStatus);
   const status =
     params.state === "success" ? "Completed: " : params.state === "error" ? "Failed: " : "";
   const sections = [
-    `${status}*${escapeSlackMrkdwn(params.title.trim() || "Working")}*`,
-    narration ? `_${escapeSlackMrkdwn(narration)}_` : "",
-    planLines.map((line) => escapeSlackMrkdwn(line)).join("\n"),
+    `${status}*${renderProgressCardText(params.title.trim() || "Working", "bold")}*`,
+    narration ? `_${renderProgressCardText(narration, "italic")}_` : "",
+    planLines.join("\n"),
     authoredText,
-    attention && !(params.state !== "working" && attention.status === "pending")
-      ? escapeSlackMrkdwn(attention.title)
-      : "",
+    attention ? escapeSlackMrkdwn(attention.title) : "",
   ];
   const blocks: (Block | KnownBlock)[] = sections.filter(Boolean).map((text) => ({
     type: "section",

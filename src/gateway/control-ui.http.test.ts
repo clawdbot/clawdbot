@@ -64,7 +64,7 @@ type FileHandleRead = (
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
-const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
 const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
@@ -72,8 +72,9 @@ const resolvePlaybackTranscodeMock = vi.hoisted(() =>
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
+vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/ffmpeg-exec.js")>()),
+  runFfprobe: runFfprobeMock,
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
@@ -116,8 +117,8 @@ function createAuthRateLimiterSpy() {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
-  probeMediaFileDescriptorMock.mockReset();
-  probeMediaFileDescriptorMock.mockResolvedValue({});
+  runFfprobeMock.mockReset();
+  runFfprobeMock.mockResolvedValue("{}");
   resolvePlaybackModeForSourceMock.mockReset();
   resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
     mimeType === "audio/x-caf" ? "transcode" : "native",
@@ -174,6 +175,7 @@ describe("handleControlUiHttpRequest", () => {
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
       automaticallyFetchFavicons: boolean;
+      communityInvite: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1156,7 +1158,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("reports assistant audio size, type, and probed duration metadata", async () => {
-    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-audio-meta-",
       fn: async (tmpRoot) => {
@@ -1178,7 +1180,9 @@ describe("handleControlUiHttpRequest", () => {
           sizeBytes: contents.byteLength,
           durationMs: 2345,
         });
-        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+        expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
+          stdinFileDescriptor: expect.any(Number),
+        });
       },
     });
   });
@@ -1760,32 +1764,36 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.automaticallyFetchFavicons).toBe(true);
+        expect(parsed.communityInvite).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
 
-  it("projects an explicit favicon opt-out into bootstrap config", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+  it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
+    "projects an explicit %s opt-out into bootstrap config",
+    async (key) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                gateway: { controlUi: { [key]: false } },
+              },
             },
-          },
-        );
+          );
 
-        expect(handled).toBe(true);
-        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
-      },
-    });
-  });
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end)[key]).toBe(false);
+        },
+      });
+    },
+  );
 
   it("omits the assistant agent id without a config snapshot", async () => {
     await withControlUiRoot({
@@ -3533,6 +3541,7 @@ describe("handleControlUiHttpRequest", () => {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
               sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
+              contentPath: filePath,
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;
