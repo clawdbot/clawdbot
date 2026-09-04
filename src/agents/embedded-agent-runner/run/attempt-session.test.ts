@@ -116,7 +116,7 @@ function createInput(options?: {
       throw options.activationError;
     }
   });
-  const setPromptPreparation = vi.fn<(prepare: (() => Promise<void>) | undefined) => void>();
+  const setPromptPreparation = vi.fn<AgentSession[typeof agentSessionSetPromptPreparation]>();
   const activeSession = {
     [agentSessionSetPromptPreparation]: setPromptPreparation,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
@@ -444,6 +444,31 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     controller.abort(reason);
     await expect(prepare!()).rejects.toBe(reason);
   });
+
+  it.each([false, true])(
+    "checks replay ownership synchronously after preparation with cancellation %s",
+    async (cancel) => {
+      const fixture = createInput();
+      const controller = new AbortController();
+      const assertInitialUserTurnReplay = vi.fn();
+      await prepareEmbeddedAttemptAgentSession({
+        ...fixture.input,
+        runAbortSignal: controller.signal,
+        assertInitialUserTurnReplay,
+      });
+      const admit = await fixture.setPromptPreparation.mock.lastCall?.[0]?.();
+      expect(assertInitialUserTurnReplay).not.toHaveBeenCalled();
+      const reason = new Error("closed after preparation");
+      if (cancel) {
+        controller.abort(reason);
+        expect(() => admit?.()).toThrow(reason);
+        expect(assertInitialUserTurnReplay).not.toHaveBeenCalled();
+      } else {
+        admit?.();
+        expect(assertInitialUserTurnReplay).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("does not install Code Mode outcome handling when the run kept direct tools", async () => {
     const fixture = createInput({ codeModeControlsEnabledForRun: false });

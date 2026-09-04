@@ -12,6 +12,7 @@ import {
 } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
+import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
 
 export type ChannelKind = ChannelId;
 
@@ -26,8 +27,7 @@ export type GatewayReloadPlan = {
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
-  reconcileSkillReviewJobs?: boolean;
-  restartHealthMonitor: boolean;
+  reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
   disposeMcpRuntimes: boolean;
@@ -45,8 +45,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
-    !plan.reconcileSkillReviewJobs &&
-    !plan.restartHealthMonitor &&
+    !plan.reconcileSystemJobs &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0 &&
@@ -71,8 +70,7 @@ type ReloadAction =
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
-  | "reconcile-skill-review-jobs"
-  | "restart-health-monitor"
+  | "reconcile-system-jobs"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
   | `restart-channel-account:${ChannelId}`
@@ -83,13 +81,16 @@ type GatewayReloadPlanOptions = {
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
+  previousConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
+const AUTH_CREDENTIAL_PATHS = ["gateway.auth.token", "gateway.auth.password"];
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  ...AUTH_CREDENTIAL_PATHS.map((prefix): ReloadRule => ({ prefix, kind: "restart" })),
   // Request policy reads the published config; listeners and startup-owned
   // resources retain the broad Gateway restart rule below.
   { prefix: "gateway.http.endpoints", kind: "hot" },
@@ -104,18 +105,31 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.controlUi.embedSandbox", kind: "hot" },
   { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
   { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
+  { prefix: "gateway.controlUi.allowedOrigins", kind: "hot" },
+  { prefix: "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback", kind: "hot" },
   { prefix: "gateway.nodes.browser", kind: "hot" },
   { prefix: "gateway.nodes.pairing", kind: "hot" },
+  { prefix: "gateway.nodes.commands", kind: "hot" },
+  { prefix: "gateway.nodes.pluginTools.enabled", kind: "hot" },
+  { prefix: "gateway.nodes.allowSkills", kind: "hot" },
   { prefix: "gateway.push.apns.relay", kind: "hot" },
-  // New PTYs use the committed shell; availability/CSP and detach timers stay startup-owned.
-  { prefix: "gateway.terminal.shell", kind: "hot" },
+  { prefix: "gateway.terminal", kind: "hot" },
+  { prefix: "gateway.auth.rateLimit", kind: "hot" },
+  { prefix: "discovery.mdns.mode", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
-  {
-    prefix: "agents.defaults.heartbeat",
+  ...[
+    "agents.defaults.heartbeat",
+    "agents.defaults.models",
+    "agents.defaults.modelPolicy",
+    "agents.defaults.model",
+    "models",
+    "agent.heartbeat",
+  ].map((prefix): ReloadRule => ({
+    prefix,
     kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
+    actions: ["restart-heartbeat", "reconcile-system-jobs"],
+  })),
   {
     prefix: "agents.defaults.sessionStore",
     kind: "hot",
@@ -123,36 +137,15 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agents.defaults", kind: "hot" },
   {
-    prefix: "agents.defaults.models",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "agents.defaults.modelPolicy",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "agents.defaults.model",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "models",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
     prefix: "agents.entries",
     kind: "hot",
-    actions: ["restart-heartbeat", "refresh-hooks-policy"],
+    actions: ["restart-heartbeat", "reconcile-system-jobs", "refresh-hooks-policy"],
   },
   { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
-  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   {
     prefix: "skills.workshop.autonomous.mode",
     kind: "hot",
-    actions: ["reconcile-skill-review-jobs"],
+    actions: ["reconcile-system-jobs"],
   },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
@@ -232,12 +225,10 @@ function listReloadRules(): ReloadRule[] {
         return rule;
       })
       .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
+        (plugin.reload?.noopPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        })),
       );
   });
   const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
@@ -252,40 +243,28 @@ function listReloadRules(): ReloadRule[] {
     },
   ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (entry.registration.restartPrefixes ?? [])
-      .map(
-        (prefix): ReloadRule => ({
-          prefix,
-          kind: "restart",
-        }),
-      )
-      .concat(
-        (entry.registration.hotPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "hot",
-          }),
-        ),
-        (entry.registration.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
-      ),
+    (
+      [
+        ["restart", entry.registration.restartPrefixes],
+        ["hot", entry.registration.hotPrefixes],
+        ["none", entry.registration.noopPrefixes],
+      ] as const
+    ).flatMap(([kind, prefixes]) => (prefixes ?? []).map((prefix) => ({ prefix, kind }))),
   );
   const rules: ReloadRule[] = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
     ...channelPluginStateRules,
-    // Channel snapshots capture the shared fallback. Fan out by default while
+    // Channel snapshots capture shared policy. Fan out by default while
     // preserving explicit plugin/channel policies above on equal-prefix ties.
-    {
-      prefix: "agents.defaults.mediaMaxMb",
-      kind: "hot",
-      actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
-    },
+    ...["agents.defaults.mediaMaxMb", "channels.defaults", "channels.modelByChannel"].map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+        actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
+      }),
+    ),
     ...BASE_RELOAD_RULES_TAIL,
   ];
   // Narrow config contracts must override broad owner fallbacks. Sort once per
@@ -450,8 +429,7 @@ export function buildGatewayReloadPlan(
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
-    reconcileSkillReviewJobs: false,
-    restartHealthMonitor: false,
+    reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -511,11 +489,8 @@ export function buildGatewayReloadPlan(
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
         break;
-      case "reconcile-skill-review-jobs":
-        plan.reconcileSkillReviewJobs = true;
-        break;
-      case "restart-health-monitor":
-        plan.restartHealthMonitor = true;
+      case "reconcile-system-jobs":
+        plan.reconcileSystemJobs = true;
         break;
       case "reload-plugins":
         plan.reloadPlugins = true;
@@ -542,7 +517,10 @@ export function buildGatewayReloadPlan(
       plan.restartReasons.push(path);
       continue;
     }
-    if (rule.kind === "restart") {
+    const isCredentialRotation =
+      AUTH_CREDENTIAL_PATHS.includes(rule.prefix) &&
+      canHotReloadGatewayAuthCredentials(options.previousConfig, options.candidateConfig);
+    if (rule.kind === "restart" && !isCredentialRotation) {
       plan.restartGateway = true;
       plan.restartReasons.push(path);
       continue;

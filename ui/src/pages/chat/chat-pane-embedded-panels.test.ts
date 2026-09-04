@@ -30,8 +30,8 @@ describe("chat pane embedded panels", () => {
   it("enumerates a structural loading variant for every side-panel tab", async () => {
     const expected = {
       browser: "browser",
-      chat: "chat",
       companion: "chat",
+      dashboard: "review",
       desktop: "desktop",
       detail: "review",
       discussion: "discussion",
@@ -50,7 +50,7 @@ describe("chat pane embedded panels", () => {
       "tasks",
       "desktop",
       "discussion",
-      "chat",
+      "dashboard",
     ]);
     for (const definition of definitions) {
       const mount = document.body.appendChild(document.createElement("div"));

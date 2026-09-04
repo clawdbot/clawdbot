@@ -43,7 +43,7 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
           `⬆️ Updating OpenClaw${versions}. Back in a few minutes; I'll confirm here.`,
         );
       }
-      const message = summary.handoff?.message?.replaceAll("\n", " ");
+      const message = (summary.message ?? summary.handoff?.message)?.replaceAll("\n", " ");
       const command = summary.handoff?.command;
       const manualCommand =
         command && !message?.includes(command) ? `Run manually: ${command}` : "";

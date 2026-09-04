@@ -48,6 +48,7 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
   includeLabelOwners?: string;
@@ -236,7 +237,10 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 transactionDb,
                 replacement.sessionKey,
                 cloneSessionEntry(replacement.entry),
-                { previousEntry: selectedBefore ?? null },
+                {
+                  ...(params.consumePendingReset ? { consumePendingReset: true } : {}),
+                  previousEntry: selectedBefore ?? null,
+                },
               );
               deleteLegacySessionEntryRows(
                 transactionDb,

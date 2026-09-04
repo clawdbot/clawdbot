@@ -16,13 +16,13 @@ type FixtureOptions = {
   scopes?: string[];
   selfUser?: { id: string };
   data?: NewSessionRouteData;
-  request?: (method: string) => Promise<unknown>;
+  request?: (method: string, params?: unknown) => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
-  const request = vi.fn((method: string) => {
+  const request = vi.fn((method: string, params?: unknown) => {
     if (options.request) {
-      return options.request(method);
+      return options.request(method, params);
     }
     return Promise.resolve({});
   });

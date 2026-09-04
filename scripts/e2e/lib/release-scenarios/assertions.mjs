@@ -8,7 +8,7 @@ import {
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
 import {
   applyMockOpenAiModelConfig,
@@ -61,7 +61,7 @@ function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
   return [
     ...paths.map((file) => fs.readFileSync(file, "utf8")),
-    readSharedAuthProfileStoreText(stateDir()),
+    readCanonicalAuthProfileStoreText(stateDir()),
   ]
     .filter(Boolean)
     .join("\n");
@@ -78,7 +78,7 @@ function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
   assert(fs.existsSync(configPath()), "openclaw.json missing");
   assertNoLegacyPrimaryAuthRows(stateDir());
-  assertOpenAiEnvAuthProfileStore(readSharedAuthProfileStoreText(stateDir()), {
+  assertOpenAiEnvAuthProfileStore(readCanonicalAuthProfileStoreText(stateDir()), {
     missingMessage: "OpenAI env ref was not persisted",
     envRefMessage: "OpenAI env ref was not persisted",
     rawKeyMessage: "raw OpenAI key was persisted",

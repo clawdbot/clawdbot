@@ -1,12 +1,14 @@
 // Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
@@ -458,6 +460,29 @@ describe("Control UI plugin and catalog icon routes", () => {
         enlarge: false,
       },
     });
+  });
+
+  it("closes the descriptor when rejecting an empty package icon", async () => {
+    writeFileSync(localIconPath, "");
+    const opened = vi.spyOn(boundaryFileRead, "openRootFile");
+    const closed = vi.spyOn(fs, "closeSync");
+    try {
+      // Sync the named builtin export to observe release itself; another worker
+      // thread may reuse the retired descriptor before the request resolves.
+      syncBuiltinESMExports();
+      const response = await request("/__openclaw__/plugin-icon/empty-package");
+      expect(response.status).toBe(404);
+      const receipt = await opened.mock.results[0]?.value;
+      expect(receipt?.ok).toBe(true);
+      if (!receipt?.ok) {
+        throw new Error("expected the real empty icon file to open");
+      }
+      expect(closed).toHaveBeenCalledWith(receipt.fd);
+    } finally {
+      closed.mockRestore();
+      opened.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 
   it("rejects a package icon redirected outside its package after discovery", async () => {

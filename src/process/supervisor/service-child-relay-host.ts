@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Duplex, Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { toErrorObject } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -28,6 +29,7 @@ type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-l
 type StdioEntry = "ignore" | "inherit" | "ipc" | "pipe" | number;
 
 const PUSHED_OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
+const CONTROL_PENDING_LINE_LIMIT_BYTES = 256 * 1024;
 
 function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChildAnchorMessage {
   // SAFETY: the spawned relay or Job anchor is the sole writer on each private protocol channel.
@@ -166,6 +168,14 @@ export async function createServiceChildRelayAdapter(params: {
     windowsHide: true,
     env: process.env,
   });
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      child.kill("SIGKILL");
+      throw error;
+    }
+  };
 
   // SAFETY: a defined controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
@@ -359,25 +369,52 @@ export async function createServiceChildRelayAdapter(params: {
 
   if (control) {
     let pending = "";
-    control.setEncoding("utf8");
-    control.on("data", (chunk: string) => {
-      pending += chunk;
+    let pendingBytes = 0;
+    let decoder = new StringDecoder("utf8");
+    const rejectControlLine = () => {
+      loseIdentity("control pipe pending line exceeded cap");
+      child.kill("SIGKILL");
+      pending = "";
+      pendingBytes = 0;
+      decoder = new StringDecoder("utf8");
+    };
+    const parseControlLine = (fragment: Buffer): boolean => {
+      const line = pending + decoder.end(fragment);
+      pending = "";
+      pendingBytes = 0;
+      decoder = new StringDecoder("utf8");
+      try {
+        const message = readChildMessage(JSON.parse(line));
+        if (!("sequence" in message)) {
+          throw new Error("invalid anchor message");
+        }
+        handleAnchorMessage(message);
+      } catch {
+        loseIdentity("invalid anchor message");
+      }
+      return true;
+    };
+    // Keep raw bytes until the line cap accepts each fragment.
+    // String mode decodes a complete oversized frame before this parser can reject it.
+    control.on("data", (chunk: Buffer) => {
+      let offset = 0;
       for (;;) {
-        const newline = pending.indexOf("\n");
+        const searchLength = CONTROL_PENDING_LINE_LIMIT_BYTES - pendingBytes + 1;
+        const boundedChunk = chunk.subarray(offset, offset + searchLength);
+        const newline = boundedChunk.indexOf(0x0a);
         if (newline < 0) {
-          break;
-        }
-        const line = pending.slice(0, newline);
-        pending = pending.slice(newline + 1);
-        try {
-          const message = readChildMessage(JSON.parse(line));
-          if (!("sequence" in message)) {
-            throw new Error("invalid anchor message");
+          if (boundedChunk.length === searchLength) {
+            rejectControlLine();
+          } else {
+            pending += decoder.write(boundedChunk);
+            pendingBytes += boundedChunk.length;
           }
-          handleAnchorMessage(message);
-        } catch {
-          loseIdentity("invalid anchor message");
+          return;
         }
+        if (!parseControlLine(boundedChunk.subarray(0, newline))) {
+          return;
+        }
+        offset += newline + 1;
       }
     });
     control.once("close", () => {
@@ -452,6 +489,7 @@ export async function createServiceChildRelayAdapter(params: {
     controlFd,
     windowsShellCommand: params.windowsShellCommand,
   };
+  assertCurrent();
   try {
     await Promise.race([sendChildMessage(start), constructionAbort.promise]);
   } catch (error) {
@@ -460,6 +498,7 @@ export async function createServiceChildRelayAdapter(params: {
     throw error;
   }
 
+  assertCurrent();
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
     secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal }),
@@ -486,6 +525,7 @@ export async function createServiceChildRelayAdapter(params: {
   }
   removeConstructionAbortListener();
 
+  assertCurrent();
   const stdin = createManagedChildStdin(child.stdin);
   if (params.input !== undefined) {
     stdin?.write(params.input);

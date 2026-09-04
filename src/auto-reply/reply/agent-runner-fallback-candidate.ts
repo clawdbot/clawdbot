@@ -8,6 +8,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -29,6 +30,7 @@ import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -190,6 +192,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       sessionOverride: {
         kind: "reconcile-completed",
         reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
+      },
+      onAcceptedTerminal: () => {
+        params.commitTerminalOutcome();
+        return turn.replyOperation
+          ? beginReplyOperationFinalizationWork(turn.replyOperation, RUN_STALE_TAKEOVER_MS)
+          : undefined;
       },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {

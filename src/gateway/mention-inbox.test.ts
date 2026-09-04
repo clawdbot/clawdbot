@@ -4,10 +4,12 @@ import {
   validateUsersMentionableResult,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
+  ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   linkEmail,
   setDisplayName,
@@ -31,9 +33,10 @@ afterEach(() => vi.useRealTimers());
 async function withInbox(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   cfg: OpenClawConfig = {},
+  options: { notifications?: boolean } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await createFixture(cfg);
+    const fixture = await createFixture(cfg, options);
     try {
       await run(fixture);
     } finally {
@@ -43,7 +46,7 @@ async function withInbox(
   });
 }
 
-async function createFixture(cfg: OpenClawConfig) {
+async function createFixture(cfg: OpenClawConfig, options: { notifications?: boolean }) {
   const alice = ensureProfileForEmail("alice@mentions.example.test");
   const bob = ensureProfileForEmail("bob@mentions.example.test");
   const carol = ensureProfileForEmail("carol@mentions.example.test");
@@ -57,22 +60,24 @@ async function createFixture(cfg: OpenClawConfig) {
   const clients: GatewayClient[] = [aliceClient, bobClient, bobSecond, carolClient];
   const broadcast = vi.fn();
   const push = vi.fn<NonNullable<Parameters<typeof createMentionInbox>[0]["onMentionCreated"]>>();
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: SESSION_KEY },
-    {
-      sessionId: SESSION_ID,
-      updatedAt: Date.now(),
-      visibility: "shared",
-      createdActor: { type: "human", source: "profile", id: alice.id },
-      displayName: "Design review",
-    },
-  );
+  const setSession = (entry: Partial<SessionEntry>, sessionKey = SESSION_KEY) =>
+    upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: SESSION_ID,
+        updatedAt: Date.now(),
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: alice.id },
+        ...entry,
+      },
+    );
+  await setSession({ displayName: "Design review" });
   const inbox = createMentionInbox({
     gatewayInstanceId: "mention-gateway",
     getRuntimeConfig: () => cfg,
     getClients: () => clients,
     broadcastToConnIds: broadcast,
-    onMentionCreated: push,
+    onMentionCreated: options.notifications === false ? undefined : push,
   });
   const context = { mentionInbox: inbox } as GatewayRequestContext;
   async function call(method: string, params: Record<string, unknown>, client = bobClient) {
@@ -109,6 +114,7 @@ async function createFixture(cfg: OpenClawConfig) {
     call,
     broadcast,
     push,
+    setSession,
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}) {
       inbox.recordCommittedInput({
         sourceId,
@@ -218,15 +224,7 @@ describe("temporary human mention Inbox", () => {
       expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
       f.post();
       const visible = read(f.inbox, f.bobClient);
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SESSION_KEY },
-        {
-          sessionId: SESSION_ID,
-          updatedAt: Date.now(),
-          visibility: "draft",
-          createdActor: { type: "human", source: "profile", id: f.alice.id },
-        },
-      );
+      await f.setSession({ visibility: "draft" });
       f.inbox.invalidate();
       const hidden = read(f.inbox, f.bobClient);
       expect(hidden.items).toEqual([]);
@@ -264,6 +262,80 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
+  it("keeps recipients independent when they share a committed message", async () => {
+    await withInbox(async (f) => {
+      f.post("shared-source", { recipientProfileIds: [f.bob.id, f.carol.id] });
+      const bob = read(f.inbox, f.bobClient).items[0]!;
+      const carol = read(f.inbox, f.carolClient).items[0]!;
+      expect(bob.id).not.toBe(carol.id);
+      bob.excerpt = "Changed by a caller";
+      expect(read(f.inbox, f.carolClient).items).toEqual([carol]);
+      f.inbox.dismiss(f.bobClient, [bob.id]);
+      expect(read(f.inbox, f.bobClient).items).toEqual([]);
+      expect(read(f.inbox, f.carolClient).items).toEqual([carol]);
+      expect(f.push.mock.calls.map(([notification]) => notification.isCurrent())).toEqual([
+        false,
+        true,
+      ]);
+      f.post("shared-source", { recipientProfileIds: [f.bob.id, f.carol.id] });
+      expect(f.push).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("rebuilds the merged profile's bound in arrival order without resurrecting evictions", async () => {
+    await withInbox(async (f) => {
+      f.clients.length = 0;
+      const old = ensureProfileForEmail("bob-merged@mentions.example.test");
+      for (let index = 0; index < 150; index++) {
+        f.post(`merged-${index}`, { recipientProfileIds: [index % 2 ? f.bob.id : old.id] });
+      }
+      linkEmail("bob-merged@mentions.example.test", f.bob.id);
+      await Promise.resolve();
+      const retained = read(f.inbox, f.bobClient).items;
+      expect(retained.map((item) => item.messageId)).toEqual(
+        Array.from({ length: 100 }, (_, index) => `message-merged-${149 - index}`),
+      );
+      expect(f.push.mock.calls.filter(([notification]) => notification.isCurrent())).toHaveLength(
+        100,
+      );
+      f.post("merged-0", { recipientProfileIds: [old.id] });
+      expect(read(f.inbox, f.bobClient).items).toEqual(retained);
+      f.inbox.dismiss(
+        f.bobClient,
+        retained.map((item) => item.id),
+      );
+      f.post("merged-149");
+      expect(read(f.inbox, f.bobClient).items).toEqual([]);
+    });
+  });
+
+  it.each([
+    { rolesEnabled: false, admin: false, visible: true },
+    { rolesEnabled: true, admin: false, visible: false },
+    { rolesEnabled: true, admin: true, visible: true },
+  ])("preserves shared-owner reads: %j", async ({ rolesEnabled, admin, visible }) => {
+    const cfg: OpenClawConfig = rolesEnabled
+      ? {
+          gateway: {
+            roles: {
+              default: "reader",
+              definitions: {
+                reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+              },
+            },
+          },
+        }
+      : {};
+    await withInbox(async (f) => {
+      const owner = ensureGatewayOwnerProfile("Owner");
+      const client = identifiedClient(owner.id, "Owner");
+      client.connect.scopes = [admin ? "operator.admin" : "operator.read"];
+      f.post("owner", { recipientProfileIds: [owner.id] });
+      expect(read(f.inbox, client).items).toHaveLength(visible ? 1 : 0);
+      expect(f.inbox.mentionable(client, { sessionKey: SESSION_KEY }).ok).toBe(visible);
+    }, cfg);
+  });
+
   it("fences delayed push preparation on role revocation, session replacement, and disposal", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -287,10 +359,7 @@ describe("temporary human mention Inbox", () => {
       expect(f.inbox.list(f.bobClient)).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       setUserProfileRole(f.bob.id, "reader");
       invalidateOperatorRolePolicy(f.bob.id);
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SESSION_KEY },
-        { sessionId: "replacement-session", updatedAt: Date.now(), visibility: "shared" },
-      );
+      await f.setSession({ sessionId: "replacement-session" });
       emitSessionIdentityMutation({
         kind: "replace",
         previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
@@ -326,8 +395,17 @@ describe("temporary human mention Inbox", () => {
   it("expires on the Gateway clock and does not backfill after a new Gateway lifetime", async () => {
     await withInbox(async (f) => {
       vi.useFakeTimers();
-      f.post();
+      f.post("first");
       expect(read(f.inbox, f.bobClient).items).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      f.post("second");
+      await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60_000 - 1_000);
+      expect(read(f.inbox, f.bobClient).items.map((item) => item.messageId)).toEqual([
+        "message-second",
+      ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(read(f.inbox, f.bobClient).items).toEqual([]);
+      f.post("new-deadline");
       await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60_000);
       expect(read(f.inbox, f.bobClient).items).toEqual([]);
       f.inbox.dispose();
@@ -349,49 +427,39 @@ describe("temporary human mention Inbox", () => {
   });
 
   it("enforces the global bound and keeps evicted sources consumed", async () => {
-    await withInbox(async (f) => {
-      f.inbox.dispose();
-      const profiles = Array.from(
-        { length: 101 },
-        (_, index) => ensureProfileForEmail(`capacity-${index}@mentions.example.test`).id,
-      );
-      const inbox = createMentionInbox({
-        gatewayInstanceId: "bounded-gateway",
-        getRuntimeConfig: () => ({}),
-        getClients: () => [],
-        broadcastToConnIds: vi.fn(),
-      });
-      const post = (index: number) =>
-        inbox.recordCommittedInput({
-          sourceId: `source-${index}`,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          sessionId: SESSION_ID,
-          messageId: `message-${index}`,
-          senderProfileId: f.alice.id,
-          recipientProfileIds: Array.from(
-            { length: 10 },
-            (_, offset) => profiles[(index * 10 + offset) % profiles.length]!,
-          ),
-        });
-      try {
+    await withInbox(
+      async (f) => {
+        f.clients.length = 0;
+        const profiles = Array.from(
+          { length: 101 },
+          (_, index) => ensureProfileForEmail(`capacity-${index}@mentions.example.test`).id,
+        );
+        const post = (index: number) =>
+          f.post(`source-${index}`, {
+            messageId: `message-${index}`,
+            excerpt: undefined,
+            recipientProfileIds: Array.from(
+              { length: 10 },
+              (_, offset) => profiles[(index * 10 + offset) % profiles.length]!,
+            ),
+          });
         for (let index = 0; index < 1_001; index++) {
           post(index);
         }
-        const retained = profiles.map((id) => read(inbox, identifiedClient(id)));
+        const retained = profiles.map((id) => read(f.inbox, identifiedClient(id)));
         expect(retained.reduce((sum, snapshot) => sum + snapshot.items.length, 0)).toBe(10_000);
         const firstRecipient = identifiedClient(profiles[0]!);
         expect(
-          read(inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
+          read(f.inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
         ).toBe(false);
         post(0);
         expect(
-          read(inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
+          read(f.inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
         ).toBe(false);
-      } finally {
-        inbox.dispose();
-      }
-    });
+      },
+      {},
+      { notifications: false },
+    );
   });
 
   it("keeps the posted Inbox item if its push adapter throws", async () => {
@@ -507,15 +575,7 @@ describe("human mention directory", () => {
         f.bobClient.connect.scopes = ["operator.admin"];
         f.clients.length = 0;
         const sessionId = sessionKey === SESSION_KEY ? SESSION_ID : "incognito-policy-session";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: Date.now(),
-            createdActor: { type: "human", source: "profile", id: f.alice.id },
-            ...entry,
-          },
-        );
+        await f.setSession({ sessionId, ...entry }, sessionKey);
         const directory = f.inbox.mentionable(f.aliceClient, { sessionKey, query: "Bob" });
         const admission = f.inbox.validateRecipients(f.aliceClient, { sessionKey }, [f.bob.id]);
         f.post("policy-source", { sessionKey, sessionId });
@@ -551,15 +611,7 @@ describe("human mention directory", () => {
         f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, ["missing-person"])
           .ok,
       ).toBe(false);
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SESSION_KEY },
-        {
-          sessionId: SESSION_ID,
-          updatedAt: Date.now(),
-          visibility: "draft",
-          createdActor: { type: "human", source: "profile", id: f.alice.id },
-        },
-      );
+      await f.setSession({ visibility: "draft" });
       const hidden = f.inbox.mentionable(f.bobClient, { sessionKey: SESSION_KEY });
       expect(hidden).toMatchObject({
         ok: false,

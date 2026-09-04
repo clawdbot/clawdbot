@@ -28,6 +28,7 @@ import {
   type GatewayPluginRuntimeClaim,
 } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
@@ -53,6 +54,7 @@ export async function prepareGatewayLifecycle(params: {
   shutdownRuntime: GatewayShutdownRuntime;
 }) {
   const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
+  const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const {
     minimalTestGateway,
     transportBridge,
@@ -88,7 +90,6 @@ export async function prepareGatewayLifecycle(params: {
     activeTaskCount,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
-    nodeDesktopObserveAvailable,
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     workerPlacementRuntime,
@@ -123,8 +124,7 @@ export async function prepareGatewayLifecycle(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRuntime.registry.nodeHostCommands,
-    nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    getConfig: getRuntimeConfig,
     onRunnerStateChanged: (nodeId, change) => {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged();
@@ -143,15 +143,12 @@ export async function prepareGatewayLifecycle(params: {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
-  const nodeDesktopService =
-    nodeDesktopObserveAvailable && desktopSessionRegistry && nodeDesktopStreamBroker
-      ? (await import("./desktop/node-source.js")).createNodeDesktopService({
-          getConfig: getRuntimeConfig,
-          nodeRegistry,
-          desktopRegistry: desktopSessionRegistry,
-          streamBroker: nodeDesktopStreamBroker,
-        })
-      : undefined;
+  const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
+    getConfig: getRuntimeConfig,
+    nodeRegistry,
+    desktopRegistry: desktopSessionRegistry,
+    streamBroker: nodeDesktopStreamBroker,
+  });
   nodeDesktopServiceRef.current = nodeDesktopService;
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
@@ -256,17 +253,17 @@ export async function prepareGatewayLifecycle(params: {
       activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
-    swapBonjourStop: (next: typeof runtimeState.bonjourStop) => {
-      const previous = runtimeState.bonjourStop;
-      runtimeState.bonjourStop = next;
+    swapDiscovery: (next: typeof runtimeState.discovery) => {
+      const previous = runtimeState.discovery;
+      runtimeState.discovery = next;
       return previous;
     },
     setScheduledServiceHandles: (handles: {
       heartbeatRunner: typeof runtimeState.heartbeatRunner;
-      stopOutboundDeliveryRecovery: typeof runtimeState.stopOutboundDeliveryRecovery;
+      stopDeliveryRecovery: typeof runtimeState.stopDeliveryRecovery;
     }) => {
       runtimeState.heartbeatRunner = handles.heartbeatRunner;
-      runtimeState.stopOutboundDeliveryRecovery = handles.stopOutboundDeliveryRecovery;
+      runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
     setPostAttachHandles: (
       handles: {
@@ -289,7 +286,6 @@ export async function prepareGatewayLifecycle(params: {
       hookClientIpConfig: runtimeState.hookClientIpConfig,
       heartbeatRunner: runtimeState.heartbeatRunner,
       cronState: runtimeState.cronState,
-      channelHealthMonitor: runtimeState.channelHealthMonitor,
     }),
     setReloadHookState: (next: {
       hooksConfig: typeof runtimeState.hooksConfig;
@@ -364,10 +360,8 @@ export async function prepareGatewayLifecycle(params: {
   });
   const postReadyState: {
     maintenanceTimer: ReturnType<typeof setTimeout> | null;
-    retainedPluginCleanupHandle: { stop: () => void } | null;
   } = {
     maintenanceTimer: null,
-    retainedPluginCleanupHandle: null,
   };
   const clearPostReadyMaintenanceTimer = () => {
     if (!postReadyState.maintenanceTimer) {
@@ -376,10 +370,10 @@ export async function prepareGatewayLifecycle(params: {
     clearTimeout(postReadyState.maintenanceTimer);
     postReadyState.maintenanceTimer = null;
   };
-  let outboundDeliveryRecoveryStopPromise: Promise<void> | null = null;
-  const stopOutboundDeliveryRecoveryForClose = () => {
-    outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
-    return outboundDeliveryRecoveryStopPromise;
+  let deliveryRecoveryStopPromise: Promise<void> | null = null;
+  const stopDeliveryRecoveryForClose = () => {
+    deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery();
+    return deliveryRecoveryStopPromise;
   };
   let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
   const stopMediaCleanupForClose = () => {
@@ -391,22 +385,21 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    requestEntryLifetime.beginClose();
     mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the
     // plugin/channel or shared-state runtime they still need.
-    void stopOutboundDeliveryRecoveryForClose();
+    void stopDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
-    runtimeState.stopGatewayUpdateCheck();
+    void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
-    postReadyState.retainedPluginCleanupHandle?.stop();
-    postReadyState.retainedPluginCleanupHandle = null;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
   const stopConfigReloaderForClose = () => {
@@ -419,8 +412,10 @@ export async function prepareGatewayLifecycle(params: {
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
-      stopOutboundDeliveryRecoveryForClose(),
+      requestEntryLifetime.waitForPendingEntries(),
+      stopDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
+      runtimeState.stopGatewayUpdateCheck(),
       stopConfigReloaderForClose().catch(() => {}),
     ]);
   };
@@ -491,12 +486,12 @@ export async function prepareGatewayLifecycle(params: {
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     try {
-      markClosePreludeStarted();
+      await beginClosePrelude();
       const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
       await shutdownRuntime.createGatewayCloseHandler({
-        bonjourStop: kernel.swapBonjourStop(null),
+        bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
         clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
         channelIds,
@@ -531,6 +526,7 @@ export async function prepareGatewayLifecycle(params: {
         },
         getPendingReplyCount: getTotalPendingReplies,
         clients,
+        finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
         configReloader: { stop: stopConfigReloaderForClose },
         ...(transport
           ? {
@@ -548,6 +544,7 @@ export async function prepareGatewayLifecycle(params: {
         closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
       })(optsValue);
     } finally {
+      await requestEntryLifetime.sealAndJoin();
       params.releasePluginMetadata();
     }
   };
@@ -594,6 +591,7 @@ export async function prepareGatewayLifecycle(params: {
 
   return {
     ...runtime,
+    requestEntryLifetime,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,

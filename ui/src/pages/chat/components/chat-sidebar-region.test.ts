@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
 import {
   openSlot,
+  closeSlot,
   setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
@@ -33,6 +34,7 @@ async function createRegion(layout: SidebarLayout = openSlot({ columns: [] }, "d
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
+    appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
     setDock: vi.fn(),
@@ -168,7 +170,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -208,16 +210,29 @@ describe("chat sidebar region", () => {
     const region = await createRegion(setSidebarOpen({ columns: [], expanded: false }, true));
     const selector = root(region).querySelector(".side-panel-empty--selector");
 
-    expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a tab");
+    expect(selector?.querySelector(".side-panel-empty__title")).toBeNull();
     expect(selector?.querySelector(".side-panel-empty__description")).toBeNull();
     expect(selector?.querySelector(":scope > .side-panel-empty__icon")).toBeNull();
     expect(
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
+    ).toEqual([
+      "Review",
+      "Terminal Ctrl+`",
+      "Files Ctrl+Shift+B",
+      "Side chat Ctrl+Shift+S",
+      "Dashboard",
+    ]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
+
+    const dashboard = Array.from(
+      root(region).querySelectorAll<HTMLButtonElement>(".side-panel-empty__type"),
+    ).find((button) => button.textContent?.trim() === "Dashboard");
+    dashboard?.click();
+    expect(region.callbacks?.appendComposerText).toHaveBeenCalledWith("/dashboard ");
+    expect(region.callbacks?.openSlot).not.toHaveBeenCalledWith("dashboard");
   });
 
   it("gives every surface the shared icon, title, and description empty state", async () => {
@@ -257,7 +272,7 @@ describe("chat sidebar region", () => {
       "tasks",
       "desktop",
       "discussion",
-      "chat",
+      "dashboard",
     ];
     await region.updateComplete;
 
@@ -269,11 +284,11 @@ describe("chat sidebar region", () => {
       "Terminal Ctrl+`",
       "Browser",
       "Files Ctrl+Shift+B",
-      "Side chat",
+      "Side chat Ctrl+Shift+S",
       "Tasks",
       "Desktop",
       "Discussion",
-      "Board chat",
+      "Dashboard",
     ]);
 
     const browserMenuItem = Array.from(
@@ -293,7 +308,7 @@ describe("chat sidebar region", () => {
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
-  it("expands, restores, and minimizes without closing tabs", async () => {
+  it("expands, collapses, and minimizes without closing tabs", async () => {
     const region = await createRegion();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
@@ -302,7 +317,9 @@ describe("chat sidebar region", () => {
 
     region.layout = setSidebarExpanded(region.layout, true);
     await region.updateComplete;
-    root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
+    const collapse = root(region).querySelector<HTMLButtonElement>(".side-panel__expand");
+    expect(collapse?.getAttribute("aria-label")).toBe("Collapse");
+    collapse?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenLastCalledWith(false);
   });
 
@@ -360,5 +377,43 @@ describe("chat sidebar region", () => {
     const region = await createRegion({ ...openSlot({ columns: [] }, "detail"), open: false });
     expect(root(region).querySelector(".side-panel")).toBeNull();
     expect(root(region).querySelector("[data-primary]")).not.toBeNull();
+  });
+
+  it("retains opted-in app input while minimizing and releases other panel content", async () => {
+    const region = await createRegion(
+      setSidebarOpen(openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"), false),
+    );
+    region.panelTemplates = {
+      ...region.panelTemplates,
+      dashboard: html`<input aria-label="Unsaved app input" />`,
+    };
+    await region.updateComplete;
+    expect(root(region).querySelector(".side-panel")).toBeNull();
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    const input = root(region).querySelector<HTMLInputElement>("input")!;
+    input.value = "Unsaved note";
+    const terminal = root(region).querySelector('[data-panel="terminal"]')!;
+
+    region.layout = setSidebarOpen(region.layout, false);
+    await region.updateComplete;
+    const panel = root(region).querySelector<HTMLElement>(".side-panel")!;
+    expect(panel.hidden).toBe(true);
+    expect(panel.hasAttribute("inert")).toBe(true);
+    expect(root(region).querySelector("resizable-divider")).toBeNull();
+    expect(input.isConnected).toBe(true);
+    expect(terminal.isConnected).toBe(false);
+
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    expect(root(region).querySelector("input")).toBe(input);
+    expect(input.value).toBe("Unsaved note");
+    expect(panel.hidden).toBe(false);
+    expect(panel.hasAttribute("inert")).toBe(false);
+    expect(root(region).querySelector('[data-panel="terminal"]')).not.toBeNull();
+
+    region.layout = closeSlot(region.layout, "dashboard");
+    await region.updateComplete;
+    expect(input.isConnected).toBe(false);
   });
 });

@@ -2,10 +2,9 @@ import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-co
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -167,19 +166,7 @@ export type ResolvedBoardView = {
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  dock: BoardTab["chatDock"];
-  reopenDock: BoardVisibleChatDock;
 };
-
-export const boardChatDockLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.board-chat-dock.v1",
-  minHeight: 180,
-  minWidth: 320,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "left", "right"],
-  defaultHeight: 320,
-  defaultWidth: 420,
-});
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // One distance owns both halves of early history loading: upward intent within

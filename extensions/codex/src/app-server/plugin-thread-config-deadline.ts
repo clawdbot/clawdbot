@@ -182,14 +182,6 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
     ...buildParams
   } = params;
   const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
-  const failClosedOnTimeout = Boolean(
-    params.scheduledRuntimeAuthority ||
-    (policy?.enabled &&
-      ((policy.allowAllPlugins && policy.destructiveApprovalMode === "ask") ||
-        policy.pluginPolicies.some(
-          (plugin) => plugin.enabled && plugin.destructiveApprovalMode === "ask",
-        ))),
-  );
   return {
     enabled: true,
     // The bound context stores admitted apps only; native config owns excluded
@@ -212,7 +204,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
         threadId: buildOptions?.threadId,
         appCache: appCache ?? defaultCodexAppInventoryCache,
         metadataCache,
-        failClosedOnTimeout,
+        failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
         transform: params.scheduledRuntimeAuthority
           ? async (builtConfig, request) =>
               intersectCodexPluginThreadConfigWithScheduledAuthority(

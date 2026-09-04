@@ -667,6 +667,8 @@ async function respondWithConfigRestartWrite(params: {
   mode: ConfigRestartWriteMode;
   writeResult: ConfigWriteCommitResult;
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
   actor: ReturnType<typeof resolveControlPlaneActor>;
   context: GatewayRequestContext;
   respond: RespondFn;
@@ -694,7 +696,8 @@ async function respondWithConfigRestartWrite(params: {
     mode: params.mode,
     configPath: params.writeResult.path,
     changedPaths: params.changedPaths,
-    nextConfig: params.writeResult.config,
+    previousConfig: params.previousConfig,
+    nextConfig: params.nextConfig,
     actor: params.actor,
     context: params.context,
   });
@@ -1165,7 +1168,8 @@ export const configHandlers: GatewayRequestHandlers = {
       disconnectSharedAuthClients,
       awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
         changedPaths,
-        nextConfig: writeConfig,
+        previousConfig: snapshot.config,
+        nextConfig: validatedConfig,
       }),
       respond,
     });
@@ -1178,6 +1182,8 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.patch",
       writeResult,
       changedPaths,
+      previousConfig: snapshot.config,
+      nextConfig: validatedConfig,
       actor,
       context,
       respond,
@@ -1240,7 +1246,8 @@ export const configHandlers: GatewayRequestHandlers = {
       disconnectSharedAuthClients,
       awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
         changedPaths,
-        nextConfig: parsed.writeConfig,
+        previousConfig: snapshot.config,
+        nextConfig: parsed.config,
       }),
       respond,
     });
@@ -1253,6 +1260,8 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.apply",
       writeResult,
       changedPaths,
+      previousConfig: snapshot.config,
+      nextConfig: parsed.config,
       actor,
       context,
       respond,

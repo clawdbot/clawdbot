@@ -44,6 +44,8 @@ const offeredSlotLabels = [
   "Discussion",
 ] as const;
 
+const emptyPanelActionLabels = [...offeredSlotLabels, "Dashboard"] as const;
+
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
@@ -257,8 +259,8 @@ async function seedHiddenBoardSlot(page: Page) {
                 {
                   id: "side-panel-column",
                   side: "right",
-                  panels: [{ id: "chat", slot: "chat" }],
-                  activePanelId: "chat",
+                  panels: [{ id: "dashboard", slot: "dashboard" }],
+                  activePanelId: "dashboard",
                   height: 360,
                   width: 480,
                 },
@@ -381,7 +383,7 @@ async function readSlotColdOpenOutcome(
     expect(
       await choices.locator(".side-panel-type-option__label").allTextContents(),
       `${label} cold-open offered slots`,
-    ).toEqual(offeredSlotLabels);
+    ).toEqual(emptyPanelActionLabels);
     const held =
       label === "Discussion"
         ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)

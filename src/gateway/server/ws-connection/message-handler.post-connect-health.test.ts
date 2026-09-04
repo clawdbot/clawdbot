@@ -491,11 +491,16 @@ describe("WebSocket request trace context", () => {
   });
 });
 
-function connectTrustedProxyUser(connId: string, clientOverrides: Record<string, unknown> = {}) {
+function connectTrustedProxyUser(
+  connId: string,
+  clientOverrides: Record<string, unknown> = {},
+  scopes: string[] = [],
+) {
   loadConfigMock.mockImplementationOnce(() => ({
     gateway: {
       auth: {
         mode: "trusted-proxy",
+        identityScopes: { "alice@example.com": scopes },
         trustedProxy: {
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
@@ -543,6 +548,7 @@ function connectTrustedProxyUser(connId: string, clientOverrides: Record<string,
       ...clientOverrides,
     },
     role: "operator",
+    scopes,
     caps: [],
   });
   return harness;
@@ -1346,14 +1352,25 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     {
       error: new Error("private upstream failure"),
       message: "profile verification is unavailable",
+      retryAfterMs: 1_000,
     },
     {
       error: new ControlUiGitHubError(429, "private upstream failure"),
       message: "GitHub is rate limiting profile verification",
+      retryAfterMs: 1_000,
+    },
+    {
+      error: new ControlUiGitHubError(429, "private upstream failure", {
+        retryAtMs: 1_800_000_090_000,
+      }),
+      message: "GitHub is rate limiting profile verification",
+      retryAfterMs: 90_000,
     },
   ])(
     "rejects unavailable configured-role identity with actionable guidance ($message)",
-    async ({ error, message }) => {
+    async ({ error, message, retryAfterMs }) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      onTestFinished(() => clock.mockRestore());
       await withOpenClawTestState(
         { label: "gateway-github-role-verification-failure" },
         async () => {
@@ -1416,6 +1433,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
                   code: ErrorCodes.UNAVAILABLE,
                   message: expect.stringContaining(message),
                   retryable: true,
+                  retryAfterMs,
                   details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
                 }),
               }),
@@ -1485,7 +1503,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
     const assertion = "header.payload.signature";
-    loadConfigMock.mockImplementationOnce(() => ({
+    const previousLoadConfig = loadConfigMock.getMockImplementation();
+    onTestFinished(() => {
+      if (previousLoadConfig) {
+        loadConfigMock.mockImplementation(previousLoadConfig);
+      }
+    });
+    loadConfigMock.mockImplementation(() => ({
       gateway: {
         auth: {
           mode: "trusted-proxy",
@@ -1735,6 +1759,77 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(harness.socketSend).not.toHaveBeenCalled();
     expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
+
+  it.each(["allowedOrigins", "dangerouslyAllowHostHeaderOriginFallback"] as const)(
+    "rejects a pending handshake after %s stops allowing its browser origin",
+    async (policy) => {
+      const origin = "https://browser.example.test";
+      const previousLoadConfig = loadConfigMock.getMockImplementation();
+      let controlUi = {
+        allowedOrigins: policy === "allowedOrigins" ? [origin] : [],
+        dangerouslyAllowHostHeaderOriginFallback:
+          policy === "dangerouslyAllowHostHeaderOriginFallback",
+      };
+      loadConfigMock.mockImplementation(() => ({
+        gateway: { auth: { mode: "none" }, controlUi },
+      }));
+      const preparationStarted = createDeferred();
+      const releasePreparation = createDeferred();
+      prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return true;
+      });
+      const close = createCloseMock();
+      const harness = attachGatewayHarness({
+        connId: `origin-revoked-${policy}`,
+        connectNonce: `origin-revoked-${policy}`,
+        requestOrigin: origin,
+        requestHost: "browser.example.test",
+        remoteAddr: "203.0.113.50",
+        resolvedAuth: { mode: "token", token: "gateway-token", allowTailscale: false },
+        close,
+      });
+
+      try {
+        harness.sendConnect("connect-origin-revoked", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+          role: "operator",
+          caps: [],
+          auth: { token: "gateway-token" },
+        });
+        await preparationStarted.promise;
+        controlUi = {
+          allowedOrigins: ["https://other.example.test"],
+          dangerouslyAllowHostHeaderOriginFallback: false,
+        };
+        releasePreparation.resolve();
+
+        await waitForFast(() => {
+          expect(harness.send).toHaveBeenCalledWith(
+            expect.objectContaining({
+              ok: false,
+              error: expect.objectContaining({
+                details: expect.objectContaining({
+                  code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+                }),
+              }),
+            }),
+          );
+        });
+        expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("origin not allowed"));
+        expect(harness.client).toBeNull();
+        expect(harness.socketSend).not.toHaveBeenCalled();
+      } finally {
+        releasePreparation.resolve();
+        if (previousLoadConfig) {
+          loadConfigMock.mockImplementation(previousLoadConfig);
+        }
+      }
+    },
+  );
 
   it("emits a security event for rejected gateway auth", async () => {
     const close = createCloseMock();
@@ -2046,6 +2141,39 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(admission).toBeUndefined();
   });
+
+  it.each([
+    ["openclaw-control-ui", "operator.admin", true],
+    ["openclaw-control-ui", "operator.read", false],
+    ["openclaw-tui", "operator.admin", false],
+  ] as const)(
+    "records authenticated remote management authority for %s with %s: %s",
+    async (id, scope, allowed) => {
+      await withOpenClawTestState({ label: "gateway-control-ui-admin" }, async () => {
+        const harness = connectTrustedProxyUser("control-ui-authority", { id }, [scope]);
+        await waitForFast(() => expect(harness.client).not.toBeNull());
+        expect(harness.client).toMatchObject({ connect: { scopes: [scope] } });
+        const admission = resolveGatewayCronCreatorAuthorityAdmission({
+          runId: "control-ui-admin-run",
+          resolvedSessionKey: "agent:main:main",
+          client: harness.client as never,
+          request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
+          hasRestoredCronContinuation: false,
+          isOneShotModelRun: false,
+          isRestartRecoveryResumeRun: false,
+        });
+        expect(admission).toEqual(
+          allowed
+            ? {
+                runId: "control-ui-admin-run",
+                callerOrigin: { kind: "unknown" },
+                controlUiAdmin: true,
+              }
+            : undefined,
+        );
+      });
+    },
+  );
 
   it("marks operator approval clients with the server runtime token", async () => {
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>

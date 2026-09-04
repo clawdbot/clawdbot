@@ -21,7 +21,6 @@ import {
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import {
-  INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
@@ -605,7 +604,6 @@ export async function runSubagentAnnounceFlow(params: {
       directOrigin,
       sourceSessionKey: params.childSessionKey,
       sourceRunId: params.childRunId,
-      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,

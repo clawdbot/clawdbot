@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   createManagedCommandSpawnSpec,
@@ -163,6 +164,127 @@ sys.exit(result.returncode)
     },
   );
 
+  async function runNestedCleanupFixture(
+    {
+      runner,
+      resistant,
+      abort,
+      bin = process.execPath,
+    }: {
+      runner: "managed" | "managed-inherit" | "preparation";
+      resistant: boolean;
+      abort: boolean;
+      bin?: string;
+    },
+    ...cleanups: Array<() => unknown>
+  ) {
+    const dir = fs.realpathSync(createTempDir("openclaw-nested-timeout-"));
+    const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
+    const pidPaths = ["wrapper", "implementation", "leaf"].map((role) =>
+      path.join(dir, `${role}.pid`),
+    );
+    const publish = (index: number) =>
+      `fs.writeFileSync(${JSON.stringify(pidPaths[index])} + '.tmp', String(process.pid)); fs.renameSync(${JSON.stringify(pidPaths[index])} + '.tmp', ${JSON.stringify(pidPaths[index])});`;
+    const wrapper = path.join(dir, "wrapper.mjs");
+    fs.writeFileSync(
+      wrapper,
+      `
+import fs from 'node:fs';
+import { runTsxCliShim } from ${JSON.stringify(moduleUrl("scripts/lib/tsx-cli-shim.mjs"))};
+${publish(0)}
+await runTsxCliShim(import.meta.url, { implementation: './implementation.mts', forceKillDelayMs: 10000 });
+`,
+    );
+    fs.writeFileSync(
+      path.join(dir, "implementation.mts"),
+      `
+import fs from 'node:fs';
+import { runManagedCommand } from ${JSON.stringify(moduleUrl("scripts/lib/managed-child-process.mts"))};
+${publish(1)}
+process.exitCode = await runManagedCommand({ bin: process.execPath, args: [${JSON.stringify(path.join(dir, "leaf.mjs"))}], shell: false });
+`,
+    );
+    fs.writeFileSync(
+      path.join(dir, "leaf.mjs"),
+      `
+import fs from 'node:fs';
+process.on('SIGTERM', () => { process.stdout.write('shutdown-tail'); ${resistant ? "" : "process.exit(0);"} });
+setInterval(() => {}, 1000);
+${publish(2)}
+`,
+    );
+    const abortController = new AbortController();
+    const stdout = vi.spyOn(process.stdout, "write");
+    let output = "";
+    const releaseAndWait = startProcessWatchdogFixture(() => {
+      const command =
+        runner === "preparation"
+          ? runNodeStep("nested", [wrapper], 100, { abortController, bin })
+          : runManagedCommand({
+              bin,
+              args: [wrapper],
+              stdio: runner === "managed-inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+              timeoutMs: 100,
+              onReady: (child) =>
+                child.stdout?.on("data", (chunk) => {
+                  output += String(chunk);
+                }),
+            });
+      return command.then(
+        () => undefined,
+        (error: unknown) => toErrorObject(error, "Nested fixture command failed"),
+      );
+    });
+    const pids: number[] = [];
+    let commandOutcomeAsserted = false;
+    // Finish cleanup before the harness afterEach removes PID evidence, retaining all failures.
+    await runQaGatewayFixture(
+      async () => {
+        for (const pidPath of pidPaths) {
+          pids.push(await waitForPidFile(pidPath, 10_000));
+        }
+        expect(pids.every(isProcessAlive)).toBe(true);
+        if (abort) {
+          abortController.abort();
+        }
+        expect(await releaseAndWait()).toMatchObject({
+          message: expect.stringContaining(
+            abort ? "canceled after sibling failure" : "timed out after 100ms",
+          ),
+        });
+        commandOutcomeAsserted = true;
+        expect(
+          pids.filter(isProcessAlive),
+          "timeout must join every nested child before rejection",
+        ).toEqual([]);
+        if (runner === "preparation") {
+          expect(
+            stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),
+          ).toBe(true);
+        } else if (runner === "managed-inherit") {
+          expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(true);
+        } else {
+          expect(output).toBe("shutdown-tail");
+        }
+      },
+      async () => {
+        const error = await releaseAndWait();
+        // Immediate observation prevents unhandled rejection during PID waits;
+        // cleanup must surface failures the body never successfully asserted.
+        if (!commandOutcomeAsserted && error !== undefined) {
+          throw error;
+        }
+      },
+      () => stdout.mockRestore(),
+      ...pidPaths.toReversed().map((pidPath) => async () => {
+        if (fs.existsSync(pidPath)) {
+          await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")));
+        }
+      }),
+      ...cleanups,
+    );
+  }
+
   posixIt.each([
     { runner: "managed", resistant: false, abort: false },
     { runner: "managed", resistant: true, abort: false },
@@ -171,106 +293,30 @@ sys.exit(result.returncode)
     { runner: "preparation", resistant: true, abort: false },
     { runner: "preparation", resistant: false, abort: true },
     { runner: "preparation", resistant: true, abort: true },
-  ])(
+  ] as const)(
     "joins nested $runner cleanup (resistant=$resistant, abort=$abort)",
-    async ({ runner, resistant, abort }) => {
-      const dir = fs.realpathSync(createTempDir("openclaw-nested-timeout-"));
-      const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
-      const pidPaths = ["wrapper", "implementation", "leaf"].map((role) =>
-        path.join(dir, `${role}.pid`),
-      );
-      const publish = (index: number) =>
-        `fs.writeFileSync(${JSON.stringify(pidPaths[index])} + '.tmp', String(process.pid)); fs.renameSync(${JSON.stringify(pidPaths[index])} + '.tmp', ${JSON.stringify(pidPaths[index])});`;
-      const wrapper = path.join(dir, "wrapper.mjs");
-      fs.writeFileSync(
-        wrapper,
-        `
-import fs from 'node:fs';
-import { runTsxCliShim } from ${JSON.stringify(moduleUrl("scripts/lib/tsx-cli-shim.mjs"))};
-${publish(0)}
-await runTsxCliShim(import.meta.url, { implementation: './implementation.mts', forceKillDelayMs: 10000 });
-`,
-      );
-      fs.writeFileSync(
-        path.join(dir, "implementation.mts"),
-        `
-import fs from 'node:fs';
-import { runManagedCommand } from ${JSON.stringify(moduleUrl("scripts/lib/managed-child-process.mts"))};
-${publish(1)}
-process.exitCode = await runManagedCommand({ bin: process.execPath, args: [${JSON.stringify(path.join(dir, "leaf.mjs"))}], shell: false });
-`,
-      );
-      fs.writeFileSync(
-        path.join(dir, "leaf.mjs"),
-        `
-import fs from 'node:fs';
-process.on('SIGTERM', () => { process.stdout.write('shutdown-tail'); ${resistant ? "" : "process.exit(0);"} });
-setInterval(() => {}, 1000);
-${publish(2)}
-`,
-      );
-      const abortController = new AbortController();
-      const stdout = vi.spyOn(process.stdout, "write");
-      let output = "";
-      const releaseAndWait = startProcessWatchdogFixture(() => {
-        const command =
-          runner === "preparation"
-            ? runNodeStep("nested", [wrapper], 100, { abortController })
-            : runManagedCommand({
-                bin: process.execPath,
-                args: [wrapper],
-                stdio: runner === "managed-inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
-                timeoutMs: 100,
-                onReady: (child) =>
-                  child.stdout?.on("data", (chunk) => {
-                    output += String(chunk);
-                  }),
-              });
-        return command.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+    (params) => runNestedCleanupFixture(params),
+    20_000,
+  );
+
+  posixIt.each(["managed", "preparation"] as const)(
+    "retains pre-PID $0 launch failure while completing nested cleanup",
+    async (runner) => {
+      const bin = path.join(createTempDir("openclaw-nested-startup-"), "missing-node");
+      const lastCleanup = vi.fn();
+      const failure = await runNestedCleanupFixture(
+        { runner, resistant: false, abort: false, bin },
+        lastCleanup,
+      ).catch((error: unknown) => error);
+
+      expect(lastCleanup).toHaveBeenCalledOnce();
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({
+        errors: [
+          { message: expect.stringMatching(/timeout waiting for pid in .*wrapper\.pid$/u) },
+          { code: "ENOENT", path: bin, message: expect.stringContaining(bin) },
+        ],
       });
-      const pids: number[] = [];
-      // Finish cleanup before the harness afterEach removes PID evidence, retaining all failures.
-      await runQaGatewayFixture(
-        async () => {
-          for (const pidPath of pidPaths) {
-            pids.push(await waitForPidFile(pidPath, 10_000));
-          }
-          expect(pids.every(isProcessAlive)).toBe(true);
-          if (abort) {
-            abortController.abort();
-          }
-          expect(await releaseAndWait()).toMatchObject({
-            message: expect.stringContaining(
-              abort ? "canceled after sibling failure" : "timed out after 100ms",
-            ),
-          });
-          expect(
-            pids.filter(isProcessAlive),
-            "timeout must join every nested child before rejection",
-          ).toEqual([]);
-          if (runner === "preparation") {
-            expect(
-              stdout.mock.calls.some(([chunk]) => String(chunk) === "[nested] shutdown-tail"),
-            ).toBe(true);
-          } else if (runner === "managed-inherit") {
-            expect(stdout.mock.calls.some(([chunk]) => String(chunk) === "shutdown-tail")).toBe(
-              true,
-            );
-          } else {
-            expect(output).toBe("shutdown-tail");
-          }
-        },
-        releaseAndWait,
-        () => stdout.mockRestore(),
-        ...pidPaths.toReversed().map((pidPath) => async () => {
-          if (fs.existsSync(pidPath)) {
-            await killFixturePid(Number(fs.readFileSync(pidPath, "utf8")));
-          }
-        }),
-      );
     },
     20_000,
   );
@@ -611,7 +657,7 @@ setInterval(() => {}, 1_000);
   });
 
   it.each<{
-    snapshot: "empty" | "live" | "failed" | "zombie";
+    snapshot: "empty" | "live" | "failed" | "zombie" | "zombie-leader";
     afterSnapshot: string | null;
     expected: ReturnType<typeof inspectManagedProcessGroup>;
     policy?: Parameters<typeof inspectManagedProcessGroup>[1]["errorPolicy"];
@@ -625,6 +671,7 @@ setInterval(() => {}, 1_000);
     { snapshot: "live", afterSnapshot: null, expected: "live" },
     { snapshot: "failed", afterSnapshot: null, expected: "live" },
     { snapshot: "zombie", afterSnapshot: null, expected: "dead" },
+    { snapshot: "zombie-leader", afterSnapshot: null, expected: "live" },
     { snapshot: "empty", afterSnapshot: "EPERM", expected: "live" },
     {
       snapshot: "empty",
@@ -659,14 +706,27 @@ setInterval(() => {}, 1_000);
         }
         return true;
       });
-      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation(() => {
+      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation((...call) => {
         inspected = true;
+        // Mirror /proc reporting: without -L, ps collapses a pthread_exit leader
+        // with a live sibling thread into one Z process row; -L exposes the thread.
+        const threadRows = Array.isArray(call[1]) && call[1].includes("-L");
+        const stdout =
+          snapshot === "zombie-leader"
+            ? threadRows
+              ? "12345 Z\n12345 S\n"
+              : "12345 Z\n"
+            : snapshot === "zombie"
+              ? "12345 Z\n"
+              : snapshot === "live"
+                ? "12345 S\n"
+                : "";
         return {
           pid: 12346,
           output: [],
           signal: null,
           status: snapshot === "empty" ? 1 : 0,
-          stdout: snapshot === "zombie" ? "12345 Z\n" : snapshot === "live" ? "12345 S\n" : "",
+          stdout,
           stderr: "",
           ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
         };

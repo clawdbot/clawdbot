@@ -49,11 +49,9 @@ function projectCandidate(key: string, snippet: string, projectKey?: string): Pr
 
 function createPromptResponder(
   respond: (prompt: ConsolidationPrompt) => {
-    memory: string;
     operations: Array<{
       candidateKey: string;
       action: "added" | "merged" | "superseded";
-      resultEntry: string;
       priorEntries: string[];
     }>;
   },
@@ -74,11 +72,9 @@ describe("memory consolidation project groups", () => {
       projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
     ];
     const subagent = createPromptResponder((prompt) => ({
-      memory: `${prompt.currentMemory.trimEnd()}\n${prompt.candidates.map((item) => item.resultEntry).join("\n")}\n`,
       operations: prompt.candidates.map((item) => ({
         candidateKey: item.key,
         action: "added",
-        resultEntry: item.resultEntry,
         priorEntries: [],
       })),
     }));
@@ -133,14 +129,10 @@ describe("memory consolidation project groups", () => {
       const item = prompt.candidates[0]!;
       const crossProject = item.projectKey === "github.com/acme/alpha";
       return {
-        memory: crossProject
-          ? `${prompt.currentMemory.replace(`${betaPrior}\n`, "").trimEnd()}\n${item.resultEntry}\n`
-          : `${prompt.currentMemory.trimEnd()}\n${item.resultEntry}\n`,
         operations: [
           {
             candidateKey: item.key,
             action: crossProject ? "merged" : "added",
-            resultEntry: item.resultEntry,
             priorEntries: crossProject ? [betaPrior] : [],
           },
         ],
@@ -169,21 +161,14 @@ describe("memory consolidation project groups", () => {
       projectCandidate("global", "Use metric units globally."),
       projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
     ];
-    const outputLengths: number[] = [];
     const createBudgetSubagent = () =>
-      createPromptResponder((prompt) => {
-        const memory = `${prompt.currentMemory.trimEnd()}\n${prompt.candidates.map((item) => item.resultEntry).join("\n")}\n`;
-        outputLengths.push(memory.length);
-        return {
-          memory,
-          operations: prompt.candidates.map((item) => ({
-            candidateKey: item.key,
-            action: "added",
-            resultEntry: item.resultEntry,
-            priorEntries: [],
-          })),
-        };
-      });
+      createPromptResponder((prompt) => ({
+        operations: prompt.candidates.map((item) => ({
+          candidateKey: item.key,
+          action: "added",
+          priorEntries: [],
+        })),
+      }));
 
     const fullPlan = await consolidateMemory({
       subagent: createBudgetSubagent(),
@@ -197,9 +182,18 @@ describe("memory consolidation project groups", () => {
     if (!fullPlan) {
       return;
     }
-    const aggregateLength = fullPlan.memory.length;
-    const perGroupBudget = Math.max(...outputLengths);
-    expect(aggregateLength).toBeGreaterThan(perGroupBudget);
+    const perGroupBudget = Math.max(
+      ...fullPlan.operations.map((operation) => {
+        const result = applyMemoryConsolidationPlan({
+          existingMemory,
+          plan: { operations: [operation] },
+          nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+          maxPriorEntryLossFraction: 0.25,
+        });
+        expect(result).not.toBeNull();
+        return result!.content.length;
+      }),
+    );
 
     await expect(
       consolidateMemory({

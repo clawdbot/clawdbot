@@ -99,6 +99,7 @@ export async function applySessionEntryReplacements<T>(params: {
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
   statuses?: readonly SessionEntryStatus[];

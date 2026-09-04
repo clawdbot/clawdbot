@@ -75,7 +75,7 @@ async function createRelay(platform: "linux" | "win32") {
     if (platform === "win32") {
       stub.child.emit("message", message);
     } else {
-      control.emit("data", encodeServiceChildMessage(message));
+      control.push(Buffer.from(encodeServiceChildMessage(message)));
     }
   };
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
@@ -107,8 +107,22 @@ async function createRelay(platform: "linux" | "win32") {
     stub.disconnectMock();
     stub.emitExit(0);
   };
+  const floodControl = (chunk: string | Buffer) => {
+    control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  };
+  const controlEncoding = () => control.readableEncoding;
+  const killSpy = vi.spyOn(stub.child, "kill");
   cleanups.push(close);
-  return { adapter, cancellations, emit, completeRoot, close };
+  return {
+    adapter,
+    cancellations,
+    emit,
+    completeRoot,
+    close,
+    floodControl,
+    controlEncoding,
+    killSpy,
+  };
 }
 
 it("kills the spawned relay when abortSignal fires before ready", async () => {
@@ -224,6 +238,62 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
     await run.waitForExtinction!();
     await supervisor.shutdown();
   }
+});
+
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps an accumulated $label control line by wire bytes", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const rejectedWait = expect(adapter.wait()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  const rejectedExtinction = expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  for (let index = 0; index < 4; index += 1) {
+    floodControl(chunk);
+  }
+  expect(killSpy).not.toHaveBeenCalled();
+  floodControl(overflow);
+  await rejectedWait;
+  await rejectedExtinction;
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps a completed $label control line before decoding", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, controlEncoding, killSpy, close } = await createRelay("linux");
+  const parseSpy = vi.spyOn(JSON, "parse");
+  expect(controlEncoding()).toBeNull();
+  floodControl(`${chunk.repeat(4)}${overflow}\n`);
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(parseSpy).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it("bounds the newline search before inspecting an oversized control frame", async () => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const frame = Buffer.alloc(256 * 1024 + 2, 0x78);
+  frame[frame.length - 1] = 0x0a;
+  const fullFrameSearch = vi.spyOn(frame, "indexOf");
+
+  floodControl(frame);
+
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(fullFrameSearch).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
 });
 
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {

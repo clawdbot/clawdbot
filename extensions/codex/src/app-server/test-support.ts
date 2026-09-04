@@ -163,6 +163,8 @@ export function createClientHarness(
     stdin: Writable;
     stdout: PassThrough;
     stderr: PassThrough;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
     kill: (signal?: NodeJS.Signals) => unknown;
   };
@@ -191,6 +193,8 @@ export function createClientHarness(
     stdin,
     stdout,
     stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
     killed: false,
     kill: vi.fn((_signal?: NodeJS.Signals) => {
       process.killed = true;
@@ -199,6 +203,21 @@ export function createClientHarness(
   emitProcessExit = () => {
     process.emit("exit", 0, null);
   };
+  // Record terminal state before client observers, including direct error/signal exits.
+  // Otherwise later closeAndWait calls wait for an exit that already happened.
+  process.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exitEmitted = true;
+    process.exitCode = code;
+    process.signalCode = signal;
+    stdin.destroy();
+    // Let exit observers run before output reaches EOF.
+    queueMicrotask(() => {
+      for (const output of [stdout, process.stderr]) {
+        output.end();
+        output.resume();
+      }
+    });
+  });
   const client = CodexAppServerClient.fromTransportForTests(process);
   return {
     client,

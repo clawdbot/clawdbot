@@ -3,11 +3,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
@@ -18,6 +20,14 @@ import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
+}));
+const hostedStopExecute = vi.fn<HostedGatewayStop["execute"]>();
+const hostedStopDispose = vi.fn<HostedGatewayStop["dispose"]>();
+const hostedStopPrepare =
+  vi.fn<typeof import("../../daemon/hosted-stop.js").prepareHostedGatewayStop>();
+vi.mock("../../daemon/hosted-stop.js", () => ({
+  prepareHostedGatewayStop: (...args: Parameters<typeof hostedStopPrepare>) =>
+    hostedStopPrepare(...args),
 }));
 const consumeGatewayRestartIntentPayloadSync = vi.fn<
   () => { reason?: string; force?: boolean; waitMs?: number } | null
@@ -412,10 +422,12 @@ function createSignaledStart(close: GatewayCloseFn, startupSettled = Promise.res
   const started = new Promise<void>((resolve) => {
     resolveStarted = resolve;
   });
-  const start = vi.fn(async () => {
-    resolveStarted?.();
-    return createGatewayServer(close, startupSettled);
-  });
+  const start = vi.fn<Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"]>(
+    async () => {
+      resolveStarted?.();
+      return createGatewayServer(close, startupSettled);
+    },
+  );
   return { start, started };
 }
 
@@ -460,11 +472,11 @@ async function waitForLoopCondition(predicate: () => boolean, message: string) {
   throw new Error(message);
 }
 
-async function createSignaledLoopHarness(exitCallOrder?: string[]) {
+async function createSignaledLoopHarness(exitCallOrder?: string[], ownsProcessLifecycle = false) {
   const close = createCloseMock();
   const { start, started } = createSignaledStart(close);
   const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
-  const { loopPromise } = await runLoopWithStart({ start, runtime });
+  const { loopPromise } = await runLoopWithStart({ start, runtime, ownsProcessLifecycle });
   await waitForStart(started);
   return { close, start, runtime, exited, loopPromise };
 }
@@ -498,6 +510,15 @@ let supervisorEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 beforeEach(async () => {
   vi.useRealTimers();
+  for (const log of Object.values(gatewayLog)) {
+    log.mockClear();
+  }
+  hostedStopExecute.mockReset().mockResolvedValue({ outcome: "accepted" });
+  hostedStopDispose.mockReset().mockResolvedValue(undefined);
+  hostedStopPrepare.mockReset().mockImplementation(async (_owner, assertCurrent) => {
+    assertCurrent();
+    return { execute: hostedStopExecute, dispose: hostedStopDispose };
+  });
   supervisorEnvSnapshot = captureEnv([...SUPERVISOR_HINT_ENV_VARS]);
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
     deleteTestEnvValue(key);
@@ -551,6 +572,194 @@ afterEach(() => {
 });
 
 describe("runGatewayLoop", () => {
+  it("does not grant process control to a nonexclusive embedded host", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, close, exited, runtime } = await createSignaledLoopHarness();
+      const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+      await expect(host!.request("start", () => {})).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "already-running" },
+      });
+      for (const action of ["stop", "restart"] as const) {
+        await expect(host!.request(action, () => {})).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("does not own the process lifecycle"),
+        });
+      }
+      expect(close).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(hostedStopExecute).not.toHaveBeenCalled();
+      captureSignal("SIGINT")();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it.each(["native", "foreground"] as const)(
+    "retains the initiating root through response submission and joins before %s stop",
+    async (mode) => {
+      if (mode === "foreground") {
+        const native = await vi.importActual<typeof import("../../daemon/hosted-stop.js")>(
+          "../../daemon/hosted-stop.js",
+        );
+        hostedStopPrepare.mockImplementation(native.prepareHostedGatewayStop);
+      }
+      await withIsolatedSignals(async () => {
+        const { close, start, exited } = await createSignaledLoopHarness(undefined, true);
+        const startOptions = start.mock.calls[0]?.[0];
+        const host = startOptions?.hostLifecycle;
+        expect(host).toBeDefined();
+        let finishRequest!: () => void;
+        const requestFinished = new Promise<void>((resolve) => {
+          finishRequest = resolve;
+        });
+        let finishJoin!: () => void;
+        const joined = new Promise<void>((resolve) => {
+          finishJoin = resolve;
+        });
+        close.mockImplementationOnce(async () => {
+          await joined;
+        });
+        waitForGatewayActiveWork.mockImplementationOnce(async () => {
+          // excludeCurrent must not hide the original RPC when shutdown begins.
+          expect(
+            gatewayWorkAdmissionActual.getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+          ).toBe(1);
+          await requestFinished;
+          expect(gatewayWorkAdmissionActual.getActiveGatewayRootWorkCount()).toBe(0);
+          return { drained: true, snapshot: idleActiveWorkSnapshot };
+        });
+        try {
+          await gatewayWorkAdmissionActual.runWithGatewayIndependentRootWorkAdmission(async () => {
+            await expect(host!.request("stop", () => {})).resolves.toEqual({
+              ok: true,
+              value: { outcome: "scheduled" },
+            });
+            // Audit/history/response work remains in the admitted handler after acceptance.
+            await Promise.resolve();
+            expect(gatewayWorkAdmissionActual.getActiveGatewayRootWorkCount()).toBe(1);
+            expect(close).not.toHaveBeenCalled();
+            expect(hostedStopExecute).not.toHaveBeenCalled();
+          }, "rpc:system-agent.chat");
+          finishRequest();
+          await waitForLoopCondition(
+            () => close.mock.calls.length === 1,
+            "hosted stop did not reach teardown",
+          );
+          expect(hostedStopExecute).not.toHaveBeenCalled();
+          finishJoin();
+          await expect(exited).resolves.toBe(0);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
+          expect(hostedStopExecute).toHaveBeenCalledTimes(mode === "native" ? 1 : 0);
+          await expect(host!.request("start", () => {})).resolves.toMatchObject({ ok: false });
+        } finally {
+          finishRequest();
+          finishJoin();
+        }
+      });
+    },
+  );
+
+  it("joins a self-waiting native client on SIGTERM without reopening closed kernel storage", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const nativeStarted = createDeferredCore();
+      const nativeClosed = createDeferredCore();
+      hostedStopPrepare.mockImplementationOnce(async (_owner, assertCurrent, signal) => {
+        assertCurrent();
+        hostedStopExecute.mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => reject(new Error("native stop interrupted", { cause: signal.reason })),
+                { once: true },
+              );
+              nativeStarted.resolve();
+            }),
+        );
+        return { execute: hostedStopExecute, dispose: hostedStopDispose };
+      });
+      hostedStopDispose.mockImplementationOnce(() => nativeClosed.promise);
+      const { close, start, exited, runtime } = await createSignaledLoopHarness(undefined, true);
+      const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+      try {
+        await expect(host!.request("stop", () => {})).resolves.toMatchObject({ ok: true });
+        await nativeStarted.promise;
+        expect(close).toHaveBeenCalledOnce();
+        captureSignal("SIGTERM")();
+        await waitForLoopCondition(
+          () => hostedStopDispose.mock.calls.length === 1,
+          "native stop signal did not cancel the self-waiting client",
+        );
+        expect(runtime.exit).not.toHaveBeenCalled();
+        // A second native signal during the close join still belongs to this stop.
+        captureSignal("SIGTERM")();
+        expect(consumeGatewayRestartIntentPayloadSync).not.toHaveBeenCalled();
+      } finally {
+        nativeClosed.resolve();
+      }
+      await expect(exited).resolves.toBe(0);
+      expect(start).toHaveBeenCalledOnce();
+      expect(gatewayLog.info).not.toHaveBeenCalledWith(
+        "Native service manager accepted Gateway stop",
+      );
+    });
+  });
+
+  it("reopens a fresh generation only after a definitive native stop refusal", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      hostedStopExecute.mockResolvedValueOnce({
+        outcome: "refused",
+        detail: "same native generation; stop denied",
+      });
+      let finishClose!: () => void;
+      hostedStopDispose.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishClose = resolve;
+          }),
+      );
+      const { start, exited, runtime } = await createSignaledLoopHarness(undefined, true);
+      const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+      expect(host).toBeDefined();
+      await host!.request("stop", () => {});
+      await waitForLoopCondition(
+        () => hostedStopDispose.mock.calls.length === 1,
+        "executor cleanup did not start",
+      );
+      expect(start).toHaveBeenCalledOnce();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      finishClose();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "native refusal left a closed Gateway instead of restarting in process",
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+      await expect(host!.request("restart", () => {})).resolves.toMatchObject({ ok: false });
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("same native generation; stop denied"),
+      );
+      captureSignal("SIGINT")();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("reports uncertain native stop without clean-stop success or in-process recovery", async () => {
+    await withIsolatedSignals(async () => {
+      hostedStopExecute.mockResolvedValueOnce({
+        outcome: "uncertain",
+        detail: "native acknowledgement lost",
+      });
+      const { start, exited } = await createSignaledLoopHarness(undefined, true);
+      const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+      await host!.request("stop", () => {});
+      await expect(exited).resolves.toBe(1);
+      expect(start).toHaveBeenCalledOnce();
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("native acknowledgement lost"),
+      );
+    });
+  });
+
   it("routes deferred startup failure through first-boot failure handling", async () => {
     await withIsolatedSignals(async () => {
       const startupError = new Error("deferred startup failed");
@@ -756,6 +965,7 @@ describe("runGatewayLoop", () => {
           processStartedAt: expect.any(Number),
           startupStartedAt: expect.any(Number),
           requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+          hostLifecycle: { request: expect.any(Function) },
         });
         expect(runtime.exit).toHaveBeenCalledWith(0);
         expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();

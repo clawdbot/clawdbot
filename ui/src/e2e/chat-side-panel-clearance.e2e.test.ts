@@ -126,7 +126,7 @@ async function openExpandedFilesPanel(page: Page, beforeExpandProof?: string): P
     await capturePanel(page, beforeExpandProof);
   }
   await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
-  await sidePanel(page).getByRole("button", { name: "Restore side panel" }).waitFor();
+  await sidePanel(page).getByRole("button", { name: "Collapse" }).waitFor();
 }
 
 async function waitForShellLayout(page: Page): Promise<void> {

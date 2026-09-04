@@ -13,6 +13,14 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
+**Copy → Session link** uses the connected Gateway's public Control UI address
+when `gateway.publicOrigin` is configured, including its
+`gateway.controlUi.basePath`. This keeps links shareable when the desktop app
+connects through a local SSH tunnel. Without a public origin, copied links use
+the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+Normal navigation and **Open in** continue using the current UI. Copied links
+contain no connection credentials, and recipients still need Gateway access.
+
 Chat and dashboard views are parallel route namespaces:
 
 ```text

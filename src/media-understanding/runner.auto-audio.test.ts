@@ -1,8 +1,9 @@
-// Auto-audio runner tests cover provider fallback selection and local binary
-// discovery for audio transcription.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Auto-audio runner tests cover provider fallback selection and local binary
+// discovery for audio transcription.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -101,16 +102,6 @@ async function runAutoAudioCase(params: {
   return runResult;
 }
 
-type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
-
-function requireCapabilityOutput(result: CapabilityResult, index: number) {
-  const output = result.outputs[index];
-  if (!output) {
-    throw new Error(`expected media-understanding output at index ${index}`);
-  }
-  return output;
-}
-
 describe("runCapability auto audio entries", () => {
   it("resolves audio credentials after loading each attachment", async () => {
     await withAudioFixture("openclaw-audio-late-auth", async ({ ctx, media, cache }) => {
@@ -189,7 +180,7 @@ describe("runCapability auto audio entries", () => {
         return { text: "ok", model: req.model ?? "unknown" };
       },
     });
-    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
     expect(seenModel).toBe("gpt-4o-transcribe");
     expect(result.decision.outcome).toBe("success");
   });
@@ -429,7 +420,7 @@ describe("runCapability auto audio entries", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "audio.transcription",
           attachmentIndex: 0,
           provider: "mistral",
@@ -487,7 +478,7 @@ describe("runCapability auto audio entries", () => {
       });
 
       expect(result.decision.outcome).toBe("success");
-      expect(requireCapabilityOutput(result, 0).text).toBe("workspace test-key");
+      expect(expectDefined(result.outputs[0], "media output 0").text).toBe("workspace test-key");
     });
 
     expect(resolveApiKeyForProviderCore).toHaveBeenCalledWith(
@@ -540,7 +531,7 @@ describe("runCapability auto audio entries", () => {
     if (!runResult) {
       throw new Error("expected Codex audio result");
     }
-    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+    expect(expectDefined(runResult.outputs[0], "media output 0")).toEqual({
       kind: "audio.transcription",
       attachmentIndex: 0,
       provider: "openai",
@@ -590,7 +581,7 @@ describe("runCapability auto audio entries", () => {
     if (!runResult) {
       throw new Error("expected xAI audio result");
     }
-    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+    expect(expectDefined(runResult.outputs[0], "media output 0")).toEqual({
       kind: "audio.transcription",
       attachmentIndex: 0,
       provider: "xai",
@@ -621,7 +612,7 @@ describe("runCapability auto audio entries", () => {
               }),
             }),
         );
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.provider).toBe("openai");
         expect(output.text).toBe("provider transcription");
       });
@@ -677,7 +668,7 @@ describe("runCapability auto audio entries", () => {
       },
     });
 
-    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
     expect(seenModel).toBe("whisper-1");
   });
 
@@ -714,7 +705,7 @@ describe("runCapability auto audio entries", () => {
       } as Partial<OpenClawConfig>,
     });
 
-    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
     expect(seenLanguage).toBe("en");
     expect(seenPrompt).toBe("Focus on names");
   });
@@ -741,7 +732,7 @@ describe("runCapability auto audio entries", () => {
       } as Partial<OpenClawConfig>,
     });
 
-    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
     expect(seenLanguage).toBe("ru");
     expect(seenPrompt).toBeUndefined();
   });
@@ -812,7 +803,7 @@ describe("runCapability auto audio entries", () => {
           },
         },
       });
-      expect(requireCapabilityOutput(result, 0).text).toBe("Bonjour.");
+      expect(expectDefined(result.outputs[0], "media output 0").text).toBe("Bonjour.");
       expect(requests).toHaveLength(1);
       expect(requests[0]?.prompt).toBeUndefined();
       expect(requests[0]?.language).toBe(language);
@@ -889,7 +880,7 @@ describe("runCapability auto audio entries", () => {
       throw new Error("Expected auto audio mistral result");
     }
     expect(runResult.decision.outcome).toBe("success");
-    const output = requireCapabilityOutput(runResult, 0);
+    const output = expectDefined(runResult.outputs[0], "media output 0");
     expect(output.provider).toBe("mistral");
     expect(output.model).toBe("voxtral-mini-latest");
     expect(output.text).toBe("mistral");

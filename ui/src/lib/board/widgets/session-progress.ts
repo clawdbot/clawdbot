@@ -59,11 +59,13 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
               : "sessionProgressCard.widgetUnavailable",
           )}</span
         >
-        ${loadError === "unavailable"
-          ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
-              ${t("common.retry")}
-            </button>`
-          : null}
+        ${
+          loadError === "unavailable"
+            ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
+                ${t("common.retry")}
+              </button>`
+            : null
+        }
       </div>`;
     }
     const card = this.store?.get(this.targetSessionKey);

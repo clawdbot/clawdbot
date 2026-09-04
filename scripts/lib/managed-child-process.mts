@@ -254,7 +254,9 @@ export function inspectManagedProcessGroup(
 function isLinuxZombieProcessGroup(pid: number): boolean {
   // Detached children lead their own session. Linux kill(0) includes zombies,
   // which cannot write or respond to signals while awaiting their parent's reap.
-  const result = spawnSync("ps", ["-s", String(pid), "-o", "pgid=,state="], {
+  // Enumerate threads (-L): a process row reports only the group leader's state,
+  // and a pthread_exit leader reads Z while sibling threads still run and write.
+  const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: PROCESS_GROUP_DRAIN_TIMEOUT_MS,

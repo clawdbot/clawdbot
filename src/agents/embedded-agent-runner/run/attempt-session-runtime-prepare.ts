@@ -140,6 +140,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
+    assertInitialUserTurnReplay: preparedSessionManager.assertInitialUserTurnReplay,
     nestedToolActivities: input.nestedToolActivities,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;

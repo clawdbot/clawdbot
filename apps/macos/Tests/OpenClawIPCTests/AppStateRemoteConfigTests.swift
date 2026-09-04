@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -315,6 +316,123 @@ struct AppStateRemoteConfigTests {
             #expect(state.remoteTokenDirty)
             await state._testAwaitGatewayConfigSync()
             #expect(!state.remoteTokenDirty)
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `primary replacement retires the previous gateway credentials`(
+        promoteProfile: Bool,
+        storedTokenIsReference: Bool) async throws
+    {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let priorToken: Any = storedTokenIsReference
+                ? ["$secretRef": "gateway-a-token"]
+                : "gateway-a-token"
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": priorToken,
+                        "password": "gateway-a-password",
+                        "tlsFingerprint": String(repeating: "b", count: 64),
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            let nextURL = try #require(URL(string: "wss://gateway-b.example.test:443"))
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: nextURL, token: "gateway-b-token", password: nil),
+                        routeAuthority: nil)
+                })
+
+            if promoteProfile {
+                try await adapter.apply(profileID: "gateway-b")
+            } else {
+                try adapter.apply(link: GatewayConnectDeepLink(
+                    host: "gateway-b.example.test",
+                    port: 443,
+                    tls: true,
+                    bootstrapToken: nil,
+                    token: nil,
+                    password: nil))
+            }
+            await state._testAwaitGatewayConfigSync()
+
+            let persisted = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: persisted) == nextURL)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: persisted) ==
+                (promoteProfile ? "gateway-b-token" : nil))
+            if !promoteProfile {
+                let remote = (persisted["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+                #expect(remote?["token"] == nil)
+            }
+            #expect(GatewayRemoteConfig.resolvePasswordString(root: persisted) == nil)
+            #expect(GatewayEndpointStore._testResolveGatewayPassword(
+                isRemote: true,
+                root: persisted,
+                env: [:]) == nil)
+            #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: persisted) == nil)
+            #expect(state.connectionMode == .remote)
+            #expect(state.remoteTransport == .direct)
+            #expect(state.remoteUrl == nextURL.absoluteString)
+            #expect(state.remoteToken == (promoteProfile ? "gateway-b-token" : ""))
+            #expect(!state.remoteTokenUnsupported)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test
+    func `rejected primary replacement preserves the canonical connection without a rollback write`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": ["$secretRef": "gateway-a-token"],
+                        "password": "gateway-a-password",
+                    ],
+                ],
+            ]))
+            let original = OpenClawConfigFile.loadDict()
+            var saveAttempts = 0
+            let state = AppState(preview: true, gatewayConfigSaver: { _ in
+                saveAttempts += 1
+                return false
+            })
+            state._testEnableGatewayConfigSync()
+            let adapter = DashboardPrimaryGatewayAdapter(state: state)
+            let link = GatewayConnectDeepLink(
+                host: "gateway-b.example.test",
+                port: 443,
+                tls: true,
+                bootstrapToken: nil,
+                token: "gateway-b-token",
+                password: nil)
+
+            #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
+                try adapter.apply(link: link)
+            }
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(saveAttempts == 1)
+            #expect(NSDictionary(dictionary: OpenClawConfigFile.loadDict()).isEqual(to: original))
+            #expect(state.remoteUrl == "wss://gateway-a.example.test")
+            #expect(state.remoteToken.isEmpty)
+            #expect(state.remoteTokenUnsupported)
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
         }
     }
 
@@ -726,7 +844,10 @@ struct AppStateRemoteConfigTests {
             #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
         }
     }
+}
 
+@MainActor
+extension AppStateRemoteConfigTests {
     @Test
     func `cold SSH config replacement overrides stale defaults and clears their owner`() async {
         let configPath = TestIsolation.tempConfigPath()
