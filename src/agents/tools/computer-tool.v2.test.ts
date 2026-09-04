@@ -20,15 +20,19 @@ import {
 describe("createComputerTool v2 execution", () => {
   beforeEach(resetComputerToolMocks);
 
-  it("rebuilds the visible action enum from the selected node declaration", async () => {
+  it("derives local wait from the selected node screenshot capability", async () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
     const tool = createVisionComputerTool();
     expect(tool.description).not.toContain("get_window_state");
 
-    await tool.execute("select", { action: "screenshot" });
+    await tool.execute("select", { action: "wait", duration: 0 });
 
-    expect(readActionEnum(tool)).toEqual(actions);
+    expect(readActionEnum(tool)).toEqual([...actions, "wait"]);
+    expect(sleepMock).toHaveBeenCalledWith(0, undefined);
+    expect(
+      callGatewayToolMock.mock.calls.map((call) => (call[2] as ComputerActBody).command),
+    ).toEqual(["screen.snapshot"]);
     expect(tool.description).toContain("Observe first with `get_window_state`");
   });
 
@@ -42,11 +46,39 @@ describe("createComputerTool v2 execution", () => {
 
     const withoutCleanup = createVisionComputerTool();
     await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot"]);
+    expect(readActionEnum(withoutCleanup)).toEqual(["screenshot", "wait"]);
 
     const withCleanup = createVisionComputerTool({ registerRunCleanup: () => {} });
     await withCleanup.execute("bind-with-cleanup", { action: "screenshot" });
-    expect(readActionEnum(withCleanup)).toEqual(actions);
+    expect(readActionEnum(withCleanup)).toEqual([...actions, "wait"]);
+  });
+
+  it.each([
+    {
+      name: "missing screenshot capability",
+      actions: ["list_apps"],
+      error: "does not advertise action wait",
+      captures: 0,
+    },
+    {
+      name: "denied screenshot transport",
+      actions: ["screenshot"],
+      error: "snapshot policy denied",
+      captures: 1,
+    },
+  ] as const)("keeps $name authoritative for local wait", async ({ actions, error, captures }) => {
+    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor([...actions]) })]);
+    callGatewayToolMock.mockRejectedValue(new Error("snapshot policy denied"));
+    const tool = createVisionComputerTool();
+
+    await expect(tool.execute("wait", { action: "wait", duration: 0 })).rejects.toThrow(error);
+
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(captures);
+    expect(
+      callGatewayToolMock.mock.calls.every(
+        (call) => (call[2] as ComputerActBody).command === "screen.snapshot",
+      ),
+    ).toBe(true);
   });
 
   it("projects a provider observation without taking a duplicate desktop screenshot", async () => {
