@@ -20,7 +20,7 @@ export type MemoryConfig = {
 export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
-  /** Overall memory_search/memory_get deadline in milliseconds (default: 15000). */
+  /** Overall memory_search/memory_get deadline in milliseconds (default: 60000). */
   timeoutMs?: number;
   /** Use relevant context from this agent's other private conversations. */
   rememberAcrossConversations?: boolean;

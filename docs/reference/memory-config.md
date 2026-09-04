@@ -401,7 +401,7 @@ All under `memory.search.query`:
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-The outer tool deadline defaults to 15 seconds. Set `memory.search.timeoutMs`
+The outer tool deadline defaults to 60 seconds. Set `memory.search.timeoutMs`
 to an integer from 1,000 through 120,000 milliseconds when a healthy large
 corpus needs a longer bounded search window. Per-agent overrides take
 precedence over the global value.

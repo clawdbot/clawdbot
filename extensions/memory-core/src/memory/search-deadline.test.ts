@@ -8,7 +8,7 @@ import {
 
 describe("normalizeMemorySearchTimeoutMs", () => {
   it("uses the default and clamps configured deadlines", () => {
-    expect(normalizeMemorySearchTimeoutMs(undefined)).toBe(15_000);
+    expect(normalizeMemorySearchTimeoutMs(undefined)).toBe(60_000);
     expect(normalizeMemorySearchTimeoutMs(500)).toBe(1_000);
     expect(normalizeMemorySearchTimeoutMs(45_999.9)).toBe(45_999);
     expect(normalizeMemorySearchTimeoutMs(180_000)).toBe(120_000);
