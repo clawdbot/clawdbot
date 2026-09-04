@@ -61,6 +61,22 @@ describe("tool-policy", () => {
     expect(normalizeToolPolicyName("automations")).toBe("automations");
   });
 
+  it.each(["constructor", "__proto__"])(
+    "does not treat Object.prototype key %s as a tool alias or group",
+    (name) => {
+      expect(typeof normalizeToolPolicyName(name)).toBe("string");
+      expect(normalizeToolPolicyName(name)).toBe(name);
+      expect(expandToolGroups([name])).toEqual([name]);
+    },
+  );
+
+  it("still maps own alias and group keys after prototype names are rejected", () => {
+    expect(normalizeToolPolicyName("bash")).toBe("exec");
+    expect(expandToolGroups(["group:fs"])).toEqual(
+      expect.arrayContaining(["read", "write", "edit", "apply_patch"]),
+    );
+  });
+
   it("collects explicit allowlist entries", () => {
     expect(
       collectExplicitAllowlist([
