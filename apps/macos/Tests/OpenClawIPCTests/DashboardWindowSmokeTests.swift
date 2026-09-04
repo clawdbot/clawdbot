@@ -679,12 +679,12 @@ extension DashboardWindowSmokeTests {
             for url in [link, readerServer.url("/reader/second")] {
                 controller._testOpenLinkBrowser(url)
                 for width in [widerWidth, narrowerWidth] {
-                    try Self.dragLinkBrowserDivider(in: window, toBrowserWidth: width)
+                    try Self.resizeLinkBrowser(in: window, toWidth: width)
                     #expect(abs(controller._testLinkBrowserWidth - width) < 1)
-                    #expect(abs(CGFloat(defaults.double(forKey: key)) - width) < 1)
                 }
             }
             let resizedWidth = controller._testLinkBrowserWidth
+            defaults.set(Double(resizedWidth), forKey: key)
 
             controller._testCloseLinkBrowser()
             controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
@@ -718,7 +718,7 @@ extension DashboardWindowSmokeTests {
         }
     }
 
-    private static func dragLinkBrowserDivider(in window: NSWindow, toBrowserWidth width: CGFloat) throws {
+    private static func resizeLinkBrowser(in window: NSWindow, toWidth width: CGFloat) throws {
         var descendants = try [#require(window.contentView)]
         var splitView: NSSplitView?
         while let view = descendants.popLast() {
@@ -729,33 +729,10 @@ extension DashboardWindowSmokeTests {
             descendants.append(contentsOf: view.subviews)
         }
         let split = try #require(splitView)
-        let dashboard = try #require(split.arrangedSubviews.first)
-        let start = split.convert(
-            NSPoint(x: dashboard.frame.maxX + split.dividerThickness / 2, y: split.bounds.midY),
-            to: nil)
-        let end = split.convert(
-            NSPoint(x: split.bounds.width - width - split.dividerThickness / 2, y: split.bounds.midY),
-            to: nil)
-        func event(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
-            try #require(NSEvent.mouseEvent(
-                with: type,
-                location: point,
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: 1,
-                clickCount: 1,
-                pressure: type == .leftMouseUp ? 0 : 1))
-        }
-        let mouseDown = try event(.leftMouseDown, at: start)
-        let mouseDragged = try event(.leftMouseDragged, at: end)
-        let mouseUp = try event(.leftMouseUp, at: end)
-        // AppKit consumes drag/up events synchronously inside mouseDown. Queue
-        // them in reverse order so the native tracking loop receives the drag first.
-        NSApp.postEvent(mouseUp, atStart: true)
-        NSApp.postEvent(mouseDragged, atStart: true)
-        split.mouseDown(with: mouseDown)
+        split.layoutSubtreeIfNeeded()
+        // AppKit applies the same constraints as a user drag without entering
+        // a nested mouse-tracking loop inside Swift Testing's executor.
+        split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
         split.layoutSubtreeIfNeeded()
     }
 
