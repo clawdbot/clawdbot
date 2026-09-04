@@ -133,6 +133,8 @@ type LineRule = {
   severity: SkillScanSeverity;
   message: string;
   pattern: RegExp;
+  /** Pattern for Markdown files, whose prose otherwise satisfies code-shaped boundaries. */
+  prosePattern?: RegExp;
   /** If set, the rule only fires when the *full source* also matches this pattern. */
   requiresContext?: RegExp;
 };
@@ -167,12 +169,11 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dynamic-code-execution",
     severity: "critical",
     message: "Dynamic code execution detected",
-    // `\b` counts `-` and `$` as identifier boundaries, so hyphenated prose
-    // ("Self-eval (") and unrelated identifiers (`scope.$eval(`) matched as
-    // critical. `eval(` with no space is a call unless an identifier character
-    // precedes it, so `0-eval(x)`, `)-eval(x)`, and unary `-eval(x)` still fire;
-    // only the spaced form treats a leading hyphen as prose.
-    pattern: /(?<![\w$])eval\(|(?<![\w$-])eval\s+\(|new\s+Function\s*\(/,
+    pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    // Deep audit runs this rule over SKILL.md prose, where `\b` treats the `-`
+    // in "Self-eval (" as a boundary. Prose gets an identifier-start boundary;
+    // executable sources keep the full pattern so `x-eval (y)` stays critical.
+    prosePattern: /(?<![\w$-])eval\s*\(|new\s+Function\s*\(/,
   },
   {
     ruleId: "crypto-mining",
@@ -568,11 +569,13 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
   // --- Line rules ---
+  const isMarkdown = filePath.toLowerCase().endsWith(".md");
   for (const rule of LINE_RULES) {
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
+    const pattern = (isMarkdown && rule.prosePattern) || rule.pattern;
 
     let acceptedMatches = 0;
     let omittedMatches = 0;
@@ -580,8 +583,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
-          rule.pattern.source,
-          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+          pattern.source,
+          pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
         ),
       );
       const literalDangerousExecIndexes = new Set<number>();
