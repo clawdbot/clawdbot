@@ -3347,9 +3347,13 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each([false, true])(
-    "reports newer ClawHub releases for exact-pinned trusted official installs (dryRun=%s)",
-    async (dryRun) => {
+  it.each(
+    [false, true].flatMap((dryRun) =>
+      ["2026.9.1", "v2026.9.1"].map((version) => ({ dryRun, version })),
+    ),
+  )(
+    "reports newer ClawHub releases for exact-pinned trusted official installs (dryRun=$dryRun, version=$version)",
+    async ({ dryRun, version }) => {
       const installPath = createInstalledPackageDir({
         name: "@openclaw/diagnostics-otel",
         version: "2026.9.1",
@@ -3373,7 +3377,7 @@ describe("updateNpmInstalledPlugins", () => {
         pluginId: "diagnostics-otel",
         installPath,
         clawhubPackage: "@openclaw/diagnostics-otel",
-        spec: "clawhub:@openclaw/diagnostics-otel@2026.9.1",
+        spec: `clawhub:@openclaw/diagnostics-otel@${version}`,
       });
 
       const result = await updateNpmInstalledPlugins({
@@ -3394,13 +3398,13 @@ describe("updateNpmInstalledPlugins", () => {
         currentVersion: "2026.9.1",
         nextVersion: "2026.9.2",
         message:
-          "diagnostics-otel is pinned to clawhub:@openclaw/diagnostics-otel@2026.9.1 " +
+          `diagnostics-otel is pinned to clawhub:@openclaw/diagnostics-otel@${version} ` +
           "(installed 2026.9.1); ClawHub latest resolves to 2026.9.2. " +
           "Pass `openclaw plugins install clawhub:@openclaw/diagnostics-otel --force` " +
           "to replace this version pin.",
       });
       expect(result.config.plugins?.installs?.["diagnostics-otel"]?.spec).toBe(
-        "clawhub:@openclaw/diagnostics-otel@2026.9.1",
+        `clawhub:@openclaw/diagnostics-otel@${version}`,
       );
     },
   );
