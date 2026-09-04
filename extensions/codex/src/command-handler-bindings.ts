@@ -423,7 +423,9 @@ export async function resumeThread(
             if (bindingBeforeCommit && !sameOwner) {
               // The old row must remain authoritative until its subscription
               // is gone; otherwise another session can claim and lose it.
-              await releaseCodexAppServerBindingSubscription(bindingBeforeCommit);
+              await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
+                assertCurrent,
+              });
             }
             assertCurrent();
             const committed = await deps.bindingStore.mutate(
@@ -483,6 +485,7 @@ export async function resumeThread(
             authProfileId: currentBinding?.authProfileId,
             sessionKey: ctx.sessionKey,
             sessionId: ctx.sessionId,
+            storePath: ctx.sessionTarget?.storePath,
             assertCurrent: assertHostGeneration,
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
