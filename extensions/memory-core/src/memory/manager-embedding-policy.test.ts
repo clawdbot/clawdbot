@@ -214,6 +214,10 @@ describe("memory embedding policy", () => {
     for (const message of [
       "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
       "embeddings max input length is 16",
+      "<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents",
+      "batch size should not be larger than 20",
+      "batch size cannot be larger than 10",
+      "batch size exceeds maximum allowed of 10",
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
       expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
@@ -230,6 +234,30 @@ describe("memory embedding policy", () => {
     expect(isRetryableMemoryEmbeddingError("HTTP 400: request id fixture-000597000")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("HTTP 429: rate limit")).toBe(true);
     expect(isRetryableMemoryEmbeddingError("HTTP 503: service unavailable")).toBe(true);
+  });
+
+  it("splits provider batches failing with per-request batch size limits", async () => {
+    const run = vi.fn(async (items: string[]) => {
+      if (items.length > 2) {
+        throw new Error(
+          "<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 2.: input.contents",
+        );
+      }
+      return items.map((item) => [item.charCodeAt(0)]);
+    });
+
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items: ["a", "b", "c", "d"],
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isSplittableMemoryEmbeddingBatchError,
+      waitForRetry: async () => {},
+      maxAttempts: 3,
+      baseDelayMs: 500,
+    });
+
+    expect(result).toEqual([[97], [98], [99], [100]]);
+    expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 2]);
   });
 
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
