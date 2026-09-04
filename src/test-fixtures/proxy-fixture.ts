@@ -8,7 +8,7 @@ import tls from "node:tls";
 import {
   PROXY_FIXTURE_CERTIFICATE as certificate,
   PROXY_FIXTURE_KEY as privateKey,
-} from "./proxy-tls-fixture.js";
+} from "../test-helpers/proxy-tls-fixture.js";
 
 export const PROXY_FIXTURE_HOST = "files.proxy.test";
 export const PROXY_FIXTURE_PAYLOAD = "proxy media bytes\n";
@@ -99,9 +99,10 @@ export async function withProxyFixture(
     port: number,
     ready: () => void,
     head: Buffer,
+    deny: () => void,
   ) => {
     if (hostname !== PROXY_FIXTURE_HOST || (port !== 443 && port !== 80)) {
-      client.destroy();
+      deny();
       return;
     }
     const upstream = net.connect({
@@ -145,6 +146,7 @@ export async function withProxyFixture(
           client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         },
         head,
+        () => client.destroy(),
       );
     });
     return server;
@@ -219,6 +221,9 @@ export async function withProxyFixture(
           client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0]));
         },
         buffer.subarray(7 + length),
+        // A protocol refusal settles the client immediately; closing alone leaves
+        // Undici's SOCKS CONNECT waiter pending until its separate timeout.
+        () => client.end(Buffer.from([5, 2, 0, 1, 0, 0, 0, 0, 0, 0])),
       );
     };
     client.on("data", receive);

@@ -6,7 +6,8 @@ import {
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { fetch as undiciFetch, MockAgent, ProxyAgent } from "undici";
+import { withProxyFixture } from "openclaw/plugin-sdk/test-env";
+import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
@@ -73,30 +74,52 @@ describe("xAI OAuth", () => {
     { proxy: "http_proxy", noProxy: "auth.x.ai" },
     { proxy: "https_proxy", noProxy: "auth.x.ai" },
     { proxy: "all_proxy", noProxy: "auth.x.ai" },
-    { proxy: "all_proxy", noProxy: "", proxyUrl: "socks5://127.0.0.1:7897" },
-    { proxy: "all_proxy", noProxy: "auth.x.ai", proxyUrl: "socks5://127.0.0.1:7897" },
-  ])(
-    "preserves $proxy routing with no_proxy=$noProxy",
-    async ({ proxy, noProxy, proxyUrl = "http://127.0.0.1:7897" }) => {
+    { proxy: "all_proxy", noProxy: "", socks: true },
+    { proxy: "all_proxy", noProxy: "auth.x.ai", socks: true },
+  ])("preserves $proxy routing with no_proxy=$noProxy", async ({ proxy, noProxy, socks }) => {
+    await withProxyFixture(async (fixture) => {
+      const proxyUrl = socks ? fixture.socksProxy : fixture.httpProxy;
       for (const key of ["http_proxy", "https_proxy", "all_proxy"]) {
         vi.stubEnv(key, key === proxy ? proxyUrl : "");
       }
       vi.stubEnv("no_proxy", noProxy);
-      const fetchImpl = vi.fn<typeof fetch>(async () =>
-        jsonResponse({ error: "temporarily_unavailable" }, { status: 503 }),
+      const fetchImpl = vi.fn<typeof fetch>(
+        async (input, init?: RequestInit & { dispatcher?: Dispatcher }) => {
+          expect(requestUrl(input)).toBe("https://auth.x.ai/oauth2/token");
+          expect(init?.method).toBe("POST");
+          if (noProxy) {
+            expect(init).not.toHaveProperty("dispatcher");
+          } else {
+            if (!init?.dispatcher) {
+              throw new Error("expected proxy dispatcher");
+            }
+            // The loopback fixture records this exact destination and refuses it
+            // before opening any upstream socket; no OAuth traffic leaves the host.
+            await expect(
+              undiciFetch(requestUrl(input), {
+                method: init.method,
+                body: requireStringBody(init),
+                headers: Object.fromEntries(new Headers(init.headers)),
+                redirect: init.redirect,
+                signal: init.signal,
+                dispatcher: init.dispatcher,
+              }),
+            ).rejects.toMatchObject({
+              cause: { code: socks ? "UND_ERR_SOCKS5_REPLY_2" : "UND_ERR_PRX_CONN" },
+            });
+          }
+          return jsonResponse({ error: "temporarily_unavailable" }, { status: 503 });
+        },
       );
       await expect(
         refreshXaiOAuthCredential(createXaiOAuthCredential(), { fetchImpl }),
       ).rejects.toThrow("temporarily_unavailable");
       expect(fetchImpl).toHaveBeenCalledOnce();
-      const init = fetchImpl.mock.calls[0]?.[1];
-      if (noProxy) {
-        expect(init).not.toHaveProperty("dispatcher");
-      } else {
-        expect(init).toHaveProperty("dispatcher", expect.any(ProxyAgent));
-      }
-    },
-  );
+      expect(fixture.connections).toEqual(noProxy ? [] : [`${socks ? "socks" : "http"}:auth.x.ai`]);
+      expect(fixture.originRoutes).toEqual([]);
+      await fixture.waitForSocketsClosed();
+    });
+  });
 
   it("revalidates live authority before following an OAuth redirect", async () => {
     const transport = new MockAgent();

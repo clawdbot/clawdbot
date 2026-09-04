@@ -18,7 +18,7 @@ import {
   PROXY_FIXTURE_HOST as TARGET_HOST,
   PROXY_FIXTURE_PAYLOAD as PAYLOAD,
   withProxyFixture,
-} from "../../test-helpers/proxy-fixture.js";
+} from "../../test-fixtures/proxy-fixture.js";
 import { fetchWithSsrFGuard } from "./fetch-guard.js";
 import { resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 import {
@@ -132,12 +132,13 @@ describe("SOCKS proxy protocol boundaries", () => {
   );
 
   it.each(["explicit", "environment", "custom-http", "forward-http"])(
-    "preserves address-family policy on the actual %s proxy connection",
+    "preserves TCP policy on the actual %s proxy connection",
     async (mode) => {
       const family = vi
         .spyOn(familyPolicy, "resolveUndiciAutoSelectFamilyConnectOptions")
         .mockReturnValue({ autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 321 });
       const connect = vi.spyOn(net, "connect");
+      const keepAlive = vi.spyOn(net.Socket.prototype, "setKeepAlive");
       const runtime = createRequire(import.meta.url)("undici") as typeof import("undici");
       const originalConnector = runtime.buildConnector;
       const usedTimeouts: Array<{ port: number; timeout: number | undefined }> = [];
@@ -150,7 +151,16 @@ describe("SOCKS proxy protocol boundaries", () => {
       });
       try {
         await withProxyFixture(async ({ socksProxy, httpProxy, httpOrigin, certificate }) => {
-          const options = { requestTls: { ca: certificate }, connect: { timeout: 4321 } };
+          const options = {
+            requestTls: { ca: certificate },
+            connect: {
+              timeout: 4321,
+              family: 4,
+              keepAlive: mode !== "forward-http",
+              keepAliveInitialDelay: 30_000,
+            },
+            ...(mode === "custom-http" ? { proxyTls: { keepAliveInitialDelay: 7_000 } } : {}),
+          };
           const clientFactory = vi.fn(
             (origin: URL, poolOptions: object) => new Pool(origin, poolOptions),
           );
@@ -180,18 +190,27 @@ describe("SOCKS proxy protocol boundaries", () => {
             expect(clientFactory).toHaveBeenCalledOnce();
           }
           const socketCalls: ReadonlyArray<readonly unknown[]> = connect.mock.calls;
-          const proxySocket = socketCalls
-            .map(([value]) => value)
-            .find(
-              (value) =>
-                value !== null &&
-                typeof value === "object" &&
-                "port" in value &&
-                Number(value.port) === proxyPort,
-            );
-          expect(proxySocket).toMatchObject({
-            autoSelectFamily: false,
-            autoSelectFamilyAttemptTimeout: 321,
+          const proxyIndex = socketCalls.findIndex(
+            ([value]) =>
+              value !== null &&
+              typeof value === "object" &&
+              "port" in value &&
+              Number(value.port) === proxyPort,
+          );
+          const proxySocket = connect.mock.results[proxyIndex]?.value;
+          expect({
+            options: socketCalls[proxyIndex]?.[0],
+            keepAliveCalls: keepAlive.mock.calls.filter(
+              (_, index) => keepAlive.mock.contexts[index] === proxySocket,
+            ),
+          }).toMatchObject({
+            options: {
+              family: 4,
+              autoSelectFamily: false,
+              autoSelectFamilyAttemptTimeout: 321,
+            },
+            keepAliveCalls:
+              mode === "forward-http" ? [] : [[true, mode === "custom-http" ? 7_000 : 30_000]],
           });
           if (mode === "explicit" || mode === "environment") {
             expect(usedTimeouts).toContainEqual({ port: proxyPort, timeout: 4321 });
@@ -199,6 +218,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         });
       } finally {
         connect.mockRestore();
+        keepAlive.mockRestore();
         family.mockRestore();
         connector.mockRestore();
       }
@@ -259,7 +279,9 @@ describe("SOCKS proxy protocol boundaries", () => {
       }
       let dispatcher: ReturnType<typeof createHttp1ProxyAgent> | undefined;
       try {
-        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
         const address = server.address();
         if (!address || typeof address === "string") {
           throw new Error("expected a listening loopback proxy");
@@ -288,7 +310,9 @@ describe("SOCKS proxy protocol boundaries", () => {
           socket.destroy();
         }
         await dispatcher?.destroy();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     },
   );

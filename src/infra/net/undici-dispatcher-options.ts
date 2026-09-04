@@ -67,6 +67,9 @@ export function buildProxyConnectOptions(
   return {
     autoSelectFamily: connect.autoSelectFamily,
     autoSelectFamilyAttemptTimeout: connect.autoSelectFamilyAttemptTimeout,
+    family: "family" in connect ? connect.family : undefined,
+    keepAlive: connect.keepAlive,
+    keepAliveInitialDelay: connect.keepAliveInitialDelay,
     ...options.proxyTls,
     // Proxy-hop overrides must not replace the tunneled target's connectTimeout.
     timeout:
@@ -139,6 +142,8 @@ export function buildHttp1ProxyAgentOptions(
 ): Exclude<UndiciProxyAgentOptions, string> {
   const normalized =
     typeof options === "string" || options instanceof URL ? { uri: options.toString() } : options;
+  // oxlint-disable-next-line typescript/unbound-method -- Undici invokes this callback without an options receiver; preserve inherited callbacks too.
+  const { clientFactory = createHttp1ProxyClientFactory() } = normalized;
   const managed = addActiveManagedProxyTlsOptions(normalized, { env: managedTlsEnv });
   // Generic connector hints are not TLS opt-in: Undici interprets proxyTls
   // presence as SOCKS-over-TLS. Only explicitly supplied/managed TLS belongs there.
@@ -146,9 +151,6 @@ export function buildHttp1ProxyAgentOptions(
     proxyTunnel: true,
     ...managed,
     ...buildHttp1AgentOptions(managed, timeoutMs),
-    clientFactory:
-      normalized.clientFactory === undefined
-        ? createHttp1ProxyClientFactory()
-        : normalized.clientFactory,
+    clientFactory,
   };
 }

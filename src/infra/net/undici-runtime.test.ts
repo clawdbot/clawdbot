@@ -202,6 +202,30 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 }
 
 describe("createHttp1ProxyAgent", () => {
+  it.each(["own", "inherited", "non-enumerable"])(
+    "uses the caller's %s proxy client factory",
+    (placement) => {
+      installUndiciRuntimeDeps();
+      const clientFactory = vi.fn(() => createHttp1Agent());
+      const options = { uri: "http://proxy.test:8080" };
+      if (placement === "inherited") {
+        Object.setPrototypeOf(options, { clientFactory });
+      } else {
+        Object.defineProperty(options, "clientFactory", {
+          value: clientFactory,
+          enumerable: placement === "own",
+        });
+      }
+
+      createHttp1ProxyAgent(options);
+      invokeProxyClientFactory(requireProxyAgentOptions());
+
+      expect(clientFactory).toHaveBeenCalledExactlyOnceWith(new URL("https://127.0.0.1:8443"), {
+        connect: proxyConnect,
+      });
+    },
+  );
+
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
     installUndiciRuntimeDeps();
     const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
