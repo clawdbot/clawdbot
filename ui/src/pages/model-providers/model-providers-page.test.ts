@@ -543,7 +543,7 @@ describe("ModelProvidersPage agent scope", () => {
     }
   });
 
-  it("keeps a pending provider setup owned by its initiating card", async () => {
+  it("disables sibling provider setup while one wizard is pending", async () => {
     const { context, request, runtimeConfig } = createProviderSetupHarness();
     const prepare = deferred<unknown>();
     const config = {
@@ -597,7 +597,7 @@ describe("ModelProvidersPage agent scope", () => {
 
       expect(requestCount(request, "openclaw.setup.prepare.start")).toBe(1);
       expect(providerButton("local-cli")?.disabled).toBe(true);
-      expect(providerButton("other-cli")?.disabled).toBe(false);
+      expect(providerButton("other-cli")?.disabled).toBe(true);
     } finally {
       prepare.resolve({ done: true, status: "done", preparedModelRef: "local-cli/current-model" });
       page.remove();

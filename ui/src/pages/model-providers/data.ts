@@ -486,8 +486,10 @@ export function buildUnconfiguredProviderOptions(
     "manualProviders" | "authOptions" | "prepareOptions"
   > | null,
   configuredProviderIds: Iterable<string>,
+  handledChoiceIds: Iterable<string> = [],
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
+  const handledChoices = new Set(handledChoiceIds);
   const options = new Map<string, ProviderOption>();
   const choices: SystemAgentSetupDetectResult["manualProviders"] = [
     ...(inventory?.manualProviders ?? []),
@@ -498,6 +500,7 @@ export function buildUnconfiguredProviderOptions(
     // Auth choices are opaque. Only declared provider identity can exclude a configured family.
     if (
       options.has(choice.id) ||
+      handledChoices.has(choice.id) ||
       (choice.brandId && configured.has(canonicalProviderId(choice.brandId)))
     ) {
       continue;

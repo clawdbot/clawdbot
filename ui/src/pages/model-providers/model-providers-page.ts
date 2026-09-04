@@ -604,11 +604,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     });
     const configuredProviderIds = new Set([
       ...config.providerIds,
-      ...config.selectedProviderIds,
       ...(data.authStatus?.providers
         .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
         .map((provider) => provider.provider) ?? []),
     ]);
+    const handledSetupChoiceIds = new Set(
+      cards.flatMap((card) => card.setupActions?.map((action) => action.choiceId) ?? []),
+    );
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
@@ -632,6 +634,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         this.providerSetup.inventory,
         configuredProviderIds,
+        handledSetupChoiceIds,
       ),
       canMutate: this.canMutate(),
       mutationBlockedReason: this.mutationBlockedReason(),
@@ -639,7 +642,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: {
         ...this.busy,
-        add: this.providerSetup.busy && this.providerSetup.targetProviderId === null,
+        add: this.providerSetup.busy,
         ...(this.providerSetup.targetProviderId
           ? { [`setup:${this.providerSetup.targetProviderId}`]: this.providerSetup.busy }
           : {}),

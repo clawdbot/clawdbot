@@ -569,7 +569,7 @@ describe("model provider configuration data", () => {
     ).toEqual({ OpenAI: "oauth" });
   });
 
-  it("joins setup methods by opaque choice while filtering only declared configured families", () => {
+  it("filters configured families and handled opaque choices independently", () => {
     const options = buildUnconfiguredProviderOptions(
       {
         manualProviders: [
@@ -597,18 +597,8 @@ describe("model provider configuration data", () => {
         prepareOptions: [{ id: "local", brandId: "local-service", label: "Local service" }],
       },
       ["openai"],
+      ["vendor/login"],
     );
-    expect(options.map((option) => option.id)).toEqual([
-      "vendor/device",
-      "vendor/login",
-      "local",
-      "openai",
-    ]);
-    expect(options[1]).toEqual({
-      id: "vendor/login",
-      providerName: "Catalog vendor",
-      displayName: "Catalog vendor · Project key",
-      hint: "Models: Small, Large",
-    });
+    expect(options.map((option) => option.id)).toEqual(["vendor/device", "local", "openai"]);
   });
 });

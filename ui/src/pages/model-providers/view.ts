@@ -274,6 +274,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
   const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const setupBusy = Boolean(props.busy[`setup:${card.id}`]);
+  const providerSetupBusy = Boolean(props.busy.add);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -337,7 +338,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
         (action) => html`
           <button
             class="btn btn--sm"
-            ?disabled=${setupBusy || mutationDisabled}
+            ?disabled=${providerSetupBusy || mutationDisabled}
             title=${mutationDisabled ? blocked : (action.hint ?? "")}
             @click=${() => props.onSetupProvider(card.id, card.displayName, action)}
           >
