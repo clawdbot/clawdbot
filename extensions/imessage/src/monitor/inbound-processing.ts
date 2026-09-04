@@ -258,11 +258,13 @@ function hasIMessageEchoMatch(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | {
-        skipIdShortCircuit?: boolean;
-        includePendingText?: boolean;
-        requireMessageIdTextMatch?: boolean;
-      },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean;
   };
   scope: string | readonly string[];
@@ -301,9 +303,13 @@ function hasIMessageEchoMatch(params: {
     if (
       params.replyToGuid &&
       params.text &&
-      params.echoCache.has(scope, { messageId: params.replyToGuid, text: params.text }, {
-        requireMessageIdTextMatch: true,
-      })
+      params.echoCache.has(
+        scope,
+        { messageId: params.replyToGuid, text: params.text },
+        {
+          requireMessageIdTextMatch: true,
+        },
+      )
     ) {
       return true;
     }
@@ -440,11 +446,13 @@ export async function resolveIMessageInboundDecision(params: {
     has: (
       scope: string,
       lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | {
-        skipIdShortCircuit?: boolean;
-        includePendingText?: boolean;
-        requireMessageIdTextMatch?: boolean;
-      },
+      options?:
+        | boolean
+        | {
+            skipIdShortCircuit?: boolean;
+            includePendingText?: boolean;
+            requireMessageIdTextMatch?: boolean;
+          },
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;

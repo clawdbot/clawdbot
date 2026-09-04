@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
+import { createSelfChatCache } from "./self-chat-cache.js";
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 type InboundProcessingModule = typeof import("./inbound-processing.js");
