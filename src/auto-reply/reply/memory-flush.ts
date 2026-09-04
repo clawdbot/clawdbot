@@ -218,7 +218,7 @@ export function hasAlreadyFlushedForCliRearmBucket(
   entry: Pick<SessionEntry, "memoryFlush"> | undefined,
   bucket: number,
 ): boolean {
-  return entry?.memoryFlush?.compactionCount === bucket;
+  return entry?.memoryFlush?.cliRearmBucket === bucket;
 }
 
 export function hasAlreadyFlushedForCurrentCompaction(

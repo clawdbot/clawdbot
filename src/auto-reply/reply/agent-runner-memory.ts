@@ -1281,8 +1281,12 @@ export async function runMemoryFlushIfNeeded(params: {
   let flushRunRegistered = false;
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore ?? {};
+  // Resolved further below, once the transcript size is known; declared here so
+  // recordFailure can capture it without a temporal dead zone if an earlier
+  // step throws.
+  let cliRearmBucket: number | undefined;
   const recordFailure = (error: unknown) =>
-    recordMemoryFlushFailure(error, params, activeSessionEntry);
+    recordMemoryFlushFailure(error, params, activeSessionEntry, cliRearmBucket);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
@@ -1339,16 +1343,21 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     entry && Number.isFinite(forceFlushTranscriptBytes) && forceFlushTranscriptBytes > 0,
   );
+  // CLI backends anchor their re-arm window on transcript bytes, so they need
+  // the size even when byte forcing is off (forceFlushTranscriptBytes: 0).
+  // Without this they would never resolve an anchor and never flush.
+  const shouldReadTranscriptSize =
+    shouldCheckTranscriptSizeForForcedFlush || Boolean(entry && isCli);
   const shouldReadTurnTaint = Boolean(entry);
   const shouldReadSessionLog =
-    shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
+    shouldReadTranscript || shouldReadTranscriptSize || shouldReadTurnTaint;
   const sessionLogSnapshot = shouldReadSessionLog
     ? readSessionLogSnapshot({
         agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         storePath: params.storePath,
-        includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeByteSize: shouldReadTranscriptSize,
         includeTurnTaint: shouldReadTurnTaint,
         includeUsage: shouldReadTranscript,
       })
@@ -1363,7 +1372,7 @@ export async function runMemoryFlushIfNeeded(params: {
   // transcript-byte anchor is available to replace that watermark; a CLI
   // session without one keeps the original skip rather than flushing once
   // and then silently never again.
-  const cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
+  cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
   if (isCli && cliRearmBucket === undefined) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
@@ -1546,9 +1555,11 @@ export async function runMemoryFlushIfNeeded(params: {
     sessionFile: params.followupRun.run.sessionFile,
     abortSignal,
   });
-  // On a CLI backend the stored watermark is the transcript bucket, which is
-  // what re-arms the next flush there; elsewhere it stays the compaction count.
-  const flushedCompactionCount = cliRearmBucket ?? activeSessionEntry?.compactionCount ?? 0;
+  const flushedCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  // CLI backends re-arm on this instead, because their compaction count never
+  // advances. It is stored separately so neither value has to stand in for the
+  // other.
+  const flushedCliRearmBucket = cliRearmBucket;
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   let visibleErrorPayloads: ReplyPayload[] = [];
   // Only runnable maintenance owns a run context. The matching finally is
@@ -1726,7 +1737,13 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await updateSessionEntry(
           { storePath: params.storePath, sessionKey: params.sessionKey },
           async () => ({
-            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
+            memoryFlush: {
+              kind: "succeeded",
+              compactionCount: flushedCompactionCount,
+              ...(flushedCliRearmBucket !== undefined
+                ? { cliRearmBucket: flushedCliRearmBucket }
+                : {}),
+            },
           }),
           { skipMaintenance: true, takeCacheOwnership: true },
         );
@@ -1759,6 +1776,7 @@ async function recordMemoryFlushFailure(
   error: unknown,
   run: MemoryFlushRunParams,
   initialSessionEntry?: SessionEntry,
+  cliRearmBucket?: number,
 ): Promise<MemoryFlushResult> {
   let sessionEntry = initialSessionEntry;
   let outcome: MemoryFlushOutcome = "failed";
@@ -1785,6 +1803,7 @@ async function recordMemoryFlushFailure(
           ...(currentEntry.memoryFlush?.compactionCount !== undefined
             ? { compactionCount: currentEntry.memoryFlush.compactionCount }
             : {}),
+          ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
           failureCount:
             (currentEntry.memoryFlush?.kind === "failed"
               ? currentEntry.memoryFlush.failureCount
@@ -1806,6 +1825,9 @@ async function recordMemoryFlushFailure(
           memoryFlush: {
             kind: "succeeded",
             compactionCount: currentEntry.compactionCount ?? 0,
+            // CLI sessions re-arm on the byte bucket, so suppression has to be
+            // recorded there too or the exhausted cycle retries every turn.
+            ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
           },
         }));
         adoptEntry(exhaustedEntry);

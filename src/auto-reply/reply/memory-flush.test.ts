@@ -317,9 +317,18 @@ describe("CLI memory-flush re-arm bucket", () => {
   });
 
   it("re-arms only once the transcript reaches the next bucket", () => {
-    const entry = { memoryFlush: { kind: "succeeded" as const, compactionCount: 2 } };
+    const entry = {
+      memoryFlush: { kind: "succeeded" as const, compactionCount: 0, cliRearmBucket: 2 },
+    };
     expect(hasAlreadyFlushedForCliRearmBucket(entry, 2)).toBe(true);
     expect(hasAlreadyFlushedForCliRearmBucket(entry, 3)).toBe(false);
+    // The compaction count is a separate value and must not stand in for it.
+    expect(
+      hasAlreadyFlushedForCliRearmBucket(
+        { memoryFlush: { kind: "succeeded" as const, compactionCount: 2 } },
+        2,
+      ),
+    ).toBe(false);
     expect(hasAlreadyFlushedForCliRearmBucket(undefined, 0)).toBe(false);
     expect(hasAlreadyFlushedForCliRearmBucket({}, 0)).toBe(false);
   });

@@ -102,10 +102,16 @@ type FallbackNoticeState = {
 };
 
 type MemoryFlushState =
-  | { kind: "succeeded"; compactionCount: number }
+  | { kind: "succeeded"; compactionCount: number; cliRearmBucket?: number }
   | {
       kind: "failed";
       compactionCount?: number;
+      /**
+       * Transcript-byte window this session last flushed for. CLI backends that
+       * own native compaction never advance `compactionCount`, so they re-arm
+       * against this instead; it is never a compaction count.
+       */
+      cliRearmBucket?: number;
       failureCount: number;
     };
 
