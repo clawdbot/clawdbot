@@ -35,7 +35,7 @@ export function buildSlackAssistantThreadMetadata(
   };
 }
 
-export function parseSlackAssistantThreadMetadata(value: unknown) {
+function parseSlackAssistantThreadMetadata(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
