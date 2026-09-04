@@ -182,13 +182,17 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
-    { selection: "draft", expired: false },
-    { selection: "default", expired: false },
-    { selection: "draft", expired: true },
-    { selection: "default", expired: true },
+    { selection: "draft", expired: false, sharedOrder: false },
+    { selection: "default", expired: false, sharedOrder: false },
+    { selection: "draft", expired: true, sharedOrder: false },
+    { selection: "default", expired: true, sharedOrder: false },
+    { selection: "draft", expired: false, sharedOrder: true },
+    { selection: "default", expired: false, sharedOrder: true },
+    { selection: "draft", expired: true, sharedOrder: true },
+    { selection: "default", expired: true, sharedOrder: true },
   ])(
-    "uses personal $selection auth instead of native login (expired=$expired)",
-    async ({ selection, expired }) => {
+    "uses personal $selection auth instead of native login (expired=$expired, sharedOrder=$sharedOrder)",
+    async ({ selection, expired, sharedOrder }) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "personal-cli-model-catalog-" },
         async (state) => {
@@ -206,8 +210,24 @@ describe("models.list CLI runtime availability", () => {
           if (selection === "draft") {
             clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
           }
+          const cfg: OpenClawConfig = sharedOrder
+            ? { ...config, auth: { order: { anthropic: ["anthropic:shared"] } } }
+            : config;
+          if (sharedOrder) {
+            await state.writeAuthProfiles({
+              version: 1,
+              profiles: {
+                "anthropic:shared": {
+                  type: "token",
+                  provider: "anthropic",
+                  token: "synthetic-shared-token",
+                  expires: Date.now() + (expired ? 600_000 : -60_000),
+                },
+              },
+            });
+          }
           const context = createModelsListTestContext({
-            cfg: config,
+            cfg,
             agentDir: state.agentDir(),
             workspaceDir: state.workspaceDir,
             catalog: [providerCatalogEntry("anthropic", "claude-opus-5")],
@@ -220,10 +240,10 @@ describe("models.list CLI runtime availability", () => {
             agentId: "main",
             requesterProfileId: owner.id,
             params: { view: "configured", preparedOnly: true },
-            preloadedCatalog: { agentId: "main", config, snapshot },
+            preloadedCatalog: { agentId: "main", config: cfg, snapshot },
             preloadedOnly: true,
             catalogProjector: createGatewayAgentModelCatalogProjector({
-              cfg: config,
+              cfg,
               agentId: "main",
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,

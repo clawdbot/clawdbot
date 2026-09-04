@@ -96,16 +96,19 @@ function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
-      const preferredProfileId =
-        params.preferredProfileId ??
-        params.preferredProfilesByProvider?.get(normalizeProviderId(entry.provider));
+      const defaultProfileId = params.preferredProfilesByProvider?.get(
+        normalizeProviderId(entry.provider),
+      );
+      const preferredProfileId = params.preferredProfileId ?? defaultProfileId;
+      // New sessions capture personal defaults with the same strength as explicit account pins.
+      const lockedProfileId = params.lockedProfileId ?? defaultProfileId;
       const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(normalizeProviderId(entry.provider) === "openai"
           ? {}
           : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(preferredProfileId ? { preferredProfileId } : {}),
-        ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+        ...(lockedProfileId ? { lockedProfileId } : {}),
         observedRoutes: routeVariants.map((variant) => ({
           api: variant.api,
           baseUrl: variant.baseUrl,
@@ -120,7 +123,7 @@ function createModelsListEntryEvaluator(params: {
         provider: entry.provider,
         modelId: entry.id,
         preferredProfileId,
-        lockedProfileId: params.lockedProfileId,
+        lockedProfileId,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the

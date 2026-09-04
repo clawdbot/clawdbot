@@ -12,7 +12,7 @@ import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -186,7 +186,7 @@ function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefin
   if (!profileId) {
     return {};
   }
-  const profileSource = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
     ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
