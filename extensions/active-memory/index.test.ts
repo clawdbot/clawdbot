@@ -13,7 +13,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   afterAll,
   afterEach,
@@ -267,7 +270,8 @@ describe("active-memory plugin", () => {
       meta: {
         ...meta,
         agentMeta: {
-          sessionFile: testSessionFile,
+          sessionId,
+          sessionFile: params.sessionKey,
           ...agentMeta,
         },
       },
@@ -437,13 +441,28 @@ describe("active-memory plugin", () => {
   const expectLinesNotToContain = (lines: string[], text: string) => {
     expect(lines.join("\n")).not.toContain(text);
   };
-  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[], suffix = "\n") => {
+  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[]) => {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(
       sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}${suffix}`,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
       "utf8",
     );
+  };
+  let runtimeTranscriptCounter = 0;
+  const writeRuntimeTranscript = async (
+    records: Array<{ type?: string; message: Record<string, unknown> }>,
+    target: SessionTranscriptTargetParams = {
+      agentId: "main",
+      sessionId: `bounded-transcript-${++runtimeTranscriptCounter}`,
+      sessionKey: "agent:main:bounded-transcript",
+      storePath: path.join(stateDir, "sessions.json"),
+    },
+  ) => {
+    for (const { message } of records) {
+      await appendSessionTranscriptMessageByIdentity({ ...target, message });
+    }
+    return target;
   };
   const usableMemoryTranscriptRecord = (text: string) => ({
     message: {
@@ -1118,8 +1137,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("cleans the transient workspace when SQLite recall cleanup retries are exhausted", async () => {
-    const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
+  it("rejects recall when SQLite cleanup retries are exhausted", async () => {
     hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
       new Error("session store remains busy"),
     );
@@ -1128,12 +1146,6 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
-    expect(mkdtempSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-$/));
-    const tempWorkspaceDir = expectDefined(
-      await mkdtempSpy.mock.results[0]?.value,
-      "active-memory temp workspace",
-    );
-    await expectPathMissing(tempWorkspaceDir);
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to clean up recall session"),
     );
@@ -2636,61 +2648,72 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("persists a readable debug summary alongside the status line", async () => {
-    const sessionKey = "agent:main:debug";
-    seedSession(sessionKey, "s-main", 0);
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeTranscriptJsonl(params.sessionFile, [
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_search",
-            details: {
-              results: [{ text: "lemon pepper wings" }],
-              debug: {
-                backend: "builtin",
-                configuredMode: "search",
-                effectiveMode: "query",
-                fallback: "unsupported-search-flags",
-                searchMs: 2590,
-                hits: 3,
+  it.each([undefined, "native-cli-session"])(
+    "persists a readable debug summary alongside the status line (CLI identity: %s)",
+    async (nativeSessionId) => {
+      const sessionKey = "agent:main:debug";
+      seedSession(sessionKey, "s-main", 0);
+      runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: {
+                results: [{ text: "lemon pepper wings" }],
+                debug: {
+                  backend: "builtin",
+                  configuredMode: "search",
+                  effectiveMode: "query",
+                  fallback: "unsupported-search-flags",
+                  searchMs: 2590,
+                  hits: 3,
+                },
               },
             },
           },
+        ]);
+        return {
+          payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
+          ...(nativeSessionId
+            ? { meta: { agentMeta: { sessionId: nativeSessionId, sessionFile: undefined } } }
+            : {}),
+        };
+      });
+
+      await runPromptBuild(
+        {
+          prompt: "what wings should i order? debug telemetry",
         },
-      ]);
-      return {
-        payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
-      };
-    });
+        { sessionKey },
+      );
 
-    await runPromptBuild(
-      {
-        prompt: "what wings should i order? debug telemetry",
-      },
-      { sessionKey },
-    );
-
-    expect(hoisted.updateSessionStore).toHaveBeenCalled();
-    const updater = lastSessionStoreUpdater();
-    const store = {
-      [sessionKey]: {
-        sessionId: "s-main",
-        updatedAt: 0,
-      },
-    } as Record<string, Record<string, unknown>>;
-    updater(store);
-    const entries = store[sessionKey]?.pluginDebugEntries as
-      | Array<{ pluginId?: string; lines?: string[] }>
-      | undefined;
-    expect(entries).toHaveLength(1);
-    expect(entries?.[0]?.pluginId).toBe("active-memory");
-    expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
-    expectLinesToContain(
-      entries?.[0]?.lines ?? [],
-      "🔎 Active Memory Debug: backend=builtin configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
-    );
-  });
+      if (nativeSessionId) {
+        expect(hoisted.rawDeltaReads.some(({ sessionId }) => sessionId === nativeSessionId)).toBe(
+          false,
+        );
+      }
+      expect(hoisted.updateSessionStore).toHaveBeenCalled();
+      const updater = lastSessionStoreUpdater();
+      const store = {
+        [sessionKey]: {
+          sessionId: "s-main",
+          updatedAt: 0,
+        },
+      } as Record<string, Record<string, unknown>>;
+      updater(store);
+      const entries = store[sessionKey]?.pluginDebugEntries as
+        | Array<{ pluginId?: string; lines?: string[] }>
+        | undefined;
+      expect(entries).toHaveLength(1);
+      expect(entries?.[0]?.pluginId).toBe("active-memory");
+      expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
+      expectLinesToContain(
+        entries?.[0]?.lines ?? [],
+        "🔎 Active Memory Debug: backend=builtin configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
+      );
+    },
+  );
 
   it("skips newest memory_search toolResult entries that carry no debug payload", async () => {
     const sessionKey = "agent:main:transcript-debug";
@@ -3222,25 +3245,21 @@ describe("active-memory plugin", () => {
     seedSession(sessionKey, "s-timeout-partial", 0);
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeTranscriptJsonl(
-          params.sessionFile,
-          [
-            { type: "message", message: { role: "user", content: "ignore this user text" } },
-            usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
-            {
-              type: "message",
-              message: { role: "assistant", content: "alpha beta gamma delta" },
+        await writeTranscriptJsonl(params.sessionFile, [
+          { type: "message", message: { role: "user", content: "ignore this user text" } },
+          usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
+          {
+            type: "message",
+            message: { role: "assistant", content: "alpha beta gamma delta" },
+          },
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "epsilon zeta eta theta" }],
             },
-            {
-              type: "message",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "epsilon zeta eta theta" }],
-              },
-            },
-          ],
-          "\n{",
-        );
+          },
+        ]);
         return await waitForAbort(params.abortSignal);
       },
     );
@@ -3265,113 +3284,62 @@ describe("active-memory plugin", () => {
     expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
 
-  it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
+  it("returns partial transcript text after temporary SQLite recall rows are cleaned up", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(50);
     registerPluginConfig({ timeoutMs: 100, maxSummaryChars: 80, logging: true });
-    const sessionKey = "agent:main:timeout-partial-temp-transcript";
-    seedSession(sessionKey, "s-timeout-partial-temp-transcript", 0);
-    const transcriptWritten = createDeferred<void>();
-    let tempSessionFile = "";
+    const sessionRuntime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/session-store-runtime")
+    >("openclaw/plugin-sdk/session-store-runtime");
+    const transcriptRuntime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/session-transcript-runtime")
+    >("openclaw/plugin-sdk/session-transcript-runtime");
+    hoisted.patchSessionEntry.mockImplementationOnce(sessionRuntime.patchSessionEntry);
+    hoisted.cleanupSessionLifecycleArtifacts.mockImplementationOnce(
+      sessionRuntime.cleanupSessionLifecycleArtifacts,
+    );
+    const sessionKey = "agent:main:timeout-partial-sqlite-transcript";
+    seedSession(sessionKey, "s-timeout-partial-sqlite-transcript", 0);
+    const transcriptWritten = createDeferred<SessionTranscriptTargetParams>();
     runEmbeddedAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        tempSessionFile = params.sessionFile;
-        await writeTranscriptJsonl(params.sessionFile, [
-          usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
-          {
-            type: "message",
-            message: { role: "assistant", content: "temporary partial recall summary" },
-          },
-        ]);
-        transcriptWritten.resolve();
+      async (params: {
+        sessionTarget: SessionTranscriptTargetParams;
+        abortSignal?: AbortSignal;
+      }) => {
+        const target = await writeRuntimeTranscript(
+          [
+            usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
+            { message: { role: "assistant", content: "temporary partial recall summary" } },
+          ],
+          params.sessionTarget,
+        );
+        transcriptWritten.resolve(target);
         await waitForAbort(params.abortSignal);
       },
     );
-
     const resultPromise = runPromptBuild(
-      { prompt: "what wings should i order? timeout partial temp" },
+      { prompt: "what wings should i order? timeout partial sqlite" },
       { sessionKey },
     );
-    await transcriptWritten.promise;
+    const target = await transcriptWritten.promise;
     await vi.advanceTimersByTimeAsync(100);
     const result = await resultPromise;
 
     expectPrependContextContains(result, "temporary partial recall summary");
-    await expectPathMissing(tempSessionFile);
-    const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(
-      lines,
-      "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
-    );
-  });
-
-  it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
-    testing.setMinimumTimeoutMsForTests(1);
-    testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, maxSummaryChars: 80, logging: true });
-    const sessionKey = "agent:main:timeout-partial-sqlite-transcript";
-    seedSession(sessionKey, "s-timeout-partial-sqlite-transcript", 0);
-    let artifactSessionFile = "";
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: {
-        abortSignal?: AbortSignal;
-        sessionFile?: string;
-        sessionTarget?: {
-          agentId: string;
-          sessionId: string;
-          sessionKey: string;
-          storePath?: string;
-        };
-      }) => {
-        artifactSessionFile = params.sessionFile ?? "";
-        const target = params.sessionTarget;
-        if (!target) {
-          throw new Error("expected active-memory runtime session target");
-        }
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: usableMemoryTranscriptRecord("user prefers lemon pepper wings").message,
-        });
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: {
-            role: "assistant",
-            content: "sqlite partial recall summary",
-          },
-        });
-        await waitForAbort(params.abortSignal);
-      },
-    );
-
-    const result = await runPromptBuild(
-      { prompt: "what wings should i order? timeout partial sqlite" },
-      { sessionKey },
-    );
-
-    expectPrependContextContains(result, "sqlite partial recall summary");
-    expect(hoisted.rawDeltaReads).toContainEqual(
-      expect.objectContaining({
-        maxBytes: 50 * 1024 * 1024,
-        maxEvents: 2_000,
-      }),
-    );
-    if (artifactSessionFile) {
-      await expectPathMissing(artifactSessionFile);
-    }
-    const runParams = lastEmbeddedRunParams();
-    expect(runParams.sessionTarget).toMatchObject({
-      agentId: "main",
-      sessionKey: expect.stringMatching(/^agent:main:timeout-partial-sqlite-transcript:/),
+    expect(sessionRuntime.getSessionEntry(target)).toBeUndefined();
+    expect(await transcriptRuntime.readSessionTranscriptEvents(target)).toEqual([]);
+    expect(hoisted.rawDeltaReads).toContainEqual({
+      sessionId: target.sessionId,
+      maxBytes: 50 * 1024 * 1024,
+      maxEvents: 2_000,
     });
     const lines = getActiveMemoryLines(sessionKey);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
     expectLinesToContain(
       lines,
-      "🔎 Active Memory Debug: timeout_partial: 29 chars recovered (not persisted)",
+      "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
     );
   });
 
@@ -3642,38 +3610,27 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("bounds partial assistant transcript reads by character cap for large JSONL files", async () => {
-    const sessionFile = path.join(stateDir, "large-timeout-transcript.jsonl");
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    const line = `${JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: "alpha beta gamma delta epsilon zeta eta theta",
-      },
-    })}\n`;
-    await fs.writeFile(
-      sessionFile,
-      line.repeat(Math.ceil((5 * 1024 * 1024) / line.length)),
-      "utf8",
-    );
-    const readFileSpy = vi.spyOn(fs, "readFile");
-
-    const result = await testing.readPartialAssistantText(sessionFile, {
+  it("bounds partial assistant transcript reads by character cap", async () => {
+    const source = await writeRuntimeTranscript([
+      { message: { role: "assistant", content: "alpha beta gamma ".repeat(1_000) } },
+    ]);
+    const result = await testing.readPartialAssistantText(source, {
       maxChars: 128,
       maxLines: 2_000,
       maxBytes: 10 * 1024 * 1024,
     });
-
     const partialText = requireNonEmptyString(result, "partial assistant text missing");
     expect(partialText.length).toBeLessThanOrEqual(128);
     expect(partialText).toContain("alpha beta gamma");
-    expect(readFileSpy).not.toHaveBeenCalled();
+    expect(hoisted.rawDeltaReads).toContainEqual({
+      sessionId: source.sessionId,
+      maxEvents: 2_000,
+      maxBytes: 10 * 1024 * 1024,
+    });
   });
 
   it("keeps partial assistant transcript caps UTF-16 safe", async () => {
-    const sessionFile = path.join(stateDir, "surrogate-timeout-transcript.jsonl");
-    await writeTranscriptJsonl(sessionFile, [
+    const source = await writeRuntimeTranscript([
       {
         type: "message",
         message: {
@@ -3683,7 +3640,7 @@ describe("active-memory plugin", () => {
       },
     ]);
 
-    const result = await testing.readPartialAssistantText(sessionFile, {
+    const result = await testing.readPartialAssistantText(source, {
       maxChars: 39,
       maxLines: 10,
     });
@@ -3692,8 +3649,7 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
-    const sessionFile = path.join(stateDir, "joined-surrogate-timeout-transcript.jsonl");
-    await writeTranscriptJsonl(sessionFile, [
+    const source = await writeRuntimeTranscript([
       {
         type: "message",
         message: { role: "assistant", content: "a".repeat(37) },
@@ -3704,7 +3660,7 @@ describe("active-memory plugin", () => {
       },
     ]);
 
-    const result = await testing.readPartialAssistantText(sessionFile, {
+    const result = await testing.readPartialAssistantText(source, {
       maxChars: 39,
       maxLines: 10,
     });
@@ -3712,32 +3668,8 @@ describe("active-memory plugin", () => {
     expect(result).toBe("a".repeat(37));
   });
 
-  it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
-    const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      [
-        "{not valid json",
-        JSON.stringify({
-          type: "message",
-          message: { role: "assistant", content: "valid partial summary" },
-        }),
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = await testing.readPartialAssistantText(sessionFile, {
-      maxChars: 200,
-      maxLines: 10,
-    });
-
-    expect(result).toBe("valid partial summary");
-  });
-
-  it("honors transcript maxLines caps for partial text and search debug reads", async () => {
-    const sessionFile = path.join(stateDir, "max-lines-transcript.jsonl");
-    await writeTranscriptJsonl(sessionFile, [
+  it("honors transcript maxLines caps for partial text", async () => {
+    const source = await writeRuntimeTranscript([
       {
         type: "message",
         message: { role: "user", content: "line one" },
@@ -3763,21 +3695,14 @@ describe("active-memory plugin", () => {
     ]);
 
     await expect(
-      testing.readPartialAssistantText(sessionFile, {
+      testing.readPartialAssistantText(source, {
         maxChars: 1_000,
-        maxLines: 2,
-      }),
-    ).resolves.toBe("inside cap");
-    await expect(
-      testing.readActiveMemorySearchDebug(sessionFile, {
         maxLines: 3,
       }),
-    ).resolves.toBeUndefined();
-    const debug = await testing.readActiveMemorySearchDebug(sessionFile, {
-      maxLines: 4,
-    });
-    expect(debug?.backend).toBe("builtin");
-    expect(debug?.hits).toBe(1);
+    ).resolves.toBe("inside cap");
+    await expect(testing.readPartialAssistantText(source, { maxLines: 4 })).resolves.toBe(
+      "inside cap\noutside cap",
+    );
   });
 
   it("caches ok summaries but not empty, no-relevant, or timeout_partial results", () => {
@@ -4235,6 +4160,7 @@ describe("active-memory plugin", () => {
         setTimeout(resolve, 550);
       });
       const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
+      hoisted.runtimeTranscriptFiles["rotated-transcript"] = activeSessionFile;
       await writeTranscriptJsonl(activeSessionFile, [
         {
           message: {
@@ -4249,7 +4175,12 @@ describe("active-memory plugin", () => {
       ]);
       return {
         payloads: [{ text: verboseSummary }],
-        meta: { agentMeta: { sessionFile: activeSessionFile } },
+        meta: {
+          agentMeta: {
+            sessionId: "rotated-transcript",
+            sessionFile: lastRuntimeEmbeddedRunParams().sessionKey,
+          },
+        },
       };
     });
 
@@ -4991,6 +4922,7 @@ describe("active-memory plugin", () => {
           await writeTranscriptJsonl(params.sessionFile, [memoryResult]);
         }
         const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
+        hoisted.runtimeTranscriptFiles["rotated-transcript"] = activeSessionFile;
         await writeTranscriptJsonl(activeSessionFile, [
           {
             message: {
@@ -5005,7 +4937,12 @@ describe("active-memory plugin", () => {
         ]);
         return {
           payloads: [{ text: "User usually orders ramen." }],
-          meta: { agentMeta: { sessionFile: activeSessionFile } },
+          meta: {
+            agentMeta: {
+              sessionId: "rotated-transcript",
+              sessionFile: lastRuntimeEmbeddedRunParams().sessionKey,
+            },
+          },
         };
       });
 
@@ -5037,101 +4974,70 @@ describe("active-memory plugin", () => {
     },
   );
 
-  it("rejects completed output when only a rotated transcript reports unavailable memory", async () => {
-    testing.setMinimumTimeoutMsForTests(1);
-    testing.setSetupGraceTimeoutMsForTests(0);
-    registerPluginConfig({ timeoutMs: 1_000, logging: true });
-    const sessionKey = "agent:main:rotated-memory-unavailable";
-    seedSession(sessionKey, "s-rotated-memory-unavailable", 0);
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
-      await writeTranscriptJsonl(activeSessionFile, [
-        {
-          message: {
-            role: "toolResult",
-            toolName: "memory_search",
-            details: {
-              disabled: true,
-              warning: "Memory search is disabled for this session.",
+  it.each(["marker", "session-key"])(
+    "rejects completed output when a rotated SQLite transcript reports unavailable memory (%s)",
+    async (identity) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      testing.setMinimumTimeoutMsForTests(1);
+      testing.setSetupGraceTimeoutMsForTests(0);
+      registerPluginConfig({ timeoutMs: 1_000, logging: true });
+      const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
+      seedSession(sessionKey, "s-rotated-sqlite-memory-unavailable", 0);
+      runEmbeddedAgent.mockImplementationOnce(
+        async (params: {
+          sessionTarget?: {
+            agentId: string;
+            sessionId: string;
+            sessionKey: string;
+            storePath?: string;
+          };
+        }) => {
+          const target = params.sessionTarget;
+          if (!target?.storePath) {
+            throw new Error("expected active-memory SQLite runtime target");
+          }
+          const rotatedTarget = {
+            ...target,
+            sessionId: "s-rotated-sqlite-memory-unavailable-next",
+          };
+          await appendSessionTranscriptMessageByIdentity({
+            ...rotatedTarget,
+            message: {
+              role: "toolResult",
+              toolCallId: "memory-search-1",
+              toolName: "memory_search",
+              isError: true,
+              content: [],
+              details: {
+                disabled: true,
+                warning: "Memory search is disabled for this session.",
+              },
             },
-          },
+          });
+          return {
+            payloads: [{ text: "This arbitrary output must not become recalled context." }],
+            meta: {
+              agentMeta: {
+                sessionId: rotatedTarget.sessionId,
+                sessionFile:
+                  identity === "marker"
+                    ? `sqlite:${rotatedTarget.agentId}:${rotatedTarget.sessionId}:${rotatedTarget.storePath}`
+                    : rotatedTarget.sessionKey,
+              },
+            },
+          };
         },
-      ]);
-      return {
-        payloads: [{ text: "This arbitrary output must not become recalled context." }],
-        meta: { agentMeta: { sessionFile: activeSessionFile } },
-      };
-    });
+      );
 
-    const result = await runPromptBuild(
-      { prompt: "what food do i usually order? rotated unavailable" },
-      { sessionKey },
-    );
+      const result = await runPromptBuild(
+        { prompt: "what food do i usually order? rotated sqlite unavailable" },
+        { sessionKey },
+      );
 
-    expectPrependContextContains(result, unavailableRecallContext);
-    const infoLines = vi
-      .mocked(api.logger.info)
-      .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "done status=unavailable reason=search-unavailable");
-    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
-  });
-
-  it("rejects completed output when a rotated SQLite transcript reports unavailable memory", async () => {
-    testing.setMinimumTimeoutMsForTests(1);
-    testing.setSetupGraceTimeoutMsForTests(0);
-    registerPluginConfig({ timeoutMs: 1_000, logging: true });
-    const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
-    seedSession(sessionKey, "s-rotated-sqlite-memory-unavailable", 0);
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: {
-        sessionTarget?: {
-          agentId: string;
-          sessionId: string;
-          sessionKey: string;
-          storePath?: string;
-        };
-      }) => {
-        const target = params.sessionTarget;
-        if (!target?.storePath) {
-          throw new Error("expected active-memory SQLite runtime target");
-        }
-        const rotatedTarget = {
-          ...target,
-          sessionId: "s-rotated-sqlite-memory-unavailable-next",
-        };
-        await appendSessionTranscriptMessageByIdentity({
-          ...rotatedTarget,
-          message: {
-            role: "toolResult",
-            toolCallId: "memory-search-1",
-            toolName: "memory_search",
-            isError: true,
-            content: [],
-            details: {
-              disabled: true,
-              warning: "Memory search is disabled for this session.",
-            },
-          },
-        });
-        return {
-          payloads: [{ text: "This arbitrary output must not become recalled context." }],
-          meta: {
-            agentMeta: {
-              sessionFile: `sqlite:${rotatedTarget.agentId}:${rotatedTarget.sessionId}:${rotatedTarget.storePath}`,
-            },
-          },
-        };
-      },
-    );
-
-    const result = await runPromptBuild(
-      { prompt: "what food do i usually order? rotated sqlite unavailable" },
-      { sessionKey },
-    );
-
-    expectPrependContextContains(result, unavailableRecallContext);
-    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
-  });
+      expectPrependContextContains(result, unavailableRecallContext);
+      expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
+    },
+  );
 
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
@@ -5839,17 +5745,13 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
+  it("does not allocate transcript artifacts for default SQLite recall", async () => {
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
 
     await runPromptBuild({ prompt: "what wings should i order? temp transcript path" });
 
-    expect(mkdtempSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-$/));
-    const tempWorkspaceDir = expectDefined(
-      await mkdtempSpy.mock.results[0]?.value,
-      "active-memory temp workspace",
-    );
-    await expectPathMissing(tempWorkspaceDir);
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    await expectPathMissing(path.join(stateDir, "plugins", "active-memory", "transcripts"));
   });
 
   it("persists subagent transcripts in a separate directory when enabled", async () => {
