@@ -8,6 +8,10 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -54,6 +58,46 @@ it("projects ordinary startup as active before execution starts", () => {
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(false);
   registration.cleanup();
+});
+
+it("projects a live subagent on its own session without activating its parent", () => {
+  const parentKey = "agent:main:main";
+  const childKey = "agent:main:subagent:attachment-fix";
+  resetSubagentRegistryForTests({ persist: false });
+  addSubagentRunForTests({
+    runId: "run-attachment-fix",
+    childSessionKey: childKey,
+    controllerSessionKey: parentKey,
+    requesterSessionKey: parentKey,
+    requesterDisplayKey: "main",
+    task: "Fix parent activity indicator",
+    cleanup: "keep",
+    createdAt: 1,
+    startedAt: 2,
+  });
+  registerAgentRunContext("run-attachment-fix", { sessionKey: childKey, agentId: "main" });
+
+  try {
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: childKey,
+        canonicalKey: childKey,
+        agentId: "main",
+      }),
+    ).toEqual({ active: true, runIds: ["run-attachment-fix"] });
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: parentKey,
+        canonicalKey: parentKey,
+        agentId: "main",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+  } finally {
+    clearAgentRunContext("run-attachment-fix");
+    resetSubagentRegistryForTests({ persist: false });
+  }
 });
 
 it("keeps terminal persistence visible only to chat history", () => {
