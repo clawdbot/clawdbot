@@ -116,6 +116,9 @@ Use two layers of proof:
 
 An HTTP 200 for the shell or widget route is transport proof, not visual proof.
 Do not claim the dashboard works until the sandboxed frame renders.
+For widgets that fetch live data, exercise that fetch from the rendered frame.
+A host-side `curl` does not prove the browser received the required capability
+grant or accepted the endpoint's CORS and mixed-content policy.
 If no browser-control or connected-client inspection is available, report the
 dashboard as published but visually unverified instead of claiming success.
 
@@ -126,7 +129,11 @@ When a widget is blank or stale:
 1. confirm the expected session, tab, widget name, and revision with
    `dashboard read`;
 2. classify the hosting path using [hosting.md](references/hosting.md);
-3. verify the Control UI origin and the separate widget sandbox origin;
-4. after a Gateway restart or routing change, republish/update the widget so the
+3. verify the Control UI origin, the separate widget sandbox origin, and the
+   protocol used on every reverse-proxy hop;
+4. if widget JavaScript reports `Failed to fetch`, verify its exact HTTPS origin
+   is declared and granted in `capabilities.netOrigins`, then check browser CORS
+   and mixed-content errors;
+5. after a Gateway restart or routing change, republish/update the widget so the
    browser receives a fresh ticketed frame URL;
-5. reload the Control UI and verify the rendered frame, not only route status.
+6. reload the Control UI and verify the rendered frame, not only route status.

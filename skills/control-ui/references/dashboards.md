@@ -88,6 +88,9 @@ Chat/Dashboard preference is server-side session state.
 - Stable widget names, correct owners, and current revisions.
 - Layout is usable at desktop and narrow widths when relevant.
 - Widget frame loaded; no sandbox-origin or ticket error.
+- Every live-data origin is declared and granted in
+  `capabilities.netOrigins`; browser requests complete without CSP, CORS,
+  certificate, or mixed-content errors.
 - External links open intentionally; the widget does not rely on a nested
   external iframe.
 - Interactive controls perform their intended action.
