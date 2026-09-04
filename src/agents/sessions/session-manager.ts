@@ -14,10 +14,12 @@ import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sess
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
+  validateSessionTranscriptContextAdmission,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
+  resolveSessionTranscriptReadFence,
+  withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
@@ -60,24 +62,6 @@ export type {
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
-
-function withSessionContextAdmission<T>(
-  target: SessionTranscriptRuntimeTarget,
-  admission: UserTurnTranscriptAdmissionReceipt | undefined,
-  read: () => T,
-): T {
-  if (
-    admission &&
-    (target.agentId !== admission.agentId ||
-      target.sessionId !== admission.sessionId ||
-      target.sessionKey !== admission.sessionKey)
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Current-turn transcript admission belongs to a different transcript target",
-    );
-  }
-  return runWithSessionTranscriptReadFence(admission, read);
-}
 
 export class SessionManager extends SessionManagerBranching {
   private constructor(
@@ -159,6 +143,31 @@ export class SessionManager extends SessionManagerBranching {
     const contextEntries = withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptModelContext(target),
     );
+    return SessionManager.fromModelContextEntries(contextEntries, options.cwd);
+  }
+
+  /** The same detached model view, with durable transcript scanning off the event loop. */
+  static async openModelContextAsync(
+    target: SessionTranscriptRuntimeTarget,
+    options: {
+      cwd?: string;
+      admission?: UserTurnTranscriptAdmissionReceipt;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<SessionManager> {
+    const readTarget = { ...target };
+    const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
+    const admission = receipt ? { ...receipt } : undefined;
+    const entries = await withSessionContextAdmission(readTarget, admission, () =>
+      readSessionTranscriptModelContextAsync(readTarget, admission, options.signal),
+    );
+    options.signal?.throwIfAborted();
+    // Even process-local reads yield here; accept only the still-current admission.
+    validateSessionTranscriptContextAdmission(readTarget, admission);
+    return SessionManager.fromModelContextEntries(entries, options.cwd);
+  }
+
+  private static fromModelContextEntries(contextEntries: unknown[], cwd?: string): SessionManager {
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
     const entries = contextEntries as FileEntry[];
     const header = entries.find((entry) => entry.type === "session");
@@ -167,7 +176,7 @@ export class SessionManager extends SessionManagerBranching {
         "Persisted legacy session transcripts require doctor/import migration before runtime use",
       );
     }
-    return new SessionManager(options.cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
   }
 
   /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */

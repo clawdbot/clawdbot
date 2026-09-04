@@ -11,7 +11,9 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
@@ -25,18 +27,85 @@ import {
   projectModelContextEventSql,
   projectModelContextNavigationSql,
 } from "./session-model-context-projection.js";
-import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  resolveSqliteSessionTranscriptReadFence,
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "./session-transcript-read-fence.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+};
 type TranscriptContextSnapshot = {
   header: TranscriptEvent;
   entries: ContextEntry[];
+  version: SessionTranscriptContextVersion;
   readEntry: (entry: ContextEntry, omitCheckpoint?: boolean) => SessionTreeEntry;
 };
+
+function readContextVersion(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.max<number | null>("seq").as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+      ])
+      .where("session_id", "=", sessionId),
+  )!;
+}
+
+/** Full native evidence must still describe this session when an async read returns. */
+export function validateSessionTranscriptContextVersion(
+  scope: SessionTranscriptReadScope,
+  version: SessionTranscriptContextVersion | undefined,
+): void {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readContextVersion(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
+    { throwOnMissingTable: true },
+  );
+  const current = result.found ? result.value : undefined;
+  if (current?.generation !== version?.generation || current?.rawSeq !== version?.rawSeq) {
+    throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+  }
+}
+
+/** Revalidate admission after an asynchronous read before accepting its detached result. */
+export function validateSessionTranscriptContextAdmission(
+  scope: SessionTranscriptReadScope,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+): void {
+  if (!admission) {
+    return;
+  }
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = runWithSessionTranscriptReadFence(admission, () =>
+    withOpenClawAgentDatabaseReadOnly(
+      (database) => resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
+      toDatabaseOptions(resolved),
+      { throwOnMissingTable: true },
+    ),
+  );
+  if (!result.found || !result.value) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission is no longer readable",
+    );
+  }
+}
 
 /** Read a transient context without opening the writer lifecycle or copying native evidence. */
 export function readSessionTranscriptModelContext(
@@ -64,15 +133,19 @@ export function readSessionTranscriptModelContext(
 /** Consume full-fidelity context lazily inside one read snapshot, never retaining raw history. */
 export function readSessionTranscriptContextMessages<T>(
   scope: SessionTranscriptReadScope,
-  read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+  read: (
+    messages: Iterable<AgentMessage>,
+    header: unknown,
+    version?: SessionTranscriptContextVersion,
+  ) => T,
 ): T {
   const result = withTranscriptContextSnapshot(
     scope,
     "transcript",
-    ({ header, entries, readEntry }) => {
+    ({ header, entries, readEntry, version }) => {
       const messages = iterateSessionContextMessages(entries, readEntry);
       try {
-        return read(messages, header);
+        return read(messages, header, version);
       } finally {
         // Retained iterators cannot read after the snapshot closes, including early rejection.
         messages.return(undefined);
@@ -95,6 +168,7 @@ function withTranscriptContextSnapshot<T>(
         () => {
           const db = getSessionKysely(database.db);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+          const version = readContextVersion(database, resolved.sessionId);
           const base = db
             .selectFrom("transcript_events")
             .where("session_id", "=", resolved.sessionId)
@@ -158,6 +232,7 @@ function withTranscriptContextSnapshot<T>(
           return read({
             header: header ? JSON.parse(header.event_json) : undefined,
             entries,
+            version,
             readEntry: (entry, omitCheckpoint = false) => {
               const row = readPayload({ seq: entry.seq, omitCheckpoint: omitCheckpoint ? 1 : 0 })
                 .rows[0];

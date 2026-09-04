@@ -42,7 +42,7 @@ vi.mock("../../agents/run-session-target.js", () => ({
 }));
 vi.mock("../../agents/sessions/index.js", () => ({
   SessionManager: {
-    openModelContext: vi.fn(() => ({})),
+    openModelContextAsync: vi.fn(async () => ({})),
   },
 }));
 
@@ -80,7 +80,7 @@ describe("experience review auto apply", () => {
   it("records acquisition failure and releases its registered review", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-read-failure-");
     const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
-    vi.spyOn(SessionManager, "openModelContext").mockImplementationOnce(() => {
+    vi.spyOn(SessionManager, "openModelContextAsync").mockImplementationOnce(async () => {
       throw new Error("synthetic acquisition failure");
     });
     try {

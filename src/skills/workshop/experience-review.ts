@@ -434,7 +434,7 @@ async function runSkillExperienceReviewInner(
       sessionKey: foregroundSessionKey,
       missingSessionKey: "resolve-existing",
     });
-    const detachedSession = SessionManager.openModelContext(foregroundSessionTarget, {
+    const detachedSession = await SessionManager.openModelContextAsync(foregroundSessionTarget, {
       cwd: workspaceDir,
     });
     const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
