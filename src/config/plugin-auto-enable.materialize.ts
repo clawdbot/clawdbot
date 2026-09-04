@@ -54,7 +54,7 @@ export function resolvePluginAutoEnableCandidateReason(
 function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const channels = cfg.channels;
     if (asOptionalRecord(channels?.[builtInChannelId])?.enabled === false) {
       return true;
     }
@@ -115,7 +115,7 @@ function disableImplicitPreferredOverPlugin(params: {
 }
 
 function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channels = cfg.channels;
   return asOptionalRecord(channels?.[channelId])?.enabled === true;
 }
 
@@ -161,7 +161,7 @@ function registerPluginEntry(
 ): OpenClawConfig {
   const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const channels = cfg.channels;
     return {
       ...cfg,
       channels: {
@@ -181,7 +181,7 @@ function registerPluginEntry(
       entries: {
         ...cfg.plugins?.entries,
         [entry.pluginId]: {
-          ...(cfg.plugins?.entries?.[entry.pluginId] as Record<string, unknown> | undefined),
+          ...cfg.plugins?.entries?.[entry.pluginId],
           enabled: true,
         },
       },
