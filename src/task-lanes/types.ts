@@ -46,15 +46,36 @@ export type TaskLane = {
   items: TaskLaneItem[];
   /** Set by snapshot assembly; provider-authored lanes omit it. */
   providerId?: string;
+  /**
+   * Total items the provider reported for this lane. Snapshot pages can leave
+   * a lane with zero rendered items while its queue is non-empty, so clients
+   * need the real total to tell emptiness from omission.
+   */
+  totalItems?: number;
+  /** Items of this lane left outside the current snapshot page. */
+  omittedItems?: number;
 };
 
 export type TaskLaneProviderDiagnostic =
   | { providerId: string; ok: true; laneCount: number; itemCount: number }
   | { providerId: string; ok: false; error: string };
 
+export type TaskLaneSnapshotPaging = {
+  /** Flat-item offset the snapshot page starts at. */
+  offset: number;
+  /** Flat-item page size that was applied. */
+  limit: number;
+  /** Items across every lane before paging. */
+  totalItems: number;
+  /** Items included in this page. */
+  returnedItems: number;
+};
+
 export type TaskLaneSnapshot = {
   lanes: TaskLane[];
   diagnostics: TaskLaneProviderDiagnostic[];
+  /** Page coordinates so clients can detect and follow truncation. */
+  paging: TaskLaneSnapshotPaging;
 };
 
 export type TaskLaneProvider = {

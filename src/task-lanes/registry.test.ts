@@ -107,6 +107,40 @@ describe("task-lane registry", () => {
     ).toEqual(["a1", "b1"]);
   });
 
+  it("reports per-lane totals so an off-page lane is distinguishable from an empty lane", async () => {
+    // Both slice slots go to lane "busy"; lane "quiet" keeps its only item
+    // outside the slice. Without totals the UI would render "quiet" as an
+    // empty queue, indistinguishable from real emptiness.
+    const registry = createTaskLaneRegistry();
+    registerTaskLaneProvider(
+      registry,
+      provider("src", async () => ({
+        lanes: [
+          lane("busy", [
+            { id: "b1", title: "b1", state: "running", startedAtMs: 300 },
+            { id: "b2", title: "b2", state: "running", startedAtMs: 200 },
+          ]),
+          lane("quiet", [{ id: "q1", title: "q1", state: "pending", startedAtMs: 100 }]),
+        ],
+      })),
+    );
+    const page1 = await loadTaskLaneSnapshot(registry, { limit: 2 });
+    const busy = page1.lanes.find((entry) => entry.id === "busy");
+    const quiet = page1.lanes.find((entry) => entry.id === "quiet");
+    expect(quiet?.items).toEqual([]);
+    expect(busy?.totalItems).toBe(2);
+    expect(busy?.omittedItems).toBe(0);
+    expect(quiet?.totalItems).toBe(1);
+    expect(quiet?.omittedItems).toBe(1);
+    expect(page1.paging).toEqual({ offset: 0, limit: 2, totalItems: 3, returnedItems: 2 });
+    // The next page materializes the omitted item and clears the signal.
+    const page2 = await loadTaskLaneSnapshot(registry, { limit: 2, offset: 2 });
+    const quietPage2 = page2.lanes.find((entry) => entry.id === "quiet");
+    expect(quietPage2?.items.map((item) => item.id)).toEqual(["q1"]);
+    expect(quietPage2?.omittedItems).toBe(0);
+    expect(page2.paging).toEqual({ offset: 2, limit: 2, totalItems: 3, returnedItems: 1 });
+  });
+
   it("pages the newest-first flat item list and normalizes states", async () => {
     const registry = createTaskLaneRegistry();
     registerTaskLaneProvider(

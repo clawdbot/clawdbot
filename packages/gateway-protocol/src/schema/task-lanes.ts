@@ -40,6 +40,11 @@ export const TaskLaneSchema = closedObject({
   // the wire so older snapshots stay valid, but the registry always sets it.
   providerId: Type.Optional(Type.String({ pattern: PROVIDER_ID_PATTERN })),
   items: Type.Array(TaskLaneItemSchema),
+  // Paging can leave a lane with zero rendered items while its queue is
+  // non-empty; totals let clients tell emptiness from omission. Optional on
+  // the wire so older snapshots stay valid; the registry always sets them.
+  totalItems: Type.Optional(Type.Integer({ minimum: 0 })),
+  omittedItems: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 export const TaskLaneProviderDiagnosticSchema = Type.Union([
@@ -59,6 +64,17 @@ export const TaskLaneProviderDiagnosticSchema = Type.Union([
 export const TaskLaneSnapshotSchema = closedObject({
   lanes: Type.Array(TaskLaneSchema),
   diagnostics: Type.Array(TaskLaneProviderDiagnosticSchema),
+  // Page coordinates of the flat-item slice the snapshot was built from.
+  // Optional on the wire so older snapshots stay valid; the registry always
+  // sets it so clients can detect and follow truncation.
+  paging: Type.Optional(
+    closedObject({
+      offset: Type.Integer({ minimum: 0 }),
+      limit: Type.Integer({ minimum: 1, maximum: 200 }),
+      totalItems: Type.Integer({ minimum: 0 }),
+      returnedItems: Type.Integer({ minimum: 0 }),
+    }),
+  ),
 });
 
 export type TaskLaneSnapshotPayload = Static<typeof TaskLaneSnapshotSchema>;

@@ -20,6 +20,7 @@ type TaskLaneDiagnostic = TaskLaneSnapshotPayload["diagnostics"][number];
 /** Lanes sort by provider-then-id; items render newest-first (startedAtMs desc, missing last). */
 function sortTaskLaneSnapshot(snapshot: TaskLaneSnapshotPayload): TaskLaneSnapshotPayload {
   return {
+    ...snapshot,
     lanes: snapshot.lanes
       .toSorted((a, b) =>
         a.providerId === b.providerId
@@ -32,16 +33,31 @@ function sortTaskLaneSnapshot(snapshot: TaskLaneSnapshotPayload): TaskLaneSnapsh
             ? -1
             : 1,
       )
-      .map((lane) => ({
-        providerId: lane.providerId,
-        id: lane.id,
-        label: lane.label,
-        items: lane.items.toSorted((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0)),
-      })),
+      .map((lane) =>
+        Object.assign({}, lane, {
+          items: lane.items.toSorted((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0)),
+        }),
+      ),
     diagnostics: snapshot.diagnostics.toSorted((a, b) =>
       a.providerId < b.providerId ? -1 : a.providerId > b.providerId ? 1 : 0,
     ),
   };
+}
+
+/**
+ * Paging can leave a lane with zero rendered items while its queue is
+ * non-empty. Totals distinguish omission from emptiness; a lane missing
+ * totals (older snapshot) falls back to its rendered count.
+ */
+function renderLaneCount(lane: TaskLane) {
+  const omitted = lane.omittedItems ?? 0;
+  if (omitted > 0 && lane.totalItems !== undefined) {
+    return t("cron.lanes.itemsShownOfTotal", {
+      shown: String(lane.items.length),
+      total: String(lane.totalItems),
+    });
+  }
+  return String(lane.items.length);
 }
 
 function renderDiagnosticChip(diagnostic: TaskLaneDiagnostic) {
@@ -133,6 +149,18 @@ export function renderTaskLanesPanel(props: TaskLanesSectionProps) {
             `
           : nothing
       }
+      ${
+        snapshot.paging && snapshot.paging.totalItems > snapshot.paging.returnedItems
+          ? html`
+              <div class="cron-task-lanes__truncated" role="status">
+                ${t("cron.lanes.truncated", {
+                  shown: String(snapshot.paging.returnedItems),
+                  total: String(snapshot.paging.totalItems),
+                })}
+              </div>
+            `
+          : nothing
+      }
       <div class="cron-task-lanes__lanes">
         ${snapshot.lanes.map(
           (lane) => html`
@@ -141,7 +169,7 @@ export function renderTaskLanesPanel(props: TaskLanesSectionProps) {
                 <span class="cron-task-lanes__lane-label">
                   ${lane.providerId ? `${lane.providerId} · ${lane.label}` : lane.label}
                 </span>
-                <span class="cron-task-lanes__lane-count">${lane.items.length}</span>
+                <span class="cron-task-lanes__lane-count">${renderLaneCount(lane)}</span>
               </summary>
               <div class="cron-task-lanes__items">${lane.items.map(renderLaneItem)}</div>
             </details>

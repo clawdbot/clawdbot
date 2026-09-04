@@ -59,6 +59,7 @@ export async function loadTaskLaneSnapshot(
   const lanes: Array<TaskLane & { providerId: string }> = [];
   const diagnostics: TaskLaneProviderDiagnostic[] = [];
   const flat: Array<{ item: TaskLaneItem; laneId: string; laneProviderId: string }> = [];
+  const totalItemsByLane = new Map<string, number>();
   for (const providerId of providerIds) {
     const provider = registry.providers.get(providerId);
     if (!provider) {
@@ -71,8 +72,11 @@ export async function loadTaskLaneSnapshot(
       for (const lane of providerLanes) {
         // Lane ids are only unique within a provider; item-to-lane assignment
         // must therefore match on both, or duplicate lane ids across providers
-        // would cross-assign items.
+        // would cross-assign items. The same composite key tracks each lane's
+        // unpaged item total so an off-page lane reads as omitted, not empty.
+        const laneKey = `${providerId} ${lane.id}`;
         lanes.push({ ...lane, providerId });
+        totalItemsByLane.set(laneKey, (totalItemsByLane.get(laneKey) ?? 0) + lane.items.length);
         itemCount += lane.items.length;
         for (const item of lane.items) {
           flat.push({ item, laneId: lane.id, laneProviderId: providerId });
@@ -95,7 +99,8 @@ export async function loadTaskLaneSnapshot(
   lanes.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   flat.sort((left, right) => laneItemSortKey(right.item) - laneItemSortKey(left.item));
   const itemsByLane = new Map<string, TaskLaneItem[]>();
-  for (const { item, laneId, laneProviderId } of flat.slice(offset, offset + limit)) {
+  const page = flat.slice(offset, offset + limit);
+  for (const { item, laneId, laneProviderId } of page) {
     const key = `${laneProviderId} ${laneId}`;
     let laneItems = itemsByLane.get(key);
     if (!laneItems) {
@@ -107,12 +112,24 @@ export async function loadTaskLaneSnapshot(
   return {
     // Lane identity is provider-scoped (two providers may share a lane id), so
     // every returned lane keeps its provider id instead of flattening it away.
-    lanes: lanes.map(({ providerId, id, label }) => ({
-      providerId,
-      id,
-      label,
-      items: itemsByLane.get(`${providerId} ${id}`) ?? [],
-    })),
+    lanes: lanes.map(({ providerId, id, label }) => {
+      const items = itemsByLane.get(`${providerId} ${id}`) ?? [];
+      const totalItems = totalItemsByLane.get(`${providerId} ${id}`) ?? items.length;
+      return {
+        providerId,
+        id,
+        label,
+        items,
+        totalItems,
+        omittedItems: Math.max(totalItems - items.length, 0),
+      };
+    }),
     diagnostics,
+    paging: {
+      offset,
+      limit,
+      totalItems: flat.length,
+      returnedItems: page.length,
+    },
   };
 }

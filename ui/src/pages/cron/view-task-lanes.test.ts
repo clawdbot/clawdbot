@@ -102,6 +102,32 @@ describe("task lanes panel", () => {
     expect(chips[1]).toContain("5");
   });
 
+  it("marks an off-page lane as omitted instead of reading as an empty queue", () => {
+    const container = renderPanel({
+      taskLanes: snapshot({
+        lanes: [
+          { id: "quiet", label: "Quiet", items: [], totalItems: 1, omittedItems: 1 },
+          {
+            id: "busy",
+            label: "Busy",
+            items: [{ id: "b1", title: "b1", state: "running", startedAtMs: 5_000 }],
+            totalItems: 1,
+            omittedItems: 0,
+          },
+        ],
+        paging: { offset: 0, limit: 50, totalItems: 2, returnedItems: 1 },
+      }),
+    });
+    const counts = Array.from(container.querySelectorAll(".cron-task-lanes__lane-count")).map(
+      (el) => el.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    // A lane with items outside the page must never show a bare "0".
+    expect(counts).toEqual(["1", "0 of 1"]);
+    expect(
+      container.querySelector(".cron-task-lanes__truncated")?.textContent?.replace(/\s+/g, " "),
+    ).toContain("1 of 2");
+  });
+
   it("renders the empty state when no lanes or diagnostics exist", () => {
     const container = renderPanel({ taskLanes: snapshot({ lanes: [], diagnostics: [] }) });
     expect(container.querySelector(".cron-task-lanes__empty")?.textContent).toBeTruthy();

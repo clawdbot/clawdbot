@@ -439,7 +439,12 @@ export async function loadTaskLanes(state: CronState) {
     return;
   }
   try {
-    const res = await state.client.request<TaskLaneSnapshotPayload>("taskLanes.list", {});
+    // Request the bounded maximum page (200 items, the schema cap) so the
+    // panel shows the fullest snapshot the registry will serve; the snapshot
+    // paging/totals signal covers anything omitted beyond that bound.
+    const res = await state.client.request<TaskLaneSnapshotPayload>("taskLanes.list", {
+      limit: 200,
+    });
     // Defensive shape check: an unexpected response must not crash the pane.
     state.taskLanes =
       Array.isArray(res?.lanes) && Array.isArray(res?.diagnostics)
