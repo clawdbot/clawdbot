@@ -1112,8 +1112,9 @@ class GatewaySessionReconnectTest {
         assertNull(firstAuth["deviceToken"])
         assertNull(firstAuth["password"])
 
+        harness.session.retryAfterNetworkRestore()
         assertNull(
-          "Terminal authentication failure must suppress automatic reconnects",
+          "Terminal authentication failure must suppress automatic and network-restore reconnects",
           withTimeoutOrNull(LIFECYCLE_TEST_TIMEOUT_MS) { secondAttempt.await() },
         )
         assertTrue(readField<Boolean>(desiredConnection, "reconnectPausedForAuthFailure"))
@@ -2024,9 +2025,9 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
-  fun steadyReconnectDelayKeepsEndpointOnlyRecoveryWithinOneMinute() {
-    // Android emits no network callback when only the Gateway process restarts. Pin the absolute
-    // user wait, not just a value derived from the production ceiling, so it cannot drift upward.
+  fun steadyReconnectTimerIsThirtyToSixtySecondsBeforeConnectionTime() {
+    // Endpoint-only restarts do not emit network callbacks. Bound the retry timer; completing
+    // the next TCP/TLS and gateway handshake takes additional time.
     assertEquals(30_000L, gatewayReconnectDelayMs(20, jitter = 0.0))
     assertEquals(60_000L, gatewayReconnectDelayMs(20, jitter = 1.0))
     assertEquals(45_000L, gatewayReconnectDelayMs(20, jitter = 0.5))
@@ -2120,16 +2121,20 @@ class GatewaySessionReconnectTest {
   @Test
   fun networkRestoreDoesNotDisconnectAnAlreadyReadyConnection() =
     runBlocking {
-      // Regression for the P2 finding on #127873: the network-restore fan-out reaches every
-      // session, including one that is already connected over a different route (e.g. cellular
-      // kept a secondary alive while its own Wi-Fi was down) — forcing that connection closed
-      // would interrupt real in-flight work for no benefit.
+      // A restore can concern another route. Even an application-level error proves that this
+      // socket is live; preserve its unrelated in-flight work and do not enqueue a reconnect.
       val json = Json { ignoreUnknownKeys = true }
       val connected = CompletableDeferred<Unit>()
+      val checkReceived = CompletableDeferred<Pair<WebSocket, String>>()
+      val slowRequest = CompletableDeferred<Pair<WebSocket, String>>()
       val disconnectedReasons = ConcurrentLinkedQueue<String>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
-          if (method == "connect") webSocket.send(connectResponseFrame(id))
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "health" -> checkReceived.complete(webSocket to id)
+            "slow.method" -> slowRequest.complete(webSocket to id)
+          }
         }
       val harness =
         createReconnectHarness(
@@ -2145,15 +2150,219 @@ class GatewaySessionReconnectTest {
         disconnectedReasons.clear()
         val wakesBefore: Long = readField(harness.session, "reconnectWakeCount")
 
+        val lease = requireNotNull(harness.session.captureRequestLease())
+        val pending = async { lease.request("slow.method", null) }
+        val (slowSocket, slowId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { slowRequest.await() }
         harness.session.retryAfterNetworkRestore()
-        delay(SETTLE_INTO_BACKOFF_MS)
-
+        val (checkSocket, checkId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { checkReceived.await() }
+        repeat(5) { harness.session.retryAfterNetworkRestore() }
+        checkSocket.send("""{"type":"res","id":"$checkId","ok":false,"error":{"code":"UNAVAILABLE","message":"health summary unavailable"}}""")
+        // Observe beyond the check deadline: a delayed timeout must not kill this live socket.
+        delay(8_500)
+        slowSocket.send("""{"type":"res","id":"$slowId","ok":true,"payload":{}}""")
+        assertEquals("{}", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { pending.await() })
+        assertTrue(lease.isCurrent())
+        assertEquals(1, server.requestFrames.count { it["method"]?.jsonPrimitive?.content == "health" })
         assertEquals("a ready connection must not be reopened", 1, server.requestCount)
         assertEquals(emptyList<String>(), disconnectedReasons.toList())
         val wakesAfter: Long = readField(harness.session, "reconnectWakeCount")
         assertEquals("an already-ready session must not be woken", wakesBefore, wakesAfter)
       } finally {
         shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun networkRestoreKeepsResponsiveSocketWhileHealthSummaryIsSlow() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val healthRequest = CompletableDeferred<Pair<WebSocket, String>>()
+      val eventReceived = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "health" -> healthRequest.complete(socket to id)
+            else -> socket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { connected.complete(Unit) },
+          onEvent = { event, _ -> if (event == "tick") eventReceived.complete(Unit) },
+        )
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val lease = requireNotNull(harness.session.captureRequestLease())
+        harness.session.retryAfterNetworkRestore()
+        val (socket, id) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { healthRequest.await() }
+        socket.send("""{"type":"event","event":"tick","payload":{}}""")
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { eventReceived.await() }
+        // Prove both directions while the unrelated health computation remains pending.
+        assertEquals("{}", lease.request("test.echo", null))
+        delay(8_500)
+        assertTrue("Health latency is not transport failure when this socket still receives frames", lease.isCurrent())
+        // A response arriving after the check's waiter expired must remain harmless.
+        socket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+        assertEquals("{}", lease.request("test.echo", null))
+        assertEquals(1, server.requestCount)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun networkRestoreReplacesSilentlyBlackholedReadyConnection() = assertNetworkRestoreReplacesBrokenFlow(keepInbound = false)
+
+  @Test
+  fun networkRestoreReplacesBrokenOutboundPathDespiteIncomingEvents() = assertNetworkRestoreReplacesBrokenFlow(keepInbound = true)
+
+  private fun assertNetworkRestoreReplacesBrokenFlow(keepInbound: Boolean) =
+    runBlocking {
+      val connections = Channel<Unit>(Channel.UNLIMITED)
+      val freshConnected = CompletableDeferred<Unit>()
+      val eventReceived = CompletableDeferred<Unit>()
+      val oldRequest = CompletableDeferred<Pair<WebSocket, String>>()
+      var heartbeat: Job? = null
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "hold.before.restore" -> oldRequest.complete(socket to id)
+            else -> socket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+          }
+        }
+      val proxy = SilentFlowProxy(server.port)
+      val harness =
+        createReconnectHarness(
+          onConnected = { connections.trySend(Unit) },
+          onEvent = { event, _ -> if (event == "tick") eventReceived.complete(Unit) },
+        )
+      val fresh = createReconnectHarness(onConnected = { freshConnected.complete(Unit) })
+      try {
+        connectNodeSession(harness.session, proxy.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connections.receive() }
+        val originalLease = requireNotNull(harness.session.captureRequestLease())
+        assertEquals("{}", originalLease.request("health", null))
+        val delayedReply = if (keepInbound) async { originalLease.request("hold.before.restore", null, timeoutMs = 20_000) } else null
+        val oldWireRequest = if (keepInbound) withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { oldRequest.await() } else null
+        proxy.blackholeExistingFlows(keepInbound)
+
+        // Network validation can return while only the old flow is broken. Prove that a new
+        // connection through the same listener can handshake and exchange real frames.
+        connectNodeSession(fresh.session, proxy.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { freshConnected.await() }
+        assertEquals("{}", fresh.session.request("health", null))
+        assertTrue("No EOF or socket error should have retired the stale flow", originalLease.isCurrent())
+        val started = System.nanoTime()
+        val stranded =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { originalLease.request("health", null) }
+          }
+        harness.session.retryAfterNetworkRestore()
+        if (keepInbound) {
+          val staleSocket = server.sockets.first()
+          heartbeat =
+            launch {
+              repeat(24) {
+                staleSocket.send("""{"type":"event","event":"tick","payload":{}}""")
+                delay(500)
+              }
+            }
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { eventReceived.await() }
+          // A late reply to a pre-restore request also cannot prove that new outbound work arrives.
+          val (oldSocket, oldId) = requireNotNull(oldWireRequest)
+          oldSocket.send("""{"type":"res","id":"$oldId","ok":true,"payload":{}}""")
+          assertEquals("{}", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { requireNotNull(delayedReply).await() })
+        }
+        val outcome = withTimeout(17_000) { stranded.await() }
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        println("silent-flow request: elapsedMs=$elapsedMs error=${outcome.exceptionOrNull()?.message} ready=${originalLease.isCurrent()}")
+        assertTrue(outcome.exceptionOrNull() is GatewayRequestOutcomeUnknown)
+        assertTrue("Restore must retire the stale flow before the normal 15s RPC deadline (observed ${elapsedMs}ms)", elapsedMs < 12_000)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connections.receive() }
+        assertFalse(originalLease.isCurrent())
+        assertEquals("{}", harness.session.request("health", null))
+      } finally {
+        heartbeat?.cancelAndJoin()
+        shutdownReconnectHarness(fresh)
+        shutdownReconnectHarness(harness)
+        proxy.close()
+        server.shutdown()
+      }
+    }
+
+  @Test
+  fun networkRestoreCheckCannotRetireReplacementOrUndoDisconnect() =
+    runBlocking {
+      for (replace in listOf(false, true)) {
+        val connected = Channel<Unit>(Channel.UNLIMITED)
+        val checkReceived = CompletableDeferred<Unit>()
+        val oldEventStarted = CountDownLatch(1)
+        val releaseOldEvent = CountDownLatch(1)
+        val first =
+          startGatewayServer(json = Json) { socket, id, method ->
+            if (method == "connect") socket.send(connectResponseFrame(id))
+            if (method == "health") {
+              if (replace) socket.send("""{"type":"event","event":"hold-old-check","payload":{}}""")
+              checkReceived.complete(Unit)
+            }
+          }
+        val replacement =
+          startGatewayServer(json = Json) { socket, id, method ->
+            socket.send(
+              if (method == "connect") {
+                connectResponseFrame(id)
+              } else {
+                """{"type":"res","id":"$id","ok":true,"payload":{}}"""
+              },
+            )
+          }
+        val harness =
+          createReconnectHarness(
+            onConnected = { connected.trySend(Unit) },
+            onEvent = { event, _ ->
+              if (event == "hold-old-check") {
+                oldEventStarted.countDown()
+                check(releaseOldEvent.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+              }
+            },
+          )
+        try {
+          connectNodeSession(harness.session, first.port)
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.receive() }
+          val lease = requireNotNull(harness.session.captureRequestLease())
+          harness.session.retryAfterNetworkRestore()
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { checkReceived.await() }
+          if (replace) {
+            // Keep the old message pump (and pending-check failure) alive until a fresh loop
+            // has published its replacement. A late failure must not close that new socket.
+            assertTrue(oldEventStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+            harness.session.disconnect()
+            val oldCleanup = readField<Job>(harness.session, "disconnectTail")
+            connectNodeSession(harness.session, replacement.port)
+            withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.receive() }
+            releaseOldEvent.countDown()
+            withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { oldCleanup.join() }
+          } else {
+            harness.session.disconnectAndJoin()
+            harness.session.retryAfterNetworkRestore()
+          }
+          // A cancelled/late probe must not act on the next desired intent, even past its deadline.
+          delay(8_500)
+          assertFalse(lease.isCurrent())
+          assertEquals(1, first.requestCount)
+          assertEquals(if (replace) 1 else 0, replacement.requestCount)
+          if (replace) {
+            assertEquals("{}", harness.session.request("health", null))
+          } else {
+            assertFalse(harness.session.isReady())
+          }
+        } finally {
+          releaseOldEvent.countDown()
+          shutdownReconnectHarness(harness, first, replacement)
+        }
       }
     }
 

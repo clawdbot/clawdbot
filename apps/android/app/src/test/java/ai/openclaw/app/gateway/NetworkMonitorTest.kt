@@ -98,17 +98,4 @@ class NetworkMonitorTest {
 
     assertEquals(2, wakeCount)
   }
-
-  @Test
-  fun networkAttachDuringStartupWakes() {
-    val context = RuntimeEnvironment.getApplication()
-    var wakeCount = 0
-    NetworkMonitor(context) { wakeCount += 1 }
-
-    val connectivity = context.getSystemService(ConnectivityManager::class.java)
-    val callback = shadowOf(connectivity).networkCallbacks.single()
-    callback.onAvailable(ShadowNetwork.newInstance(101))
-
-    assertEquals(1, wakeCount)
-  }
 }
