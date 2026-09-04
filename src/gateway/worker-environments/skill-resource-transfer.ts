@@ -10,7 +10,6 @@ import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
-import { cleanupSkillResourceAllocation } from "./skill-resource-allocation-cleanup.js";
 import {
   createSkillResourceLeaseRenewal,
   RESOURCE_LEASE_MS,
@@ -485,18 +484,19 @@ export async function transferSkillResources(params: {
     registryIdentity: location.registryIdentity,
     workspaceIdentity: location.workspaceIdentity,
   };
+  const retireProvisional = async () =>
+    await allocationOwner.coordinator.retireProvisional(
+      ledgerRecord,
+      ledgerLocation,
+      params.tunnel,
+      params.assertCurrent,
+    );
   // A forged init response cannot prove that its claimed identity belongs to the receiver's
   // canonical root. Require the receiver to accept the complete lease tuple before using it.
   try {
     await execute({ op: "renew", ...leaseLocation });
   } catch (error) {
-    await cleanupSkillResourceAllocation({
-      record: { ...ledgerRecord, location: ledgerLocation },
-      runtimeScript: SKILL_RESOURCE_RUNTIME_SCRIPT,
-      tunnel: params.tunnel,
-      assertCurrent: params.assertCurrent,
-    }).catch(() => undefined);
-    await retireIntent().catch(() => undefined);
+    await retireProvisional().catch(() => undefined);
     throw error;
   }
   try {
@@ -506,13 +506,7 @@ export async function transferSkillResources(params: {
       workspaceIdentity: location.workspaceIdentity,
     });
   } catch (error) {
-    await cleanupSkillResourceAllocation({
-      record: { ...ledgerRecord, location: ledgerLocation },
-      runtimeScript: SKILL_RESOURCE_RUNTIME_SCRIPT,
-      tunnel: params.tunnel,
-      assertCurrent: params.assertCurrent,
-    }).catch(() => undefined);
-    await retireIntent().catch(() => undefined);
+    await retireProvisional().catch(() => undefined);
     throw error;
   }
   const commitDispatchedAt = Date.now();

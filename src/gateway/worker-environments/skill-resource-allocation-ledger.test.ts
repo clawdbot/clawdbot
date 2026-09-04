@@ -162,6 +162,31 @@ describe("skill resource allocation ledger", () => {
     await expect(ledger.list()).resolves.toEqual([]);
   });
 
+  it("persists a provisional locator before cleanup can mutate the receiver", async () => {
+    const { ledger } = createFixture();
+    const created = await ledger.createIntent(intent);
+
+    const pending = await ledger.markCleanupPending(
+      allocationId,
+      created.revision,
+      undefined,
+      location,
+    );
+
+    expect(pending).toMatchObject({
+      phase: "cleanup-pending",
+      revision: 3,
+      location,
+    });
+    await expect(ledger.markAllocated(allocationId, pending.revision, location)).rejects.toThrow(
+      "not awaiting allocation",
+    );
+    const complete = await ledger.markCleanupComplete(allocationId, pending.revision);
+    expect(complete).toMatchObject({ phase: "cleanup-complete", revision: 4, location });
+    await ledger.remove(allocationId, complete.revision);
+    await expect(ledger.list()).resolves.toEqual([]);
+  });
+
   it("allows only one database owner to advance an observed revision", async () => {
     const stateDir = temps.make("skill-resource-allocation-ledger-cas-");
     const first = createFixture({ stateDir }).ledger;

@@ -318,6 +318,19 @@ describe("remote-exec skill resource allocation lifecycle", () => {
     ).rejects.toThrow("Invalid skill resource allocation");
 
     expect(allocationId).toBeDefined();
+    await allocationOwner.coordinator.stop();
+    const restarted = createTestCoordinator(allocationOwner.stateDir, "f".repeat(32));
+    await vi.waitFor(
+      async () => {
+        await restarted.coordinator.recover({
+          getEnvironment: () => ({ state: "attached", ownerEpoch: 1, leaseId: "lease-active" }),
+          startTunnel: async () => carrier as never,
+        });
+        await expect(restarted.ledger.list()).resolves.toEqual([]);
+      },
+      { timeout: 3_000 },
+    );
+    await restarted.coordinator.stop();
     await expect(allocationOwner.ledger.list()).resolves.toEqual([]);
     expect(
       (await fs.readdir(remoteWorkspaceDir)).filter((name) =>

@@ -168,18 +168,20 @@ function asRawLedgerRow(value: unknown): RawLedgerRow {
 }
 
 function prepareRawRowStatement(database: DatabaseSync, many: boolean) {
-  const statement = database.prepare(
-    many
-      ? `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
+  const statement =
+    database /* sqlite-allow-raw -- Statement-local BigInt reads preserve corrupt int64 evidence exactly. */
+      .prepare(
+        many
+          ? `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
                 created_at, updated_at
            FROM state_leases
           WHERE scope = ? AND lease_key NOT GLOB ?
           ORDER BY lease_key`
-      : `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
+          : `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
                 created_at, updated_at
            FROM state_leases
           WHERE scope = ? AND lease_key = ?`,
-  ); // sqlite-allow-raw -- Statement-local BigInt reads preserve corrupt int64 evidence exactly.
+      );
   statement.setReadBigInts(true);
   return statement;
 }
@@ -286,13 +288,13 @@ function quarantineRow(
     throw new Error("Unable to quarantine corrupt skill resource allocation row");
   }
   transactionFence?.(database);
-  const removed = database
+  const removed = database // sqlite-allow-raw -- BigInt bindings keep malformed int64 evidence under exact CAS.
     .prepare(
       `DELETE FROM state_leases
         WHERE scope IS ? AND lease_key IS ? AND owner IS ?
           AND expires_at IS ? AND heartbeat_at IS ? AND payload_json IS ?
           AND created_at IS ? AND updated_at IS ?`,
-    ) // sqlite-allow-raw -- BigInt bindings keep malformed int64 evidence under exact CAS.
+    )
     .run(
       row.scope,
       row.lease_key,
@@ -545,19 +547,28 @@ export class SkillResourceAllocationLedger {
     allocationId: string,
     expectedRevision: number,
     transactionFence?: SkillResourceAllocationTransactionFence,
+    provisionalLocation?: SkillResourceAllocationLocation,
   ): Promise<SkillResourceAllocationRecord> {
+    const parsedLocation = parseSkillResourceAllocationLocation(provisionalLocation);
+    if (provisionalLocation !== undefined && !parsedLocation) {
+      throw new Error("Invalid skill resource allocation location");
+    }
     return await this.update(
       allocationId,
       expectedRevision,
       (current) => {
+        if (parsedLocation && current.phase !== "intent") {
+          throw new Error("Skill resource allocation is not awaiting allocation");
+        }
         if (current.phase === "cleanup-pending" || current.phase === "cleanup-complete") {
           return current;
         }
         return {
           ...current,
-          revision: current.phase === "intent" ? 2 : 3,
+          revision: parsedLocation || current.phase !== "intent" ? 3 : 2,
           phase: "cleanup-pending",
           updatedAtMs: monotonicTimestamp(current.createdAtMs, current.updatedAtMs),
+          ...(parsedLocation ? { location: parsedLocation } : {}),
         };
       },
       transactionFence,

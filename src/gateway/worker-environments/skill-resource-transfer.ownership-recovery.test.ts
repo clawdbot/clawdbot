@@ -342,6 +342,199 @@ describe("remote-exec skill resource ownership recovery", () => {
     },
   );
 
+  it("queues failed setup through the coordinator while ownership is unchanged", async () => {
+    const remoteWorkspaceDir = await fs.realpath(temps.make("resource-setup-retire-"));
+    const carrier = createSpawnTunnel(remoteWorkspaceDir);
+    const stateDir = temps.make("resource-setup-retire-state-");
+    const current = createCoordinator(stateDir, "3".repeat(32));
+    let allocationId: string | undefined;
+    let rejectRenewal = true;
+    let cleanupDispatches = 0;
+
+    await expect(
+      transferSkillResources({
+        snapshot: await createSnapshot(),
+        remoteWorkspaceDir,
+        assertCurrent: () => {},
+        allocationOwner: {
+          coordinator: current.coordinator,
+          environmentId: "setup-retire-environment",
+          ownerEpoch: 1,
+        },
+        tunnel: {
+          runWorkspaceCommand: async (command) => {
+            const operation = JSON.parse(command.input!);
+            if (operation.op === "init") {
+              allocationId = operation.id;
+            }
+            if (operation.op === "renew" && rejectRenewal) {
+              rejectRenewal = false;
+              return {
+                stdout: "",
+                stderr: "fixture renewal failure",
+                code: 1,
+                termination: "exit" as const,
+                signal: null,
+                killed: false,
+              };
+            }
+            if (operation.op === "cleanup") {
+              cleanupDispatches += 1;
+            }
+            return await carrier.runWorkspaceCommand(command);
+          },
+        },
+      }),
+    ).rejects.toThrow("Skill resource transfer failed");
+
+    const queued = await current.ledger.list();
+    for (const leftover of queued) {
+      await current.ledger.removeAfterEnvironmentDestroyed(
+        leftover.allocationId,
+        leftover.revision,
+      );
+    }
+    await fs.rm(path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`), {
+      force: true,
+      recursive: true,
+    });
+    await current.coordinator.stop();
+
+    expect(rejectRenewal).toBe(false);
+    expect(cleanupDispatches).toBe(1);
+    expect(queued).toMatchObject([
+      {
+        allocationId,
+        phase: "cleanup-pending",
+        revision: 3,
+        location: {
+          identity: expect.any(String),
+          registryIdentity: expect.any(String),
+          workspaceIdentity: expect.any(String),
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    { cut: "after receiver renewal", takeoverDuringRenew: true },
+    { cut: "before allocated-state commit", takeoverDuringRenew: false },
+  ] as const)(
+    "does not dispatch failed-setup cleanup after ownership takeover $cut",
+    async ({ takeoverDuringRenew }) => {
+      const remoteWorkspaceDir = await fs.realpath(temps.make("resource-setup-takeover-"));
+      const carrier = createSpawnTunnel(remoteWorkspaceDir);
+      const stateDir = temps.make("resource-setup-takeover-state-");
+      const current = createCoordinator(stateDir, "1".repeat(32));
+      let allocationId: string | undefined;
+      let root: string | undefined;
+      let takeoverInjected = false;
+      let cleanupDispatches = 0;
+      const replaceOwner = () => {
+        openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
+          .db.prepare(
+            "UPDATE state_leases SET owner = ?, expires_at = ?, updated_at = ? WHERE scope = ? AND lease_key = ?",
+          )
+          .run(
+            "replacement-owner",
+            Date.now() + 60_000,
+            Date.now(),
+            "worker.skill-resource-allocation-owner.v1",
+            "gateway",
+          );
+        takeoverInjected = true;
+      };
+      if (!takeoverDuringRenew) {
+        const markAllocated = current.coordinator.markAllocated.bind(current.coordinator);
+        vi.spyOn(current.coordinator, "markAllocated").mockImplementation(
+          async (record, location) => {
+            replaceOwner();
+            return await markAllocated(record, location);
+          },
+        );
+      }
+      const instrumented = {
+        runWorkspaceCommand: async (
+          command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+        ) => {
+          const operation = JSON.parse(command.input!);
+          if (operation.op === "cleanup" || operation.op === "cleanup-intent") {
+            cleanupDispatches += 1;
+          }
+          const result = await carrier.runWorkspaceCommand(command);
+          if (operation.op === "init") {
+            allocationId = operation.id;
+            root = path.join(
+              remoteWorkspaceDir,
+              `${registryPrefix}${operation.id}`,
+              skillResourceAllocationDirectoryName(operation.id),
+            );
+          } else if (operation.op === "renew" && takeoverDuringRenew && !takeoverInjected) {
+            replaceOwner();
+          }
+          return result;
+        },
+      };
+
+      await expect(
+        transferSkillResources({
+          snapshot: await createSnapshot(),
+          remoteWorkspaceDir,
+          assertCurrent: () => {},
+          allocationOwner: {
+            coordinator: current.coordinator,
+            environmentId: "setup-takeover-environment",
+            ownerEpoch: 1,
+          },
+          tunnel: instrumented,
+        }),
+      ).rejects.toThrow(/skill resource allocation owner/iu);
+      const rowsBeforeRecovery = await current.ledger.list();
+      const rootSurvived = await fs
+        .stat(root!)
+        .then(() => true)
+        .catch(() => false);
+      await current.coordinator.stop();
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
+        .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .run("worker.skill-resource-allocation-owner.v1", "gateway");
+      const replacement = createCoordinator(stateDir, "2".repeat(32));
+      const replacementRecovered = await replacement.coordinator
+        .recover({
+          getEnvironment: () => ({
+            state: "attached",
+            ownerEpoch: 2,
+            leaseId: "lease-replacement",
+          }),
+          startTunnel: async () => carrier as never,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      for (const leftover of await replacement.ledger.list()) {
+        await replacement.ledger.removeAfterEnvironmentDestroyed(
+          leftover.allocationId,
+          leftover.revision,
+        );
+      }
+      await fs.rm(path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`), {
+        force: true,
+        recursive: true,
+      });
+      await replacement.coordinator.stop();
+
+      expect(takeoverInjected).toBe(true);
+      expect(cleanupDispatches).toBe(0);
+      expect(rowsBeforeRecovery).toMatchObject([{ allocationId, phase: "intent" }]);
+      expect(rootSurvived).toBe(true);
+      expect(replacementRecovered).toBe(true);
+      await expect(
+        fs.stat(path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it.each([
     { cut: "after remote prepare", operation: "cleanup", phase: "cleanup-pending" },
     { cut: "after durable receipt", operation: "cleanup-finalize", phase: "cleanup-complete" },

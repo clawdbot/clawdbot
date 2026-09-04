@@ -14,6 +14,12 @@ export type SkillResourceAllocationOwner = {
     record: SkillResourceAllocationRecord,
     location: SkillResourceAllocationLocation,
   ): Promise<SkillResourceAllocationRecord>;
+  retireProvisional(
+    record: SkillResourceAllocationRecord,
+    location: SkillResourceAllocationLocation,
+    tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">,
+    assertCurrent: () => void,
+  ): Promise<void>;
   retire(
     record: SkillResourceAllocationRecord,
     tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">,

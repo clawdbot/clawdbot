@@ -210,6 +210,30 @@ export class SkillResourceAllocationCoordinator {
     return allocated;
   }
 
+  async retireProvisional(
+    record: SkillResourceAllocationRecord,
+    location: SkillResourceAllocationLocation,
+    tunnel: AllocationTunnel,
+    assertCurrent: () => void,
+  ): Promise<void> {
+    this.assertOwned();
+    if (!this.active.has(record.allocationId)) {
+      throw new Error("Skill resource allocation is not active in this Gateway");
+    }
+    try {
+      const pending = await this.ledger.markCleanupPending(
+        record.allocationId,
+        record.revision,
+        this.assertOwnedInTransaction,
+        location,
+      );
+      this.assertOwned();
+      await this.retire(pending, tunnel, assertCurrent);
+    } finally {
+      this.active.delete(record.allocationId);
+    }
+  }
+
   async retire(
     record: SkillResourceAllocationRecord,
     tunnel: AllocationTunnel,
