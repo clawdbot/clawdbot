@@ -1666,6 +1666,69 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.CommandSource).toBe("text");
   });
 
+  // "@bot /reset" is how a control command gets typed in a mention-gated channel: Mattermost's
+  // composer executes a bare "/reset" as a Mattermost slash command instead of posting it. The
+  // mention must be stripped before command detection and before the debounce gate, or the
+  // command is batched with chat text and reaches the model as prose.
+  it("routes a mention-prefixed text command without debouncing", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const mentionConfig: OpenClawConfig = {
+      messages: { inbound: { debounceMs: 60_000 } },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "oncall",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
+        },
+      },
+    };
+    const isControlCommandMessage = vi.fn((text?: string) => text?.trim() === "/reset");
+    mockState.runtimeCore = createRuntimeCore(mentionConfig, undefined, {
+      inboundDebounceMs: 60_000,
+      createInboundDebouncer,
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized: () => true,
+      shouldHandleTextCommands: () => true,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-mention-command",
+      message: "@openclaw /reset",
+    });
+    // Control commands bypass the 60s debounce window, so the turn dispatches right away.
+    await vi.waitFor(() => {
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("/reset", mentionConfig);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.WasMentioned).toBe(true);
+    expect(ctx?.BodyForAgent).toBe("/reset");
+    expect(ctx?.CommandBody).toBe("/reset");
+    expect(ctx?.CommandAuthorized).toBe(true);
+    expect(ctx?.CommandSource).toBe("text");
+  });
+
   it("uses websocket channel type when REST channel lookup fails", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
