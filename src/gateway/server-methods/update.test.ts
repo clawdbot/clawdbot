@@ -5,7 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import {
+  getUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { summarizeUpdateRunResponse } from "../update-run-summary.js";
@@ -172,7 +176,7 @@ describe("update.run acknowledgement", () => {
           channel: "slack",
           to: "slack:C0123ABC",
           threadId: "1234567890.123456",
-          message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. The gateway restarts in about a minute; you'll get a message here when it's back.`,
+          message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. You'll get a message here before the gateway restarts and when verification finishes.`,
           deliveryIntentId: expect.stringMatching(/^update-run-ack:/),
         }),
       );
@@ -199,6 +203,40 @@ describe("update.run acknowledgement", () => {
       expect.objectContaining({
         to: "slack:C0456DEF",
         message: expect.stringContaining("⚠️ OpenClaw update failed: build-failed."),
+      }),
+    );
+  });
+
+  it("awaits a managed restart notice only after the orchestrator enters activating", async () => {
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    const response = await captureUpdateRunPayload({ sessionKey });
+    const beforePark = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0].beforePark;
+    if (!response || !beforePark) {
+      throw new Error("expected admitted managed handoff");
+    }
+    await beforePark();
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
+    recordUpdateRunPhase(response.runId, "activating", { after: { version: "2.0.0" } });
+    const delivered = createDeferredCore<boolean>();
+    const started = createDeferredCore();
+    sendGatewayLifecycleNoticeMock.mockImplementationOnce(() => {
+      started.resolve();
+      return delivered.promise;
+    });
+    let parked = false;
+    const park = beforePark().then(() => {
+      parked = true;
+    });
+    await started.promise;
+    expect(parked).toBe(false);
+    delivered.resolve(true);
+    await park;
+    await beforePark();
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
+    expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        message: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…",
       }),
     );
   });

@@ -435,7 +435,7 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
-  const updateRun = payload.kind === "update" ? finalizeRestartUpdateRun(payload) : undefined;
+  const updateRun = payload.kind === "update" ? await finalizeRestartUpdateRun(payload) : undefined;
   const updateRunId = updateRun?.runId;
   let noticeMessage =
     payload.kind === "update"
@@ -452,7 +452,10 @@ async function loadRestartSentinelStartupTask(params: {
   const run = async () => {
     let routedSessionKey = sessionKey;
     let wakeAgentId: string | undefined;
-    if (isPendingControlPlaneUpdateRestartSentinel(payload)) {
+    if (
+      isPendingControlPlaneUpdateRestartSentinel(payload) &&
+      (!updateRun || updateRun.status === "running")
+    ) {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
         const timer = setTimeout(() => {
@@ -475,7 +478,7 @@ async function loadRestartSentinelStartupTask(params: {
       if (updateRunId) {
         // A lost updater must leave a terminal outcome after the existing
         // verification deadline; first-terminal-wins preserves a completed CLI result.
-        const expiredRun = finalizeRestartUpdateRun(payload, true);
+        const expiredRun = await finalizeRestartUpdateRun(payload, true);
         if (expiredRun) {
           noticeMessage = renderUpdateRunReport(expiredRun).markdown;
         }
@@ -548,7 +551,9 @@ async function loadRestartSentinelStartupTask(params: {
     const continuationRoute = continuation && route ? { ...route, chatType } : undefined;
 
     let internalNoticeWritten = false;
-    if (!route && sessionKey && entry && isInternalMessageChannel(origin?.channel)) {
+    if (updateRun?.verification.noticeDelivered) {
+      internalNoticeWritten = true;
+    } else if (!route && sessionKey && entry && isInternalMessageChannel(origin?.channel)) {
       const notice = await appendAssistantMessageToSessionTranscript({
         agentId,
         sessionKey: canonicalKey,
@@ -556,7 +561,9 @@ async function loadRestartSentinelStartupTask(params: {
         expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         storePath,
         text: noticeMessage,
-        idempotencyKey: `restart-sentinel-notice:${canonicalKey}:${sentinelRevision}`,
+        idempotencyKey: updateRunId
+          ? `update-run-finished:${updateRunId}`
+          : `restart-sentinel-notice:${canonicalKey}:${sentinelRevision}`,
       }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
       internalNoticeWritten = notice.ok;
       if (notice.ok && updateRunId) {
@@ -577,9 +584,11 @@ async function loadRestartSentinelStartupTask(params: {
     // Inline transcript publication also broadcasts to Control UI. An update
     // outcome needs no model wake unless continuation work remains; heartbeats
     // can silently suppress the notice or contradict the recorded outcome.
-    const internalUpdateComplete =
-      internalNoticeWritten && payload.kind === "update" && !continuation;
-    if (!routedAgentTurnContinuation && !internalUpdateComplete) {
+    const updateComplete =
+      (internalNoticeWritten || (updateRunId && route)) &&
+      payload.kind === "update" &&
+      !continuation;
+    if (!routedAgentTurnContinuation && !updateComplete) {
       wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
@@ -612,13 +621,14 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    if (route) {
+    if (route && !updateRun?.verification.noticeDelivered) {
       const queuedNotice = await enqueueRestartSentinelNotice({
         cfg,
         ...route,
         message: noticeMessage,
         sessionKey: canonicalKey,
         revision: sentinelRevision,
+        ...(updateRunId ? { deliveryIntentId: `update-run-finished:${updateRunId}` } : {}),
       });
       noticeQueueId = queuedNotice.id;
       noticeQueueCreated = queuedNotice.created;

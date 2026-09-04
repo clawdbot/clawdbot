@@ -941,7 +941,12 @@ describe("scheduleRestartSentinelWake", () => {
 
       await scheduleRestartSentinelWake({ deps: {} as never });
       expect(getUpdateRun(record.runId)?.status).toBe("running");
-      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: `🔁 Back on v${resolveRuntimeServiceVersion()}, verifying…`,
+        }),
+      );
       if (cliFinished) {
         finishUpdateRun(record.runId, {
           status: "succeeded",
@@ -959,11 +964,11 @@ describe("scheduleRestartSentinelWake", () => {
         expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
       );
       expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
-      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
       const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
       await vi.advanceTimersByTimeAsync(900);
       expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
-      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
       expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
     },
   );

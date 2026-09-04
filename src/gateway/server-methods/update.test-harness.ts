@@ -113,7 +113,8 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEnabledMock }));
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   extractDeliveryInfo: (sessionKey: string | undefined) => {
     if (!sessionKey) {
       return { deliveryContext: undefined, threadId: undefined };
@@ -274,7 +275,7 @@ beforeEach(() => {
   });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
-  runGatewayUpdateMock.mockClear();
+  runGatewayUpdateMock.mockReset();
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
@@ -302,7 +303,7 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
-  startManagedServiceUpdateHandoffMock.mockClear();
+  startManagedServiceUpdateHandoffMock.mockReset();
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,
