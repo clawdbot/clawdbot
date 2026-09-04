@@ -378,6 +378,14 @@ const options: ExecOptions = { timeout: 5000 };
     expectRulePresence(findings, "dangerous-exec", false);
   });
 
+  it("does not flag hyphenated prose like 'Self-eval (' as dynamic code execution", () => {
+    const source = `
+7. **Self-eval (before showing the user).**
+`;
+    const findings = scanSource(source, "SKILL.md");
+    expectRulePresence(findings, "dynamic-code-execution", false);
+  });
+
   it("does not flag RegExp.exec when child_process appears elsewhere", () => {
     const source = `
 import type { ExecOptions } from "child_process";
