@@ -16076,14 +16076,11 @@ it("pins simple release admission owners before selected checkout and preserves 
   });
   expect(
     signingSteps.map(({ uses }) => uses).filter((uses): uses is string => uses !== undefined),
-  ).toEqual([
-    "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    DOWNLOAD_ARTIFACT_V8,
-    UPLOAD_ARTIFACT_V7,
-  ]);
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
   expect(signingSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
   const signingBodies = signingSteps.map(({ run }) => run ?? "").join("\n");
   expect(signingBodies).not.toMatch(/(?:^|\s)(?:git|cargo)\s|\.release-tooling|apps\/linux\//mu);
+  expect(signingBodies).not.toMatch(/\b(?:npm|pnpm|npx|corepack)\b/u);
   expect(
     signingSteps.find(({ name }) => name === "Download finalized unsigned AppImage")?.with,
   ).toEqual({
@@ -16101,22 +16098,85 @@ it("pins simple release admission owners before selected checkout and preserves 
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
     UPDATER_PUBLIC_KEY: "${{ needs.validate_release.outputs.updater_pubkey }}",
   });
-  expect(
-    signingSteps.find(({ name }) => name === "Install trusted signature verifier")?.run,
-  ).toContain("sudo apt-get install -y --no-install-recommends minisign");
-  expect(signAppImage.run).toContain(
-    "npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4",
+  const signingToolsInstaller = expectDefined(
+    signingSteps.find(({ name }) => name === "Install trusted signing tools"),
+    "Linux signing tools installer",
   );
-  expect(signAppImage.run).toContain('tauri signer sign "$appimage"');
+  expect(linux.env).toMatchObject({
+    MINISIGN_ARCHIVE_SHA256: "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73",
+    MINISIGN_BINARY_SHA256: "2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db",
+    MINISIGN_URL:
+      "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz",
+    TAURI_CLI_ARCHIVE_SHA256: "6864602a34292aa6f2ad40ae019eebe5c1064d6c623fe20696a8a8974067e60b",
+    TAURI_CLI_BINARY_SHA256: "23a27f61c50417fe87c92fa958fb56ecc8de7c791f78df3cac046c8579b45897",
+    TAURI_CLI_URL:
+      "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-unknown-linux-gnu.tgz",
+  });
+  expect(signingToolsInstaller.run?.match(/--proto '=https' --tlsv1\.2/gu)).toHaveLength(2);
+  expect(signingToolsInstaller.run?.match(/--connect-timeout 10 --max-time 120/gu)).toHaveLength(2);
+  expect(signingToolsInstaller.run).toContain('--output "$minisign_archive" "$MINISIGN_URL"');
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \\\n  minisign-linux/x86_64/minisign',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -',
+  );
+  expect(signingToolsInstaller.run).toContain('--output "$tauri_archive" "$TAURI_CLI_URL"');
+  expect(signingToolsInstaller.run).toContain(
+    'tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" --version');
+  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/minisign" -v');
+  expect(signingToolsInstaller.run).not.toMatch(
+    /apt-get|GITHUB_PATH|(?:^|\n)\s*(?:export\s+)?PATH=/u,
+  );
+  expect(signAppImage.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri"',
+  );
+  expect(signAppImage.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signAppImage.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"');
+  expect(signAppImage.run).toContain(
+    "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  );
+  expect(signAppImage.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signAppImage.run.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"'),
+  );
+  expect(signAppImage.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signAppImage.run.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"'),
+  );
   expect(signAppImage.run).toContain('before=$(sha256sum "$appimage")');
   expect(signAppImage.run).toContain('after=$(sha256sum "$appimage")');
   expect(signAppImage.run).toContain('base64 --decode < "${appimage}.sig"');
-  expect(signAppImage.run).toContain('minisign -Vm "$appimage"');
+  expect(signAppImage.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"');
+  expect(signAppImage.run).not.toMatch(/\b(?:curl|wget|npm|pnpm|npx|corepack)\b|https?:\/\//u);
+  expect(signAppImage.run).not.toMatch(/(?:^|\n)\s*(?:export\s+)?PATH=/u);
   expect(signAppImage.run).not.toContain("finalize-appimage.sh");
   expect(signingSteps.find(({ id }) => id === "upload_signed_appimage")?.with).toMatchObject({
     name: "linux-app-release-signed-appimage",
     path: "dist/linux-app",
   });
+  for (const [jobName, job] of Object.entries(linux.jobs)) {
+    if (jobName === "sign_linux" || jobName === "sign_desktop") {
+      continue;
+    }
+    expect(JSON.stringify(job), `${jobName} must not reference signer binaries`).not.toMatch(
+      /\$\{RUNNER_TEMP\}\/bin\/(?:cargo-tauri|minisign)/u,
+    );
+  }
   const macosBuildSteps = linux.jobs.build_macos.steps as WorkflowStep[];
   const buildMacos = expectDefined(
     macosBuildSteps.find(({ name }) => name === "Build macOS test bundles"),
@@ -16181,17 +16241,13 @@ it("pins simple release admission owners before selected checkout and preserves 
     desktopSigningSteps
       .map(({ uses }) => uses)
       .filter((uses): uses is string => uses !== undefined),
-  ).toEqual([
-    "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    DOWNLOAD_ARTIFACT_V8,
-    DOWNLOAD_ARTIFACT_V8,
-    UPLOAD_ARTIFACT_V7,
-  ]);
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
   expect(desktopSigningSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
   const desktopSigningBodies = desktopSigningSteps.map(({ run }) => run ?? "").join("\n");
   expect(desktopSigningBodies).not.toMatch(
     /(?:^|\s)(?:git|cargo)\s|\.release-tooling|apps\/linux\//mu,
   );
+  expect(desktopSigningBodies).not.toMatch(/\b(?:npm|pnpm|npx|corepack)\b/u);
   expect(
     desktopSigningSteps.find(({ name }) => name === "Download finalized macOS updater archive")
       ?.with,
@@ -16217,18 +16273,32 @@ it("pins simple release admission owners before selected checkout and preserves 
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
     UPDATER_PUBLIC_KEY: "${{ needs.validate_release.outputs.updater_pubkey }}",
   });
-  expect(
-    desktopSigningSteps.find(({ name }) => name === "Install trusted signature verifier")?.run,
-  ).toContain("sudo apt-get install -y --no-install-recommends minisign");
-  expect(signDesktop.run).toContain(
-    "npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4",
+  expect(desktopSigningSteps.find(({ name }) => name === "Install trusted signing tools")).toEqual(
+    signingToolsInstaller,
   );
-  expect(signDesktop.run).toContain('signer sign "$macos"');
-  expect(signDesktop.run).toContain('signer sign "$windows"');
+  expect(signDesktop.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri"',
+  );
+  expect(signDesktop.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$macos"');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"');
+  expect(signDesktop.run).toContain(
+    "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  );
+  expect(signDesktop.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signDesktop.run.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"'),
+  );
+  expect(signDesktop.run.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signDesktop.run.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"'),
+  );
   expect(signDesktop.run).toContain('macos_before=$(sha256sum "$macos")');
   expect(signDesktop.run).toContain('windows_after=$(sha256sum "$windows")');
-  expect(signDesktop.run).toContain('minisign -Vm "$macos"');
-  expect(signDesktop.run).toContain('minisign -Vm "$windows"');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$windows"');
+  expect(signDesktop.run).not.toMatch(/\b(?:curl|wget|npm|pnpm|npx|corepack)\b|https?:\/\//u);
+  expect(signDesktop.run).not.toMatch(/(?:^|\n)\s*(?:export\s+)?PATH=/u);
   expect(desktopSigningSteps.find(({ id }) => id === "upload_signed_desktop")?.with).toMatchObject({
     name: "desktop-test-release-signed-updaters",
     path: "dist/desktop-test",
@@ -16363,53 +16433,79 @@ it("pins simple release admission owners before selected checkout and preserves 
     );
     expect(smokeChild.status, `${smokeChild.stdout}${smokeChild.stderr}`).toBe(0);
 
+    const writeSigningToolFixtures = (root: string) => {
+      const bin = path.join(root, "bin");
+      const poisonBin = path.join(root, "poison-bin");
+      const tauri = path.join(bin, "cargo-tauri");
+      const tauriLog = path.join(root, "cargo-tauri.log");
+      const minisignLog = path.join(root, "minisign.log");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(poisonBin, { recursive: true });
+      writeFileSync(
+        tauri,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          '[[ "$#" -eq 3 && "$1" == "signer" && "$2" == "sign" ]]',
+          '[[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]',
+          '[[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]',
+          'printf "%s\\n" "$*" >> "$TAURI_SIGN_LOG"',
+          'printf "ephemeral-signature:%s" "$(basename "$3")" | base64 > "$3.sig"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(bin, "minisign"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          '[[ "$#" -eq 6 && "$1" == "-Vm" && "$3" == "-x" && "$5" == "-p" ]]',
+          '[[ -z "${TAURI_SIGNING_PRIVATE_KEY+x}" ]]',
+          '[[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" ]]',
+          '[[ -s "$2" && -s "$4" && -s "$6" ]]',
+          '[[ "$(cat "$6")" == "ephemeral-public-key" ]]',
+          'printf "%s\\n" "$(basename "$2")" >> "$MINISIGN_LOG"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      for (const command of ["cargo-tauri", "minisign", "npm", "pnpm", "npx", "corepack"]) {
+        writeFileSync(path.join(poisonBin, command), "#!/bin/sh\nexit 97\n", { mode: 0o755 });
+      }
+      return {
+        minisignBinarySha256: createHash("sha256")
+          .update(readFileSync(path.join(bin, "minisign")))
+          .digest("hex"),
+        minisignLog,
+        path: `${poisonBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        tauriBinarySha256: createHash("sha256").update(readFileSync(tauri)).digest("hex"),
+        tauriLog,
+      };
+    };
+
     const signingRoot = tempDirs.make("openclaw-linux-signing-job-");
     const signingInput = path.join(signingRoot, "dist/signing-input");
-    const signingBin = path.join(signingRoot, "bin");
     const finalizedArtifact = path.join(signingInput, "OpenClaw-2026.8.2-amd64.AppImage");
     mkdirSync(signingInput, { recursive: true });
-    mkdirSync(signingBin, { recursive: true });
     writeFileSync(finalizedArtifact, "trusted-finalized-bytes");
-    writeFileSync(
-      path.join(signingBin, "npm"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        '[[ "$#" -eq 9 ]]',
-        '[[ "$1" == "exec" && "$2" == "--yes" && "$3" == "--audit=false" ]]',
-        '[[ "$4" == "--package=@tauri-apps/cli@2.11.4" && "$5" == "--" ]]',
-        '[[ "$6" == "tauri" && "$7" == "signer" && "$8" == "sign" ]]',
-        'printf "ephemeral-signature" | base64 > "${9}.sig"',
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      path.join(signingBin, "minisign"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        '[[ "$#" -eq 6 && "$1" == "-Vm" && "$3" == "-x" && "$5" == "-p" ]]',
-        '[[ -s "$2" && -s "$4" && -s "$6" ]]',
-        '[[ "$(cat "$6")" == "ephemeral-public-key" ]]',
-        'printf "%s\\n" "$(basename "$2")" >> "$MINISIGN_LOG"',
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    const linuxMinisignLog = path.join(signingRoot, "minisign.log");
+    const linuxSigningTools = writeSigningToolFixtures(signingRoot);
     const signed = spawnSync("bash", ["-c", signAppImage.run ?? ""], {
       cwd: signingRoot,
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${signingBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: linuxSigningTools.path,
         RELEASE_TAG: "v2026.8.2",
+        RUNNER_TEMP: signingRoot,
         TAG_SHA: "a".repeat(40),
+        MINISIGN_BINARY_SHA256: linuxSigningTools.minisignBinarySha256,
+        TAURI_CLI_BINARY_SHA256: linuxSigningTools.tauriBinarySha256,
+        TAURI_SIGN_LOG: linuxSigningTools.tauriLog,
         TAURI_SIGNING_PRIVATE_KEY: "ephemeral-test-key",
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "ephemeral-test-password",
         UPDATER_PUBLIC_KEY: Buffer.from("ephemeral-public-key").toString("base64"),
-        MINISIGN_LOG: linuxMinisignLog,
+        MINISIGN_LOG: linuxSigningTools.minisignLog,
       },
     });
     expect(signed.status, `${signed.stdout}${signed.stderr}`).toBe(0);
@@ -16425,13 +16521,19 @@ it("pins simple release admission owners before selected checkout and preserves 
         path.join(signingRoot, "dist/linux-app/signatures/OpenClaw-2026.8.2-amd64.AppImage.sig"),
         "utf8",
       ),
-    ).toBe(`${Buffer.from("ephemeral-signature").toString("base64")}\n`);
-    expect(readFileSync(linuxMinisignLog, "utf8")).toBe("OpenClaw-2026.8.2-amd64.AppImage\n");
+    ).toBe(
+      `${Buffer.from("ephemeral-signature:OpenClaw-2026.8.2-amd64.AppImage").toString("base64")}\n`,
+    );
+    expect(readFileSync(linuxSigningTools.tauriLog, "utf8")).toBe(
+      "signer sign dist/signing-input/OpenClaw-2026.8.2-amd64.AppImage\n",
+    );
+    expect(readFileSync(linuxSigningTools.minisignLog, "utf8")).toBe(
+      "OpenClaw-2026.8.2-amd64.AppImage\n",
+    );
     expect(existsSync(path.join(signingRoot, ".release-tooling"))).toBe(false);
     expect(existsSync(path.join(signingRoot, "apps"))).toBe(false);
 
     const desktopSigningRoot = tempDirs.make("openclaw-desktop-signing-job-");
-    const desktopSigningBin = path.join(desktopSigningRoot, "bin");
     const macosInput = path.join(
       desktopSigningRoot,
       "dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz",
@@ -16442,49 +16544,25 @@ it("pins simple release admission owners before selected checkout and preserves 
     );
     mkdirSync(path.dirname(macosInput), { recursive: true });
     mkdirSync(path.dirname(windowsInput), { recursive: true });
-    mkdirSync(desktopSigningBin, { recursive: true });
     writeFileSync(macosInput, "finalized-macos-updater-bytes");
     writeFileSync(windowsInput, "finalized-windows-updater-bytes");
-    writeFileSync(
-      path.join(desktopSigningBin, "npm"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        '[[ "$#" -eq 9 ]]',
-        '[[ "$1" == "exec" && "$2" == "--yes" && "$3" == "--audit=false" ]]',
-        '[[ "$4" == "--package=@tauri-apps/cli@2.11.4" && "$5" == "--" ]]',
-        '[[ "$6" == "tauri" && "$7" == "signer" && "$8" == "sign" ]]',
-        'printf "ephemeral-signature:%s" "$(basename "${9}")" | base64 > "${9}.sig"',
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      path.join(desktopSigningBin, "minisign"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        '[[ "$#" -eq 6 && "$1" == "-Vm" && "$3" == "-x" && "$5" == "-p" ]]',
-        '[[ -s "$2" && -s "$4" && -s "$6" ]]',
-        '[[ "$(cat "$6")" == "ephemeral-public-key" ]]',
-        'printf "%s\\n" "$(basename "$2")" >> "$MINISIGN_LOG"',
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    const desktopMinisignLog = path.join(desktopSigningRoot, "minisign.log");
+    const desktopSigningTools = writeSigningToolFixtures(desktopSigningRoot);
     const desktopSigned = spawnSync("bash", ["-c", signDesktop.run ?? ""], {
       cwd: desktopSigningRoot,
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${desktopSigningBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: desktopSigningTools.path,
         RELEASE_TAG: "v2026.8.2",
+        RUNNER_TEMP: desktopSigningRoot,
         TAG_SHA: "a".repeat(40),
+        MINISIGN_BINARY_SHA256: desktopSigningTools.minisignBinarySha256,
+        TAURI_CLI_BINARY_SHA256: desktopSigningTools.tauriBinarySha256,
+        TAURI_SIGN_LOG: desktopSigningTools.tauriLog,
         TAURI_SIGNING_PRIVATE_KEY: "ephemeral-test-key",
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "ephemeral-test-password",
         UPDATER_PUBLIC_KEY: Buffer.from("ephemeral-public-key").toString("base64"),
-        MINISIGN_LOG: desktopMinisignLog,
+        MINISIGN_LOG: desktopSigningTools.minisignLog,
       },
     });
     expect(desktopSigned.status, `${desktopSigned.stdout}${desktopSigned.stderr}`).toBe(0);
@@ -16532,7 +16610,11 @@ it("pins simple release admission owners before selected checkout and preserves 
         "base64",
       ).toString(),
     ).toContain("OpenClaw-2026.8.2-windows-x86_64.exe");
-    expect(readFileSync(desktopMinisignLog, "utf8")).toBe(
+    expect(readFileSync(desktopSigningTools.tauriLog, "utf8")).toBe(
+      "signer sign dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\n" +
+        "signer sign dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe\n",
+    );
+    expect(readFileSync(desktopSigningTools.minisignLog, "utf8")).toBe(
       "OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\nOpenClaw-2026.8.2-windows-x86_64.exe\n",
     );
     expect(existsSync(path.join(desktopSigningRoot, ".release-tooling"))).toBe(false);

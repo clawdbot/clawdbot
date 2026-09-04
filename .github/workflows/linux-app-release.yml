@@ -14,6 +14,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MINISIGN_ARCHIVE_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+  MINISIGN_BINARY_SHA256: 2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db
+  MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+  TAURI_CLI_ARCHIVE_SHA256: 6864602a34292aa6f2ad40ae019eebe5c1064d6c623fe20696a8a8974067e60b
+  TAURI_CLI_BINARY_SHA256: 23a27f61c50417fe87c92fa958fb56ecc8de7c791f78df3cac046c8579b45897
+  TAURI_CLI_URL: https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-unknown-linux-gnu.tgz
 
 jobs:
   validate_release:
@@ -368,15 +374,30 @@ jobs:
     outputs:
       signed_appimage_artifact_id: ${{ steps.upload_signed_appimage.outputs.artifact-id }}
     steps:
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
-      - name: Install trusted signature verifier
+      - name: Install trusted signing tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends minisign
+          set -euo pipefail
+          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
+          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$minisign_archive" "$MINISIGN_URL"
+          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
+          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
+            minisign-linux/x86_64/minisign
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$tauri_archive" "$TAURI_CLI_URL"
+          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
+          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
+          "${RUNNER_TEMP}/bin/cargo-tauri" --version
+          "${RUNNER_TEMP}/bin/minisign" -v
 
       - name: Download finalized unsigned AppImage
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -393,6 +414,11 @@ jobs:
           UPDATER_PUBLIC_KEY: ${{ needs.validate_release.outputs.updater_pubkey }}
         run: |
           set -euo pipefail
+          # Artifact download follows installation; revalidate exact tool bytes before using credentials.
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
           version="${RELEASE_TAG#v}"
           appimage="dist/signing-input/OpenClaw-${version}-amd64.AppImage"
           mapfile -d '' inputs < <(find dist/signing-input -mindepth 1 -maxdepth 1 -print0)
@@ -401,15 +427,16 @@ jobs:
             exit 1
           fi
           before=$(sha256sum "$appimage")
-          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
-            tauri signer sign "$appimage"
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"
+          # Signature verification must not inherit production signing credentials.
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           after=$(sha256sum "$appimage")
           verify_dir=$(mktemp -d)
           trap 'rm -rf "$verify_dir"' EXIT
           printf '%s' "$UPDATER_PUBLIC_KEY" | base64 --decode > "$verify_dir/updater.pub"
           base64 --decode < "${appimage}.sig" > "$verify_dir/appimage.minisig"
           if [[ "$before" != "$after" || ! -s "${appimage}.sig" ]] ||
-             ! minisign -Vm "$appimage" -x "$verify_dir/appimage.minisig" \
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$appimage" -x "$verify_dir/appimage.minisig" \
                -p "$verify_dir/updater.pub"; then
             echo "Signing must preserve the finalized AppImage bytes and create its signature"
             exit 1
@@ -609,15 +636,30 @@ jobs:
     outputs:
       signed_desktop_artifact_id: ${{ steps.upload_signed_desktop.outputs.artifact-id }}
     steps:
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
-      - name: Install trusted signature verifier
+      - name: Install trusted signing tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends minisign
+          set -euo pipefail
+          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
+          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$minisign_archive" "$MINISIGN_URL"
+          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
+          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
+            minisign-linux/x86_64/minisign
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "$tauri_archive" "$TAURI_CLI_URL"
+          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
+          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
+          "${RUNNER_TEMP}/bin/cargo-tauri" --version
+          "${RUNNER_TEMP}/bin/minisign" -v
 
       - name: Download finalized macOS updater archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -640,6 +682,11 @@ jobs:
           UPDATER_PUBLIC_KEY: ${{ needs.validate_release.outputs.updater_pubkey }}
         run: |
           set -euo pipefail
+          # Artifact download follows installation; revalidate exact tool bytes before using credentials.
+          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
+            sha256sum --check -
+          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
+            sha256sum --check -
           version="${RELEASE_TAG#v}"
           macos="dist/signing-input/macos/OpenClaw-${version}-darwin-aarch64.app.tar.gz"
           windows="dist/signing-input/windows/OpenClaw-${version}-windows-x86_64.exe"
@@ -651,10 +698,10 @@ jobs:
           fi
           macos_before=$(sha256sum "$macos")
           windows_before=$(sha256sum "$windows")
-          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
-            tauri signer sign "$macos"
-          npm exec --yes --audit=false --package=@tauri-apps/cli@2.11.4 -- \
-            tauri signer sign "$windows"
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$macos"
+          "${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"
+          # Signature verification must not inherit production signing credentials.
+          unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           macos_after=$(sha256sum "$macos")
           windows_after=$(sha256sum "$windows")
           verify_dir=$(mktemp -d)
@@ -664,9 +711,9 @@ jobs:
           base64 --decode < "${windows}.sig" > "$verify_dir/windows.minisig"
           if [[ "$macos_before" != "$macos_after" || "$windows_before" != "$windows_after" ||
                 ! -s "${macos}.sig" || ! -s "${windows}.sig" ]] ||
-             ! minisign -Vm "$macos" -x "$verify_dir/macos.minisig" \
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$macos" -x "$verify_dir/macos.minisig" \
                -p "$verify_dir/updater.pub" ||
-             ! minisign -Vm "$windows" -x "$verify_dir/windows.minisig" \
+             ! "${RUNNER_TEMP}/bin/minisign" -Vm "$windows" -x "$verify_dir/windows.minisig" \
                -p "$verify_dir/updater.pub"; then
             echo "Signing must preserve finalized desktop updater bytes and create both signatures"
             exit 1
