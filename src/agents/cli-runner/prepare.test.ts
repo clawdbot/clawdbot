@@ -3710,11 +3710,12 @@ describe("prepareCliRunContext", () => {
     "bounds native authority by $name",
     async ({ observed, selected, projected, capabilities }) => {
       const { capture, observe, projectNativeToolAuthority, captureNativeToolAuthority } =
-        await prepareNativeAuthority(capabilities, {
-          ...(selected === undefined
+        await prepareNativeAuthority(
+          capabilities,
+          selected === undefined
             ? {}
-            : { cliToolAvailability: { native: selected, openClaw: ["message"] } }),
-        });
+            : { cliToolAvailability: { native: selected, openClaw: ["message"] } },
+        );
       capture.activate("native-capture");
       observe(observed);
 

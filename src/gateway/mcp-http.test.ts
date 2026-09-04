@@ -1405,13 +1405,15 @@ describe("mcp loopback server", () => {
       runtimeOwnerToken: runtime.ownerToken,
       captureKey: "capture-native-discovery",
     });
-    const request = {
+    const requestScope = {
       token: grant.token,
       headers: { "x-openclaw-cli-capture-key": "capture-native-discovery" },
     };
 
-    expectMcpToolNames(await readOkMcpPayload(await sendLoopbackToolsList(request)), ["message"]);
-    const response = await sendLoopbackToolCall({ ...request, name: "message" });
+    expectMcpToolNames(await readOkMcpPayload(await sendLoopbackToolsList(requestScope)), [
+      "message",
+    ]);
+    const response = await sendLoopbackToolCall({ ...requestScope, name: "message" });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       error: { code: -32000, message: expect.stringMatching(/retry|wait|initializ/i) },
@@ -1422,17 +1424,17 @@ describe("mcp loopback server", () => {
     }
     expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
     expectMcpResultText(
-      await readOkMcpPayload(await sendLoopbackToolCall({ ...request, name: "message" })),
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
       '["read"]',
     );
     expect(capture.captureNativeToolAuthority([])).toBe(true);
     expectMcpResultText(
-      await readOkMcpPayload(await sendLoopbackToolCall({ ...request, name: "message" })),
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
       "[]",
     );
     expect(capture.captureNativeToolAuthority(null)).toBe(true);
     expect(
-      await (await sendLoopbackToolCall({ ...request, name: "message" })).json(),
+      await (await sendLoopbackToolCall({ ...requestScope, name: "message" })).json(),
     ).toMatchObject({
       error: { code: -32000 },
     });
