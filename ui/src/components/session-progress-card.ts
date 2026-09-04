@@ -10,7 +10,7 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-type SessionProgressCardPlacement = "board" | "composer" | "hovercard";
+type SessionProgressCardPlacement = "board" | "composer";
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
@@ -46,13 +46,11 @@ const TERMINAL_STEP_STATUS_LABEL_KEYS: Partial<Record<SessionRunStatus, Paramete
 class ProgressActivityTimeDirective extends AsyncDirective {
   private timestamp = 0;
   private labelKey: Parameters<typeof t>[0] = "sessionProgressCard.activity.updated";
-  private compact = false;
   private timer: ReturnType<typeof setInterval> | undefined;
 
-  render(timestamp: number, labelKey: Parameters<typeof t>[0], compact = false) {
+  render(timestamp: number, labelKey: Parameters<typeof t>[0]) {
     this.timestamp = timestamp;
     this.labelKey = labelKey;
-    this.compact = compact;
     if (this.isConnected) {
       this.startTimer();
     }
@@ -84,15 +82,11 @@ class ProgressActivityTimeDirective extends AsyncDirective {
 
   private renderTime() {
     const label = t(this.labelKey, { time: formatRelativeTimestamp(this.timestamp) });
-    const visibleLabel =
-      this.compact && this.labelKey === "sessionProgressCard.activity.updated"
-        ? formatRelativeTimestamp(this.timestamp, { suffix: false })
-        : label;
     return html`<time
       datetime=${new Date(this.timestamp).toISOString()}
       aria-label=${label}
       title=${label}
-      >${visibleLabel}</time
+      >${label}</time
     >`;
   }
 }
@@ -166,9 +160,10 @@ function progressCounts(card: ProgressCard): { completed: number; total: number 
   };
 }
 
-export type ProgressCardHeadsUp = {
+type ProgressCardHeadsUp = {
   completed: number;
-  step: ProgressCardStep;
+  status: PresentedProgressStepStatus;
+  step: string;
   total: number;
 };
 
@@ -179,11 +174,19 @@ function unfinishedProgressStep(steps: readonly ProgressCardStep[]): ProgressCar
   );
 }
 
+function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): boolean {
+  const runStart = asDateTimestampMs(startedAt);
+  const cardUpdate = asDateTimestampMs(card.updatedAt);
+  return runStart !== undefined && cardUpdate !== undefined && cardUpdate < runStart;
+}
+
 export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
+  startedAt?: number,
 ): ProgressCardHeadsUp | null {
-  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus]) {
+  const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
+  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !staleForRun) {
     return null;
   }
   const counts = card ? progressCounts(card) : null;
@@ -194,7 +197,8 @@ export function progressCardHeadsUp(
   if (!step) {
     return null;
   }
-  return { ...counts, step };
+  const status = step.status === "in_progress" && staleForRun ? "paused" : step.status;
+  return { ...counts, status, step: step.step };
 }
 
 function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardStep | undefined {
@@ -351,6 +355,8 @@ export function renderSessionProgressCard(
     validEndedAt >= validStartedAt &&
     validUpdatedAt !== undefined &&
     validUpdatedAt >= validStartedAt;
+  // A later run does not own durable progress last updated before it started.
+  const effectiveHasActiveRun = hasActiveRun && !isProgressCardStaleForRun(card, startedAt);
   const terminalTimestamp =
     sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && hasValidRunWindow
       ? validEndedAt
@@ -364,11 +370,7 @@ export function renderSessionProgressCard(
     ? ACTIVITY_LABEL_KEYS[sessionStatus!]
     : "sessionProgressCard.activity.updated";
   const accessibleLabel = countLabel;
-  const lastActivity = progressActivityTime(
-    activityTimestamp,
-    activityKey,
-    placement === "hovercard",
-  );
+  const lastActivity = progressActivityTime(activityTimestamp, activityKey);
   const dismissible = Boolean(
     onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
   );
@@ -410,7 +412,7 @@ export function renderSessionProgressCard(
         })
       : nothing;
     const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasActiveRun && !terminalOutcomeKey
+      currentStep?.status === "in_progress" && !effectiveHasActiveRun && !terminalOutcomeKey
         ? "paused"
         : currentStep?.status;
     const summaryIndicator =
@@ -483,7 +485,7 @@ export function renderSessionProgressCard(
       </summary>
       <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
         ${renderProgressCardMarkdown(card.markdown)}
-        ${renderSteps(card, hasActiveRun, effectiveSessionStatus)}
+        ${renderSteps(card, effectiveHasActiveRun, effectiveSessionStatus)}
       </div>
     </details>`;
   }
@@ -500,6 +502,6 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, hasActiveRun, effectiveSessionStatus)}
+    ${renderBody(card, effectiveHasActiveRun, effectiveSessionStatus)}
   </section>`;
 }

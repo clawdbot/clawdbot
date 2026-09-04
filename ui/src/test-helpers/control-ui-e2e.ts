@@ -11,11 +11,13 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
   createControlUiSessionFixtures,
   type ControlUiSessionFixture,
@@ -319,6 +321,8 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  nativePlugins?: readonly NativeControlUiPluginFixture[];
+  pluginAssetsRequireAuth?: boolean;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
@@ -441,7 +445,9 @@ export type ControlUiMockGatewayScenario = {
   localMediaPreviewRoots?: string[];
 };
 
-type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
+type NormalizedControlUiMockGatewayScenario = Required<
+  Omit<ControlUiMockGatewayScenario, "nativePlugins">
+>;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -974,6 +980,7 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     communityInvite: scenario.communityInvite ?? true,
@@ -1058,7 +1065,19 @@ function normalizeScenario(
 
 export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewayScenario = {}) {
   const normalizedScenario = normalizeScenario(scenario);
+  const nativeCatalog = normalizedScenario.methodResponses["plugins.controlUi.list"] as
+    | { plugins?: { pluginId: string }[] }
+    | undefined;
   return {
+    pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
+    pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth
+      ? (nativeCatalog?.plugins ?? [])
+      : []
+    ).map(({ pluginId }) => ({
+      pluginId,
+      path: `/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
+      match: "prefix",
+    })),
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
     communityInvite: normalizedScenario.communityInvite,
@@ -2736,11 +2755,45 @@ function installControlUiMockGateway(
   });
 }
 
+export async function prepareControlUiMockGatewayScenario(
+  scenario: ControlUiMockGatewayScenario = {},
+) {
+  const { prepareNativeControlUiPluginFixtures } = await import("./control-ui-plugin-fixture.ts");
+  const { catalog, assets } = await prepareNativeControlUiPluginFixtures(
+    scenario.nativePlugins ?? [],
+  );
+  const preparedScenario = catalog.plugins.length
+    ? {
+        ...scenario,
+        featureMethods: [
+          ...new Set([
+            ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
+            "plugins.controlUi.list",
+            "plugins.controlUi.report",
+          ]),
+        ],
+        methodResponses: {
+          ...scenario.methodResponses,
+          "plugins.controlUi.list": catalog,
+          "plugins.controlUi.report": { ok: true },
+        },
+      }
+    : scenario;
+  return { scenario: preparedScenario, assets };
+}
+
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
 ): Promise<MockGatewayControls> {
-  const normalizedScenario = normalizeScenario(scenario);
+  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  if (prepared.assets.size) {
+    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
+      const asset = prepared.assets.get(new URL(route.request().url()).pathname);
+      await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
+    });
+  }
+  const normalizedScenario = normalizeScenario(prepared.scenario);
   const diagnosticEvents = installControlUiE2ePageDiagnosticRing(page);
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
@@ -2751,13 +2804,19 @@ export async function installMockGateway(
   );
   await installControlUiE2eUnhandledRejectionRing(page);
   await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
-  return createMockGatewayControls(page, normalizedScenario.sessionKey, diagnosticEvents);
+  return createMockGatewayControls(
+    page,
+    normalizedScenario.sessionKey,
+    diagnosticEvents,
+    normalizedScenario.methodResponses,
+  );
 }
 
 function createMockGatewayControls(
   page: Page,
   defaultSessionKey: string,
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
+  methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
   const emitGatewayEvent = async (event: string, payload?: unknown) => {
     await page.evaluate(
@@ -2922,6 +2981,7 @@ function createMockGatewayControls(
       }, messages);
     },
     async setMethodResponse(method, payload) {
+      methodResponses[method] = payload;
       await page.evaluate(
         ({ targetMethod, responsePayload }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;

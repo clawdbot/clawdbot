@@ -80,6 +80,7 @@ export const GatewayConfigSchema = z
         dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
+        experimental: z.strictObject({ customPlugins: z.boolean().optional() }).optional(),
         root: z.string().optional(),
         environment: z
           .strictObject({

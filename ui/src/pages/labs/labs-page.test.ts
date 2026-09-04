@@ -170,22 +170,37 @@ describe("LabsPage", () => {
     expect(codeModeToggle(page).checked).toBe(true);
   });
 
-  it("delegates refresh ownership to the canonical patch flow when disabling", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: { enabled: true } },
-    });
-    const toggle = codeModeToggle(page);
-
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: null } } },
+  it.each([
+    {
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: { enabled: true } } },
+      expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
-    });
-    expect(runtimeConfig.refresh).not.toHaveBeenCalled();
-  });
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
+      note: "labs: update customPluginUi",
+    },
+  ])(
+    "restores the default through the canonical patch flow when disabling $label",
+    async (testCase) => {
+      const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+      const toggle = labToggle(page, testCase.label);
+      expect(toggle.checked).toBe(true);
+
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+      await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: testCase.expectedPatch,
+        note: testCase.note,
+      });
+      expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const pendingPatch = deferred<boolean>();
@@ -246,6 +261,12 @@ describe("LabsPage", () => {
       note: "labs: update cliAgents",
     },
     {
+      label: "Custom plugin UI",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      note: "labs: update customPluginUi",
+    },
+    {
       // Not a boolean gate: the on state is the conservative `direct` mode, so
       // enabling here cannot start recording group or unknown conversations.
       label: "Message audit metadata",
@@ -268,6 +289,7 @@ describe("LabsPage", () => {
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.label);
+    expect(toggle.checked).toBe(false);
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -315,14 +337,18 @@ describe("LabsPage", () => {
     const { page } = await mountPage({});
     const rows = [...page.querySelectorAll(".settings-row")];
 
-    const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(3);
+    const restartRows = rows.filter((row) => row.textContent?.toLowerCase().includes("restart"));
+    expect(restartRows).toHaveLength(4);
     expect(restartRows.map((row) => row.textContent)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Custom plugin UI"),
         expect.stringContaining("Host Desktop"),
         expect.stringContaining("Cloud Worker Desktop"),
       ]),
+    );
+    expect(labRow(page, "Custom plugin UI").textContent).toContain(
+      "Restart the Gateway and reload this browser tab",
     );
   });
 
