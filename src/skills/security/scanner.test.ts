@@ -222,6 +222,20 @@ const result = eval(code);
       expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
     },
     {
+      name: "detects eval called through a global member",
+      source: `
+window.eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval called with space before the argument list",
+      source: `
+const result = eval (code);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
       name: "detects new Function constructor",
       source: `
 const fn = new Function("a", "b", "return a + b");
@@ -366,6 +380,20 @@ run("node a.js"); run("node b.js");
       (finding) => finding.ruleId === "dangerous-exec",
     );
     expect(findings).toHaveLength(2);
+  });
+
+  it("does not flag eval word fragments outside a call", () => {
+    // Deep audit runs the source rules over SKILL.md prose, so an `eval` that
+    // only ends another word or identifier must not read as a call (#137907).
+    for (const [name, source] of [
+      ["hyphenated prose heading", "7. **Self-eval (before showing the user).**"],
+      ["hyphenated prose sentence", "Then re-eval (the plan) with the user."],
+      ["unrelated $eval identifier", "scope.$eval(expression);"],
+    ] as const) {
+      runSyncNamedCase(name, () => {
+        expectRulePresence(scanSource(source, "SKILL.md"), "dynamic-code-execution", false);
+      });
+    }
   });
 
   it("does not flag child_process import without exec/spawn call", () => {

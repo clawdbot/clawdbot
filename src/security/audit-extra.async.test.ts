@@ -242,6 +242,8 @@ description: test skill
 # Safe skill
 
 Read the requested file and summarize it.
+
+7. **Self-eval (before showing the user).**
 `,
       "utf-8",
     );

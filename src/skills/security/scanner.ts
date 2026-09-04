@@ -167,7 +167,10 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dynamic-code-execution",
     severity: "critical",
     message: "Dynamic code execution detected",
-    pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    // `\b` counts `-` and `$` as identifier boundaries, so hyphenated prose
+    // ("Self-eval (") and unrelated identifiers (`scope.$eval(`) matched as
+    // critical. Require an identifier start; `.`/`(`/space callers still fire.
+    pattern: /(?<![\w$-])eval\s*\(|new\s+Function\s*\(/,
   },
   {
     ruleId: "crypto-mining",
