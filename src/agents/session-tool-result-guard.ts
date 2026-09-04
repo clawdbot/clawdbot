@@ -666,6 +666,7 @@ export function installSessionToolResultGuard(
 ): {
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
+  armNextUserMessagePersistenceSuppression: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
   setTranscriptRunId: (runId: string | undefined) => void;
@@ -1029,6 +1030,9 @@ export function installSessionToolResultGuard(
   return {
     flushPendingToolResults,
     clearPendingToolResults,
+    armNextUserMessagePersistenceSuppression: () => {
+      suppressNextUserMessagePersistence = true;
+    },
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
     },

@@ -40,6 +40,8 @@ type GuardedSessionManager = SessionManager & {
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
+  /** Suppress the next persisted user message without dropping the runtime copy. */
+  armNextUserMessagePersistenceSuppression?: () => void;
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
   /** Refresh the exact owning run when a caller reuses this guarded manager. */
@@ -290,6 +292,8 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
+  guardedSessionManager.armNextUserMessagePersistenceSuppression =
+    guard.armNextUserMessagePersistenceSuppression;
   guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks) => {
     guard.setTranscriptRunId(runId);
     prepareAssistantTranscriptMessage = prepare;

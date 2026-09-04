@@ -4,6 +4,7 @@ import {
   buildHeartbeatOutcomeContext,
   claimHeartbeatOutcomeForRun,
 } from "../../../infra/heartbeat-outcome-store.js";
+import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -103,7 +104,7 @@ type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<
 export async function runEmbeddedAttemptPromptPhase(input: {
   attempt: PromptAssemblyInput["attempt"];
   activeSession: PromptAssemblyInput["activeSession"];
-  sessionManager: PromptAssemblyInput["sessionManager"];
+  sessionManager: ReturnType<typeof guardSessionManager>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   getCompactionReserveTokens: () => number;
   emptyExplicitToolAllowlistError?: Error;
@@ -342,30 +343,45 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     publishDispatchState(state);
 
     if (!state.skipPromptSubmission) {
-      await submitEmbeddedAttemptPrompt({
-        ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
-        attempt,
-        activeSession,
-        contextTokenBudget: promptContext.contextTokenBudget,
-        images: imageResult.images,
-        ...(leasedSteering ? { leasedSteering } : {}),
-        modelPrompt: promptContext.promptForModel,
-        onFinalPromptText: input.lifecycle.setFinalPromptText,
-        onSteeringAcknowledged: () => {
-          leasedSteering = undefined;
-        },
-        ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
-        ...(promptContext.runtimeContextMessageForCurrentTurn
-          ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
-          : {}),
-        runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
-        systemPrompt: promptContext.systemPromptForHook,
-        toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
-        toolResultMaxChars: promptContext.promptToolResultMaxChars,
-        transcriptLeafId,
-        transcriptPrompt: promptContext.promptForSession,
-        ...input.submission,
-      });
+      // Runtime-only turns submit a synthetic continuation marker instead of user
+      // text. Persisting that marker would fabricate a user turn (#124244), so arm
+      // the existing one-shot persistence suppression before submitting. The
+      // marker's own write consumes it; disarm in case the submission never
+      // produced that user message.
+      const runtimeOnlySubmission = promptContext.promptSubmission.runtimeOnly === true;
+      if (runtimeOnlySubmission) {
+        sessionManager.armNextUserMessagePersistenceSuppression?.();
+      }
+      try {
+        await submitEmbeddedAttemptPrompt({
+          ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
+          attempt,
+          activeSession,
+          contextTokenBudget: promptContext.contextTokenBudget,
+          images: imageResult.images,
+          ...(leasedSteering ? { leasedSteering } : {}),
+          modelPrompt: promptContext.promptForModel,
+          onFinalPromptText: input.lifecycle.setFinalPromptText,
+          onSteeringAcknowledged: () => {
+            leasedSteering = undefined;
+          },
+          ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
+          ...(promptContext.runtimeContextMessageForCurrentTurn
+            ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
+            : {}),
+          runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+          systemPrompt: promptContext.systemPromptForHook,
+          toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
+          toolResultMaxChars: promptContext.promptToolResultMaxChars,
+          transcriptLeafId,
+          transcriptPrompt: promptContext.promptForSession,
+          ...input.submission,
+        });
+      } finally {
+        if (runtimeOnlySubmission) {
+          sessionManager.clearNextUserMessagePersistenceSuppression?.();
+        }
+      }
     } else {
       releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }

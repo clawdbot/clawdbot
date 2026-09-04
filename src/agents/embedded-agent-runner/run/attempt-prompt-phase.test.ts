@@ -419,6 +419,86 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
   });
 
+  it("arms one-shot persistence suppression around runtime-only submissions", async () => {
+    const fixture = createFixture();
+    const armSuppression = vi.fn(() => fixture.order.push("arm-suppression"));
+    const clearSuppression = vi.fn(() => fixture.order.push("clear-suppression"));
+    const preparePromptContext = mocks.preparePromptContext.getMockImplementation();
+    mocks.preparePromptContext.mockImplementation(() => ({
+      ...(preparePromptContext?.() as Record<string, unknown>),
+      promptSubmission: { prompt: "Continue the OpenClaw runtime event.", runtimeOnly: true },
+    }));
+    fixture.input.sessionManager = {
+      appendCustomEntry: vi.fn(),
+      getEntries: vi.fn(() => []),
+      armNextUserMessagePersistenceSuppression: armSuppression,
+      clearNextUserMessagePersistenceSuppression: clearSuppression,
+    } as unknown as PromptPhaseInput["sessionManager"];
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(mocks.submitPrompt).toHaveBeenCalledWith(expect.objectContaining({ runtimeOnly: true }));
+    expect(fixture.order).toEqual([
+      "assembly",
+      "context",
+      "before-agent-run",
+      "google-cache",
+      "images",
+      "observe",
+      "publish",
+      "preflight",
+      "publish",
+      "arm-suppression",
+      "submit",
+      "clear-suppression",
+      "publish",
+      "stop-steering",
+    ]);
+    expect(armSuppression).toHaveBeenCalledTimes(1);
+    expect(clearSuppression).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears armed suppression when a runtime-only submission fails", async () => {
+    const fixture = createFixture();
+    const armSuppression = vi.fn();
+    const clearSuppression = vi.fn();
+    const preparePromptContext = mocks.preparePromptContext.getMockImplementation();
+    mocks.preparePromptContext.mockImplementation(() => ({
+      ...(preparePromptContext?.() as Record<string, unknown>),
+      promptSubmission: { prompt: "Continue the OpenClaw runtime event.", runtimeOnly: true },
+    }));
+    fixture.input.sessionManager = {
+      appendCustomEntry: vi.fn(),
+      getEntries: vi.fn(() => []),
+      armNextUserMessagePersistenceSuppression: armSuppression,
+      clearNextUserMessagePersistenceSuppression: clearSuppression,
+    } as unknown as PromptPhaseInput["sessionManager"];
+    mocks.submitPrompt.mockRejectedValueOnce(new Error("submission failed"));
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(armSuppression).toHaveBeenCalledTimes(1);
+    expect(clearSuppression).toHaveBeenCalledTimes(1);
+    expect(mocks.handlePromptError).toHaveBeenCalledOnce();
+  });
+
+  it("leaves persistence untouched for user-authored submissions", async () => {
+    const fixture = createFixture();
+    const armSuppression = vi.fn();
+    const clearSuppression = vi.fn();
+    fixture.input.sessionManager = {
+      appendCustomEntry: vi.fn(),
+      getEntries: vi.fn(() => []),
+      armNextUserMessagePersistenceSuppression: armSuppression,
+      clearNextUserMessagePersistenceSuppression: clearSuppression,
+    } as unknown as PromptPhaseInput["sessionManager"];
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(armSuppression).not.toHaveBeenCalled();
+    expect(clearSuppression).not.toHaveBeenCalled();
+  });
+
   it("records a final prompt policy that removes core read", async () => {
     const fixture = createFixture();
     mocks.applyPromptToolsAllow.mockReturnValueOnce({

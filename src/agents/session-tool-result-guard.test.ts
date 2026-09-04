@@ -894,6 +894,17 @@ describe("installSessionToolResultGuard", () => {
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
   });
 
+  it("arms one-shot user persistence suppression at runtime", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+    guard.armNextUserMessagePersistenceSuppression();
+    sm.appendMessage(asAppendMessage({ role: "user", content: "marker turn", timestamp: 1 }));
+    sm.appendMessage(asAppendMessage({ role: "user", content: "real user turn", timestamp: 2 }));
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("real user turn");
+  });
+
   it("re-enables the next user write after the canonical entry is removed", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
