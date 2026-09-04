@@ -1041,8 +1041,11 @@ export function createAgentEventHandler({
     if (!input.itemId) {
       delete run.assistantScope;
     } else if (run.assistantScope?.itemId !== input.itemId) {
-      // Cross-item replacements discard drafts; same-item corrections keep prior messages.
-      run.assistantScope = { itemId: input.itemId, prefix: input.replace ? "" : previousRawText };
+      // Only provisional stream replacements discard prior text; bounded message snapshots retain it.
+      run.assistantScope = {
+        itemId: input.itemId,
+        prefix: input.replaceStream ? "" : previousRawText,
+      };
     }
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,

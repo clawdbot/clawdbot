@@ -2581,13 +2581,20 @@ describe("agent event handler", () => {
   });
 
   it.each([
-    { itemId: "message-2", text: "Hello", replace: false, expected: "HelloHello" },
-    { itemId: "message-2", text: "Hi", replace: true, expected: "Hi" },
-    { itemId: "message-1", text: "Hi", replace: true, expected: "EarlierHi" },
-    { itemId: "message-1", text: "", replace: true, expected: "Earlier" },
+    { itemId: "message-2", text: "Hello", flags: {}, expected: "HelloHello" },
+    { itemId: "message-2", text: "Hi", flags: { replace: true }, expected: "HelloHi" },
+    { itemId: "message-2", text: "Hi", flags: { replaceable: true }, expected: "HelloHi" },
+    {
+      itemId: "message-2",
+      text: "Hi",
+      flags: { replace: true, replaceable: true },
+      expected: "Hi",
+    },
+    { itemId: "message-1", text: "Hi", flags: { replace: true }, expected: "EarlierHi" },
+    { itemId: "message-1", text: "", flags: { replace: true }, expected: "Earlier" },
   ])(
     "keeps item ownership across $itemId correction $text",
-    ({ itemId, text, replace, expected }) => {
+    ({ itemId, text, flags, expected }) => {
       const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
         now: 11_800,
       });
@@ -2619,7 +2626,7 @@ describe("agent event handler", () => {
         handler,
         "run-item-correction",
         "assistant",
-        { itemId, text, replace },
+        { itemId, text, ...flags },
         {
           seq: itemId === "message-1" ? 3 : 2,
         },

@@ -26,7 +26,7 @@ export function resolveAssistantLiveChatInput(data: unknown):
       text: string;
       delta: string;
       itemId?: string;
-      replace: boolean;
+      replaceStream: boolean;
       managedMediaUrls?: string[];
     }
   | undefined {
@@ -38,6 +38,7 @@ export function resolveAssistantLiveChatInput(data: unknown):
     delta?: unknown;
     itemId?: unknown;
     replace?: unknown;
+    replaceable?: unknown;
     managedMediaUrls?: unknown;
   };
   if (typeof record.text !== "string" && typeof record.delta !== "string") {
@@ -46,7 +47,7 @@ export function resolveAssistantLiveChatInput(data: unknown):
   return {
     text: typeof record.text === "string" ? record.text : "",
     delta: typeof record.delta === "string" ? record.delta : "",
-    replace: record.replace === true,
+    replaceStream: record.replace === true && record.replaceable === true,
     ...(typeof record.itemId === "string" && record.itemId ? { itemId: record.itemId } : {}),
     ...(Array.isArray(record.managedMediaUrls)
       ? {
