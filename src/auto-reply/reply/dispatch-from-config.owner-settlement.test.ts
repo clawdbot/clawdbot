@@ -267,7 +267,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             await retained?.onBlockReply?.({ text: "second queued reply" });
           }
           const cleanup = retained?.onQueuedFollowupSettled?.();
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           const cleanedUpBeforeDelivery = onQueuedFollowupSettled.mock.calls.length;
           release.resolve();
           returnResolver.resolve();
@@ -359,7 +361,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           const cleanup = Promise.resolve(retained?.onQueuedFollowupSettled?.()).catch(
             (error: unknown) => error,
           );
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(onQueuedFollowupSettled).not.toHaveBeenCalled();
           release.resolve();
 
