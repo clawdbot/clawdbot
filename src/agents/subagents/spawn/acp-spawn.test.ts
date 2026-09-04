@@ -1509,7 +1509,49 @@ describe("spawnAcpDirect", () => {
 
     expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
     expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "codex" });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps bare keys in a shared owner and harness store ambiguous after migration expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2027-03-02T00:00:00Z"));
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      global: {
+        sessionId: "sess-expired-ambiguous-bare",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "expired-ambiguous-bare-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Reject expired ambiguous bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "expired-ambiguous-bare-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 

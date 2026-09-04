@@ -298,28 +298,40 @@ export async function validateAcpResumeSessionOwnership(params: {
   }
 
   const configuredBackend = normalizeOptionalLowercaseString(params.backendId);
-  const storeAgentIds = [params.sessionOwnerAgentId];
-  if (
-    params.harnessAgentId !== params.sessionOwnerAgentId &&
-    Date.now() < LEGACY_ACP_HARNESS_STORE_MIGRATION_DEADLINE_MS
-  ) {
-    storeAgentIds.push(params.harnessAgentId);
-  }
-  const storeOwnersByPath = new Map<string, Set<string>>();
-  for (const storeAgentId of storeAgentIds) {
+  const storeSearchesByPath = new Map<
+    string,
+    { allowedOwners: Set<string>; possibleOwners: Set<string> }
+  >();
+  const registerStoreOwner = (storeAgentId: string, allowed: boolean) => {
     const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: storeAgentId,
     });
-    const owners = storeOwnersByPath.get(storePath) ?? new Set<string>();
-    owners.add(storeAgentId);
-    storeOwnersByPath.set(storePath, owners);
+    const search = storeSearchesByPath.get(storePath) ?? {
+      allowedOwners: new Set<string>(),
+      possibleOwners: new Set<string>(),
+    };
+    search.possibleOwners.add(storeAgentId);
+    if (allowed) {
+      search.allowedOwners.add(storeAgentId);
+    }
+    storeSearchesByPath.set(storePath, search);
+  };
+  registerStoreOwner(params.sessionOwnerAgentId, true);
+  if (params.harnessAgentId !== params.sessionOwnerAgentId) {
+    registerStoreOwner(
+      params.harnessAgentId,
+      Date.now() < LEGACY_ACP_HARNESS_STORE_MIGRATION_DEADLINE_MS,
+    );
   }
-  for (const [storePath, allowedOwners] of storeOwnersByPath) {
+  for (const [storePath, { allowedOwners, possibleOwners }] of storeSearchesByPath) {
+    if (allowedOwners.size === 0) {
+      continue;
+    }
     const entries = listSessionEntriesReadOnly({ storePath, clone: false });
     const entryOwners = new Map(
       entries.map(({ sessionKey, entry }) => [
         entry,
-        resolveStoredSessionOwner(sessionKey, allowedOwners),
+        resolveStoredSessionOwner(sessionKey, possibleOwners),
       ]),
     );
     const metaByEntry = readAcpSessionMetaBatch({
