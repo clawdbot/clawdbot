@@ -97,7 +97,7 @@ export type ModelAuthStatusResult = {
   };
   /** Process-stable provider setup capabilities from the active plugin generation. */
   providerCapabilities?: ModelProviderCapability[];
-  /** Account usage is still filling its credential-bound cache. */
+  /** Account or independent provider usage is still refreshing its cache. */
   usageRefreshPending?: boolean;
 };
 

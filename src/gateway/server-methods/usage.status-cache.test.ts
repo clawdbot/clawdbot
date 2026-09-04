@@ -431,9 +431,9 @@ describe("usage.status provider usage cache", () => {
         providerIds: ["openai"],
         now,
       };
-      expect(readProviderUsageStaleWhileRevalidate(params).size).toBe(0);
+      expect(readProviderUsageStaleWhileRevalidate(params).usageByProvider.size).toBe(0);
       await Promise.all(mocks.loadProviderUsageSummary.mock.results.map((result) => result.value));
-      expect(readProviderUsageStaleWhileRevalidate(params).size).toBe(0);
+      expect(readProviderUsageStaleWhileRevalidate(params).usageByProvider.size).toBe(0);
       expect(await runUsageStatus()).toMatchObject({
         providers: [{ windows: [{ usedPercent: 10 }] }],
       });

@@ -304,13 +304,13 @@ function readUsageCacheStaleWhileRevalidate(params: ProviderUsageCacheParams): U
 
 export function readProviderUsageStaleWhileRevalidate(
   params: ProviderUsageCacheParams,
-): Map<string, ProviderUsageStatus> {
+): UsageCacheRead {
   // A provider-only miss must not hide account usage from the general usage page.
   return readUsageCacheStaleWhileRevalidate({
     ...params,
     providerOnly: true,
     cacheOwnerKey: `${params.agentId}\0provider`,
-  }).usageByProvider;
+  });
 }
 
 export function readProfileUsageStaleWhileRevalidate(params: {

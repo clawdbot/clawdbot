@@ -425,7 +425,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];
-      const usageByProvider =
+      const providerUsage =
         usageProviderIds.length > 0
           ? readProviderUsageStaleWhileRevalidate({
               agentId,
@@ -437,7 +437,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               providerIds: usageProviderIds,
               now,
             })
-          : new Map<string, ProviderUsageStatus>();
+          : { usageByProvider: new Map<string, ProviderUsageStatus>(), refreshPending: false };
       const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
       const profileUsage = includeProfileDetails
         ? readProfileUsageStaleWhileRevalidate({
@@ -494,7 +494,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           config: cfg,
           store,
           authAliasLookupParams,
-          usageByProvider,
+          usageByProvider: providerUsage.usageByProvider,
           usageByProfile: profileUsage.usageByProfile,
           usageTargetProfileIds: profileUsage.targetProfileIds,
           pendingUsageProfileIds: profileUsage.pendingProfileIds,
@@ -516,7 +516,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ts: now,
         providers,
         providerCapabilities,
-        ...(profileUsage.refreshPending ? { usageRefreshPending: true } : {}),
+        ...(profileUsage.refreshPending || providerUsage.refreshPending
+          ? { usageRefreshPending: true }
+          : {}),
       };
       respond(true, result, undefined);
     } catch (err) {

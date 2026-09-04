@@ -1923,9 +1923,10 @@ describe("models.authStatus", () => {
         },
       },
     });
-    const pending = Promise.withResolvers<void>();
+    let pending = Promise.withResolvers<void>();
+    let billingSummary = "Organization billing";
     mocks.loadProviderUsageSummary.mockImplementation(async (options) => {
-      await pending.promise;
+      if (options.providerOnly) await pending.promise;
       return {
         updatedAt: 1,
         providers: [
@@ -1933,21 +1934,45 @@ describe("models.authStatus", () => {
             provider: "anthropic",
             displayName: "Claude",
             windows: [],
-            summary: options.providerOnly ? "Organization billing" : "Account quota",
+            summary: options.providerOnly ? billingSummary : "Account quota",
           },
         ],
       };
     });
-    expect((await readAuthStatus()).usageRefreshPending).toBe(true);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-    pending.resolve();
-    await waitForFast(async () => {
-      const result = (await readAuthStatus()).providers[0];
-      expect(result?.usage?.summary).toBe("Account quota");
-      expect(result?.usageProfileId).toBe(oauthProfileId);
-      expect(result?.independentUsage?.summary).toBe("Organization billing");
-      expect(result?.profiles[0]?.usage?.summary).toBe("Account quota");
-    });
+    try {
+      expect((await readAuthStatus()).usageRefreshPending).toBe(true);
+      await waitForFast(async () => {
+        const result = await readAuthStatus();
+        expect(result.providers[0]?.profiles[0]?.usage).toBeDefined();
+        expect(result.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+        expect(result.usageRefreshPending).toBe(true);
+      });
+      pending.resolve();
+      await waitForFast(async () => {
+        const result = await readAuthStatus();
+        expect(result.providers[0]?.usage?.summary).toBe("Account quota");
+        expect(result.providers[0]?.usageProfileId).toBe(oauthProfileId);
+        expect(result.providers[0]?.independentUsage?.summary).toBe("Organization billing");
+        expect(result.usageRefreshPending).toBeUndefined();
+      });
+      pending = Promise.withResolvers<void>();
+      billingSummary = "Updated billing";
+      await readAuthStatus({ refresh: true });
+      await waitForFast(async () => {
+        const result = await readAuthStatus();
+        expect(result.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+        expect(result.providers[0]?.independentUsage?.summary).toBe("Organization billing");
+        expect(result.usageRefreshPending).toBe(true);
+      });
+      pending.resolve();
+      await waitForFast(async () => {
+        const result = await readAuthStatus();
+        expect(result.providers[0]?.independentUsage?.summary).toBe("Updated billing");
+        expect(result.usageRefreshPending).toBeUndefined();
+      });
+    } finally {
+      pending.resolve();
+    }
   });
 
   it.each([
@@ -2263,13 +2288,15 @@ describe("models.authStatus", () => {
     await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
     await mocks.loadProviderUsageSummary.mock.results[0]?.value;
     expect(
-      readProviderUsageStaleWhileRevalidate(cacheParams).get("openai")?.windows[0]?.usedPercent,
+      readProviderUsageStaleWhileRevalidate(cacheParams).usageByProvider.get("openai")?.windows[0]
+        ?.usedPercent,
     ).toBe(10);
 
     await readAuthStatus();
 
     expect(
-      readProviderUsageStaleWhileRevalidate(cacheParams).get("openai")?.windows[0]?.usedPercent,
+      readProviderUsageStaleWhileRevalidate(cacheParams).usageByProvider.get("openai")?.windows[0]
+        ?.usedPercent,
     ).toBe(10);
   });
 
