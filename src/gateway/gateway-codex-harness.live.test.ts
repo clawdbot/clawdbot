@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type {
@@ -37,7 +38,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { pluginStateEntriesInKeyRange } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { resolveBundledPluginPublicModulePath } from "../test-utils/bundled-plugin-public-surface.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -2161,10 +2161,11 @@ describeLive("gateway live (Codex harness)", () => {
     async () => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
       const { modelId } = parseModelKey(modelKey);
-      const codexPackagePath = resolveBundledPluginPublicModulePath({
-        pluginId: "codex",
-        artifactBasename: "package.json",
-      });
+      const codexPackagePath = bundledPluginFileAt(
+        path.resolve(import.meta.dirname, "../.."),
+        "codex",
+        "package.json",
+      );
       const codexPackage = asOptionalRecord(
         JSON.parse(await fs.readFile(codexPackagePath, "utf8")),
       );
