@@ -19,16 +19,32 @@ function isConfigurationUpdate(value: unknown): value is ResponsesConfigurationU
   );
 }
 
-export function supportsResponsesReasoningUpdate(request: ResponsesContinuationRequest): boolean {
+function isResponsesReasoningUpdateCompatible(request: ResponsesContinuationRequest): boolean {
+  const mode = isRecord(request.reasoning) ? request.reasoning.mode : undefined;
   return (
     request.model === "gpt-6-astra" &&
-    isRecord(request.reasoning) &&
-    typeof request.reasoning.effort === "string" &&
-    (request.reasoning.mode === undefined || request.reasoning.mode === "standard") &&
+    (mode === undefined || mode === "standard") &&
     (!isRecord(request.multi_agent) || request.multi_agent.enabled !== true) &&
     request.truncation !== "auto" &&
     (!Array.isArray(request.context_management) ||
       !request.context_management.some((item) => isRecord(item) && item.type === "compaction"))
+  );
+}
+
+export function supportsResponsesReasoningUpdate(request: ResponsesContinuationRequest): boolean {
+  return (
+    isResponsesReasoningUpdateCompatible(request) &&
+    isRecord(request.reasoning) &&
+    typeof request.reasoning.effort === "string"
+  );
+}
+
+export function canReferenceResponsesReasoningHistory(
+  previous: ResponsesContinuationRequest,
+  request: ResponsesContinuationRequest,
+): boolean {
+  return (
+    !previous.input?.some(isConfigurationUpdate) || isResponsesReasoningUpdateCompatible(request)
   );
 }
 

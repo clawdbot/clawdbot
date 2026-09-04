@@ -127,6 +127,9 @@ Responses endpoint. Configure the existing model settings:
   request settings, including output limits and reasoning settings, without
   repeating accepted steering. Earlier `configuration_update` items retain
   their effect; a changed request-level effort does not replace those controls.
+  When accepted steering waits for a tool result or approval and its history
+  contains effort controls, finish that input with a compatible Astra model
+  and mode before switching.
 
 The example disables automatic server compaction because OpenAI cannot combine
 it with configuration updates. Cache-preserving effort changes also exclude
