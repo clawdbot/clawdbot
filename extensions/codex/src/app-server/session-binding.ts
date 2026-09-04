@@ -425,9 +425,13 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
       previousSessionId,
       assertCurrent,
     );
-    if (adopted !== "absent") return adopted !== "conflict";
+    if (adopted !== "absent") {
+      return adopted !== "conflict";
+    }
   }
-  if (params.reclaimStale === false) return false;
+  if (params.reclaimStale === false) {
+    return false;
+  }
   return await params.bindingStore.mutate(
     params.identity,
     {
@@ -449,7 +453,9 @@ export async function resolveCodexSessionBinding(params: {
   assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
 }): Promise<CodexAppServerThreadBinding | undefined> {
   params.assertCurrent?.();
-  if (params.assertBinding) params.assertBinding(readCodexSessionOwnershipBinding(params));
+  if (params.assertBinding) {
+    params.assertBinding(readCodexSessionOwnershipBinding(params));
+  }
   let binding = params.bindingStore.read(params.identity);
   if (!binding && params.identity.kind === "session" && params.identity.sessionKey) {
     if (

@@ -3831,9 +3831,15 @@ describe("Codex app-server adopted thread lifecycle", () => {
         agentDir: path.join(tempDir, "agent"),
         persistedThreads: [threadId],
         respond: (method) => {
-          if (method === "config/read") return { config: {}, origins: {}, layers: [] };
-          if (method === "configRequirements/read") return { requirements: null };
-          if (method === "thread/resume") return nativeModel;
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "thread/resume") {
+            return nativeModel;
+          }
           throw new Error(`unexpected method: ${method}`);
         },
       });

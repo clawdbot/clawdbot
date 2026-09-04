@@ -444,7 +444,9 @@ export function readCodexSessionOwnershipBinding(params: {
   storePath?: string;
 }): CodexAppServerThreadBinding | undefined {
   const binding = params.bindingStore.read(params.identity);
-  if (binding || params.identity.kind !== "session") return binding;
+  if (binding || params.identity.kind !== "session") {
+    return binding;
+  }
   const entry = readCodexBindingSessionEntry({ ...params, identity: params.identity });
   return entry?.sessionId === params.identity.sessionId && entry.previousSessionId
     ? params.bindingStore.read({ ...params.identity, sessionId: entry.previousSessionId })
