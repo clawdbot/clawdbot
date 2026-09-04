@@ -1967,10 +1967,12 @@ describe("models.authStatus", () => {
         },
       },
     });
-    let pending = createDeferred<void>();
+    let pending = createDeferred();
     let billingSummary = "Organization billing";
     mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
-      if (options.providerOnly) await pending.promise;
+      if (options.providerOnly) {
+        await pending.promise;
+      }
       return {
         updatedAt: 1,
         providers: [
@@ -1999,7 +2001,7 @@ describe("models.authStatus", () => {
         expect(result.providers[0]?.independentUsage?.summary).toBe("Organization billing");
         expect(result.usageRefreshPending).toBeUndefined();
       });
-      pending = createDeferred<void>();
+      pending = createDeferred();
       billingSummary = "Updated billing";
       await readAuthStatus({ refresh: true });
       await waitForFast(async () => {
@@ -2070,10 +2072,14 @@ describe("models.authStatus", () => {
       profiles,
       providers: [{ provider: "openrouter", status: "ok", profiles, effectiveProfiles: profiles }],
     });
-    const login = createDeferred<void>();
-    if (!pending) login.resolve();
+    const login = createDeferred();
+    if (!pending) {
+      login.resolve();
+    }
     mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => {
-      if (options.authProfile?.profileId === loginId) await login.promise;
+      if (options.authProfile?.profileId === loginId) {
+        await login.promise;
+      }
       return {
         updatedAt: 0,
         providers: [
@@ -2190,7 +2196,10 @@ describe("models.authStatus", () => {
       const readOnly = createOptions({}, ["operator.read"]);
       const calls = mocks.loadProviderUsageSummary.mock.calls.length;
       await handler(readOnly);
-      const result = (firstRespondCall(readOnly)?.[1] as ModelAuthStatusResult).providers[0];
+      const result = expectDefined<ModelAuthStatusResult>(
+        firstRespondCall(readOnly)?.[1],
+        "read-only auth status result",
+      ).providers[0];
       expect(result?.usageScope).toBe(usageScope);
       expect(result?.usage?.usageScope).toBe(usageScope);
       expect(result?.usage?.accountEmail).toBeUndefined();
@@ -2952,10 +2961,14 @@ describe("models.authOrderSet", () => {
       agents: { list: [{ id: "main", default: true, agentDir: "/tmp/agent" }] },
     };
     mocks.getRuntimeConfig.mockReturnValue(config);
-    const profiles = ["openai:one", "openai:two"].map((profileId) => ({
-      ...expectDefined(createOpenAiCodexOauthHealthSummary().profiles[0], "OAuth health fixture"),
-      profileId,
-    }));
+    const profiles = ["openai:one", "openai:two"].map((profileId) => {
+      const profile = expectDefined(
+        createOpenAiCodexOauthHealthSummary().profiles[0],
+        "OAuth health fixture",
+      );
+      profile.profileId = profileId;
+      return profile;
+    });
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,
@@ -2995,7 +3008,7 @@ describe("models.authOrderSet", () => {
     mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
       setPreparedAuthStore(reordered);
     });
-    const warming = createDeferred<void>();
+    const warming = createDeferred();
     mocks.warmCurrentProviderAuthStateOffMainThread.mockReturnValueOnce(warming.promise);
     const opts = createOrderOptions({ provider: "openai", profileIds: order });
     try {

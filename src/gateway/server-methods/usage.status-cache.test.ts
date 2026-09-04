@@ -422,7 +422,9 @@ describe("usage.status provider usage cache", () => {
               },
             ],
       }));
-      if (generalFirst) await runUsageStatus();
+      if (generalFirst) {
+        await runUsageStatus();
+      }
       const params = {
         agentId: resolveDefaultAgentId(config),
         agentDir: resolveAgentDir(config, resolveDefaultAgentId(config)),
