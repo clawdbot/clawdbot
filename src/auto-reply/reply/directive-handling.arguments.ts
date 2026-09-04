@@ -13,7 +13,8 @@ export function maybeHandleUnexpectedDirectiveArguments(
   }
 
   // One token is enough to explain the rejected boundary without echoing an unbounded prompt.
-  const unexpectedArgument = unconsumedArguments.split(/\s+/, 1)[0] ?? unconsumedArguments;
+  const unexpectedArgument =
+    unconsumedArguments.trimStart().split(/\s+/, 1)[0] ?? unconsumedArguments;
   return {
     text: `Unexpected argument "${unexpectedArgument}" for /${command.name}.`,
   };

@@ -124,7 +124,18 @@ export function parseInlineSessionDirectives(
   },
 ): InlineDirectives {
   const invocation = options?.command;
-  const nativeCommand = invocation?.kind === "native" ? invocation.name : undefined;
+  // Inspect raw exec arguments before sibling directives can remove tokens and
+  // turn an invalid positional argument into a recognized option or state change.
+  const textExec =
+    invocation?.kind === "text" && invocation.name === "exec"
+      ? extractExecDirective(body)
+      : undefined;
+  const command =
+    invocation?.kind === "native"
+      ? invocation.name
+      : textExec?.hasDirective && !textExec.hasExecOptions && textExec.cleaned
+        ? "exec"
+        : undefined;
   let cleaned = body;
   let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
@@ -133,7 +144,7 @@ export function parseInlineSessionDirectives(
     enabled = true,
   ): T => {
     const parsed =
-      enabled && (!nativeCommand || nativeCommand === commandName)
+      enabled && (!command || command === commandName)
         ? extract(cleaned)
         : ({ cleaned, hasDirective: false } as T);
     cleaned = parsed.cleaned;
@@ -141,27 +152,27 @@ export function parseInlineSessionDirectives(
     return parsed;
   };
   const think = parseScopedDirective("think", (value) =>
-    extractThinkDirective(value, { strict: nativeCommand === "think" }),
+    extractThinkDirective(value, { strict: command === "think" }),
   );
   const verbose = parseScopedDirective("verbose", (value) =>
-    extractVerboseDirective(value, { strict: nativeCommand === "verbose" }),
+    extractVerboseDirective(value, { strict: command === "verbose" }),
   );
   const trace = parseScopedDirective("trace", (value) =>
-    extractTraceDirective(value, { strict: nativeCommand === "trace" }),
+    extractTraceDirective(value, { strict: command === "trace" }),
   );
   const fast = parseScopedDirective("fast", (value) =>
-    extractFastDirective(value, { strict: nativeCommand === "fast" }),
+    extractFastDirective(value, { strict: command === "fast" }),
   );
   const reasoning = parseScopedDirective("reasoning", (value) =>
-    extractReasoningDirective(value, { strict: nativeCommand === "reasoning" }),
+    extractReasoningDirective(value, { strict: command === "reasoning" }),
   );
   const elevated = parseScopedDirective(
     "elevated",
-    (value) => extractElevatedDirective(value, { strict: nativeCommand === "elevated" }),
+    (value) => extractElevatedDirective(value, { strict: command === "elevated" }),
     !options?.disableElevated,
   );
   const exec = parseScopedDirective("exec", extractExecDirective);
-  const allowStatusDirective = options?.allowStatusDirective !== false && !nativeCommand;
+  const allowStatusDirective = options?.allowStatusDirective !== false && !command;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
     ? extractStatusDirective(cleaned)
     : { cleaned, hasDirective: false };
@@ -173,11 +184,6 @@ export function parseInlineSessionDirectives(
     }),
   );
   const queue = parseScopedDirective("queue", extractQueueDirective);
-  // Text directives may share a message with a task or each other. Only a bare
-  // /exec with unrecognized arguments needs command ownership instead of inline routing.
-  const command =
-    nativeCommand ??
-    (invocation?.name === "exec" && !exec.hasExecOptions && cleaned ? "exec" : undefined);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned,
