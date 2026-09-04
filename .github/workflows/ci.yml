@@ -1922,7 +1922,14 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        run: |
+          audit_exit=0
+          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high || audit_exit=$?
+          if [ "$audit_exit" -eq 2 ]; then
+            echo "::warning::npm advisory service unavailable; production dependency audit incomplete. CI is continuing without full advisory coverage."
+          else
+            exit "$audit_exit"
+          fi
 
   # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
   # GitHub backend, and docs-only same-repo PRs. This job restores only; the

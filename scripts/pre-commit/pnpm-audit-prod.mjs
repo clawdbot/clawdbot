@@ -45,7 +45,24 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   },
 ];
 
-class AdvisoryRequestTimeoutError extends Error {}
+class AdvisoryUnavailableError extends Error {}
+class AdvisoryRequestTimeoutError extends AdvisoryUnavailableError {}
+
+// Node fetch wraps transport failures in cause; invalid URLs, TLS validation,
+// malformed responses, and programming errors must remain blocking.
+const ADVISORY_TRANSPORT_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 
 /** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
 /**
@@ -841,6 +858,8 @@ export async function fetchBulkAdvisories({
   // backoff cap a chunk at 186s; timed-out attempts abort before the next starts.
   for (let attempt = 0; ; attempt += 1) {
     let responseStatus;
+    /** @type {Error | undefined} */
+    let permanentHttpError;
     try {
       return await withAdvisoryRequestTimeout({
         label: "Bulk advisory request",
@@ -854,12 +873,22 @@ export async function fetchBulkAdvisories({
           });
           responseStatus = response.status;
           if (!response.ok) {
+            const ErrorType =
+              response.status >= 500 || response.status === 408 || response.status === 429
+                ? AdvisoryUnavailableError
+                : Error;
+            const httpError = new ErrorType(
+              `Bulk advisory request failed (${response.status} ${response.statusText})`,
+            );
+            // A diagnostic-body timeout cannot soften an already-known permanent failure.
+            if (ErrorType === Error) {
+              permanentHttpError = httpError;
+            }
             const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
               timeoutPromise,
             });
-            throw new Error(
-              `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-            );
+            httpError.message += `: ${bodyText}`;
+            throw httpError;
           }
           return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
             signal,
@@ -868,17 +897,28 @@ export async function fetchBulkAdvisories({
         },
       });
     } catch (error) {
+      if (permanentHttpError) {
+        throw permanentHttpError;
+      }
+      const code = error?.cause?.code ?? error?.code;
+      const failure = ADVISORY_TRANSPORT_ERROR_CODES.has(code)
+        ? new AdvisoryUnavailableError(`Bulk advisory request unavailable (${code})`, {
+            cause: error,
+          })
+        : error;
       const retryable =
         responseStatus === undefined || responseStatus < 400
           ? error instanceof AdvisoryRequestTimeoutError || error instanceof TypeError
           : responseStatus >= 500 && responseStatus < 600;
       if (!retryable) {
-        throw error;
+        throw failure;
       }
       if (attempt === 2) {
-        throw new Error(
-          `Bulk advisory request failed after 3 attempts. Check npm registry availability and retry the audit; no clearance was obtained. Last failure: ${error.message}`,
-          { cause: error },
+        const ErrorType =
+          failure instanceof AdvisoryUnavailableError ? AdvisoryUnavailableError : Error;
+        throw new ErrorType(
+          `Bulk advisory request failed after 3 attempts. Check npm registry availability and retry the audit; no clearance was obtained. Last failure: ${failure.message}`,
+          { cause: failure },
         );
       }
     }
@@ -907,13 +947,23 @@ export async function runPnpmAuditProd({
   }
 
   const advisoryResults = {};
-  for (const payloadChunk of chunkEntries(payloadEntries, 400)) {
-    const chunkPayload = Object.fromEntries(payloadChunk);
-    const chunkResults = await fetchBulkAdvisories({
-      payload: chunkPayload,
-      fetchImpl,
-    });
-    Object.assign(advisoryResults, chunkResults);
+  let unavailable = false;
+  try {
+    for (const payloadChunk of chunkEntries(payloadEntries, 400)) {
+      Object.assign(
+        advisoryResults,
+        await fetchBulkAdvisories({
+          payload: Object.fromEntries(payloadChunk),
+          fetchImpl,
+        }),
+      );
+    }
+  } catch (error) {
+    if (!(error instanceof AdvisoryUnavailableError)) {
+      throw error;
+    }
+    unavailable = true;
+    stderr.write(`Production dependency audit incomplete: ${error.message}\n`);
   }
 
   const findings = filterFindingsBySeverity(
@@ -922,6 +972,11 @@ export async function runPnpmAuditProd({
     versionsByPackage,
   );
   if (findings.length === 0) {
+    // Exit 2 means unavailable, never clean. Known findings from earlier chunks
+    // still exit 1; only ordinary CI downgrades an unavailable audit to a warning.
+    if (unavailable) {
+      return 2;
+    }
     stdout.write(
       `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies. ` +
         "Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n",
