@@ -1707,6 +1707,71 @@ describe("maybeCompactCodexAppServerSession", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
+  it("preserves a recovered binding when the host advances during remote retirement", async () => {
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:recovered-retirement",
+      sessionId: "successor",
+    };
+    const previous = { ...current, sessionId: "predecessor" };
+    const next = { ...current, sessionId: "next-successor" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "retirement", "sessions.json"),
+    };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "thread-recovered", cwd: tempDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const fake = createFakeCodexClient({
+      autoCompleteCompaction: false,
+      rejectInterrupt: true,
+      retainedThreadId: "thread-recovered",
+    });
+    let finishClose!: (stopped: boolean) => void;
+    const closeFinished = new Promise<boolean>((resolve) => {
+      finishClose = resolve;
+    });
+    fake.closeAndWait.mockImplementationOnce(async () => {
+      fake.close();
+      return await closeFinished;
+    });
+
+    const pendingResult = maybeCompactCodexAppServerSessionImpl(
+      {
+        sessionId: current.sessionId,
+        sessionKey: current.sessionKey,
+        agentId: current.agentId,
+        sessionTarget: { ...scope, sessionId: current.sessionId },
+        sessionFile: path.join(tempDir, "recovered-retirement.jsonl"),
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      {
+        bindingStore,
+        clientFactory: async () => fake.client,
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
+        },
+        nativeCompletionTimeoutMs: 10,
+        nativeInterruptGraceMs: 10,
+      },
+    );
+    await vi.waitFor(() => expect(fake.closeAndWait).toHaveBeenCalledOnce());
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
+    finishClose(false);
+
+    await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
+    expect(bindingStore.read(current)).toEqual(binding);
+    await expect(bindingStore.adoptSessionGeneration(next, current.sessionId)).resolves.toBe(
+      "adopted",
+    );
+    expect(bindingStore.read(next)).toEqual(binding);
+  });
+
   it("never detaches an unconfirmed remote supervised thread", async () => {
     const fake = createFakeCodexClient({
       autoCompleteCompaction: false,

@@ -608,10 +608,14 @@ async function compactCodexNativeThread(
             // Closing a WebSocket proves only that the connection ended, not
             // that its remote turn stopped. Detach this exact thread before
             // allowing future work to acquire the session lifecycle fence.
-            const bindingCleared = await options.bindingStore.mutate(bindingIdentity, {
-              kind: "clear",
-              threadId: binding.threadId,
-            });
+            const bindingCleared = await options.bindingStore.mutate(
+              bindingIdentity,
+              {
+                kind: "clear",
+                threadId: binding.threadId,
+              },
+              assertCurrent,
+            );
             if (bindingCleared) {
               return;
             }
