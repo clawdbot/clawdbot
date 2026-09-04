@@ -527,6 +527,69 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
+  it("sends a pre-sized fenced media tail once", async () => {
+    let messageCount = 0;
+    const loopback = await createDiscordLoopbackRest({
+      respond: (request) =>
+        request.method === "GET"
+          ? { id: "789", type: ChannelType.GuildText }
+          : { id: `message-${++messageCount}`, channel_id: "789" },
+    });
+    try {
+      const body = "abc ".repeat(14);
+      const onDeliveryResult = vi.fn();
+      const result = await sendMessageDiscord("channel:789", `\`\`\`txt\n${body}\n\`\`\``, {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+        maxLinesPerMessage: 2,
+        onDeliveryResult,
+      });
+      const requests = loopback.requests.filter((request) => request.method === "POST");
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(JSON.parse(requests[1]?.body ?? "{}").content).toBe(`\`\`\`txt\n${body}\n\`\`\``);
+      expect(result.messageId).toBe("message-1");
+      expect(result.receipt.platformMessageIds).toEqual(["message-1", "message-2"]);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual([
+        "message-1",
+        "message-2",
+      ]);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each(["delivery callback", "later text send"])(
+    "does not retry accepted media when its %s raises an upload error",
+    async (failure) => {
+      const { rest, postMock } = makeDiscordRest();
+      const error = Object.assign(new Error("upload-shaped follow-up failure"), {
+        status: 413,
+        code: 40005,
+      });
+      postMock.mockResolvedValueOnce({ id: "media-1", channel_id: "789" });
+      const onDeliveryResult = vi.fn();
+      if (failure === "delivery callback") {
+        onDeliveryResult.mockRejectedValue(error);
+      } else {
+        postMock.mockRejectedValueOnce(error);
+      }
+      await expect(
+        sendMessageDiscord("channel:789", "a".repeat(2500), {
+          rest,
+          token: "t",
+          cfg: DISCORD_TEST_CFG,
+          mediaUrl: "file:///tmp/photo.jpg",
+          onDeliveryResult,
+        }),
+      ).rejects.toBe(error);
+      expect(postMock).toHaveBeenCalledTimes(failure === "delivery callback" ? 1 : 2);
+      expect(onDeliveryResult.mock.calls.map(([part]) => part.messageId)).toEqual(["media-1"]);
+    },
+  );
+
   it("rechecks delivery authority before media caption follow-up chunks", async () => {
     const loopback = await createDiscordLoopbackRest();
     try {

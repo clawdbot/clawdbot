@@ -785,7 +785,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -802,26 +802,24 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          stopReason: "timeout",
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-tool-use-deadline",
-          status: "timeout",
-          summary: "aborted",
-          stopReason: "timeout",
-        }),
-        undefined,
-        { runId: "agent-run-tool-use-deadline" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        stopReason: "timeout",
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-tool-use-deadline",
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+      }),
+      undefined,
+      { runId: "agent-run-tool-use-deadline" },
+    );
   });
 
   it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
@@ -844,7 +842,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run a command that exceeds the provider deadline",
         sessionKey: "agent:main:main",
@@ -861,29 +859,27 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          reason: "hard_timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-provider-timeout-result",
-          status: "timeout",
-          summary: "aborted",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        undefined,
-        { runId: "agent-run-provider-timeout-result" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-provider-timeout-result",
+        status: "timeout",
+        summary: "aborted",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      undefined,
+      { runId: "agent-run-provider-timeout-result" },
+    );
   });
 
   it("projects a resolved agent error as a failed gateway response", async () => {
@@ -898,7 +894,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run the agent",
         sessionKey: "agent:main:main",
@@ -915,27 +911,25 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "error",
-          reason: "failed",
-          stopReason: "error",
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-resolved-error",
-          status: "error",
-          summary: "failed",
-          stopReason: "error",
-        }),
-        undefined,
-        { runId: "agent-run-resolved-error" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "error",
+        reason: "failed",
+        stopReason: "error",
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-resolved-error",
+        status: "error",
+        summary: "failed",
+        stopReason: "error",
+      }),
+      undefined,
+      { runId: "agent-run-resolved-error" },
+    );
   });
 
   it("projects a recorded failed dispatch outcome through agent.wait", async () => {
@@ -953,7 +947,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
     const runId = "agent-run-recorded-dispatch-failure";
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run on the unavailable device",
         sessionKey: "agent:main:main",
@@ -970,18 +964,16 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId, status: "error", summary: "failed" }),
-        undefined,
-        { runId },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", summary: "failed" }),
+      undefined,
+      { runId },
+    );
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "error",
     });
@@ -1050,7 +1042,7 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -1066,14 +1058,12 @@ describe("gateway agent handler", () => {
       taskTrackingMode: "none",
     });
 
-    await waitForAssertion(() => {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "ok", summary: "completed" }),
-        undefined,
-        expect.any(Object),
-      );
-    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "ok", summary: "completed" }),
+      undefined,
+      expect.any(Object),
+    );
   });
 
   it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
@@ -1411,7 +1401,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "characterize terminal ownership",
         sessionKey: "agent:main:main",
@@ -1427,18 +1417,16 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: test.outcome,
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId, ...test.payload }),
-        undefined,
-        { runId },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: test.outcome,
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, ...test.payload }),
+      undefined,
+      { runId },
+    );
   });
 
   it("settles ordinary async gateway agent rejections as failed", async () => {
@@ -1448,7 +1436,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "background cli task",
         sessionKey: "agent:main:main",
@@ -1464,17 +1452,15 @@ describe("gateway agent handler", () => {
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: {
-          reason: "failed",
-          status: "error",
-          error: "provider request failed",
-        },
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalled();
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: {
+        reason: "failed",
+        status: "error",
+        error: "provider request failed",
+      },
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -1497,7 +1483,7 @@ describe("gateway agent handler", () => {
       const respond = vi.fn();
       const runId = "agent-run-model-not-found";
 
-      dispatchAgentRunFromGateway({
+      await dispatchAgentRunFromGateway({
         ingressOpts: {
           message: "hi",
           sessionKey: "agent:badmodel:main",
@@ -1512,17 +1498,15 @@ describe("gateway agent handler", () => {
         taskTrackingMode: "none",
       });
 
-      await waitForAssertion(() => {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          { runId, status: "error", summary: message },
-          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
-          { runId, error: message },
-        );
-        expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
-        expect(failure.message).toBe(message);
-        expect(failure.reason).toBe("model_not_found");
-      });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { runId, status: "error", summary: message },
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+        { runId, error: message },
+      );
+      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
+      expect(failure.message).toBe(message);
+      expect(failure.reason).toBe("model_not_found");
       await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
         status: "error",
         error: displayed,

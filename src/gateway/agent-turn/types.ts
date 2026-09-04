@@ -49,6 +49,7 @@ export type AgentTurnContext = Pick<
   | "logGateway"
   | "nodeSendToSession"
   | "removeChatRun"
+  | "requestEntryLifetime"
   | "resolveGatewayContext"
   | "validateAgentRuntimeApprovalAuthority"
 >;

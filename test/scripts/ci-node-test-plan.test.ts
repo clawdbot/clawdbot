@@ -2406,6 +2406,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ...(shard.shardName === "agentic-control-plane-startup-health-runtime"
           ? { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } }
           : {}),
+        ...(shard.includePatterns?.includes("src/gateway/server-sidecar-retention.test.ts")
+          ? { pretestBuildMode: "runtime" }
+          : {}),
         includePatterns: shard.includePatterns,
         requiresDist: false,
         runner:

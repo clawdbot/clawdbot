@@ -411,7 +411,7 @@ extensions/discord/src/security-audit.ts	12
 extensions/discord/src/send.components.ts	3
 extensions/discord/src/send.messages.ts	2
 extensions/discord/src/send.outbound.ts	2
-extensions/discord/src/send.shared.ts	4
+extensions/discord/src/send.shared.ts	2
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
 extensions/discord/src/setup-core.ts	1
@@ -1150,7 +1150,7 @@ extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
 extensions/slack/src/monitor/message-handler/dispatch.ts	1
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/message-handler/prepare.ts	2
+extensions/slack/src/monitor/message-handler/prepare.ts	1
 extensions/slack/src/monitor/message-handler/preview-finalize.ts	3
 extensions/slack/src/monitor/message-handler/subteam-mentions.ts	1
 extensions/slack/src/monitor/provider-support.ts	3
@@ -1384,7 +1384,7 @@ extensions/workboard/doctor-contract-api.ts	4
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/gateway-helpers.ts	1
-extensions/workboard/src/sqlite-store.ts	44
+extensions/workboard/src/sqlite-store.ts	38
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	5
@@ -1473,7 +1473,7 @@ packages/ai/src/providers/openai-chatgpt-responses.ts	27
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	10
 packages/ai/src/providers/openai-reasoning-effort.ts	6
-packages/ai/src/providers/openai-responses-shared.ts	7
+packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	6
@@ -1771,7 +1771,7 @@ src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	3
 src/agents/embedded-agent-runner/run/attempt-history.ts	17
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	19
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	18
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -2784,7 +2784,6 @@ src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
-src/gateway/exec-approval-manager.ts	7
 src/gateway/gateway-cli-backend.live-helpers.ts	2
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	3
@@ -2801,7 +2800,6 @@ src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.request.ts	2
 src/gateway/mcp-http.schema.ts	3
 src/gateway/method-scopes.ts	10
-src/gateway/methods/core-descriptors.ts	1
 src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-command-policy.ts	2
 src/gateway/node-invoke-system-run-approval.ts	1
@@ -2819,7 +2817,6 @@ src/gateway/portals/portal-service.ts	1
 src/gateway/probe.ts	2
 src/gateway/restart-trace.ts	3
 src/gateway/secret-input-paths.ts	1
-src/gateway/server-aux-handlers.ts	2
 src/gateway/server-broadcast.ts	2
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
@@ -3046,7 +3043,6 @@ src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
 src/infra/exec-approval-channel-runtime.ts	9
-src/infra/exec-approval-forwarder.ts	1
 src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
@@ -3625,7 +3621,6 @@ src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/config.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/source.ts	1
-src/skills/loading/workspace-skill-loader.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2

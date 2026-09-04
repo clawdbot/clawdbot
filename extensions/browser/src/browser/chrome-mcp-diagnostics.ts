@@ -10,19 +10,17 @@ import { CHROME_MCP_STDERR_MAX_BYTES } from "./chrome-mcp-contracts.js";
 export function decodeChromeMcpStderrTail(buffer: Buffer): string {
   return decodeBoundedUtf8Tail(buffer, CHROME_MCP_STDERR_MAX_BYTES).trim();
 }
-export function drainStderr(transport: StdioClientTransport): Promise<string> {
+export function drainStderr(transport: StdioClientTransport): () => string {
   const stream = transport.stderr;
   if (!stream) {
-    return Promise.resolve("");
+    return () => "";
   }
   const tail = createBoundedUtf8Tail(CHROME_MCP_STDERR_MAX_BYTES);
-  return new Promise((resolve) => {
-    const finish = () => resolve(tail.text().trim());
-    stream.on("data", (chunk: Buffer | string) => tail.append(chunk));
-    stream.once("end", finish);
-    stream.once("close", finish);
-    stream.on("error", finish);
+  stream.on("data", (chunk: Buffer | string) => {
+    tail.append(chunk);
   });
+  stream.on("error", () => {});
+  return () => tail.text().trim();
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {

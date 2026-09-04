@@ -481,8 +481,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.invalidateClientsForDevice?.(removed.deviceId, {
           reason: "device-pair-removed",
         });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
       }
-      await reconcileRevokedDeviceWorker(context, removed.deviceId);
       context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
       emitDevicePairingLifecycleSecurityEvent({
         action: "device.pairing.removed",

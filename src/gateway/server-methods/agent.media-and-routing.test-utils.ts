@@ -47,7 +47,6 @@ import {
   describe0AfterEach0,
 } from "./agent.test-harness.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
 
@@ -1146,14 +1145,10 @@ describe("gateway agent handler", () => {
       {
         respond,
         context: {
-          dedupe: new Map(),
-          addChatRun: vi.fn(),
-          chatAbortControllers: new Map(),
-          logGateway: { info: vi.fn(), error: vi.fn() },
+          ...makeContext(),
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-          getRuntimeConfig: () => mocks.loadConfigReturn,
-        } as unknown as GatewayRequestContext,
+        },
       },
     );
 
@@ -1235,14 +1230,10 @@ describe("gateway agent handler", () => {
       },
       {
         context: {
-          dedupe: new Map(),
-          addChatRun: vi.fn(),
-          chatAbortControllers: new Map(),
-          logGateway: { info: vi.fn(), error: vi.fn() },
+          ...makeContext(),
           broadcastToConnIds,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-          getRuntimeConfig: () => mocks.loadConfigReturn,
-        } as unknown as GatewayRequestContext,
+        },
       },
     );
 

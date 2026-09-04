@@ -6,7 +6,10 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
-import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  resolveVitestPretestBuildMode,
+  resolveVitestRuntimeCliSelections,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
@@ -83,18 +86,20 @@ describe("test runtime prerequisites", () => {
     ],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
+    ["Gateway sidecar lifecycle", ["src/gateway/server-sidecar-retention.test.ts"], "runtime"],
     [
       "Windows cron process identity",
       ["src/gateway/gateway-cron-process-identity.windows.test.ts"],
       "runtime",
     ],
     ["real Gateway config edits", ["src/gateway/server.config-patch.test.ts"], "runtime"],
-    ["Gateway server config", ["test/vitest/vitest.gateway-server.config.ts"], "runtime"],
     ["Gateway directory", ["src/gateway"], "runtime"],
     ["Gateway core config", ["test/vitest/vitest.gateway-core.config.ts"], "runtime"],
+    ["Gateway server config", ["test/vitest/vitest.gateway-server.config.ts"], "runtime"],
     ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],
     ["agentic config", ["test/vitest/vitest.full-agentic.config.ts"], "runtime"],
     ["ordinary Gateway unit test", ["src/gateway/net.test.ts"], undefined],
+    ["ordinary Gateway server test", ["src/gateway/server-request-context.test.ts"], undefined],
     ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child.test.ts"], undefined],
     [
       "model reader",
@@ -111,6 +116,40 @@ describe("test runtime prerequisites", () => {
         })),
       ),
     ).toBe(expected);
+  });
+
+  it.each([
+    "test/vitest/vitest.gateway-server.config.ts",
+    "test/vitest/vitest.gateway.config.ts",
+    "test/vitest/vitest.full-agentic.config.ts",
+  ])("prepares direct lifecycle selection under %s", (config) => {
+    for (const [file, expected] of [
+      ["src/gateway/server-sidecar-retention.test.ts", "runtime"],
+      ["src/gateway/server-request-context.test.ts", undefined],
+    ] as const) {
+      const selections = resolveVitestRuntimeCliSelections(config, ["run", file], {});
+      expect(resolveVitestPretestBuildMode(selections), file).toBe(expected);
+    }
+  });
+
+  it.each([
+    ["gateway-core", ["gateway-*.test.ts"], undefined],
+    ["gateway-server", ["server-sidecar-retention.test.ts"], "runtime"],
+    ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
+    [
+      "gateway-server",
+      ["server-sidecar-retention.test.ts", "server.config-patch.test.ts"],
+      undefined,
+    ],
+    ["gateway", ["gateway-*.test.ts"], "runtime"],
+    ["gateway", ["server*.test.ts"], "runtime"],
+  ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
+    const selections = resolveVitestRuntimeCliSelections(
+      `test/vitest/vitest.${project}.config.ts`,
+      ["run", ...exclude.flatMap((pattern) => ["--exclude", pattern])],
+      {},
+    );
+    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
   });
 
   it("combines private QA and runtime readers into one private build", () => {

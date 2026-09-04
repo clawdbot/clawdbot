@@ -876,6 +876,19 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it("prepares runtime artifacts for the changed Gateway sidecar lifecycle fixture", () => {
+    const target = "src/gateway/server-sidecar-retention.test.ts";
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    const owners = shards?.filter((shard) => shard.targets?.includes(target));
+    expect(owners).toHaveLength(1);
+    expect(owners?.[0]).toMatchObject({
+      configs: [],
+      targets: [target],
+      pretestBuildMode: "runtime",
+    });
+  });
+
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {
     const shards = createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"]);
     expect(shards.length).toBeGreaterThan(1);

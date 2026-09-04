@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
@@ -125,6 +126,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
+      trackExecution: (run) => runtime.connectionWork.track(run),
       deps,
       configRevisionProjector,
       runtimeState,
@@ -236,6 +238,14 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       notifyPluginMetadataChanged: kernel.notifyPluginMetadataChanged,
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
+  });
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => {
+      // Received mutations and their finalizers join before lifetime sidecars stop.
+      // Retire this exact context too when no request ever bound its coordinator.
+      retireQuestionChannelGateway(runtime.connectionWork.signal);
+      await gatewayRequestContext.scopeUpgradeCoordinator?.close();
+    },
   });
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);

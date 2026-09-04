@@ -497,4 +497,6 @@ export function dispatchAgentRunFromGateway(params: {
       return ok(current);
     });
   }
+  // Gateway shutdown must join this execution, not just its admission.
+  return runCompletion;
 }
