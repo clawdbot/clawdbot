@@ -6,6 +6,7 @@ import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placem
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
 } from "../chat/attachment-payload-store.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
@@ -427,6 +428,11 @@ describe("DraftSubmissionFlow", () => {
     const shared = registerTextPayload("shared");
     const displaced = registerTextPayload("displaced");
     const incoming = registerTextPayload("incoming");
+    expect([shared, displaced, incoming].map(getChatAttachmentPreviewUrl)).toEqual([
+      "blob:shared",
+      "blob:displaced",
+      "blob:incoming",
+    ]);
     flow.attachmentDraft.replace([shared, displaced]);
     noteUserMutation.mockClear();
     requestUpdate.mockClear();
@@ -448,6 +454,7 @@ describe("DraftSubmissionFlow", () => {
     const { flow, requestUpdate } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const current = registerTextPayload("current");
+    expect(getChatAttachmentPreviewUrl(current)).toBe("blob:current-draft");
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
     requestUpdate.mockClear();
@@ -482,7 +489,8 @@ describe("DraftSubmissionFlow", () => {
 
     flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
 
-    expect(revokeObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
+    expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(flow.message).toBe("@Alex recovered cloud prompt");
