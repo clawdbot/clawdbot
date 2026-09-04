@@ -17,6 +17,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   afterAll,
   afterEach,
@@ -550,6 +551,18 @@ describe("active-memory plugin", () => {
   const expectPrependContextContains = (result: unknown, text: string) => {
     expect(requirePrependContext(result)).toContain(text);
   };
+  const recallDiagnostics = (sessionKey: string) =>
+    JSON.stringify(
+      {
+        statusLines: getActiveMemoryLines(sessionKey),
+        warnings: api.logger.warn.mock.calls,
+        info: api.logger.info.mock.calls,
+        debug: api.logger.debug.mock.calls,
+        cleanupResults: hoisted.cleanupSessionLifecycleArtifacts.mock.settledResults,
+        transcriptReads: hoisted.rawDeltaReads,
+      },
+      (_key, value: unknown) => (value instanceof Error ? value.message : value),
+    );
   const lastEmbeddedRunParams = () => {
     const calls = runEmbeddedAgent.mock.calls;
     return requireRecord(calls[calls.length - 1]?.[0], "expected embedded run params");
@@ -646,8 +659,9 @@ describe("active-memory plugin", () => {
   });
 
   beforeEach(async () => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     api.pluginConfig = { agents: ["main"] };
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.mkdir(stateDir, { recursive: true });
     // Keep the SQLite file/schema warm, but clear the plugin's only real namespace.
@@ -656,7 +670,6 @@ describe("active-memory plugin", () => {
       maxEntries: 10_000,
       env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
     }).clear();
-    runEmbeddedAgent.mockReset();
     configFile = {
       session: { dmScope: "per-peer" },
       plugins: {
@@ -766,6 +779,7 @@ describe("active-memory plugin", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
     resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     fixtureRoot = "";
@@ -1002,40 +1016,44 @@ describe("active-memory plugin", () => {
   });
 
   it("waits for timeout cleanup before replacing a recall in the same run", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 100, logging: true });
-    let releaseCleanup: () => void = () => {
-      throw new Error("cleanup gate was not initialized");
-    };
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const firstStarted = createDeferred<void>();
+    const cleanupStarted = createDeferred<void>();
+    const cleanupGate = createDeferred<void>();
     hoisted.closeActiveMemorySearchManager.mockImplementationOnce(async () => {
-      await cleanupGate;
+      cleanupStarted.resolve();
+      await cleanupGate.promise;
     });
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
-    );
+    runEmbeddedAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      firstStarted.resolve();
+      return await waitForAbort(params.abortSignal);
+    });
     const context = {
       runId: "run-timeout-retry",
       sessionKey: "agent:main:timeout-retry",
     };
 
-    await expect(
-      runPromptBuild({ prompt: "what wings should i order before timeout?" }, context),
-    ).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
-    });
+    const event = { prompt: "what wings should i order?" };
+    const first = runPromptBuild(event, context);
+    await firstStarted.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(first).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await cleanupStarted.promise;
 
-    const retry = runPromptBuild({ prompt: "what wings should i order after timeout?" }, context);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const retry = runPromptBuild(event, context);
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanupGate.resolve();
+    }
 
-    releaseCleanup();
     await expect(retry).resolves.toEqual(
       expect.objectContaining({ prependContext: expect.stringContaining("lemon pepper wings") }),
     );
@@ -3232,6 +3250,7 @@ describe("active-memory plugin", () => {
   );
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(50);
@@ -3243,6 +3262,7 @@ describe("active-memory plugin", () => {
     });
     const sessionKey = "agent:main:timeout-partial";
     seedSession(sessionKey, "s-timeout-partial", 0);
+    const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await writeTranscriptJsonl(params.sessionFile, [
@@ -3260,14 +3280,18 @@ describe("active-memory plugin", () => {
             },
           },
         ]);
+        transcriptWritten.resolve();
         return await waitForAbort(params.abortSignal);
       },
     );
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? timeout partial" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await resultPromise;
 
     const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("alpha beta gamma delta epsilon zeta eta…");
@@ -3327,7 +3351,9 @@ describe("active-memory plugin", () => {
     await vi.advanceTimersByTimeAsync(100);
     const result = await resultPromise;
 
-    expectPrependContextContains(result, "temporary partial recall summary");
+    expect(result, recallDiagnostics(sessionKey)).toMatchObject({
+      prependContext: expect.stringContaining("temporary partial recall summary"),
+    });
     expect(sessionRuntime.getSessionEntry(target)).toBeUndefined();
     expect(await transcriptRuntime.readSessionTranscriptEvents(target)).toEqual([]);
     expect(hoisted.rawDeltaReads).toContainEqual({
@@ -3344,22 +3370,28 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1, persistTranscripts: true, logging: true });
     const sessionKey = "agent:main:timeout-empty-transcript";
     seedSession(sessionKey, "s-timeout-empty-transcript", 0);
+    const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await fs.writeFile(params.sessionFile, "", "utf8");
+        transcriptWritten.resolve();
         return await waitForAbort(params.abortSignal);
       },
     );
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? empty timeout transcript" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
 
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
@@ -3402,21 +3434,28 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1, persistTranscripts: true, logging: true });
     const sessionKey = "agent:main:timeout-missing-transcript";
     seedSession(sessionKey, "s-timeout-missing-transcript", 0);
-    runEmbeddedAgent.mockImplementationOnce(
-      async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
-    );
+    const embeddedStarted = createDeferred<void>();
+    runEmbeddedAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      embeddedStarted.resolve();
+      return await waitForAbort(params.abortSignal);
+    });
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? missing timeout transcript" },
       { sessionKey },
     );
+    await embeddedStarted.promise;
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
 
     expect(result).toBeUndefined();
+    expect(hoisted.sessionStore[String(lastEmbeddedRunParams().sessionKey)]).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(1);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
@@ -3849,17 +3888,22 @@ describe("active-memory plugin", () => {
   });
 
   it("schedules timeout cleanup before slow status persistence", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1, logging: true });
-    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
-    hoisted.updateSessionStore.mockImplementationOnce(
-      async () =>
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 5_000);
-        }),
-    );
+    const embeddedStarted = createDeferred<void>();
+    const persistenceStarted = createDeferred<void>();
+    const releasePersistence = createDeferred<void>();
+    let persistence: Promise<void> | undefined;
+    runEmbeddedAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      embeddedStarted.resolve();
+      return await waitForAbort(params.abortSignal);
+    });
+    hoisted.updateSessionStore.mockImplementationOnce(() => {
+      persistenceStarted.resolve();
+      return (persistence = releasePersistence.promise);
+    });
 
     const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? slow timeout persistence" },
@@ -3867,26 +3911,31 @@ describe("active-memory plugin", () => {
         sessionKey: "agent:main:slow-timeout-persistence",
       },
     );
-    await vi.advanceTimersByTimeAsync(1_501);
+    try {
+      await embeddedStarted.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      await persistenceStarted.promise;
+      await vi.advanceTimersByTimeAsync(1_500);
 
-    await expect(resultPromise).resolves.toBeUndefined();
-    expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+    } finally {
+      releasePersistence.resolve();
+      await persistence;
+    }
   });
 
   it("does not clean up memory managers when only successful status persistence stalls", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 25, logging: true });
-    let markPersistenceStarted: (() => void) | undefined;
-    const persistenceStarted = new Promise<void>((resolve) => {
-      markPersistenceStarted = resolve;
-    });
-    hoisted.updateSessionStore.mockImplementationOnce(async () => {
-      markPersistenceStarted?.();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 5_000);
-      });
+    const persistenceStarted = createDeferred<void>();
+    const releasePersistence = createDeferred<void>();
+    let persistence: Promise<void> | undefined;
+    hoisted.updateSessionStore.mockImplementationOnce(() => {
+      persistenceStarted.resolve();
+      return (persistence = releasePersistence.promise);
     });
 
     const resultPromise = runPromptBuild(
@@ -3895,11 +3944,16 @@ describe("active-memory plugin", () => {
         sessionKey: "agent:main:slow-success-persistence",
       },
     );
-    await persistenceStarted;
-    await vi.advanceTimersByTimeAsync(1_525);
+    try {
+      await persistenceStarted.promise;
+      await vi.advanceTimersByTimeAsync(1_525);
 
-    await expect(resultPromise).resolves.toBeUndefined();
-    expect(hoisted.closeActiveMemorySearchManager).not.toHaveBeenCalled();
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(hoisted.closeActiveMemorySearchManager).not.toHaveBeenCalled();
+    } finally {
+      releasePersistence.resolve();
+      await persistence;
+    }
   });
 
   it("does not share cached recall results across session-id-only contexts", async () => {
@@ -3965,6 +4019,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 25;
     const SETUP_GRACE_TIMEOUT_MS = 50;
     testing.setMinimumTimeoutMsForTests(1);
@@ -3973,7 +4028,9 @@ describe("active-memory plugin", () => {
       setupGraceTimeoutMs: SETUP_GRACE_TIMEOUT_MS,
       logging: true,
     });
+    const embeddedStarted = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      embeddedStarted.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5);
       });
@@ -3981,12 +4038,15 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "remember the ramen place" }] };
     });
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? setup grace" },
       {
         sessionKey: "agent:main:setup-grace",
       },
     );
+    await embeddedStarted.promise;
+    await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS + 5);
+    const result = await resultPromise;
 
     expect(result?.prependContext).toContain("remember the ramen place");
     expect(lastEmbeddedRunParams().timeoutMs).toBe(CONFIGURED_TIMEOUT_MS + SETUP_GRACE_TIMEOUT_MS);
@@ -4024,6 +4084,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not fast-fail terminal zero-hit memory_search results as empty", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 50;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -4031,6 +4092,7 @@ describe("active-memory plugin", () => {
     registerPluginConfig({ timeoutMs: CONFIGURED_TIMEOUT_MS, logging: true });
     const sessionKey = "agent:main:terminal-zero-hit";
     hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-zero-hit", updatedAt: 0 };
+    const transcriptWritten = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await writeTranscriptJsonl(params.sessionFile, [
@@ -4042,14 +4104,18 @@ describe("active-memory plugin", () => {
             },
           },
         ]);
+        transcriptWritten.resolve();
         await waitForAbort(params.abortSignal);
       },
     );
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? zero hit" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
+    const result = await resultPromise;
 
     expect(result).toBeUndefined();
     const infoLines = vi
@@ -5034,7 +5100,9 @@ describe("active-memory plugin", () => {
         { sessionKey },
       );
 
-      expectPrependContextContains(result, unavailableRecallContext);
+      expect(result, recallDiagnostics(sessionKey)).toMatchObject({
+        prependContext: expect.stringContaining(unavailableRecallContext),
+      });
       expectLinesToContain(getActiveMemoryLines(sessionKey), "status=unavailable");
     },
   );
