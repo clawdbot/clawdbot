@@ -417,7 +417,6 @@ describe("successful update finalization ordering", () => {
         restartEnvironment: process.env,
         json: true,
         windowsTaskAutoStartRecovery: {
-          suspended: Promise.resolve(true),
           beginMutation: () => {},
           restore,
           complete: () => {},

@@ -277,7 +277,6 @@ describe("failed Git update recovery restart", () => {
         },
         {
           windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
             beginMutation: () => {},
             restore,
             complete,
