@@ -1,4 +1,4 @@
-import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event, type Relay } from "nostr-tools";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,8 @@ import {
   BUZZ_TYPING_INDICATOR_KIND,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { BUZZ_MAX_CONCURRENT_RELAY_QUERIES, acquireBuzzQueryLease } from "./query-lease.js";
+import { BuzzQueryLeaseUnavailableError } from "./relay-subscription.js";
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -53,39 +55,37 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.connect).not.toHaveBeenCalled();
   });
 
-  it("bounds concurrent reply-target lookups to the reserved query capacity", async () => {
+  it("refuses a reply-target lookup while transient queries hold the allowance", async () => {
     relayMocks.auth.mockResolvedValue("ok");
     const bus = await startTestBus({});
-    relayMocks.stallReplyTargetEose = true;
+    const held: Array<(() => void) | null> = [];
     try {
+      for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+        held.push(await acquireBuzzQueryLease(relayMocks.lastRelay as Relay));
+      }
       const idsSubscriptionsBefore = relayMocks.subscriptions.filter(
         (entry) => entry.filter.ids?.length,
       ).length;
-      // Three lookups occupy the reserve and stay pending on a silent relay.
-      const pending = Array.from({ length: 3 }, (_, index) =>
-        bus.fetchMessageById({ eventId: String(index).padStart(64, "0") }),
+
+      // Profile, membership and history queries share this allowance, so a
+      // reply lookup must degrade instead of opening a subscription past it.
+      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).rejects.toThrow(
+        BuzzQueryLeaseUnavailableError,
       );
-      // The fourth must not open a subscription the relay cap would refuse.
+      expect(relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length).toBe(
+        idsSubscriptionsBefore,
+      );
+
+      // Freeing one slot lets the next lookup reach the relay again.
+      held.shift()?.();
       await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).resolves.toBeNull();
-      const idsSubscriptions = relayMocks.subscriptions.filter(
-        (entry) => entry.filter.ids?.length,
-      ).length;
-      expect(idsSubscriptions - idsSubscriptionsBefore).toBe(3);
-      // Releasing one slot lets the next lookup through again.
-      relayMocks.stallReplyTargetEose = false;
-      for (const entry of relayMocks.subscriptions) {
-        if (entry.filter.ids?.length) {
-          entry.handlers.oneose?.();
-        }
-      }
-      await Promise.allSettled(pending);
-      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).resolves.toBeNull();
-      expect(
-        relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length -
-          idsSubscriptionsBefore,
-      ).toBe(4);
+      expect(relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length).toBe(
+        idsSubscriptionsBefore + 1,
+      );
     } finally {
-      relayMocks.stallReplyTargetEose = false;
+      for (const release of held) {
+        release?.();
+      }
       await bus.close();
     }
   });

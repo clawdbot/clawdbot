@@ -1,5 +1,10 @@
 import type { Event, Filter, Relay } from "nostr-tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/** The shared query lease makes subscription setup async, so wait for the REQ. */
+async function waitForSubscription(prepareSubscription: { mock: { calls: unknown[] } }) {
+  await vi.waitFor(() => expect(prepareSubscription.mock.calls.length).toBeGreaterThan(0));
+}
 import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { queryBuzzEventById } from "./reply-context.js";
 
@@ -55,6 +60,7 @@ describe("queryBuzzEventById", () => {
     const { relay, handlers, prepareSubscription, closeSubscription, closeRelay } = createRelay();
 
     const pending = queryBuzzEventById({ relay, eventId: "target" });
+    await waitForSubscription(prepareSubscription);
     handlers.onevent?.(roomEvent("someone-else"));
     handlers.onevent?.(roomEvent("target"));
     handlers.oneose?.();
@@ -69,9 +75,10 @@ describe("queryBuzzEventById", () => {
   });
 
   it("resolves null when the relay has no such event", async () => {
-    const { relay, handlers } = createRelay();
+    const { relay, handlers, prepareSubscription } = createRelay();
 
     const pending = queryBuzzEventById({ relay, eventId: "target" });
+    await waitForSubscription(prepareSubscription);
     handlers.oneose?.();
 
     await expect(pending).resolves.toBeNull();
@@ -79,10 +86,13 @@ describe("queryBuzzEventById", () => {
 
   it("closes only its own subscription when the relay never answers", async () => {
     vi.useFakeTimers();
-    const { relay, handlers, closeSubscription, closeRelay } = createRelay();
+    const { relay, handlers, prepareSubscription, closeSubscription, closeRelay } = createRelay();
 
     const pending = queryBuzzEventById({ relay, eventId: "target" });
     const rejection = expect(pending).rejects.toThrow("Timed out loading Buzz reply target target");
+    // Fake timers are active, so flush the lease microtasks instead of polling.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prepareSubscription).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     await rejection;
 

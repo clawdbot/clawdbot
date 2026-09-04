@@ -1,4 +1,5 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { acquireBuzzQueryLease } from "./query-lease.js";
 
 type BuzzRelaySubscriptionParams = Omit<Parameters<Relay["prepareSubscription"]>[1], "abort">;
 
@@ -17,13 +18,36 @@ type BuzzRelaySnapshotParams<TResult> = {
   onTimeout?: (error: Error) => void;
   closeRelayOnTimeout?: boolean;
   /**
-   * On timeout, close this subscription even before EOSE. For per-turn lookups
-   * that must not tear down the shared relay: by the time the timeout fires the
-   * REQ has long since been sent, so leaving the subscription open only leaks it
-   * and its `ongoingOperations` count.
+   * On timeout, close this subscription instead of recycling the whole relay.
+   * For per-turn lookups that must not tear down the connection every room
+   * shares. The close still waits for the REQ frame to leave the client, so it
+   * cannot overtake an asynchronously registered REQ.
    */
   closeSubscriptionOnTimeout?: boolean;
+  /**
+   * Whether to wait for a query slot when the relay's transient-query allowance
+   * is spent. Callers in front of an agent turn pass `false` and get
+   * `BuzzQueryLeaseUnavailableError` rather than added latency.
+   */
+  leaseWait?: boolean;
   checkAbortAfterSubscribe?: boolean;
+};
+
+/** Thrown when a no-wait caller finds the relay's query allowance spent. */
+export class BuzzQueryLeaseUnavailableError extends Error {
+  constructor() {
+    super("Buzz relay query capacity is fully in use");
+    this.name = "BuzzQueryLeaseUnavailableError";
+  }
+}
+
+export type BuzzRelaySubscriptionHandle = ReturnType<Relay["prepareSubscription"]> & {
+  /**
+   * Settles once the REQ frame has left the client. `close()` must not run
+   * before this, or the CLOSE can overtake an asynchronously registered REQ and
+   * leave the subscription orphaned server-side.
+   */
+  requestSent: Promise<void>;
 };
 
 export function openBuzzRelaySubscription(
@@ -31,7 +55,7 @@ export function openBuzzRelaySubscription(
   filters: Filter[],
   params: BuzzRelaySubscriptionParams,
   requestFilters: Filter[] = filters,
-): ReturnType<Relay["prepareSubscription"]> {
+): BuzzRelaySubscriptionHandle {
   // Relay.subscribe() synthesizes EOSE after 4.4 seconds. Buzz needs the relay's
   // real EOSE before replacing or closing subscriptions, otherwise an async REQ
   // can register after CLOSE and remain orphaned on the server.
@@ -54,30 +78,48 @@ export function openBuzzRelaySubscription(
   // Gateway owns reconnects; nostr-tools automatic refires must stay disabled
   // so fresh sessions keep these wire filters separate from client validation.
   const frame = JSON.stringify(["REQ", subscription.id, ...requestFilters]);
-  void relay.send(frame).catch((error: unknown) => {
+  const requestSent = relay.send(frame).catch((error: unknown) => {
     if (subscription.closed || relay.openSubs.get(subscription.id) !== subscription) {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
     subscription.close(`Buzz relay subscription request failed: ${message}`);
   });
-  return subscription;
+  // SAFETY: Object.assign returns that same subscription with requestSent added, which is the handle shape.
+  return Object.assign(subscription, { requestSent }) as BuzzRelaySubscriptionHandle;
 }
 
 export async function queryBuzzRelaySnapshot<TResult>(
+  params: BuzzRelaySnapshotParams<TResult>,
+): Promise<TResult> {
+  // One allowance for every transient query on this relay, so the room budget's
+  // reserve holds no matter which query types overlap.
+  const releaseLease = await acquireBuzzQueryLease(params.relay, { wait: params.leaseWait });
+  if (!releaseLease) {
+    throw new BuzzQueryLeaseUnavailableError();
+  }
+  try {
+    return await runBuzzRelaySnapshot(params);
+  } finally {
+    releaseLease();
+  }
+}
+
+async function runBuzzRelaySnapshot<TResult>(
   params: BuzzRelaySnapshotParams<TResult>,
 ): Promise<TResult> {
   return await new Promise<TResult>((resolve, reject) => {
     let settled = false;
     let receivedEose = false;
     let subscriptionClosed = false;
-    let subscription: ReturnType<Relay["prepareSubscription"]> | undefined;
+    let subscription: BuzzRelaySubscriptionHandle | undefined;
     const timeout = setTimeout(() => {
       const error = new Error(params.timeoutMessage);
       finish(error);
       params.onTimeout?.(error);
       if (params.closeSubscriptionOnTimeout) {
-        closeSubscription();
+        // Never CLOSE ahead of the REQ this subscription still owes the relay.
+        void subscription?.requestSent.then(closeSubscription, closeSubscription);
       }
       if (params.closeRelayOnTimeout !== false) {
         params.relay.close();

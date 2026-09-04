@@ -29,10 +29,7 @@ import { queryBuzzEventById } from "./reply-context.js";
 import { startBuzzRoomMembershipNotifications } from "./room-membership-notification.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
-import {
-  BUZZ_MAX_CONCURRENT_REPLY_TARGET_LOOKUPS,
-  resolveBuzzSubscriptionBudget,
-} from "./subscription-budget.js";
+import { resolveBuzzSubscriptionBudget } from "./subscription-budget.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
 const PRESENCE_KIND = 20_001;
@@ -273,7 +270,6 @@ export async function startBuzzBus(options: {
     lifecycleAbort.abort(error);
     options.onFatalError?.(error);
   };
-  let replyTargetLookupsInFlight = 0;
   const replayGuard = createChannelReplayGuard<Event>({
     dedupe: {
       pluginId: "buzz",
@@ -313,22 +309,12 @@ export async function startBuzzBus(options: {
     directory,
     refreshDirectory: async () => await directoryRelay?.refreshRooms(options.channelIds),
     fetchMessageById: async ({ eventId, signal: querySignal }) => {
-      // Bounded by the shared query reserve; a saturated relay degrades to a
-      // quote-less turn instead of opening a subscription the cap would refuse.
-      if (replyTargetLookupsInFlight >= BUZZ_MAX_CONCURRENT_REPLY_TARGET_LOOKUPS) {
-        return null;
-      }
-      replyTargetLookupsInFlight += 1;
-      try {
-        const event = await queryBuzzEventById({
-          relay,
-          eventId,
-          signal: querySignal ?? signal,
-        });
-        return event ? parseBuzzMessageEvent(event) : null;
-      } finally {
-        replyTargetLookupsInFlight -= 1;
-      }
+      const event = await queryBuzzEventById({
+        relay,
+        eventId,
+        signal: querySignal ?? signal,
+      });
+      return event ? parseBuzzMessageEvent(event) : null;
     },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
       signal.throwIfAborted();

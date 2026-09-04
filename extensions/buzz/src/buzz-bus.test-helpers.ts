@@ -10,6 +10,8 @@ export const relayMocks = {
   connected: true,
   stallProfileQueryEose: false,
   stallReplyTargetEose: false,
+  // The lease is keyed per relay instance, so tests need the live one.
+  lastRelay: undefined as unknown,
   stallRoomEoseChannelId: undefined as string | undefined,
   membershipEvents: [] as Event[],
   roomMetadataEvents: [] as Event[],
@@ -34,6 +36,9 @@ export function mockBuzzRelay() {
       onauth?: (template: unknown) => Promise<unknown>;
       idleSince: number | undefined;
       ongoingOperations = 0;
+      constructor() {
+        relayMocks.lastRelay = this;
+      }
       get connected() {
         return relayMocks.connected;
       }

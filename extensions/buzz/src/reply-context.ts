@@ -39,8 +39,10 @@ export async function queryBuzzEventById(params: {
     result: () => found,
     checkAbortAfterSubscribe: true,
     // This runs once per reply, on the relay every room shares. Drop the
-    // subscription on timeout, never the connection.
+    // subscription on timeout, never the connection, and never make the agent
+    // turn wait behind a background query.
     closeRelayOnTimeout: false,
     closeSubscriptionOnTimeout: true,
+    leaseWait: false,
   });
 }

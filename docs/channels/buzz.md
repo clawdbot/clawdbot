@@ -414,6 +414,11 @@ messages and the sender's own earlier messages are always shown. Set it on
 `channels.buzz.contextVisibility`, per account, or via
 `channels.defaults.contextVisibility`.
 
+Reply lookups share one small per-relay allowance with every other transient
+Buzz query (profiles, room metadata, membership, history paging). When that
+allowance is busy, a reply turn runs without its quote rather than waiting, so
+the agent still answers promptly.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:
