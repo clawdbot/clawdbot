@@ -1,6 +1,8 @@
 // Implements task-list commands that route through the current session agent.
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { listTaskFlowsForOwner } from "../../tasks/task-flow-owner-access.js";
+import { isTerminalTaskFlow, type TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   listTasksForAgentIdForStatus,
@@ -11,6 +13,7 @@ import {
   formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
+  sanitizeTaskStatusText,
 } from "../../tasks/task-status.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -35,11 +38,45 @@ const TASK_RUNTIME_LABELS: Record<TaskRecord["runtime"], string> = {
   cron: "Cron",
 };
 
-function formatTaskHeadline(snapshot: ReturnType<typeof buildTaskStatusSnapshot>): string {
+function formatTaskHeadline(
+  snapshot: ReturnType<typeof buildTaskStatusSnapshot>,
+  openTaskFlowCount: number,
+): string {
   if (snapshot.totalCount === 0) {
+    if (openTaskFlowCount > 0) {
+      return "No active or recent tasks.";
+    }
     return "All clear - nothing linked to this session right now.";
   }
   return `Current session: ${snapshot.activeCount} active · ${snapshot.totalCount} total`;
+}
+
+function formatVisibleTaskFlow(flow: TaskFlowRecord, index: number): string {
+  const goal = sanitizeTaskStatusText(flow.goal, { maxChars: 80 }) || "TaskFlow";
+  const status = sanitizeTaskStatusText(flow.status);
+  const currentStep = sanitizeTaskStatusText(flow.currentStep, { maxChars: 80 });
+  const details = [`status ${status}`, currentStep ? `current step ${currentStep}` : undefined]
+    .filter((detail): detail is string => detail !== undefined)
+    .join(" · ");
+  return `${index + 1}. ${goal}\n   ${details}`;
+}
+
+function appendOpenTaskFlows(lines: string[], taskFlows: TaskFlowRecord[]): void {
+  if (taskFlows.length === 0) {
+    return;
+  }
+  const visible = taskFlows.slice(0, MAX_VISIBLE_TASKS);
+  lines.push("", `Open TaskFlows: ${taskFlows.length}`);
+  for (const [index, flow] of visible.entries()) {
+    lines.push(formatVisibleTaskFlow(flow, index));
+    if (index < visible.length - 1) {
+      lines.push("");
+    }
+  }
+  const hiddenCount = taskFlows.length - visible.length;
+  if (hiddenCount > 0) {
+    lines.push("", `+${hiddenCount} more open TaskFlow${hiddenCount === 1 ? "" : "s"}`);
+  }
 }
 
 function formatAgentFallbackLine(agentId: string): string | undefined {
@@ -82,7 +119,10 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   const sessionSnapshot = buildTaskStatusSnapshot(
     listTasksForSessionKeyForStatus(params.sessionKey, params.agentId),
   );
-  const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot)];
+  const openTaskFlows = listTaskFlowsForOwner({ callerOwnerKey: params.sessionKey }).filter(
+    (flow) => !isTerminalTaskFlow(flow),
+  );
+  const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot, openTaskFlows.length)];
 
   if (sessionSnapshot.totalCount > 0) {
     const visible = sessionSnapshot.visible.slice(0, MAX_VISIBLE_TASKS);
@@ -97,13 +137,14 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
     if (hiddenCount > 0) {
       lines.push("", `+${hiddenCount} more recent task${hiddenCount === 1 ? "" : "s"}`);
     }
-    return lines.join("\n");
+  } else {
+    const agentFallback = formatAgentFallbackLine(params.agentId);
+    if (agentFallback) {
+      lines.push(agentFallback);
+    }
   }
 
-  const agentFallback = formatAgentFallbackLine(params.agentId);
-  if (agentFallback) {
-    lines.push(agentFallback);
-  }
+  appendOpenTaskFlows(lines, openTaskFlows);
   return lines.join("\n");
 }
 

@@ -6,7 +6,12 @@ import {
   createRunningTaskRunCore,
   failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createManagedTaskFlow } from "../../tasks/task-flow-registry.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
@@ -43,10 +48,20 @@ describe("handleTasksCommand task board", () => {
     vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({ flows: new Map() }),
+        saveSnapshot: () => {},
+        upsertFlow: () => {},
+        deleteFlow: () => {},
+      },
+    });
   });
 
   afterEach(() => {
     resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("lists active and recent tasks for the current session", async () => {
@@ -263,6 +278,47 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("All clear - nothing linked to this session right now.");
     expect(reply.text).not.toContain("stale completed task");
     expect(reply.text).not.toContain("done a while ago");
+  });
+
+  it("lists open owner-bound TaskFlows when no task run is visible", async () => {
+    createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "commands-tasks-test",
+      goal: "Wait for the approval step",
+      status: "waiting",
+      currentStep: "approval",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("No active or recent tasks.");
+    expect(reply.text).toContain("Open TaskFlows: 1");
+    expect(reply.text).toContain("Wait for the approval step");
+    expect(reply.text).toContain("status waiting · current step approval");
+    expect(reply.text).not.toContain("All clear - nothing linked to this session right now.");
+  });
+
+  it("keeps terminal and cross-owner TaskFlows out of the session board", async () => {
+    createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "commands-tasks-test",
+      goal: "Finished workflow",
+      status: "succeeded",
+      endedAt: Date.now(),
+    });
+    createManagedTaskFlow({
+      ownerKey: "agent:main:other",
+      controllerId: "commands-tasks-test",
+      goal: "Other session workflow",
+      status: "waiting",
+      currentStep: "hidden",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).not.toContain("Finished workflow");
+    expect(reply.text).not.toContain("Other session workflow");
   });
 
   it("falls back to agent-local counts when the current session has no visible tasks", async () => {
