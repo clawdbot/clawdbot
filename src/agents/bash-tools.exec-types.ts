@@ -84,6 +84,8 @@ export type ExecToolDefaults = {
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
+  /** Trusted approval's canonical target; replay must match it, with raw currentChannelId fallback. */
+  currentMessagingTarget?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */

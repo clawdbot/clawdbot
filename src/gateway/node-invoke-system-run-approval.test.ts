@@ -981,6 +981,38 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
+  test("rejects trusted backend Discord replay when the raw target does not match the canonical target", () => {
+    const discordContext = {
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(discordContext),
+      rawParams: { ...discordContext, turnSourceTo: "123" },
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("accepts trusted backend Discord replay when the canonical target matches", () => {
+    const discordContext = {
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(discordContext),
+      rawParams: discordContext,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
   test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", () => {
     const webchatContext = {
       sessionKey: "agent:main:main",

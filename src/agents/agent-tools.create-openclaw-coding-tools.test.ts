@@ -38,6 +38,7 @@ import {
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { createExecTool } from "./bash-tools.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -182,6 +183,19 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("resolves messageTo into the exec approval target when current targets are absent", async () => {
+    vi.mocked(createExecTool).mockClear();
+
+    const tools = createOpenClawCodingTools({ messageTo: "channel:123" });
+    await requireToolExecute(requireTool(tools, "exec"))("message-target", {
+      command: "echo ok",
+    });
+
+    expect(vi.mocked(createExecTool).mock.calls.at(-1)?.[0]).toMatchObject({
+      currentMessagingTarget: "channel:123",
+    });
+  });
+
   it("forwards the session web-search gate to core tool materialization", () => {
     vi.mocked(createOpenClawTools).mockClear();
     createOpenClawCodingTools({ webSearchEnabled: false });

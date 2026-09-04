@@ -525,6 +525,63 @@ describe("exec approvals", () => {
     expect(String(agent.idempotencyKey)).toContain(approvalId);
   });
 
+  it.each([
+    {
+      name: "canonical messaging target",
+      currentMessagingTarget: "channel:123",
+      expectedTurnSourceTo: "channel:123",
+    },
+    {
+      name: "raw channel fallback",
+      currentMessagingTarget: undefined,
+      expectedTurnSourceTo: "123",
+    },
+  ])("uses the $name for node approval registration and replay", async (testCase) => {
+    let systemRunInvoke: unknown;
+    mockAcceptedApprovalFlow({
+      onNodeInvoke: (params) => {
+        const invoke = requireRecord(params, "node invoke");
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          systemRunInvoke = params;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+        return undefined;
+      },
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      messageProvider: "discord",
+      currentChannelId: "123",
+      currentMessagingTarget: testCase.currentMessagingTarget,
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute(`call-node-${testCase.name}`, { command: "echo ok" });
+
+    expect(result.details.status).toBe("completed");
+    expectRecordFields(requireExecApprovalRequestCall().params, {
+      turnSourceChannel: "discord",
+      turnSourceTo: testCase.expectedTurnSourceTo,
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    });
+    const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
+    expectRecordFields(requireRecord(systemRun.params, "system.run params"), {
+      turnSourceChannel: "discord",
+      turnSourceTo: testCase.expectedTurnSourceTo,
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    });
+  });
+
   it("skips approval when node allowlist is satisfied", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
     const binDir = path.join(tempDir, "bin");
@@ -1162,6 +1219,7 @@ describe("exec approvals", () => {
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
       messageProvider: "discord",
       currentChannelId: "123",
+      currentMessagingTarget: "channel:123",
       accountId: "default",
       currentThreadTs: "456",
     });
@@ -1187,6 +1245,12 @@ describe("exec approvals", () => {
     expect(getResultText(result)).toContain("delayed-ok");
     expect(agentCalls).toHaveLength(0);
     expect(sendMessage).not.toHaveBeenCalled();
+    expectRecordFields(requireExecApprovalRequestCall().params, {
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    });
   });
 
   it.each([undefined, "webchat"])(
