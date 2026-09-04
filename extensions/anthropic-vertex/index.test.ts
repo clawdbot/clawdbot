@@ -269,34 +269,41 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
-  it("owns Anthropic-style replay policy", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+  it.each([
+    ["claude-sonnet-4-6", false],
+    ["claude-fable-5-1@20260801", true],
+    ["claude-mythos-5-1@20260801", false],
+  ])(
+    "owns Anthropic-style replay policy for Vertex %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "anthropic-vertex",
-        modelApi: "anthropic-messages",
-        modelId: "claude-sonnet-4-6",
-      } as never),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      appendOnlyRuntimeContext: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "anthropic-vertex",
-        modelApi: "anthropic-messages",
-        modelId: "claude-fable-5",
-      } as never),
-    ).not.toHaveProperty("dropThinkingBlocks");
-  });
+      expect(
+        provider.buildReplayPolicy?.({
+          provider: "anthropic-vertex",
+          modelApi: "anthropic-messages",
+          modelId,
+        }),
+      ).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: true,
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+      expect(
+        provider.buildReplayPolicy?.({
+          provider: "anthropic-vertex",
+          modelApi: "anthropic-messages",
+          modelId: "claude-fable-5",
+        } as never),
+      ).not.toHaveProperty("dropThinkingBlocks");
+    },
+  );
 
   it("owns Anthropic-style thinking policy", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);

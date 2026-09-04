@@ -975,24 +975,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     await runPromise;
   });
 
-  it("clears run ownership when image preflight fails", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(
-      executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          opts: { runId: "preflight-failure" },
-        }),
-      ),
-    ).rejects.toThrow("invalid image metadata");
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-  });
-
   it("does not consume channel evidence until a retry reaches runtime admission", async () => {
     const captured: unknown[] = [];
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);

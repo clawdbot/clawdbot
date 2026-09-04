@@ -40,6 +40,8 @@ proposed operation. Full Access applies it automatically without an approval
 prompt, including when Full Access comes from the configured default rather than
 an explicit session mode. Restricted runs still require human approval in the
 OpenClaw operator UI; conversational claims of approval never authorize the change.
+The requesting tool waits for the human decision and application outcome. Stopping
+the run cancels its pending approval; approving later cannot revive that run.
 
 Independent filesystem and sandbox boundaries, tool policy, and system-agent
 operation restrictions still apply. The host also checks that the requesting run
@@ -60,7 +62,7 @@ Active CLI-backed runs and runs whose entire agent executes on a worker (`worker
 
 ## Policy precedence and clamping
 
-Session-wide exec policy belongs to the permission mode. When the mode is unset, normal global or per-agent configuration applies. `/exec security=... ask=...` applies only to its message and can only tighten an explicit session mode; `host` and `node` remain session placement defaults. See [Exec session overrides](/tools/exec#session-overrides-exec).
+Session-wide exec policy belongs to the permission mode. When the mode is unset, normal global or per-agent configuration applies. `/exec security=... ask=...` applies only to its message and can only tighten an explicit session mode; `host` and `node` remain session placement defaults. See [Exec session overrides](</tools/exec#session-overrides-(%2Fexec)>).
 
 Before resuming sessions after upgrading a store with legacy session exec policy, run `openclaw doctor --fix`; the runtime no longer reads that policy. Missing policy values inherit the layered global and per-agent exec policy. When historical sandbox availability is unknown, migration uses the stricter sandbox base for automatic host selection. Restrictive policies migrate without broadening exec access to `read-only` or `guarded`. Existing permission modes remain unchanged. Legacy full-access policy is removed with a notice so configuration applies, never converted into a `full` permission grant.
 

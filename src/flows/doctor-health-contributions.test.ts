@@ -95,6 +95,7 @@ const mocks = vi.hoisted(() => ({
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchAgentOverrides: vi.fn(),
+  noteMacDisabledGatewayLaunchAgent: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
@@ -387,6 +388,7 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+  noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
   noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
@@ -2882,7 +2884,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
+  it("preserves the shipped legacy dependency selector as a non-destructive deprecation", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-legacy-plugin-deps-lint-",
@@ -2915,8 +2917,9 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/legacy-plugin-dependencies",
-            severity: "warning",
-            path: legacyRuntimeRoot,
+            severity: "info",
+            message:
+              "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
           }),
         ],
       });

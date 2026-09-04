@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 
 afterEach(() => {
@@ -89,20 +90,22 @@ describe("validateExplicitMessageAccountSelection", () => {
 });
 
 describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)", () => {
-  const scopedPlugin = {
-    id: "scopex",
-    config: {
-      listAccountIds: () => ["ops"],
-      resolveAccount: (_cfg: OpenClawConfig, accountId?: string | null) => ({
-        accountId,
-        enabled: true,
-      }),
-    },
+  const scopedPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({
+      id: "scopex",
+      config: {
+        listAccountIds: () => ["ops"],
+        resolveAccount: (_cfg: OpenClawConfig, accountId?: string | null) => ({
+          accountId,
+          enabled: true,
+        }),
+      },
+    }),
     outbound: {
       deliveryMode: "direct",
-      sendText: async () => ({ messageId: "scopex-message" }),
+      sendText: async () => ({ channel: "scopex", messageId: "scopex-message" }),
     },
-  } as unknown as ChannelPlugin;
+  };
   const unavailablePlugin: ChannelPlugin = {
     ...scopedPlugin,
     id: "scopex-unavailable",

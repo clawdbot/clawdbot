@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { bindActiveOperatorTurnAuthority } from "../agents/cron-creator-authority-context.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -19,7 +20,7 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -31,6 +32,7 @@ import {
   replaceTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
@@ -285,8 +287,8 @@ async function withGatewayChatHarness(
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    clearConfigCache();
     testState.sessionStorePath = undefined;
+    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -325,7 +327,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeMainSessionTranscript(
@@ -388,7 +390,7 @@ function openDirectChatSession() {
 function resetDirectChatSession() {
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
@@ -558,6 +560,7 @@ async function sendControlUiChat(params: {
   message: string;
   respond: RespondFn;
   onAdmissionOwned?: () => Promise<boolean>;
+  localClient?: boolean;
 }): Promise<void> {
   const requestParams = makeChatSendParams({
     message: params.message,
@@ -575,6 +578,7 @@ async function sendControlUiChat(params: {
     },
     params: requestParams,
     client: createControlUiClient(undefined, {
+      ...(params.localClient ? { internal: { isLocalClient: true } } : {}),
       ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
       ...(params.authenticatedUserProfile
         ? { authenticatedUserProfile: params.authenticatedUserProfile }
@@ -886,7 +890,6 @@ describe("gateway server chat", () => {
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -936,7 +939,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1121,7 +1123,6 @@ describe("gateway server chat", () => {
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1181,7 +1182,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1387,7 +1387,6 @@ describe("gateway server chat", () => {
       } finally {
         handler.dispose();
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1733,7 +1732,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -2024,7 +2022,6 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 
@@ -2069,7 +2066,6 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
-          clearConfigCache();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
@@ -2257,7 +2253,7 @@ describe("gateway server chat", () => {
               preparedAuthStore: requirePreparedAuthStore(agentId),
               ...(profileId ? { preferredProfileId: profileId } : {}),
               ...(profileId && (profileSource === "user" || legacyUserProfile)
-                ? { lockedProfileId: profileId }
+                ? { pinnedProfileId: profileId }
                 : {}),
             });
             const projection = Promise.all([
@@ -2497,7 +2493,6 @@ describe("gateway server chat", () => {
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
-          clearConfigCache();
         }
       },
     );
@@ -3740,7 +3735,6 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -4526,6 +4520,110 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send retries a transient post-admission projection failure under the same run", async () => {
+    const { storePath } = openDirectChatSession();
+    const runId = "idem-restart-safe-projection-retry";
+    try {
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const agentStarts = vi.fn();
+      let recoveredAuthority: ReturnType<typeof bindActiveOperatorTurnAuthority> = undefined;
+      dispatchInboundMessageMock
+        .mockRejectedValueOnce(new SessionTranscriptProjectionUnavailableError("sess-main"))
+        .mockImplementationOnce(async (params: unknown) => {
+          recoveredAuthority = bindActiveOperatorTurnAuthority(runId);
+          recoveredAuthority?.assertActive();
+          const options = (params as { replyOptions?: GetReplyOptions }).replyOptions;
+          options?.onAgentRunStart?.(runId);
+          agentStarts();
+          return {};
+        });
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        localClient: true,
+        message: "retry projection before starting the model",
+        respond: captureChatResult(responses),
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(agentStarts).toHaveBeenCalledOnce();
+      expect(recoveredAuthority).toMatchObject({ source: "local" });
+      expect(context.broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        expect.anything(),
+      );
+      expect(
+        dispatchInboundMessageMock.mock.calls.map(
+          ([params]) => (params as { replyOptions?: GetReplyOptions }).replyOptions?.runId,
+        ),
+      ).toEqual([runId, runId]);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: runId,
+      });
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send terminalizes a retryable projection failure only after bounded exhaustion", async () => {
+    const { storePath } = openDirectChatSession();
+    const runId = "idem-restart-safe-projection-exhaustion";
+    try {
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockRejectedValue(
+        new SessionTranscriptProjectionUnavailableError("sess-main"),
+      );
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "exhaust projection retries",
+        respond: captureChatResult(responses),
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      expect(context.broadcast).toHaveBeenCalledTimes(1);
+      expect(context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        status: "failed",
+      });
     } finally {
       resetDirectChatSession();
     }

@@ -123,9 +123,8 @@ function resolveSearchProviderSetupContributions(
           enabledByDefault: true,
         }).enabled,
     )
-    .map(
-      (entry): SearchProviderEntryWithInstall =>
-        Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
+    .map((entry): SearchProviderEntryWithInstall =>
+      Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
     );
   const providers = sortWebSearchProviders([...runtimeProviders, ...installCatalogProviders]);
   return sortFlowContributionsByLabel(

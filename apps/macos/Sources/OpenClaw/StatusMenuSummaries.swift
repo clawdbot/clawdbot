@@ -9,21 +9,71 @@ import QuartzCore
 final class StatusMenuSummaries: NSObject {
     static let shared = StatusMenuSummaries()
 
-    @ObservationIgnored private let nodes = NodesStore.shared
-    @ObservationIgnored private let cron = CronJobsStore.shared
-    private var cachedUsage: GatewayUsageSummary?
-    private var cachedCost: GatewayCostUsageSummary?
-    private var costError: String?
-    @ObservationIgnored private var usageUpdatedAt: Date?
-    @ObservationIgnored private var costUpdatedAt: Date?
-    @ObservationIgnored private var usageRetry: Task<Void, Never>?
-    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private let nodes: NodesStore
+    @ObservationIgnored private let cron: CronJobsStore
+    @ObservationIgnored private let control: ControlChannel
+    private struct UsageState {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var usage: GatewayUsageSummary?
+        var cost: GatewayCostUsageSummary?
+        var costError: String?
+        var usageUpdatedAt: Date?
+        var costUpdatedAt: Date?
+        var retryAttempts = 0
+        var pending = false
+    }
+
+    @MainActor
+    private final class Refresh {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var task: Task<Void, Never>?
+
+        init(revision: UInt64?) {
+            self.revision = revision
+        }
+    }
+
+    private var usageState: UsageState?
+    @ObservationIgnored private var refreshOperation: Refresh?
+    @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var updateHandler: (@MainActor () -> Void)?
     @ObservationIgnored private var copiedValues: [String: String] = [:]
-    @ObservationIgnored private var usageGeneration = 0
-    private var usageRetryAttempts = 0
-    private var usageRefreshPending = false
-    @ObservationIgnored private let usageRetryLimit = 3
+    private let usageRetryLimit = 3
+
+    /// AppKit projects the cache before starting network work. Keep its TTL only
+    /// for the selected logical Gateway, including reconnects to that same route.
+    private var currentUsageState: UsageState? {
+        guard let state = self.usageState,
+              state.revision == self.control.gateway.selectedEndpointRevision,
+              state.lease.map(self.control.gateway.serverLeaseMatchesCurrentRoute) != false
+        else { return nil }
+        return state
+    }
+
+    private var cachedUsage: GatewayUsageSummary? {
+        self.currentUsageState?.usage
+    }
+
+    private var cachedCost: GatewayCostUsageSummary? {
+        self.currentUsageState?.cost
+    }
+
+    private var costError: String? {
+        self.currentUsageState?.costError
+    }
+
+    private var usageRefreshPending: Bool {
+        self.currentUsageState?.pending == true
+    }
+
+    init(control: ControlChannel = .shared, nodes: NodesStore = .shared, cron: CronJobsStore = .shared) {
+        self.control = control
+        self.nodes = nodes
+        self.cron = cron
+        super.init()
+    }
 
     var hasUsage: Bool {
         !self.usageRows.isEmpty || self.cachedCost != nil || self.cachedUsage?.refreshing == true
@@ -31,7 +81,8 @@ final class StatusMenuSummaries: NSObject {
     }
 
     var isUsageStalled: Bool {
-        self.isConnected && self.cachedUsage?.refreshing == true && self.usageRetryAttempts >= self.usageRetryLimit
+        guard let state = self.currentUsageState else { return false }
+        return self.isConnected && state.usage?.refreshing == true && state.retryAttempts >= self.usageRetryLimit
     }
 
     var usageSummary: String? {
@@ -49,28 +100,47 @@ final class StatusMenuSummaries: NSObject {
         self.updateHandler = onUpdate
         self.nodes.start()
         self.cron.start(.statusMenu)
-        guard self.refreshTask == nil else { return }
-
-        self.refreshTask = Task { [weak self] in
-            guard let self, !Task.isCancelled else { return }
-            async let usage: Void = self.refreshUsage()
-            async let cost: Void = self.refreshCost()
-            _ = await (usage, cost)
-            guard !Task.isCancelled else { return }
-            self.refreshTask = nil
+        if self.eventTask == nil {
+            GatewayPushSubscription.restartTask(
+                task: &self.eventTask,
+                connection: self.control.gateway)
+            { [weak self] delivery in
+                self?.handle(delivery)
+            }
         }
+        if self.isConnected { self.beginRefresh() }
     }
 
     func menuDidClose() {
         self.updateHandler = nil
         self.nodes.stop()
         self.cron.stop(.statusMenu)
-        self.refreshTask?.cancel()
-        self.refreshTask = nil
-        self.usageRetry?.cancel()
-        self.usageRetry = nil
-        self.usageRetryAttempts = 0
-        self.usageGeneration += 1
+        SimpleTaskSupport.stop(task: &self.eventTask)
+        self.cancelRefresh()
+        self.usageState?.retryAttempts = 0
+    }
+
+    isolated deinit {
+        self.eventTask?.cancel()
+        self.refreshOperation?.task?.cancel()
+    }
+
+    private func handle(_ delivery: GatewayConnection.PushDelivery) {
+        // Discard retired data at the delivery boundary while keeping the cache
+        // across reconnects to the same logical Gateway.
+        if self.usageState != nil, self.currentUsageState == nil {
+            self.usageState = nil
+        }
+        guard let push = delivery.push else {
+            if self.refreshOperation?.lease == delivery.serverLease { self.cancelRefresh() }
+            return
+        }
+        guard case .snapshot = push else { return }
+        // Our own admission receives a hello before dispatching the reads.
+        if let refresh = self.refreshOperation, self.isCurrent(refresh),
+           refresh.lease == nil || refresh.lease == delivery.serverLease { return }
+        if self.currentUsageState?.lease == delivery.serverLease { return }
+        self.beginRefresh()
     }
 
     func configureAutomations(_ item: NSMenuItem) {
@@ -181,7 +251,7 @@ final class StatusMenuSummaries: NSObject {
             entries.append(.info(id: "devices.service.notice", title: notice))
         }
 
-        if case .connecting = ControlChannel.shared.state {
+        if case .connecting = self.control.state {
             entries.append(.info(id: "devices.connecting", title: String(localized: "Connecting…")))
         } else if self.isConnected {
             if let error = self.nodes.lastError?.nonEmpty {
@@ -258,83 +328,120 @@ final class StatusMenuSummaries: NSObject {
     }
 
     private var isConnected: Bool {
-        if case .connected = ControlChannel.shared.state { return true }
+        if case .connected = self.control.state { return true }
         return false
     }
 
-    private func refreshUsage() async {
-        guard !Task.isCancelled, self.isConnected,
-              self.usageUpdatedAt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true
-        else { return }
-
-        self.usageGeneration += 1
-        let generation = self.usageGeneration
-        self.usageRetry?.cancel()
-        self.usageRetry = nil
-        self.usageRetryAttempts = 0
-        self.usageRefreshPending = true
-        await self.loadUsage(generation: generation)
+    private func beginRefresh() {
+        if let refresh = self.refreshOperation, self.isCurrent(refresh) { return }
+        self.cancelRefresh()
+        var state = self.currentUsageState ?? UsageState(revision: self.control.gateway.selectedEndpointRevision)
+        let loadUsage = state.usageUpdatedAt.map { Date().timeIntervalSince($0) >= 30 } ?? true
+        let loadCost = state.costUpdatedAt.map { Date().timeIntervalSince($0) >= 45 } ?? true
+        guard loadUsage || loadCost else { return }
+        state.pending = loadUsage
+        state.retryAttempts = 0
+        self.usageState = state
+        let refresh = Refresh(revision: state.revision)
+        refresh.task = Task { [weak self] in
+            await self?.performRefresh(refresh, loadUsage: loadUsage, loadCost: loadCost)
+        }
+        self.refreshOperation = refresh
     }
 
-    private func loadUsage(generation: Int) async {
+    private func cancelRefresh() {
+        self.refreshOperation?.task?.cancel()
+        self.refreshOperation = nil
+        self.usageState?.pending = false
+    }
+
+    private func isCurrent(_ refresh: Refresh) -> Bool {
+        self.refreshOperation === refresh && refresh.task?.isCancelled != true &&
+            refresh.revision == self.control.gateway.selectedEndpointRevision &&
+            refresh.lease.map(self.control.gateway.serverLeaseMatchesCurrentState) != false
+    }
+
+    private func performRefresh(_ refresh: Refresh, loadUsage: Bool, loadCost: Bool) async {
+        defer {
+            if self.refreshOperation === refresh {
+                self.refreshOperation = nil
+                self.usageState?.pending = false
+            }
+        }
+        guard self.isCurrent(refresh) else { return }
         do {
-            let summary = try await UsageLoader.loadSummary()
-            guard generation == self.usageGeneration else { return }
-            self.cachedUsage = summary
-            if summary.refreshing == true {
-                self.usageUpdatedAt = nil
-                self.scheduleUsageRetry(generation: generation)
-            } else {
-                self.usageRefreshPending = false
-                self.usageUpdatedAt = Date()
-            }
+            let lease = try await self.control.acquireServerLease()
+            guard self.isCurrent(refresh), self.control.gateway.serverLeaseMatchesCurrentState(lease) else { return }
+            refresh.lease = lease
+            self.usageState?.lease = lease
+            async let usage: Void = self.loadUsage(refresh, enabled: loadUsage)
+            async let cost: Void = self.loadCost(refresh, enabled: loadCost)
+            _ = await (usage, cost)
         } catch {
-            guard generation == self.usageGeneration else { return }
-            if self.cachedUsage?.refreshing == true {
-                self.usageUpdatedAt = nil
-                self.scheduleUsageRetry(generation: generation)
-            } else {
-                self.cachedUsage = nil
-                self.usageRefreshPending = false
-                self.usageUpdatedAt = Date()
+            guard self.isCurrent(refresh), !(error is CancellationError) else { return }
+            if loadUsage {
+                self.usageState?.usage = nil
+                self.usageState?.usageUpdatedAt = Date()
             }
+            if loadCost { self.recordCostFailure(error) }
+            self.updateHandler?()
         }
-        self.updateHandler?()
     }
 
-    private func scheduleUsageRetry(generation: Int) {
-        guard self.usageRetryAttempts < self.usageRetryLimit else {
-            self.usageRefreshPending = false
-            return
-        }
-        self.usageRetryAttempts += 1
-        self.usageRetry = Task { [weak self] in
+    private func loadUsage(_ refresh: Refresh, enabled: Bool) async {
+        guard enabled, let lease = refresh.lease else { return }
+        while self.isCurrent(refresh) {
+            do {
+                let data = try await self.control.request(
+                    method: "usage.status", timeoutMs: 5000, ifCurrentServerLease: lease)
+                guard self.isCurrent(refresh) else { return }
+                self.usageState?.usage = try JSONDecoder().decode(GatewayUsageSummary.self, from: data)
+            } catch {
+                guard self.isCurrent(refresh) else { return }
+                if self.cachedUsage?.refreshing != true { self.usageState?.usage = nil }
+            }
+            guard self.cachedUsage?.refreshing == true else {
+                self.usageState?.pending = false
+                self.usageState?.usageUpdatedAt = Date()
+                self.updateHandler?()
+                return
+            }
+            self.usageState?.usageUpdatedAt = nil
+            guard (self.usageState?.retryAttempts ?? 0) < self.usageRetryLimit else {
+                self.usageState?.pending = false
+                self.updateHandler?()
+                return
+            }
+            self.usageState?.retryAttempts += 1
+            self.updateHandler?()
             try? await Task.sleep(for: .seconds(5))
-            guard let self, !Task.isCancelled, self.isConnected, generation == self.usageGeneration else { return }
-            await self.loadUsage(generation: generation)
+            guard self.isConnected else { return }
         }
     }
 
-    private func refreshCost() async {
-        guard !Task.isCancelled, self.isConnected,
-              self.costUpdatedAt.map({ Date().timeIntervalSince($0) >= 45 }) ?? true
-        else { return }
-
+    private func loadCost(_ refresh: Refresh, enabled: Bool) async {
+        guard enabled, self.isCurrent(refresh), let lease = refresh.lease else { return }
         do {
-            let summary = try await CostUsageLoader.loadSummary()
-            guard !Task.isCancelled else { return }
-            self.cachedCost = summary
-            self.costError = nil
+            let data = try await self.control.request(
+                method: "usage.cost", timeoutMs: 7000, ifCurrentServerLease: lease)
+            guard self.isCurrent(refresh) else { return }
+            self.usageState?.cost = try JSONDecoder().decode(GatewayCostUsageSummary.self, from: data)
+            self.usageState?.costError = nil
+            self.usageState?.costUpdatedAt = Date()
         } catch {
-            guard !Task.isCancelled else { return }
-            self.cachedCost = nil
-            let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.costError = message.isEmpty
-                ? String(localized: "Usage unavailable")
-                : (message.count > 90 ? "\(message.prefix(87))…" : message)
+            guard self.isCurrent(refresh) else { return }
+            self.recordCostFailure(error)
         }
-        self.costUpdatedAt = Date()
         self.updateHandler?()
+    }
+
+    private func recordCostFailure(_ error: Error) {
+        self.usageState?.cost = nil
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.usageState?.costError = message.isEmpty
+            ? String(localized: "Usage unavailable")
+            : (message.count > 90 ? "\(message.prefix(87))…" : message)
+        self.usageState?.costUpdatedAt = Date()
     }
 
     private static func relativeRun(_ date: Date) -> String {

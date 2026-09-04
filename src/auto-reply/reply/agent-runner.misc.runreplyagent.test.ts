@@ -12,6 +12,7 @@ import {
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -49,6 +50,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import type { FollowupRun } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -440,6 +442,56 @@ afterEach(() => {
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+});
+
+describe("runReplyAgent pending operator input", () => {
+  it("refuses an unbound question without falling through to active-run queueing", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "answered" }));
+    const reservation = registerPendingAgentQuestion({
+      questionId: "ask_direct_cli_answer",
+      sessionKey: "main",
+      questions: [
+        {
+          id: "color",
+          header: "Color",
+          question: "Which color?",
+          options: [{ label: "Blue" }, { label: "Green" }],
+        },
+      ],
+      gatewayCall,
+      answer: Promise.resolve({ status: "pending" }),
+    });
+    reservation.attachRegistration(Promise.resolve({ id: "ask_direct_cli_answer" }));
+    const replyOperationRunState = {};
+    const testRun = createBaseRun({
+      context: { agentText: "Green" },
+      followup: { transcriptPrompt: "Green" },
+      reply: {
+        commandBody: "Green",
+        transcriptCommandBody: "Green",
+        sessionKey: "main",
+        isActive: true,
+        shouldSteer: true,
+        opts: { [REPLY_OPERATION_RUN_STATE]: replyOperationRunState },
+      },
+    });
+
+    try {
+      await expect(testRun.run()).resolves.toEqual({
+        text: expect.stringContaining("pending question has no prepared creator authority"),
+        isError: true,
+      });
+      expect(gatewayCall).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
+      expect(replyOperationRunState).toEqual({
+        admission: { status: "skipped", reason: "question-response-refused" },
+      });
+    } finally {
+      reservation.dispose();
+    }
+  });
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
@@ -1887,20 +1939,6 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
-        executionTrace: {
-          winnerProvider: "claude-cli",
-          winnerModel: "opus-4.5",
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "opus-4.5",
-              result: "error",
-              reason: "before_agent_run blocked the run",
-            },
-          ],
-          fallbackUsed: false,
-          runner: "cli",
-        },
       },
     });
 
@@ -1928,6 +1966,20 @@ describe("runReplyAgent claude-cli routing", () => {
         agentMeta: {
           provider: "claude-cli",
           model: "opus-4.5",
+        },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
         },
       },
     });
@@ -1972,7 +2024,10 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
-    expect(texts).toContain("fallbackUsed=no");
+    expect(texts).toContain("Summary: fallback=no attempts=1");
+    expect(texts).not.toContain("winner=");
+    expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
+    expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
 

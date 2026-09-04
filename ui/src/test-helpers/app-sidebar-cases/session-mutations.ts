@@ -20,6 +20,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
 describe("AppSidebar session mutation feedback", () => {
@@ -33,7 +34,10 @@ describe("AppSidebar session mutation feedback", () => {
     restoreDialogPolyfill();
   });
 
-  async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
+  async function mountMutationHarness(
+    client: GatewayBrowserClient = {} as GatewayBrowserClient,
+    directory = sessionOwnerProfiles(),
+  ) {
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:a",
@@ -46,6 +50,9 @@ describe("AppSidebar session mutation feedback", () => {
       ...args: Parameters<GatewayBrowserClient["request"]>
     ): Promise<T> => {
       const [method, params] = args;
+      if (method === "users.list") {
+        return Promise.resolve(directory as T);
+      }
       if (method === "sessions.patchMany") {
         const request = params as {
           targets: Array<{ key: string; agentId?: string }>;
@@ -175,9 +182,10 @@ describe("AppSidebar session mutation feedback", () => {
         },
       };
     });
-    const { gateway, harness, sidebar } = await mountMutationHarness({
-      request,
-    } as unknown as GatewayBrowserClient);
+    const { gateway, harness, sidebar } = await mountMutationHarness(
+      { request } as unknown as GatewayBrowserClient,
+      sessionOwnerProfiles("Ada", "Bob"),
+    );
     gateway.publish({
       selfUser: { id: "profile-ada", name: "Ada" },
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
@@ -197,6 +205,7 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
+    await waitForFast(() => expect(menu.textContent).toContain("Bob"));
     expect(
       Array.from(menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"))
         .map((item) => item.querySelector(".session-menu__text")?.textContent?.trim())

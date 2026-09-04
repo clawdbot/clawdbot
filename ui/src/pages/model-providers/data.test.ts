@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../api/types.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -167,6 +171,83 @@ describe("buildModelProviderCards", () => {
       modelCount: 0,
       availableModelCount: 0,
     });
+  });
+
+  it.each<{
+    name: string;
+    outcomes: ModelCatalogProviderOutcome[];
+    expected: ModelCatalogProviderOutcome["status"];
+  }>([
+    {
+      name: "keeps a ready profile above a rejected sibling",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "keeps a ready profile above an unavailable sibling",
+      outcomes: [
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports rejection when no profile is ready",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped rejection above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped unavailable result above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "keeps unscoped readiness above a rejected profile",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports the worst unscoped diagnostic",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", status: "unavailable" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "combines profile outcomes across canonical provider aliases",
+      outcomes: [
+        { provider: "anthropic", profileId: "ready", status: "ready" },
+        { provider: "claude-cli", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+  ])("$name in either input order", ({ outcomes, expected }) => {
+    for (const ordered of [outcomes, outcomes.toReversed()]) {
+      const cards = buildModelProviderCards({ ...EMPTY_INPUT, providerOutcomes: ordered });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards).catalogStatus).toBe(expected);
+    }
   });
 
   it("propagates explicit API-key capability onto provider cards", () => {

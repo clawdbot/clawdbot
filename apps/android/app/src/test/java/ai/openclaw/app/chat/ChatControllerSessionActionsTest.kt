@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -15,20 +16,25 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionActionsTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun controller(
+  private suspend fun controller(
     scope: kotlinx.coroutines.CoroutineScope,
     gateway: ScriptedGateway,
   ): ChatController =
     ChatController(
       scope = scope,
+      commandOutbox = scope.createChatCommandOutbox(),
+      cacheScope = { ChatCacheScope("gateway-test", 1L) },
       json = json,
       requestGateway = gateway::request,
-    )
+    ).also { it.outboxPresentationRestored.first { restored -> restored } }
 
   private fun ScriptedGateway.respondWithBranchHistory() {
     respondWith(
@@ -56,6 +62,7 @@ class ChatControllerSessionActionsTest {
     val controller =
       ChatController(
         scope = scope,
+        commandOutbox = scope.createChatCommandOutbox(),
         json = json,
         requestGateway = gateway::request,
         requestGatewayForGateway = { gatewayId, method, params ->

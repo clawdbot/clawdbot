@@ -2,9 +2,13 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import "../../styles/chat/message-layout.css";
@@ -25,13 +29,72 @@ import {
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import {
-  NewSessionComposerTextareaController,
-  renderDraftError,
-  renderNewSessionComposer,
-} from "./composer.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
+import { NewSessionComposerTextareaController, renderNewSessionComposer } from "./composer.ts";
+import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
+
+function renderDraftError(message: string, action?: { label: string; onClick: () => void }) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message"
+        >${formatUiError(message)}</span
+      >
+      ${
+        action
+          ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
+              ${action.label}
+            </button>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+export function renderNewSessionDraftErrors(
+  place: Pick<DraftPlaceState, "worktree" | "worktreeName">,
+  submission: Pick<
+    DraftSubmissionFlow,
+    | "submissionOutcomeUnknown"
+    | "pendingPlacement"
+    | "clearPendingPlacementRecovery"
+    | "capabilities"
+  >,
+  isCatalogTarget: boolean,
+) {
+  const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
+  const capabilities = submission.capabilities;
+  return html`
+    ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+    ${
+      isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing
+    }
+    ${
+      submission.submissionOutcomeUnknown
+        ? renderDraftError(
+            t(
+              submission.submissionOutcomeUnknown === "gateway-changed"
+                ? "newSession.createOutcomeUnknown"
+                : "newSession.placementSetupInterrupted",
+            ),
+            submission.pendingPlacement.sessionKey
+              ? {
+                  label: t("common.reset"),
+                  onClick: () => submission.clearPendingPlacementRecovery(),
+                }
+              : undefined,
+          )
+        : nothing
+    }
+  `;
+}
 
 export function renderNewSessionBody(options: {
   error: string | null;
@@ -54,9 +117,11 @@ export function renderNewSessionBody(options: {
       @mousedown=${beginNativeWindowDragFromTopInset}
     >
       ${options.error ? renderDraftError(options.error) : nothing}
-      ${pendingMessage
-        ? renderNewSessionSubmission(pendingMessage, options.onOpenImage)
-        : options.renderDraft()}
+      ${
+        pendingMessage
+          ? renderNewSessionSubmission(pendingMessage, options.onOpenImage)
+          : options.renderDraft()
+      }
     </div>
   `;
 }
@@ -88,16 +153,18 @@ function renderNewSessionSubmission(
         >
           ${renderMessageImages(images, imageOptions)}
           ${renderAssistantAttachments(attachments, imageOptions, undefined, undefined, false)}
-          ${json
-            ? renderMessageJson(json)
-            : markdown
-              ? renderMessageMarkdown(
-                  markdown,
-                  key,
-                  { role: "user", isStreaming: false },
-                  { codeBlockChrome: "none" },
-                )
-              : nothing}
+          ${
+            json
+              ? renderMessageJson(json)
+              : markdown
+                ? renderMessageMarkdown(
+                    markdown,
+                    key,
+                    { role: "user", isStreaming: false },
+                    { codeBlockChrome: "none" },
+                  )
+                : nothing
+          }
         </div>
       </div>
     </div>
@@ -121,6 +188,8 @@ export function renderNewSessionDraftComposer(options: {
   draftOwnerKey: string;
   isCatalogTarget: boolean;
   message: string;
+  mentions?: readonly HumanMention[];
+  getMentions?: () => readonly HumanMention[];
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
   capabilityMenu?: CapabilityMenuProps;
@@ -140,7 +209,7 @@ export function renderNewSessionDraftComposer(options: {
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
   messageLocked?: boolean;
-  onInput: (message: string) => void;
+  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
@@ -150,6 +219,29 @@ export function renderNewSessionDraftComposer(options: {
   const commandClient = options.nativeTerminal
     ? null
     : (options.context?.gateway.snapshot.client ?? null);
+  const gateway = options.context?.gateway;
+  const profile = gateway?.snapshot.selfUser?.identity;
+  const mentionDirectory =
+    commandClient &&
+    gateway?.snapshot.phase === "connected" &&
+    profile?.type === "profile" &&
+    hasOperatorWriteAccess(gateway.snapshot.hello?.auth ?? null) &&
+    !options.isCatalogTarget &&
+    options.visibility !== "incognito"
+      ? {
+          client: commandClient,
+          ownerKey: JSON.stringify([
+            gateway.connectionRevision,
+            commandClient.recoveryScope,
+            profile.id,
+            options.draftOwnerKey,
+          ]),
+          params: {
+            agentId: options.agentId,
+            ...(options.visibility === "draft" ? { visibility: "draft" as const } : {}),
+          },
+        }
+      : undefined;
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
@@ -161,6 +253,9 @@ export function renderNewSessionDraftComposer(options: {
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
+    mentions: options.mentions,
+    getMentions: options.getMentions,
+    mentionDirectory,
     visibility: options.visibility,
     draftAvailable: options.draftAvailable,
     capabilityMenu: options.capabilityMenu,

@@ -218,10 +218,10 @@ Suggested `.gitignore` starter:
     Clone the repo to the desired path (default `~/.openclaw/workspace`).
   </Step>
   <Step title="Update config">
-    Set `agents.defaults.workspace` to that path in `~/.openclaw/openclaw.json`.
+    Set `agents.entries.<agentId>.workspace` to the cloned path in `~/.openclaw/openclaw.json` for the agent that should use it. A sole agent without a per-agent override can use `agents.defaults.workspace` instead; in a multi-agent roster, that setting only changes the base directory for unpinned entries.
   </Step>
-  <Step title="Seed missing files">
-    Run `openclaw setup --workspace <path>` to seed any missing files.
+  <Step title="Verify the workspace">
+    Run `openclaw agents list` and confirm that the intended agent points to the cloned path before starting the Gateway. Moving an existing workspace does not require rerunning onboarding.
   </Step>
   <Step title="Copy sessions (optional)">
     If you need sessions, copy `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`

@@ -414,23 +414,19 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.port",
     "gateway.bind",
     "gateway.tls.enabled",
-    "gateway.terminal.enabled",
     "gateway.controlUi.enabled",
     "gateway.controlUi.basePath",
     "gateway.controlUi.root",
-    "gateway.controlUi.allowedOrigins",
-    "gateway.http.securityHeaders.strictTransportSecurity",
-    "gateway.nodes.commands.allow",
-    "gateway.nodes.pairing.autoApproveLocal",
-    "gateway.nodes.pairing.autoApproveCidrs",
-    "gateway.nodes.pairing.sshVerify",
-    "gateway.nodes.pluginTools.enabled",
-    "gateway.nodes.allowSkills",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
+    "browser.evaluateEnabled",
+    "browser.ssrfPolicy.allowedHostnames",
+    "browser.extensionRelay.enabled",
+    "browser.tabCleanup.enabled",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "discovery.wideArea.domain",
     "secrets.egressProxy.enabled",
     "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
@@ -443,6 +439,18 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    "gateway.auth.rateLimit.maxAttempts",
+    "gateway.auth.rateLimit.windowMs",
+    "gateway.auth.rateLimit.lockoutMs",
+    "gateway.auth.rateLimit.exemptLoopback",
+    "discovery.mdns.mode",
+    "gateway.http.securityHeaders.strictTransportSecurity",
+    "gateway.nodes.pairing.autoApproveLocal",
+    "gateway.nodes.pairing.autoApproveCidrs",
+    "gateway.nodes.pairing.sshVerify",
+    "gateway.terminal.enabled",
+    "gateway.terminal.shell",
+    "gateway.terminal.detachedSessionTimeoutSeconds",
     "gateway.http.endpoints.chatCompletions.enabled",
     "gateway.http.endpoints.responses.enabled",
     "gateway.http.endpoints.responses.files.maxBytes",
@@ -450,12 +458,19 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.tools.deny",
     "gateway.cliAgents.enabled",
     "gateway.controlUi.environment.label",
+    "gateway.controlUi.communityInvite",
     "gateway.controlUi.github.token",
     "gateway.controlUi.toolTitles",
     "gateway.controlUi.sessionObserver",
     "gateway.controlUi.embedSandbox",
     "gateway.controlUi.allowExternalEmbedUrls",
     "gateway.controlUi.automaticallyFetchFavicons",
+    "gateway.controlUi.allowedOrigins",
+    "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
+    "gateway.nodes.commands.allow",
+    "gateway.nodes.commands.deny",
+    "gateway.nodes.pluginTools.enabled",
+    "gateway.nodes.allowSkills",
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
@@ -486,8 +501,11 @@ describe("buildGatewayReloadPlan", () => {
           tools: { deny: ["sessions_list"] },
           http: { endpoints: { responses: { enabled: true } } },
           controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
-          nodes: { browser: { mode: "off" } },
+          nodes: { browser: { mode: "off" }, pairing: { autoApproveLocal: false } },
+          terminal: { enabled: false, shell: "/bin/sh" },
+          auth: { rateLimit: { maxAttempts: 5 } },
         },
+        discovery: { mdns: { mode: "off" } },
       },
       restartReasons: [],
     },
@@ -504,12 +522,7 @@ describe("buildGatewayReloadPlan", () => {
           nodes: { pairing: { sshVerify: false } },
         },
       },
-      restartReasons: [
-        "gateway.port",
-        "gateway.http.securityHeaders",
-        "gateway.controlUi.basePath",
-        "gateway.nodes.pairing",
-      ],
+      restartReasons: ["gateway.port", "gateway.controlUi.basePath"],
     },
   ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
     "preserves $name when adding or removing Gateway config",
@@ -544,23 +557,23 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "models.providers.openai.models",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.models",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.heartbeat.every",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.modelPolicy.allow",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.entries",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "plugins.entries.lossless-claw.config.mode",
@@ -588,7 +601,7 @@ describe("buildGatewayReloadPlan", () => {
       restartGateway: false,
       hotReasons: [path],
       noopPaths: [],
-      reconcileSkillReviewJobs: true,
+      reconcileSystemJobs: true,
     });
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
@@ -705,37 +718,72 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it.each([
-    [{}, { agents: { defaults: { mediaMaxMb: 4 } } }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, {}],
-    [{ agents: {} }, { agents: { defaults: { mediaMaxMb: 4 } } }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
-    [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
-  ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
+  const sharedChannelSettings = [
+    {
+      path: "agents.defaults.mediaMaxMb",
+      before: { agents: { defaults: { mediaMaxMb: 4 } } },
+      after: { agents: { defaults: { mediaMaxMb: 1 } } },
+      empty: { agents: {} },
+    },
+    {
+      path: "channels.defaults",
+      before: { channels: { defaults: { groupPolicy: "allowlist" } } },
+      after: { channels: { defaults: { groupPolicy: "open" } } },
+      empty: { channels: {} },
+    },
+    {
+      path: "channels.modelByChannel",
+      before: { channels: { modelByChannel: { telegram: { "123": "openai/before" } } } },
+      after: { channels: { modelByChannel: { telegram: { "123": "openai/after" } } } },
+      empty: { channels: {} },
+    },
+  ] satisfies Array<{
+    path: string;
+    before: OpenClawConfig;
+    after: OpenClawConfig;
+    empty: OpenClawConfig;
+  }>;
+
+  it.each(
+    sharedChannelSettings.flatMap(({ path, before, after, empty }) =>
+      (
+        [
+          [{}, before],
+          [before, {}],
+          [empty, before],
+          [before, empty],
+          [before, after],
+        ] as const
+      ).map(([prev, next]) => ({ path, prev, next })),
+    ),
+  )("refreshes every loaded channel for $path: $prev → $next", ({ path, prev, next }) => {
     const paths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
-    expect(paths).toContain("agents.defaults.mediaMaxMb");
+    expect(paths.some((changed) => changed === path || changed.startsWith(`${path}.`))).toBe(true);
     const plan = buildGatewayReloadPlan(paths);
     expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
     expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
-  it("global media refresh subsumes scoped restarts without affecting other agent settings", () => {
-    const plan = buildGatewayReloadPlan([
-      "channels.mattermost.accounts.alpha.enabled",
-      "agents.defaults.mediaMaxMb",
-    ]);
+  it.each(sharedChannelSettings)("$path refresh subsumes scoped restarts", ({ path }) => {
+    const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.alpha.enabled", path]);
     expect(plan.restartChannels).toEqual(new Set(["telegram", "whatsapp", "mattermost"]));
     expect(plan.restartChannelAccounts).toEqual(new Map());
     expect(buildGatewayReloadPlan(["agents.defaults.model"]).restartChannels).toEqual(new Set());
   });
 
-  it.each([
-    { registration: { restartPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "restart" },
-    { registration: { hotPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "hot" },
-    { registration: { noopPrefixes: ["agents.defaults.mediaMaxMb"] }, kind: "none" },
-  ])("preserves an explicit plugin media reload policy: $kind", ({ registration, kind }) => {
-    const path = "agents.defaults.mediaMaxMb";
+  it.each(
+    [
+      ...sharedChannelSettings.map(({ path }) => path),
+      "channels.defaults.groupPolicy",
+      "channels.modelByChannel.telegram",
+    ].flatMap((path) => [
+      { path, registration: { restartPrefixes: [path] }, kind: "restart" },
+      { path, registration: { hotPrefixes: [path] }, kind: "hot" },
+      { path, registration: { noopPrefixes: [path] }, kind: "none" },
+    ]),
+  )("preserves explicit plugin $kind policy for $path", ({ path, registration, kind }) => {
     setActivePluginRegistry({
       ...registry,
       reloads: [
@@ -749,19 +797,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set());
   });
 
-  it.each([
-    {
-      reload: { configPrefixes: ["agents.defaults.mediaMaxMb"] },
-      kind: "hot",
-      channels: ["telegram"],
-    },
-    {
-      reload: { configPrefixes: [], noopPrefixes: ["agents.defaults.mediaMaxMb"] },
-      kind: "none",
-      channels: [],
-    },
-  ])("preserves an explicit channel media reload policy: $kind", ({ reload, kind, channels }) => {
-    const path = "agents.defaults.mediaMaxMb";
+  it.each(
+    sharedChannelSettings.flatMap(({ path }) => [
+      { path, reload: { configPrefixes: [path] }, kind: "hot", channels: ["telegram"] },
+      { path, reload: { configPrefixes: [], noopPrefixes: [path] }, kind: "none", channels: [] },
+    ]),
+  )("preserves explicit channel $kind policy for $path", ({ path, reload, kind, channels }) => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: { ...telegramPlugin, reload }, source: "test" },
@@ -883,29 +924,34 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([path]);
   });
 
-  it("refreshes channel rules when the tracked channel registry changes", () => {
-    const channelOnlyRegistry = createTestRegistry([
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-    ]);
+  it.each(sharedChannelSettings)(
+    "refreshes $path fanout when the channel registry changes",
+    ({ path }) => {
+      const channelOnlyRegistry = createTestRegistry([
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]);
 
-    setActivePluginRegistry(emptyRegistry);
-    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
-      new Set(),
-    );
-    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
-      restartGateway: true,
-      restartChannels: new Set(),
-    });
+      setActivePluginRegistry(emptyRegistry);
+      expect(buildGatewayReloadPlan([path])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(),
+      });
+      expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+        restartGateway: true,
+        restartChannels: new Set(),
+      });
 
-    setActivePluginRegistry(channelOnlyRegistry);
-    expect(buildGatewayReloadPlan(["agents.defaults.mediaMaxMb"]).restartChannels).toEqual(
-      new Set(["telegram"]),
-    );
-    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
-      restartGateway: false,
-      restartChannels: new Set(["telegram"]),
-    });
-  });
+      setActivePluginRegistry(channelOnlyRegistry);
+      expect(buildGatewayReloadPlan([path])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(["telegram"]),
+      });
+      expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+        restartGateway: false,
+        restartChannels: new Set(["telegram"]),
+      });
+    },
+  );
 
   it("reloads loaded channel plugins when plugin entry state changes", () => {
     const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
@@ -3364,28 +3410,39 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("notifies lifecycle owners before queuing a terminal disable restart", async () => {
-    const initialConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: true } },
-    };
-    const nextConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: false } },
-    };
-    const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "terminal" }));
-    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+  it.each([false, true])(
+    "hot-applies terminal enabled=%s through lifecycle commit",
+    async (enabled) => {
+      const initialConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled: !enabled } },
+      };
+      const nextConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled } },
+      };
+      const readSnapshot = vi.fn(async () =>
+        makeSnapshot({ config: nextConfig, hash: "terminal" }),
+      );
+      const harness = createReloaderHarness(readSnapshot, { initialConfig });
 
-    await flushWatcherChange(harness);
-    await Promise.resolve();
+      await flushWatcherChange(harness);
+      await Promise.resolve();
 
-    expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
-    expect(harness.onConfigApplied).not.toHaveBeenCalled();
-    expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
-    expect(harness.onRestart).toHaveBeenCalledTimes(1);
-    expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.onRestart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    await harness.reloader.stop();
-  });
+      expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(harness.onConfigApplied).toHaveBeenCalledOnce();
+      expect(harness.onConfigRevisionApplied).toHaveBeenCalledWith(
+        hashRuntimeConfigValue(nextConfig),
+      );
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.onHotReload.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(harness.onHotReload.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      await harness.reloader.stop();
+    },
+  );
 
   it("keeps restart preparation inside the accepted config root", async () => {
     let releaseRestart = () => {};
@@ -3397,10 +3454,10 @@ describe("startGatewayConfigReloader", () => {
       releaseRestart = resolve;
     });
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: true } },
+      gateway: { reload: {}, port: 18789 },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: {}, terminal: { enabled: false } },
+      gateway: { reload: {}, port: 18790 },
     };
     const harness = createReloaderHarness(
       async () => makeSnapshot({ config: nextConfig, hash: "restart-root" }),
@@ -3444,10 +3501,10 @@ describe("startGatewayConfigReloader", () => {
 
   it("notifies lifecycle owners when hybrid mode applies a restart-only change", async () => {
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: true } },
+      gateway: { reload: { mode: "hybrid" }, port: 18789 },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: false } },
+      gateway: { reload: { mode: "hybrid" }, port: 18790 },
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "hot" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });

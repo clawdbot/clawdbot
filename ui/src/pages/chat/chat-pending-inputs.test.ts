@@ -91,7 +91,7 @@ function makeChatPageHost({
   const host = createPageState(
     context,
     { invalidate: vi.fn(), afterCommit: () => () => {} },
-    { querySelector: () => null },
+    { dispatchEvent: () => true, querySelector: () => null },
   );
   Object.assign(host, { client, hello, connected: true }, overrides);
   return Object.assign(host, { request });

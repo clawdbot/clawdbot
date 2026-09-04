@@ -1,6 +1,7 @@
 // Discord tests cover speaker context plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 function createClient(fetchMember: ReturnType<typeof vi.fn>): Client {
@@ -13,6 +14,34 @@ function createClient(fetchMember: ReturnType<typeof vi.fn>): Client {
 describe("DiscordVoiceSpeakerContextResolver", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each([
+    { owner: "123456789012345678", senderIsOwner: true },
+    { owner: "discord:123456789012345678", senderIsOwner: true },
+    { owner: "user:123456789012345678", senderIsOwner: true },
+    { owner: "pk:123456789012345678", senderIsOwner: true },
+    { owner: "<@123456789012345678>", senderIsOwner: true },
+    { owner: "<@!123456789012345678>", senderIsOwner: true },
+    { owner: "discord:user:123456789012345678", senderIsOwner: false },
+    { owner: "slack:123456789012345678", senderIsOwner: false },
+    { owner: "discord:*", senderIsOwner: false },
+    { owner: "user:*", senderIsOwner: false },
+    { owner: "pk:*", senderIsOwner: false },
+  ])("preserves owner target authority for voice: $owner", async ({ owner, senderIsOwner }) => {
+    const id = "123456789012345678";
+    const fetchMember = vi.fn().mockResolvedValue({ user: { id, username: "ada" } });
+    const access = resolveDiscordVoiceAccess({
+      cfg: { commands: { ownerAllowFrom: [owner] } },
+      discordConfig: {},
+      accountId: "default",
+    });
+    const resolver = new DiscordVoiceSpeakerContextResolver({
+      client: createClient(fetchMember),
+      ownerAllowFrom: access.ownerAllowFrom,
+    });
+
+    await expect(resolver.resolveContext("g1", id)).resolves.toMatchObject({ senderIsOwner });
   });
 
   it("reuses cached speaker context for repeated speaker lookups", async () => {

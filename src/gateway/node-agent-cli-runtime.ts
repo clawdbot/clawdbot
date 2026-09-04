@@ -11,6 +11,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-comman
 import type { NodeInvokeResult } from "./node-registry.js";
 
 export async function invokeNodeClaudeCliRun(params: {
+  assertCurrent?: () => void;
   nodeId: string;
   argv: string[];
   stdin: string;
@@ -89,6 +90,10 @@ export async function invokeNodeClaudeCliRun(params: {
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
+    isDispatchAuthorized: () => {
+      params.assertCurrent?.();
+      return true;
+    },
   };
   return params.skillRuntime
     ? await invokeNodeClaudeSkillRuntime({

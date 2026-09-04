@@ -166,8 +166,8 @@
    full-size controls that require top alignment. */
 @media not all and (max-width: 640px) {
   .settings-section__header:not(:has(.settings-section__desc)):has(
-    .settings-section__actions .btn--xs.btn--icon
-  ) {
+      .settings-section__actions .btn--xs.btn--icon
+    ) {
     align-items: center;
   }
 }
@@ -330,7 +330,7 @@
   flex-direction: column;
   gap: 0;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 
 .settings-row__title {

@@ -98,7 +98,9 @@ export function runPluginRegisterSyncInRegistry(
   registry: PluginRegistry,
   pluginId: string,
 ): void {
-  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api));
+  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api), {
+    registerMemoryCapability: api.registerMemoryCapability,
+  });
 }
 
 export function createPluginModuleLoader(options: {

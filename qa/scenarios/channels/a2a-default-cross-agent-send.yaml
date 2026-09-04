@@ -1,0 +1,123 @@
+title: A2A default cross-agent send
+
+scenario:
+  id: a2a-default-cross-agent-send
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.tool-safety-controls
+  objective: Verify default session visibility and agent-to-agent policy dispatch a real sessions_send to another configured agent and create its main session.
+  gatewayConfigPatch:
+    agents:
+      entries:
+        qa:
+          default: true
+        orion:
+          tools:
+            profile: coding
+  successCriteria:
+    - The source plans sessions_send to agent:orion:main with timeoutSeconds=0.
+    - The exact tool call returns status accepted without a forbidden result.
+    - Orion receives the target prompt in its own model run and sessions.list contains its main session.
+  docsRefs:
+    - docs/gateway/config-tools.md
+    - docs/concepts/session-tool.md
+  codeRefs:
+    - src/plugin-sdk/session-visibility.ts
+    - src/plugin-sdk/session-visibility-internal.ts
+    - src/agents/tools/sessions-send-tool.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    channel: qa-channel
+    summary: Verify default session visibility and agent-to-agent policy dispatch a real sessions_send to another configured agent and create its main session.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-a2a-default-cross-agent-send
+      targetSessionKey: agent:orion:main
+      promptSnippet: qa a2a message-tool mirror check
+      targetPromptSnippet: qa group visible reply tool check
+      expectedMarker: QA-A2A-DEFAULT-OK
+
+flow:
+  steps:
+    - name: dispatches to Orion under default cross-agent policy
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && Boolean(env.mock)"
+            message: this runtime proof requires mock-openai
+        - assert:
+            expr: "env.cfg.tools?.sessions === undefined && env.cfg.tools?.agentToAgent === undefined"
+            message: the Gateway must use only the scenario's declared session-access policy
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: sessionsBefore
+          value:
+            expr: "await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })"
+        - assert:
+            expr: "!sessionsBefore.sessions.some((session) => session.key === config.targetSessionKey)"
+            message: the target main session must not already exist
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+              title: QA Cross-Agent Access
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: "`@openclaw ${config.promptSnippet}. sessionKey=\"${config.targetSessionKey}\". Use sessions_send once with timeoutSeconds=0. The target must reply visibly with exact marker: \\`${config.expectedMarker}\\``"
+        - call: waitForCondition
+          saveAs: sourceRequest
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.prompt ?? '').includes(config.promptSnippet) && request.plannedToolName === 'sessions_send' && request.plannedToolArgs?.sessionKey === config.targetSessionKey && request.plannedToolArgs?.timeoutSeconds === 0)"
+            - 60000
+            - 500
+        - assert:
+            expr: "Boolean(sourceRequest.plannedToolCallId)"
+            message: the source send must have a tool-call ID for result correlation
+        - call: waitForCondition
+          saveAs: sourceFollowup
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${sourceRequest.cursor}`)).find((request) => request.toolOutputCallId === sourceRequest.plannedToolCallId && Boolean(request.toolOutput))"
+            - 60000
+            - 500
+        - set: sendResult
+          value:
+            expr: "JSON.parse(sourceFollowup.toolOutput)"
+        - assert:
+            expr: "sendResult.status === 'accepted' && sendResult.sessionKey === config.targetSessionKey && !sourceFollowup.toolOutput.toLowerCase().includes('forbidden')"
+            message:
+              expr: "`unexpected sessions_send result: ${String(sourceFollowup.toolOutput).slice(0, 600)}`"
+        - call: waitForCondition
+          saveAs: targetRequest
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${sourceRequest.cursor}`)).find((request) => String(request.allInputText ?? '').includes(config.targetPromptSnippet) && String(request.prompt ?? '').includes(config.targetPromptSnippet) && !String(request.prompt ?? '').includes(config.promptSnippet))"
+            - 90000
+            - 500
+        - call: waitForCondition
+          saveAs: targetSession
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions.find((session) => session.key === config.targetSessionKey)"
+            - 60000
+            - 500
+      detailsExpr: "JSON.stringify({ sourceTool: sourceRequest.plannedToolArgs, toolOutput: sourceFollowup.toolOutput.slice(0, 600), toolResultCorrelated: sourceFollowup.toolOutputCallId === sourceRequest.plannedToolCallId, targetRunPresent: Boolean(targetRequest), targetRunCursor: targetRequest.cursor, targetPromptPresent: targetRequest.prompt.includes(config.targetPromptSnippet), sessionsListMatch: targetSession.key })"

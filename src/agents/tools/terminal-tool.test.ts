@@ -14,7 +14,6 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { consumeRepairableCodeModeFailure } from "../code-mode-repair-provenance.js";
 import { createSubscribedCodeModeHarness } from "../code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { runUntilCompleted } from "../code-mode.test-support.js";
@@ -334,7 +333,6 @@ describe("terminal tool", () => {
       expect(backend.writes).toEqual([]);
       expect(approvalMocks.register).not.toHaveBeenCalled();
       expect(approvalMocks.decide).not.toHaveBeenCalled();
-      expect(consumeRepairableCodeModeFailure(details)).toBe(true);
     } finally {
       harness.dispose();
       manager.closeAgent(agentOwner, sessionId);

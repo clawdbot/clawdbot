@@ -85,9 +85,13 @@
               : "dark";
           if (pair) {
             // Script-created links need explicit render blocking before first paint.
-            // The gateway stamps the mount prefix on <html> before this runs.
+            // The gateway stamps the mount prefix and asset version before this runs.
             var base =
               document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var buildId = document.documentElement.getAttribute(
+              "data-openclaw-control-ui-build-id",
+            );
+            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");
@@ -95,7 +99,7 @@
             palette.onerror = function () {
               palette.remove();
             };
-            palette.href = base + "/themes/" + theme + ".css";
+            palette.href = base + "/themes/" + theme + ".css" + version;
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);

@@ -9,6 +9,7 @@ import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runt
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
@@ -56,6 +57,8 @@ function ownerSnapshot(
     ...(agentId ? { agentId } : {}),
     agentDir: "/tmp/gateway-agent",
     config,
+    observationConfig: config,
+    isCurrent: () => true,
     authModes: {},
     authStore: { version: 1, profiles: {} },
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
@@ -194,6 +197,8 @@ describe("gateway prepared model catalog", () => {
     } satisfies Partial<GatewayModelCatalogSnapshot>);
     expect(projected).not.toHaveProperty("authStore");
     expect(projected).not.toHaveProperty("metadataSnapshot");
+    expect(projected).not.toHaveProperty("pluginRegistry");
+    expect(projected).not.toHaveProperty("isCurrent");
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
@@ -202,6 +207,33 @@ describe("gateway prepared model catalog", () => {
       readOnly: true,
       workspaceDir: "/tmp/gateway-workspace",
     });
+  });
+
+  it("keeps the prepared generation registry behind the private snapshot", async () => {
+    const config = ownerConfig();
+    const pluginRegistry = createEmptyPluginRegistry();
+    const isCurrent = () => true;
+    const candidate = { ...ownerSnapshot(config), pluginRegistry, isCurrent };
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = async () => candidate;
+
+    await expect(
+      loadPreparedGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toMatchObject({ pluginRegistry, isCurrent });
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.not.toHaveProperty("pluginRegistry");
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.not.toHaveProperty("isCurrent");
   });
 
   it("projects whether the published owner already contains a full catalog", async () => {

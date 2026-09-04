@@ -58,6 +58,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
+  "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
   // Invoked directly by the Docker image-auth scenario.

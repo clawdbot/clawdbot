@@ -51,6 +51,12 @@ send messages. The app caches the last
 good snapshot and the last error separately so the UI loads instantly and
 does not flicker while offline.
 
+The health row and **Connected Instances** pane follow the Primary Gateway.
+Switching Primary immediately clears the previous Gateway's cached status;
+delayed replies from that Gateway cannot replace the new results. Reconnecting
+to the same Gateway retains its last good health snapshot while a fresh check
+runs. Connection errors stay with the Gateway that reported them.
+
 ## When in doubt
 
 Use the CLI flow in [Gateway health](/gateway/health) (`openclaw status`,

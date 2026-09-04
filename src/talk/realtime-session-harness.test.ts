@@ -44,7 +44,94 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
   };
 }
 
+function createEventlessResponseFixture(
+  options: { autoGreeting?: boolean; supported?: boolean } = {},
+) {
+  const harness = createHarness();
+  let callbacks!: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+  const onResponseDone = vi.fn();
+  const dispatch = vi.fn(() => callbacks.onResponseDone?.({ status: "completed" }));
+  const session = harness.createBridge({
+    provider: {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge(
+          options.supported === false
+            ? {}
+            : { sendUserMessage: dispatch, triggerGreeting: dispatch },
+        );
+      },
+    },
+    providerConfig: {},
+    audioSink: { sendAudio: vi.fn() },
+    triggerGreetingOnReady: options.autoGreeting,
+    initialGreetingInstructions: "Say hello",
+    onResponseDone,
+  });
+  return { harness, session, callbacks, dispatch, onResponseDone };
+}
+
 describe("realtime voice session harness", () => {
+  it.each(["text", "greeting", "default-greeting", "ready-greeting"] as const)(
+    "settles an eventless provider's zero-audio response to %s",
+    (request) => {
+      const { harness, session, callbacks, dispatch, onResponseDone } =
+        createEventlessResponseFixture({ autoGreeting: request === "ready-greeting" });
+      try {
+        if (request === "text") {
+          session.sendUserMessage("Speak this answer");
+        } else if (request === "ready-greeting") {
+          callbacks.onReady?.();
+        } else {
+          session.triggerGreeting(request === "default-greeting" ? undefined : "Say hello");
+        }
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({ status: "completed" });
+        expect(harness.talk.activeTurnId).toBeUndefined();
+        expect(
+          harness.talk.recentEvents.filter((event) => event.type === "turn.started"),
+        ).toHaveLength(1);
+        expect(
+          harness.talk.recentEvents.filter((event) => event.type === "turn.ended"),
+        ).toHaveLength(1);
+      } finally {
+        session.close();
+        harness.close();
+      }
+    },
+  );
+
+  it.each(["unsupported", "blank-text", "local-close", "provider-close"] as const)(
+    "does not admit or dispatch %s requests",
+    (reason) => {
+      const { harness, session, callbacks, dispatch, onResponseDone } =
+        createEventlessResponseFixture({ supported: reason !== "unsupported" });
+      try {
+        if (reason === "local-close") {
+          session.close();
+        } else if (reason === "provider-close") {
+          callbacks.onClose?.("completed");
+        }
+        session.sendUserMessage(reason === "blank-text" ? "  " : "Late answer");
+        if (reason !== "blank-text") {
+          session.triggerGreeting("Late greeting");
+        }
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(onResponseDone).not.toHaveBeenCalled();
+        expect(harness.talk.activeTurnId).toBeUndefined();
+        expect(harness.talk.recentEvents.filter((event) => event.type === "turn.started")).toEqual(
+          [],
+        );
+      } finally {
+        session.close();
+        harness.close();
+      }
+    },
+  );
+
   it.each(["completed", "cancelled", "failed", "incomplete"] as const)(
     "settles one output span and turn for %s responses",
     (status) => {
@@ -137,6 +224,54 @@ describe("realtime voice session harness", () => {
       1,
     );
   });
+
+  it("settles rejected manual speech before a response is created and fences its terminal twin", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return makeBridge({
+          sendUserMessage: () =>
+            request.onEvent?.({ direction: "client", type: "response.create" }),
+        });
+      },
+    };
+    const harness = createHarness();
+    const onResponseDone = vi.fn(() => session.sendUserMessage("Next answer"));
+    const session = harness.createBridge({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      onResponseDone,
+    });
+
+    session.sendUserMessage("First answer");
+    expect(harness.talk.activeTurnId).toBeDefined();
+    const failure = { status: "failed", message: "Speech request rejected" } as const;
+    callbacks?.onResponseDone?.(failure);
+    expect(onResponseDone).toHaveBeenCalledExactlyOnceWith(failure);
+
+    const nextTurnId = harness.talk.activeTurnId;
+    expect(nextTurnId).toBeDefined();
+    callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+    expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    expect(onResponseDone).toHaveBeenCalledOnce();
+
+    onResponseDone.mockImplementation(() => {});
+    callbacks?.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "resp-next",
+    });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-next" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-next" });
+    expect(onResponseDone).toHaveBeenCalledTimes(2);
+    expect(harness.talk.activeTurnId).toBeUndefined();
+  });
+
   it("keeps shared Talk events ordered across input, output, and turn completion", () => {
     const harness = createHarness();
 
@@ -177,6 +312,27 @@ describe("realtime voice session harness", () => {
       "session.closed",
     ]);
   });
+
+  it.each(["turn.started", "output.audio.started", "output.audio.delta"] as const)(
+    "does not restore output or echo suppression after a %s observer flushes it",
+    (eventType) => {
+      const events: string[] = [];
+      const harness = createHarness({
+        echoSuppression: { bytesPerMs: 48, tailMs: 3_000, transcriptLookbackMs: 45_000 },
+        onTalkEvent(event) {
+          events.push(event.type);
+          if (event.type === eventType) {
+            harness.flushOutput(() => harness.outputActivity.reset());
+          }
+        },
+      });
+      harness.recordOutputAudio(Buffer.alloc(48_000));
+      expect(events.at(-1)).toBe(eventType);
+      expect(harness.outputActivity.snapshot().chunks).toBe(0);
+      expect(harness.recordInputAudio(Buffer.alloc(480))).toBe(true);
+      harness.close();
+    },
+  );
 
   it("suppresses input through queued output playback plus the echo tail", () => {
     vi.useFakeTimers();

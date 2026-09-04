@@ -137,6 +137,7 @@ export type {
   ModelProviderDeclarationConfig as ModelProviderConfig,
 } from "../config/types.models.js";
 export {
+  bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,

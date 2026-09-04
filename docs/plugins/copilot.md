@@ -16,6 +16,10 @@ channels, session files, model selection, dynamic tools (bridged), approvals,
 media delivery, the visible chat transcript, `/btw` side questions (see
 [Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
+Direct bridged tools marked for sequential execution wait for earlier tool calls
+in the same attempt and delay later calls until they finish. Other tool calls
+can run concurrently.
+
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
 

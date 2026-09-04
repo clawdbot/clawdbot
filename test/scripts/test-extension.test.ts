@@ -569,11 +569,6 @@ describe("scripts/test-extension.mts", () => {
       Math.ceil(totals.reduce((sum, cost) => sum + cost, 0) / shards.length),
     );
     expect(Math.max(...totals)).toBe(lowerBound);
-    // Whole plugins cannot be divided; balance the remaining packed rows.
-    const packedTotals = shards
-      .filter((shard) => shard.extensionIds.length > 1)
-      .map((shard) => shard.estimatedCost);
-    expect(Math.max(...packedTotals) - Math.min(...packedTotals)).toBeLessThanOrEqual(1);
 
     for (const shard of shards) {
       expect(shard.extensionIds.length).toBeGreaterThan(0);

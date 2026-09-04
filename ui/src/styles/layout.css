@@ -220,15 +220,6 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
-html.openclaw-native-web-chrome .sidebar-brand__new-thread {
-  border-color: transparent;
-  box-shadow: none;
-}
-
-html.openclaw-native-web-chrome .sidebar-brand__new-thread:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
 html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
   --sidebar-agent-avatar-size: 32px;
 }
@@ -1055,6 +1046,9 @@ openclaw-settings-save-indicator:empty {
 .sidebar-brand__actions {
   display: flex;
   align-items: center;
+  /* One hit-box size and one gap for every header control: the glyph inset
+     inside each 28px box is the only spacing. A per-button offset here reads
+     as a hole in the rail once that button has no border to sit inside. */
   gap: 0;
   /* Keep the action rail independent from the fit-content identity card so
      short agent names never pull navigation controls away from the edge. */
@@ -1062,25 +1056,19 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
 }
 
-.sidebar-brand__desktop-control svg {
+.sidebar-brand__header-control svg {
   opacity: 0.72;
   stroke-width: 1.6px;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-brand__icon.sidebar-brand__desktop-control {
+.sidebar-brand__icon.sidebar-brand__header-control {
   width: var(--shell-chrome-control-size);
   height: var(--shell-chrome-control-size);
 }
 
-.sidebar-brand__desktop-control:hover:not(:disabled) svg {
+.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) svg {
   opacity: 1;
-}
-
-.sidebar-brand__new-thread {
-  margin-inline-start: 5px;
-  color: var(--text);
-  box-shadow: none;
 }
 
 .sidebar-brand__icon {
@@ -1125,6 +1113,12 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
+.sidebar-brand__new-thread svg {
+  /* The plus path occupies less of its viewBox than the panel/search artwork. */
+  width: 20px;
+  height: 20px;
+}
+
 .sidebar-shell__content {
   display: flex;
   flex: 1;
@@ -1152,8 +1146,6 @@ openclaw-settings-save-indicator:empty {
    bottom one puts the divider on the settings takeover's line and lets the
    symmetric block padding center the row in the band it leaves. */
 .sidebar-shell__footer {
-  /* Positioned ledge for resident sidebar surfaces such as the lobster pet. */
-  position: relative;
   flex-shrink: 0;
   min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
@@ -1374,6 +1366,18 @@ openclaw-settings-save-indicator:empty {
   min-height: 24px;
   padding: 0 10px 0 var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  transition: color var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
+  transition: color var(--duration-fast) ease;
+}
+
+/* Label lift only, no fill: section headers toggle rather than navigate. */
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)),
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
+  .sidebar-recent-sessions__label-text {
+  color: var(--text);
 }
 
 .sidebar-recent-sessions__head--draggable {
@@ -1394,6 +1398,24 @@ openclaw-settings-save-indicator:empty {
   border: none;
   background: transparent;
   color: inherit;
+  text-align: left;
+}
+
+.sidebar-session-group-toggle--lead {
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-person {
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-row-gap);
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
 }
 
@@ -1484,6 +1506,29 @@ openclaw-settings-save-indicator:empty {
   border-radius: 50%;
   background: var(--warn);
   box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
+/* The wrapper keeps the dot outside the avatar's clipping. Self is excluded as
+   an always-on signal; idle dimming follows the Online roster's presence rule. */
+.sidebar-session-group-toggle__person {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.sidebar-session-group-presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  box-shadow: 0 0 0 1.5px var(--sidebar-bg, var(--bg));
+}
+
+.sidebar-session-group-presence--idle {
+  opacity: 0.45;
 }
 
 .sidebar-session-catalog-load-more {
@@ -1627,7 +1672,8 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
+.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text,
+.sidebar-session-group-person > .sidebar-recent-sessions__label-text {
   min-width: 0;
   flex: 1 1 0;
 }
@@ -2360,6 +2406,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sidebar-recent-sessions__head,
+  .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
   .sidebar-online__person,
   .sidebar-online__person-action {
     transition: none;
@@ -2560,27 +2608,6 @@ wa-dropdown.session-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
-.session-menu--compact .session-menu__back {
-  z-index: 1;
-  position: sticky;
-  top: 0;
-  background: var(--wa-color-surface-raised);
-}
-
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
-html[dir="rtl"] .session-menu__chevron,
-html[dir="rtl"] .session-menu__back > .session-menu__icon {
-  transform: scaleX(-1);
-}
-
-wa-dropdown.session-menu--compact::part(menu) {
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
-}
-
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
@@ -2768,12 +2795,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-identity-menu .session-menu__shortcut {
-  font-family:
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI Symbol",
-    sans-serif;
+  font-family: var(--font-shortcut);
 }
 
 .session-menu__info {
@@ -3031,18 +3053,18 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
    modifier/middle-click navigation. Match a[href] specificity; real links
    and explicit new-tab actions keep the pointer. */
 a:is(
-  .nav-item,
-  .sidebar-recent-session__link,
-  .sidebar-online__person,
-  .sidebar-brand__new-thread,
-  .sidebar-new-session,
-  .sidebar-session-catalog-new,
-  .settings-sidebar__item,
-  .settings-sidebar__subitem,
-  .sidebar-issues-panel__navigation-link,
-  .sidebar-approval-row__open-session,
-  .sidebar-footer-build
-):where(:not([target="_blank" i], [data-new-tab-action])),
+    .nav-item,
+    .sidebar-recent-session__link,
+    .sidebar-online__person,
+    .sidebar-brand__new-thread,
+    .sidebar-new-session,
+    .sidebar-session-catalog-new,
+    .settings-sidebar__item,
+    .settings-sidebar__subitem,
+    .sidebar-issues-panel__navigation-link,
+    .sidebar-approval-row__open-session,
+    .sidebar-footer-build
+  ):where(:not([target="_blank" i], [data-new-tab-action])),
 .sidebar-more-menu a:where(:not([target="_blank" i], [data-new-tab-action])) {
   cursor: var(--cursor-action);
 }
@@ -3805,17 +3827,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   transition: color 120ms ease;
 }
 
-wa-dropdown-item.sidebar-agent-menu__agent-switch::part(base) {
-  justify-content: center;
-  width: 100%;
-  padding: 0;
-  border-radius: var(--menu-item-radius);
-}
-
 wa-dropdown-item.sidebar-agent-menu__agent-switch:hover,
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible,
-wa-dropdown-item.sidebar-agent-menu__agent-switch:hover::part(base),
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible::part(base) {
+wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   background: transparent !important;
 }
 
@@ -3826,10 +3839,6 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 .sidebar-agent-menu__agent-switch--active {
   background: transparent;
   color: var(--text-strong) !important;
-}
-
-wa-dropdown-item.sidebar-agent-menu__agent-switch--active::part(base) {
-  background: transparent;
 }
 
 .sidebar-agent-menu__agent-tile {

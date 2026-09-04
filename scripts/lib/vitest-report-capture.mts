@@ -79,11 +79,16 @@ export default class VitestReportCaptureReporter implements Reporter {
         );
       }
     }
-    const projects = ctx.projects.map(projectIdentity);
+    // Wholly empty blob replay uses the merge config's default project only as a host.
+    const loadedProjects =
+      this.expected.length && this.expected.every((capture) => capture.projects.length === 0)
+        ? []
+        : ctx.projects;
+    const projects = loadedProjects.map(projectIdentity);
     assert(
       projects.every(
         (project, index) =>
-          project.name && project.config && !ctx.projects[index]!.isBrowserEnabled(),
+          project.name && project.config && !loadedProjects[index]!.isBrowserEnabled(),
       ),
       "Multi-invocation JSON requires named file-based Node projects; run inline/browser configurations separately.",
     );
@@ -132,6 +137,10 @@ export default class VitestReportCaptureReporter implements Reporter {
   }
 
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
+    // Match native BlobReporter: empty runs have no module owners to replay.
+    this.capture.projects = [...new Set(modules.map((module) => module.project))].map(
+      projectIdentity,
+    );
     this.capture.modules = modules.map((module) => moduleIdentity(module.toTestSpecification()));
     this.capture.ended = {
       reason,

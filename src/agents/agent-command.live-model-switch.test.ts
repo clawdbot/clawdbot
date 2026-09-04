@@ -144,12 +144,10 @@ const state = vi.hoisted(() => ({
   loadFullModelCatalogMock: vi.fn(async () => {
     throw new Error("full model catalog should not materialize");
   }),
-  loadPreparedModelCatalogSnapshotMock: vi.fn(
-    async (): Promise<ModelCatalogSnapshot> => ({
-      entries: [],
-      routeVariants: [],
-    }),
-  ),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+    entries: [],
+    routeVariants: [],
+  })),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -3089,7 +3087,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       internalDeliveryMediaUrls: ["/tmp/payload.png"],
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });
@@ -3151,7 +3149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });
@@ -3183,7 +3181,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       runId: "image:task-policy:agent-loop",
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
     });

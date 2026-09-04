@@ -251,6 +251,8 @@ export type CliBackendExecuteContext = {
   sessionId?: string;
   useResume: boolean;
   abortSignal?: AbortSignal;
+  /** Revalidate the host-owned run and caller before deferred credential use or dispatch. */
+  assertCurrent?: () => void;
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
@@ -525,6 +527,13 @@ type CliBackendPluginBase = {
   resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Maps the observed native list, intersected with the host selection, to equivalent
+   * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.
+   * Never infer capabilities decided by unobserved model or sandbox settings.
+   * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
+   */
+  projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *

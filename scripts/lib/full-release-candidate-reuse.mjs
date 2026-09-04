@@ -310,6 +310,7 @@ export function validateCandidateBinding(
 export function candidateArtifactJsonFromBinding(value) {
   const binding = validateFullReleaseCandidateBinding(value);
   return JSON.stringify({
+    packagePublished: binding.request.packagePublished,
     packageArtifactName: binding.package.artifact.name,
     packageArtifactId: binding.package.artifact.id,
     packageArtifactDigest: binding.package.artifact.digest,

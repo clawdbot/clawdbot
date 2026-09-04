@@ -1,6 +1,7 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 
 const { readLoggingConfigMock } = vi.hoisted(() => ({
   readLoggingConfigMock: vi.fn<() => { level: "silent" } | { consoleLevel: "silent" } | undefined>(
@@ -96,11 +97,7 @@ describe("resolved logging settings cache", () => {
 });
 
 function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  const [arg] = call;
+  const [arg] = mockCall(mock);
   if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
     throw new Error("expected mock call argument to be an object");
   }

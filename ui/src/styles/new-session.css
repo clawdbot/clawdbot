@@ -43,9 +43,9 @@ openclaw-new-session-page {
 }
 
 :is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button:hover:not(:disabled) {
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
@@ -61,8 +61,8 @@ openclaw-new-session-page {
 
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
-  :disabled
-) {
+    :disabled
+  ) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -1251,16 +1251,4 @@ wa-popover.new-session-page__project-popover::part(body) {
   .new-session-page__incognito-notice--visible {
     max-height: 48px;
   }
-}
-
-.new-session-page__title-notice {
-  display: grid;
-  gap: 4px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.new-session-page__prepared-title {
-  color: var(--text);
 }

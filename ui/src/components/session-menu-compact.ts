@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import "../styles/session-menu-compact.css";
 
 export type CompactSessionMenuView =
   | "root"
@@ -42,11 +43,13 @@ export function renderCompactSessionMenuNavigationItem(params: {
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${params.icon}</span>
       <span class="session-menu__text">${params.label}</span>
-      ${params.details
-        ? html`<span class="session-menu__compact-details" aria-hidden="true"
-            >${params.details}</span
-          >`
-        : nothing}
+      ${
+        params.details
+          ? html`<span class="session-menu__compact-details" aria-hidden="true"
+              >${params.details}</span
+            >`
+          : nothing
+      }
       <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
         >${icons.chevronRight}</span
       >

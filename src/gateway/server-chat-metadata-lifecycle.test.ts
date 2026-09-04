@@ -89,6 +89,8 @@ describe("gateway chat metadata lifecycle", () => {
       workspaceDir: "/tmp/metadata-lifecycle/workspace",
       activeProjectKeys: [],
       config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot: createPluginMetadataSnapshot({
         config,

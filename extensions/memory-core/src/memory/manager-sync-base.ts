@@ -30,11 +30,6 @@ import {
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
 import {
-  isMemoryDatabaseReadOnly,
-  openMemoryDatabaseAtPath,
-  openMemoryDatabaseReadOnlyAtPath,
-} from "./manager-db.js";
-import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
@@ -519,7 +514,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      if (!isMemoryDatabaseReadOnly(this.db) && this.dropLegacyVectorTable()) {
+      if (!this.database.readOnly && this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -628,14 +623,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   ): { sql: string; params: MemorySource[] } {
     const sources = sourcesOverride ?? Array.from(this.sources);
     return buildMemorySourceFilter(alias, sources);
-  }
-
-  protected openDatabase(readOnly = false): DatabaseSync {
-    const dbPath = resolveUserPath(this.settings.store.databasePath);
-    const vectorEnabled = this.settings.store.vector.enabled;
-    return readOnly
-      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
-      : openMemoryDatabaseAtPath(dbPath, vectorEnabled, this.agentId);
   }
 
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {

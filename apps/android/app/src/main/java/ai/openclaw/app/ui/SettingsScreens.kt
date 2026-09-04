@@ -15,6 +15,7 @@ import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalNotice
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayUsageProviderSummary
@@ -248,11 +249,8 @@ private fun UsageSettingsScreen(
   onBack: () -> Unit,
 ) {
   val usageState by viewModel.usageState.collectAsState()
-  val usageSummary = usageState.summary
   val isConnected by viewModel.isConnected.collectAsState()
-  val providerCount = usageSummary.providers.size
-  val issueCount = usageSummary.providers.count { it.error != null }
-  val usageConverging = usageRefreshVisible(usageState.refreshing, usageSummary.refreshing)
+  val usageConverging = usageRefreshVisible(usageState.refreshing, usageState.summary?.refreshing == true)
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -261,31 +259,19 @@ private fun UsageSettingsScreen(
   }
 
   SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = Icons.Default.Storage, onBack = onBack) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Providers"), providerCount.toString()),
-          SettingsMetric(nativeString("Issues"), issueCount.toString()),
-          SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
-        ),
-    )
     SettingsRefreshControls(isConnected, usageConverging, usageState.errorText, viewModel::refreshUsage)
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      usageSummary.providers.isNotEmpty() -> {
+    SettingsSummaryContent(usageState, isConnected, nativeString("Connect the gateway to load usage.")) { usageSummary ->
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Providers"), usageSummary.providers.size.toString()),
+            SettingsMetric(nativeString("Issues"), usageSummary.providers.count { it.error != null }.toString()),
+            SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
+          ),
+      )
+      if (usageSummary.providers.isNotEmpty()) {
         UsageProvidersPanel(providers = usageSummary.providers)
-      }
-
-      // The warning panel above already reports a failed load; adding
-      // "No usage data yet." beside it claims the operator has no providers.
-      usageState.errorText != null -> {}
-
-      else -> {
+      } else if (usageState.errorText == null) {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -1826,7 +1812,7 @@ private fun GatewaySettingsScreen(
       rows =
         listOf(
           SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
-          SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Not paired")),
+          SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Offline")),
           SettingsMetric(
             nativeString("Access"),
             gatewayAccessLabel(
@@ -2539,6 +2525,33 @@ internal fun SettingsRefreshControls(
   errorText?.let { error ->
     ClawPanel {
       Text(text = error.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+    }
+  }
+}
+
+@Composable
+internal fun <T> SettingsSummaryContent(
+  state: GatewaySummaryState<T>,
+  connected: Boolean,
+  disconnectedText: String,
+  content: @Composable (T) -> Unit,
+) {
+  val summary = state.summary
+  when {
+    !connected -> {
+      ClawPanel {
+        Text(text = disconnectedText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    }
+
+    summary != null -> {
+      content(summary)
+    }
+
+    !state.refreshing && state.errorText == null -> {
+      ClawPanel {
+        Text(text = nativeString("Load from gateway"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
     }
   }
 }

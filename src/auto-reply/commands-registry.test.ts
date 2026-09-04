@@ -307,6 +307,17 @@ describe("commands registry", () => {
     );
   });
 
+  it("registers /dashboard as a standard tools command with optional requirements", () => {
+    const dashboard = requireChatCommand("dashboard");
+    expect(dashboard.nativeName).toBe("dashboard");
+    expect(dashboard.textAliases).toEqual(["/dashboard"]);
+    expect(dashboard.category).toBe("tools");
+    expect(dashboard.tier).toBe("standard");
+    expect(dashboard.acceptsArgs).toBe(true);
+    expect(requireCommandArg(dashboard, "request").required).not.toBe(true);
+    expect(resolveTextCommand("/dashboard release health")?.args).toBe("release health");
+  });
+
   it("registers /loop as a standard tools command with an optional spec", () => {
     const loop = requireChatCommand("loop");
     expect(loop.nativeName).toBe("loop");

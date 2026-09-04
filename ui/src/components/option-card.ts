@@ -110,15 +110,19 @@ class OptionCard extends LitElement {
               >
                 <span class="option-card__choice-copy">
                   <strong>${option.label}</strong>
-                  ${option.description
-                    ? html`<span class="option-card__description">${option.description}</span>`
-                    : nothing}
+                  ${
+                    option.description
+                      ? html`<span class="option-card__description">${option.description}</span>`
+                      : nothing
+                  }
                 </span>
-                ${recommended
-                  ? html`<span class="option-card__recommended">
-                      ${t("optionCard.recommended")}
-                    </span>`
-                  : nothing}
+                ${
+                  recommended
+                    ? html`<span class="option-card__recommended">
+                        ${t("optionCard.recommended")}
+                      </span>`
+                    : nothing
+                }
               </button>
             `;
           })}

@@ -11,12 +11,14 @@ import type { TlsOptions } from "node:tls";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
@@ -154,7 +156,6 @@ export function createGatewayHttpServer(opts: {
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
-  strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
@@ -188,7 +189,6 @@ export function createGatewayHttpServer(opts: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
-    strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -244,9 +244,9 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) {
-    setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: strictTransportSecurityHeader,
-    });
+    // Read only the published snapshot: even liveness and rejection responses need
+    // current headers without depending on config IO or auth resolution.
+    setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);
     // Preserve Node's version/token classification while deferring its response
     // until admission; reparsing Expect here would change HTTP/1.0 semantics.
     if (expectation === "reject") {
@@ -307,6 +307,10 @@ export function createGatewayHttpServer(opts: {
         req,
         trustedProxies,
         allowRealIpFallback,
+        // HTTP authorization must observe Tailnet revocation on the next request.
+        // WebSocket upgrades retain the ordinary cache because they authenticate once.
+        tailscaleWhois: (ip) =>
+          readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {

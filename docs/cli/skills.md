@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/library/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
@@ -14,12 +15,16 @@ title: "Skills"
 Inspect local skills, search ClawHub, install skills from ClawHub/Git/local
 directories, verify ClawHub skills, and update ClawHub-tracked installs.
 
+Use [`openclaw plugins`](/cli/plugins) for plugin packages. The standalone
+[ClawHub CLI](/clawhub/cli) handles [publishing](/clawhub/publishing), registry
+maintenance, and [removing ClawHub skills](/cli/skills#remove-a-clawhub-skill).
+
 Related:
 
 - Skills system: [Skills](/tools/skills)
+- Skill authoring: [Creating skills](/tools/creating-skills)
 - Skill Workshop: [Skill Workshop](/tools/skill-workshop)
 - Skills config: [Skills config](/tools/skills-config)
-- ClawHub installs: [ClawHub](/clawhub/cli)
 
 ## Commands
 
@@ -165,6 +170,8 @@ Notes:
 | `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events and the latest collection and experience review outcomes per workspace.                                                                                                                                                                               |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
 
+## Release trust
+
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.
 Resolver-backed GitHub skills rely on ClawHub's install resolver to enforce
@@ -288,10 +295,11 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. A shared token
-or password alone does not identify a person; use the existing workspace
-commands when operating a solo Gateway without a profile. An explicitly
-selected remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. The Control UI on a
+single-user Gateway uses a durable owner profile, but ephemeral CLI connections
+do not inherit it. A CLI shared token or password alone still has no personal
+profile; use the existing workspace commands in that case. An explicitly selected
+remote Gateway never falls back to a client-local personal library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects

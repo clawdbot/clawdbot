@@ -20,7 +20,3 @@ export function normalizeSessionRowChatType(value: unknown): "direct" | "group" 
   }
   return null;
 }
-
-export function coerceSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
-}

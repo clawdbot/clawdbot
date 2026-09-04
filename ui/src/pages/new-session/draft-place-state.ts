@@ -117,7 +117,7 @@ export class DraftPlaceState {
     return buildDraftSessionCreateParams({
       ...params,
       agentId: this.agentId,
-      model: this.modelControl.selected,
+      model: this.modelControl.modelForSubmission(),
       contextWindow: this.modelControl.contextWindow,
       thinkingLevel: this.modelControl.thinkingLevel,
       fastMode: this.modelControl.fastMode,
@@ -212,17 +212,17 @@ export class DraftPlaceState {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
-  devicePlacementRequirement() {
+  devicePlacementRuntime() {
     return this.modelControl.resolveAgentRuntime({
       agent: this.selectedAgent(),
       context: this.read().context,
-    })?.devicePlacement;
+    });
   }
 
   devices() {
     return projectDevicePlacements(
       this.gateway.environments,
-      this.devicePlacementRequirement(),
+      this.devicePlacementRuntime()?.devicePlacement,
       this.gateway.deviceCatalogDisabledReason,
     );
   }
@@ -482,7 +482,7 @@ export class DraftPlaceState {
     this.folderSelectedByUser = true;
     this.projectSelectedByUser = true;
     this.preferredProjectRestore = "";
-    if (snapshot.data?.startTerminal && this.terminalOnNode) {
+    if (catalog.isTarget(snapshot.data) && this.terminalOnNode) {
       this.callbacks.requestUpdate();
       return;
     }
@@ -617,8 +617,8 @@ export class DraftPlaceState {
     this.callbacks.requestUpdate();
   }
 
-  toggleWorktree() {
-    this.repositoryState.toggle();
+  selectWorktree(value: boolean) {
+    this.repositoryState.select(value);
   }
 
   setBaseRef(baseRef: string) {

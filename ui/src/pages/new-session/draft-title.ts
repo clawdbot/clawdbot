@@ -26,8 +26,8 @@ function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null):
   );
 }
 
-/** Disposable creation-only speculation; never owns a session or a metadata write. */
-export class DraftTitlePreparation {
+/** Owns disposable title work for New Session, never the chat route. */
+export class NewSessionTitleController implements ReactiveController {
   private current: DraftTitleInput | null = null;
   private title: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -35,9 +35,49 @@ export class DraftTitlePreparation {
   private pending = false;
   private readyAt = 0;
 
-  constructor(private readonly requestUpdate: () => void) {}
+  private connected = false;
+  private composing = false;
+  private submitted: DraftTitleInput | null = null;
 
-  sync(input: DraftTitleInput | null) {
+  constructor(
+    host: ReactiveControllerHost,
+    private readonly read: () => {
+      context: ApplicationContext | undefined;
+      data: NewSessionRouteData | undefined;
+      place: DraftPlaceState;
+      submission: DraftSubmissionFlow;
+      dictating: boolean;
+    },
+  ) {
+    host.addController(this);
+  }
+
+  hostConnected() {
+    this.connected = true;
+  }
+  hostUpdated() {
+    this.sync(this.input());
+  }
+  hostDisconnected() {
+    this.connected = false;
+    this.sync(null);
+    this.submitted = null;
+  }
+
+  setComposing(composing: boolean) {
+    this.composing = composing;
+    this.hostUpdated();
+  }
+
+  takePreparedTitle(): string | undefined {
+    const input = this.input();
+    const title = sameDraft(this.current, input) ? (this.title ?? undefined) : undefined;
+    this.submitted = input ?? this.submitted;
+    this.sync(null);
+    return title;
+  }
+
+  private sync(input: DraftTitleInput | null) {
     const message = input?.message.trim() ?? "";
     const next =
       input && message.length >= 12 && !message.startsWith("/") ? { ...input, message } : null;
@@ -50,11 +90,6 @@ export class DraftTitlePreparation {
     this.pending = next !== null;
     this.readyAt = Date.now() + 1_000;
     this.schedule();
-  }
-
-  titleFor(input: DraftTitleInput | null): string | undefined {
-    const next = input ? { ...input, message: input.message.trim() } : null;
-    return sameDraft(this.current, next) ? (this.title ?? undefined) : undefined;
   }
 
   private schedule() {
@@ -85,7 +120,6 @@ export class DraftTitlePreparation {
       // including a draft that changes away and then back during the request.
       if (this.current === current) {
         this.title = result.title;
-        this.requestUpdate();
       }
     } catch {
       // Speculation must never block Send or leak a provider error into the draft.
@@ -94,60 +128,6 @@ export class DraftTitlePreparation {
       this.active = false;
       this.schedule();
     }
-  }
-}
-
-/** Connects disposable title work to the new-session page, never the chat route. */
-export class NewSessionTitleController implements ReactiveController {
-  private readonly preparation: DraftTitlePreparation;
-  private connected = false;
-  private composing = false;
-  private submitted: DraftTitleInput | null = null;
-
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly read: () => {
-      context: ApplicationContext | undefined;
-      data: NewSessionRouteData | undefined;
-      place: DraftPlaceState;
-      submission: DraftSubmissionFlow;
-      dictating: boolean;
-    },
-  ) {
-    this.preparation = new DraftTitlePreparation(() => host.requestUpdate());
-    host.addController(this);
-  }
-
-  hostConnected() {
-    this.connected = true;
-  }
-  hostUpdated() {
-    this.preparation.sync(this.input());
-  }
-  hostDisconnected() {
-    this.connected = false;
-    this.preparation.sync(null);
-    this.submitted = null;
-  }
-
-  setComposing(composing: boolean) {
-    this.composing = composing;
-    this.hostUpdated();
-  }
-
-  available(): boolean {
-    return this.input() !== null;
-  }
-  preparedTitle(): string | undefined {
-    return this.preparation.titleFor(this.input());
-  }
-
-  takePreparedTitle(): string | undefined {
-    const input = this.input();
-    const title = this.preparation.titleFor(input);
-    this.submitted = input ?? this.submitted;
-    this.preparation.sync(null);
-    return title;
   }
 
   private input(): DraftTitleInput | null {
@@ -163,6 +143,7 @@ export class NewSessionTitleController implements ReactiveController {
       submission.visibility === "incognito" ||
       submission.pendingPlacement.sessionKey ||
       !place.agentId ||
+      !place.modelControl.accountSelectionReady() ||
       !canCallGatewayMethod(snapshot, "sessions.title.prepare", "operator.write") ||
       !snapshot?.client
     ) {
@@ -173,7 +154,7 @@ export class NewSessionTitleController implements ReactiveController {
       ownerKey: routeKey(data),
       agentId: place.agentId,
       message: submission.message.trim(),
-      model: place.modelControl.selected,
+      model: place.modelControl.modelForSubmission(),
     };
     // A failed navigation/retry may leave this page mounted after creation. The
     // submitted draft cannot start more inference; only a new draft can do so.

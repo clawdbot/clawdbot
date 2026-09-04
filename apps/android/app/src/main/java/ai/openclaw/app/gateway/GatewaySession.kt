@@ -631,8 +631,9 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): Boolean =
-    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson) ==
+    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson, logFailure) ==
       NodeEventSendOutcome.COMPLETED
 
   internal suspend fun sendNodeEventWithOutcome(
@@ -644,6 +645,7 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): NodeEventSendOutcome {
     val conn = readyConnection(expectedEndpointStableId) ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
@@ -659,7 +661,7 @@ class GatewaySession(
       // Voice/audio ownership takeover must cancel before a stale node event dispatches.
       throw err
     } catch (err: Throwable) {
-      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      if (logFailure) Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       NodeEventSendOutcome.FAILED
     }
   }
@@ -999,7 +1001,9 @@ class GatewaySession(
           tls = target.tls,
           customHeadersProvider = customHeadersProvider,
         )
-      socket = client.newWebSocket(request, listener)
+      // OkHttp can invoke onOpen before newWebSocket returns. Publish under the
+      // send lock so the handshake cannot observe a not-yet-installed socket.
+      writeLock.withLock { socket = client.newWebSocket(request, listener) }
       return connectDeferred.await()
     }
 
@@ -1188,8 +1192,8 @@ class GatewaySession(
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
-          if (socket?.send(jsonString) != true) {
-            // OkHttp returning false means this frame never entered its outgoing queue.
+          if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
+            // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
           }
         }

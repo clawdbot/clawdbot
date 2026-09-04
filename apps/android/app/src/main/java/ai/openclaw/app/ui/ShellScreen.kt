@@ -10,6 +10,7 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -1183,11 +1184,9 @@ private val sessionSourceLabels =
     "workspace" to "Workspace",
   )
 
-internal fun sessionSourceLabel(sessionKey: String): String = sessionSourceLabel(sessionKey, GatewayChannelsSummary(channels = emptyList()))
-
 internal fun sessionSourceLabel(
   sessionKey: String,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary? = null,
 ): String {
   val normalized = sessionKey.trim()
   val scopedKey =
@@ -1199,8 +1198,9 @@ internal fun sessionSourceLabel(
   if (!scopedKey.contains(':') && !scopedKey.contains('#')) return nativeString("OpenClaw")
   val source = scopedKey.substringBefore(':').substringBefore('#').lowercase()
   val channelLabel =
-    channelsSummary.channels
-      .firstOrNull { channel ->
+    channelsSummary
+      ?.channels
+      ?.firstOrNull { channel ->
         channel.id.equals(source, ignoreCase = true)
       }?.label
       ?.takeIf { it.isNotBlank() }
@@ -1219,7 +1219,7 @@ internal data class HomeAttentionRow(
 internal fun homeAttentionRows(
   isConnected: Boolean,
   pendingApprovals: Int,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
   unknownProviderCount: Int = 0,
@@ -1241,7 +1241,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (channelsSummary.channels.any { it.error != null }) {
+    if (channelsSummary?.channels?.any { it.error != null } == true) {
       HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
     } else {
       null
@@ -1353,7 +1353,7 @@ internal data class RecentSessionListItem(
 
 internal fun overviewRecentSessionRows(
   sessions: List<ChatSessionEntry>,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
 ): List<RecentSessionListItem> =
   sessions
     .take(overviewRecentSessionVisibleLimit)
@@ -1560,7 +1560,7 @@ private fun SettingsShellScreen(
             route = SettingsRoute.Gateway,
           ),
           SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-          SettingsRow(nativeText("Channels"), verbatimText(channelsSummaryText(channelsSummary)), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
+          SettingsRow(nativeText("Channels"), channelsState.summaryText(::channelsSummaryText), Icons.Default.Notifications, status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus), route = SettingsRoute.Channels),
           SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
             nativeText("OpenClaw"),
@@ -1593,8 +1593,8 @@ private fun SettingsShellScreen(
           ),
           SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
           SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-          SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
-          SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow(nativeText("Usage"), usageState.summaryText { usageSummaryText(it.providers.size) }, Icons.Default.Storage, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }, route = SettingsRoute.Usage),
+          SettingsRow(nativeText("Skills"), skillsState.summaryText { skillsSummaryText(it.skills) }, Icons.Default.Settings, status = if (skillsState.errorText != null) false else skillsSummary?.skills?.let(::skillsStatus), route = SettingsRoute.Skills),
           SettingsRow(
             nativeText("Skill Workshop"),
             verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
@@ -1602,7 +1602,7 @@ private fun SettingsShellScreen(
             status = skillWorkshopStatus(skillWorkshopSummary),
             route = SettingsRoute.SkillWorkshop,
           ),
-          SettingsRow(nativeText("Dreaming"), verbatimText(dreamingSummaryText(dreamingSummary)), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow(nativeText("Dreaming"), dreamingState.summaryText(::dreamingSummaryText), Icons.Default.Storage, status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus), route = SettingsRoute.Dreaming),
           SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           if (desktopObserveAvailable) {
             SettingsRow(nativeText("Desktop"), nativeText("View a machine screen"), Icons.Outlined.DesktopWindows, status = isConnected, route = SettingsRoute.Desktop)
@@ -1693,7 +1693,10 @@ private fun cronJobsSummary(count: Int): String =
     else -> nativeString("\$count scheduled", count)
   }
 
-/** Summarizes provider usage buckets without exposing detailed billing data. */
+private fun <T> GatewaySummaryState<T>.summaryText(format: (T) -> String): NativeText =
+  errorText ?: summary?.let { verbatimText(format(it)) }
+    ?: if (refreshing) nativeText("Refreshing") else nativeText("Load from gateway")
+
 private fun usageSummaryText(count: Int): String =
   when (count) {
     0 -> nativeString("No provider usage")

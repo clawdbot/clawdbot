@@ -87,19 +87,17 @@ type SlackTraceState = {
 
 const traceRuntimeError = vi.fn();
 
-const traceState = vi.hoisted(
-  (): SlackTraceState => ({
-    recordWireCall: () => {},
-    client: null,
-    turn: null,
-    turnStarted: null,
-    turnOutcome: null,
-    dispatchDone: null,
-    counts: { tool: 0, block: 0, final: 0 },
-    tsCounter: 0,
-    rejectStartStreamCode: undefined,
-  }),
-);
+const traceState = vi.hoisted((): SlackTraceState => ({
+  recordWireCall: () => {},
+  client: null,
+  turn: null,
+  turnStarted: null,
+  turnOutcome: null,
+  dispatchDone: null,
+  counts: { tool: 0, block: 0, final: 0 },
+  tsCounter: 0,
+  rejectStartStreamCode: undefined,
+}));
 
 // Replace only the core agent turn. Everything downstream of the captured
 // deliver/typing/replyOptions wiring (dedupe, thread plan, native stream ladder,
@@ -150,6 +148,7 @@ vi.mock("./client.js", async (importOriginal) => {
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
+    getSlackListenerWriteClient: traceClient,
   };
 });
 
@@ -249,8 +248,8 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     // the partial is recorded as IN-only script context.
     { kind: "partial", text: "Deploy status:" },
     { kind: "advance", ms: 300 },
-    // Default tool progress messages flow as tool-kind payloads under native
-    // streaming; short text stays inside the SDK buffer (accepted, not visible).
+    // Default tool progress is a logical reply and must reach Slack before
+    // its delivery callback completes, even when the text is short.
     { kind: "tool-progress", name: "deploy_checks", phase: "start" },
     { kind: "advance", ms: 300 },
     { kind: "final", text: NATIVE_FINAL_TEXT },
