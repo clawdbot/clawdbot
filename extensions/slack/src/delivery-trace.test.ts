@@ -148,6 +148,7 @@ vi.mock("./client.js", async (importOriginal) => {
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
+    getSlackListenerWriteClient: traceClient,
   };
 });
 
