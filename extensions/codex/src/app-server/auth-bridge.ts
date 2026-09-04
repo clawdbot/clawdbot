@@ -927,14 +927,14 @@ export async function refreshCodexAppServerAuthTokens(params: {
   config?: AuthProfileOrderConfig;
 }): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const previousAccountId = params.previousAccountId?.trim();
+  const store = resolveCodexAppServerAuthProfileStore(params);
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
+  const credential = profileId ? store.profiles[profileId] : undefined;
   if (previousAccountId) {
-    const store = resolveCodexAppServerAuthProfileStore(params);
-    const profileId = resolveCodexAppServerAuthProfileId({
-      authProfileId: params.authProfileId,
-      store,
-      config: params.config,
-    });
-    const credential = profileId ? store.profiles[profileId] : undefined;
     const selectedAccountId = credential
       ? (resolveExplicitChatgptAccountId(credential) ??
         (credential.type === "oauth"
@@ -947,9 +947,22 @@ export async function refreshCodexAppServerAuthTokens(params: {
       );
     }
   }
+  // First-use Codex refresh must not burn a just-issued persisted refresh
+  // token. Native CLI overlays and expired credentials still refresh.
+  const persistedCredential = profileId
+    ? findPersistedAuthProfileCredential({
+        agentDir: resolvePersistedAuthProfileOwnerAgentDir({
+          agentDir: params.agentDir,
+          profileId,
+        }),
+        profileId,
+      })
+    : undefined;
+  const forceOAuthRefresh =
+    persistedCredential?.type !== "oauth" || !hasUsableOAuthCredential(persistedCredential);
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     ...params,
-    forceOAuthRefresh: true,
+    forceOAuthRefresh,
   });
   if (!loginParams || loginParams.type !== "chatgptAuthTokens") {
     throw new Error(
