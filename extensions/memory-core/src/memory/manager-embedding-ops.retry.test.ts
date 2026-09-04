@@ -132,6 +132,11 @@ describe("memory embedding batch retry boundary", () => {
         `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
+    [
+      "a DashScope-style per-request row cap",
+      () =>
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
@@ -155,6 +160,27 @@ describe("memory embedding batch retry boundary", () => {
       expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
     },
   );
+
+  it("sends a batch under the provider row cap in one request", async () => {
+    const items = Array.from({ length: 10 }, (_, index) => `item-${index}`);
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (texts.length > 10) {
+        throw new Error(
+          'openai-compatible embeddings failed: HTTP 400: {"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
+        );
+      }
+      return texts.map((text) => [Number.parseInt(text.slice(5), 10)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+    await expect(manager.embedBatchWithRetry(items)).resolves.toEqual(
+      items.map((_, index) => [index]),
+    );
+    expect(embedBatch).toHaveBeenCalledOnce();
+    expect(embedBatch.mock.calls[0]?.[0]).toHaveLength(10);
+    expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+  });
 
   it("does not retry or split generic input validation errors containing request-id digits", async () => {
     const embedBatch = vi.fn(async () => {
