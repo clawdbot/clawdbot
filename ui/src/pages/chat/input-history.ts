@@ -135,6 +135,19 @@ export function handleChatDraftChange(
   resetChatInputHistoryNavigation(state);
 }
 
+export function appendChatDraftText(
+  state: Pick<ChatInputHistoryState, "chatMessage" | "chatMentions"> & {
+    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
+  },
+  text: string,
+): string {
+  const separator = state.chatMessage && !/\s$/u.test(state.chatMessage) ? " " : "";
+  const next = `${state.chatMessage}${separator}${text}`;
+  // Appending after the current draft leaves every mention span unchanged.
+  state.handleChatDraftChange(next, state.chatMentions);
+  return next;
+}
+
 function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
   if (state.chatInputHistoryIndex === -1) {
     return false;

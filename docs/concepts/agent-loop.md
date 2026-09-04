@@ -23,6 +23,11 @@ execution, streaming, persistence.
 4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "finishing" | "end" | "error"`).
 5. `agent.wait` (`waitForAgentRun`) waits for **lifecycle end/error** on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`.
 
+The wait result also carries the run's `terminalReply` and, when available,
+`terminalReceipt`. A receipt with `sourceReplyDelivered: true` confirms a final
+reply reached the external source conversation. A2A announcements consume that
+fact instead of using display-history mirrors as delivery evidence.
+
 ## Queueing and concurrency
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
@@ -103,7 +108,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
-- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
+- A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 

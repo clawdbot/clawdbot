@@ -61,6 +61,12 @@ final class WebChatManager {
     private var currentChatRoute: WebChatRoute?
     private var cachedPreferredSessionKey: String?
     private var primaryGatewayID: String?
+    private let primaryConnection: GatewayConnection
+
+    init(primaryConnection: GatewayConnection = .shared) {
+        self.primaryConnection = primaryConnection
+    }
+
     private var primaryGeneration: UInt64 = 0
     private var primaryOpenTask: Task<Void, Never>?
     private var windowGeneration: UInt64 = 0
@@ -92,9 +98,10 @@ final class WebChatManager {
         }
 
         let generation = self.primaryGeneration
+        let connection = self.primaryConnection
         self.primaryOpenTask = Task { @MainActor [weak self] in
             guard !Task.isCancelled else { return }
-            let sessionKey = await GatewayConnection.shared.mainSessionKey()
+            let sessionKey = await connection.mainSessionKey()
             guard !Task.isCancelled, let self else { return }
             self.preparePrimaryGateway(gatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(
                 root: OpenClawConfigFile.loadDict()))
@@ -104,7 +111,39 @@ final class WebChatManager {
         }
     }
 
-    private func presentChat(sessionKey: String, agentID: String?, draft: String?) {
+    func show(
+        sessionKey: String,
+        ifCurrentRouteFrom lease: GatewayConnection.ServerLease,
+        onRejected: @escaping @MainActor () -> Void)
+    {
+        self.primaryOpenTask?.cancel()
+        let root = OpenClawConfigFile.loadDict()
+        guard self.primaryConnection.serverLeaseMatchesCurrentRoute(lease),
+              let owner = lease.route.deviceAuthGatewayID,
+              owner == GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root),
+              let cacheID = MacChatTranscriptCache.gatewayID(root: root)
+        else {
+            onRejected()
+            return
+        }
+        self.preparePrimaryGateway(gatewayID: owner)
+        let generation = self.primaryGeneration
+        let connection = self.primaryConnection
+        // Resolve the complete route before presentation: its storage identity
+        // intentionally omits credential rotations and TLS pin changes.
+        self.primaryOpenTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
+            let current = await connection.isCurrentRoute(lease.route)
+            guard !Task.isCancelled, let self, generation == self.primaryGeneration else { return }
+            guard current, connection.serverLeaseMatchesCurrentRoute(lease) else {
+                onRejected()
+                return
+            }
+            self.presentChat(sessionKey: sessionKey, agentID: nil, draft: nil, gatewayID: cacheID)
+        }
+    }
+
+    private func presentChat(sessionKey: String, agentID: String?, draft: String?, gatewayID: String? = nil) {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         if let controller = windowController {
             // The window shell switches sessions in place (sidebar, /new);
@@ -115,23 +154,28 @@ final class WebChatManager {
                 return
             }
 
-            controller.close()
+            // Detach before closing so the retired controller's callback cannot
+            // cancel this already-admitted successor.
             self.windowController = nil
             self.windowRoute = nil
+            controller.close()
         }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
-            initialDraft: draft)
+            initialDraft: draft,
+            connection: self.primaryConnection,
+            gatewayID: gatewayID)
         controller.onVisibilityChanged = { [weak self, weak controller] visible in
             guard let self, let controller else { return }
-            self.setSessionObserverVisible(visible, owner: controller, connection: .shared)
+            self.setSessionObserverVisible(visible, owner: controller, connection: self.primaryConnection)
             self.onChatWindowVisibilityChanged?(visible)
         }
         controller.onClosed = { [weak self, weak controller] in
             guard let self, let controller else { return }
-            self.setSessionObserverVisible(false, owner: controller, connection: .shared)
+            self.setSessionObserverVisible(false, owner: controller, connection: self.primaryConnection)
             guard self.windowController === controller else { return }
+            self.cancelPrimaryOpen()
             if self.currentChatRoute == self.windowRoute {
                 self.currentChatRoute = nil
             }
@@ -292,15 +336,20 @@ final class WebChatManager {
             ?? WebChatRoute(sessionKey: trimmed, agentID: nil)
     }
 
-    func resetPrimaryConnections() {
+    private func cancelPrimaryOpen() {
         self.primaryGeneration &+= 1
         self.primaryOpenTask?.cancel()
         self.primaryOpenTask = nil
-        self.windowController?.close()
+    }
+
+    func resetPrimaryConnections() {
+        self.cancelPrimaryOpen()
+        let controller = self.windowController
         self.windowController = nil
         self.windowRoute = nil
         self.currentChatRoute = nil
         self.cachedPreferredSessionKey = nil
+        controller?.close()
     }
 
     func preparePrimaryGateway(gatewayID: String?) {

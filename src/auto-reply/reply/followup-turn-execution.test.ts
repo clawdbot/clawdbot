@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 
 const state = vi.hoisted(() => ({
@@ -92,6 +97,35 @@ beforeEach(() => {
 });
 
 describe("executeFollowupTurn", () => {
+  it.each([false, true])(
+    "records each source receipt without changing newer runner state (preflight: %s)",
+    async (preflight) => {
+      const receipts: ReplyOperationRunState[] = [{}, {}];
+      const newerReceipt: ReplyOperationRunState = {};
+      const turn = createTurn();
+      turn.queued.replyOperationRunStates = receipts;
+      if (preflight) {
+        turn.preflightFailurePayload = { text: "preflight failed" };
+      }
+
+      await executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: { [REPLY_OPERATION_RUN_STATE]: newerReceipt },
+        },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+
+      expect(receipts.map(resolveReplyOperationAgentTurn)).toEqual(["failed", "failed"]);
+      expect(resolveReplyOperationAgentTurn(newerReceipt)).toBeUndefined();
+      expect(state.execute).toHaveBeenCalledTimes(preflight ? 0 : 1);
+    },
+  );
+
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
     const typing = createTypingController();
@@ -833,6 +867,7 @@ describe("executeFollowupTurn", () => {
   });
 
   it("normalizes a post-start execution failure after draining detached progress", async () => {
+    const receipt: ReplyOperationRunState = {};
     const failure = new Error("execution failed after start");
     const onItemEvent = vi.fn(async () => {});
     const fail = vi.fn();
@@ -841,6 +876,7 @@ describe("executeFollowupTurn", () => {
       fail,
     } as unknown as AdmittedFollowupTurn["operation"];
     const turn = createTurn({ operation });
+    turn.queued.replyOperationRunStates = [receipt];
     turn.queued.originatingChatType = "direct";
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
@@ -870,6 +906,7 @@ describe("executeFollowupTurn", () => {
     });
     expect(onItemEvent).toHaveBeenCalledOnce();
     expect(fail).toHaveBeenCalledWith("run_failed", failure);
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");
   });
 
   it("waits for every pending task before propagating a drain failure", async () => {

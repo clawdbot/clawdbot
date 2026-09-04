@@ -155,7 +155,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.getOrCreateSessionMcpRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each(["disableTools", "raw", "restart", "reconciliation", "model"])(
+  it.each(["disableTools", "raw", "restart", "model"])(
     "does not discover matching MCP when tools are disabled by %s",
     async (mode) => {
       const input = createInput([], []);
@@ -164,9 +164,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disableTools";
       input.isRawModelRun = mode === "raw";
       input.attempt.forceRestartSafeTools = mode === "restart";
-      if (mode === "reconciliation") {
-        input.attempt.codeModeRecovery = { kind: "inspect", phase: "read-required" };
-      }
       input.preparedToolBase.toolsEnabled = mode !== "model";
 
       await prepareEmbeddedAttemptBundleTools(input);

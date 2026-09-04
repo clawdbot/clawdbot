@@ -9,7 +9,7 @@ export interface Skill {
   description: string;
   /** Additional loading guidance rendered with the location in full and compact catalogs. */
   locationNote?: string;
-  /** Runtime-only content for non-filesystem skill locators such as node://. */
+  /** Prepared instructions for transferred bundles or non-filesystem locators such as node://. */
   readContent?: string;
   filePath: string;
   baseDir: string;
@@ -72,7 +72,7 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
   }
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    "Use the read tool to load a skill's file when the task matches its description.",
+    "Read a skill's file at its listed location when the task matches its description.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -106,8 +106,8 @@ export function formatSkillsCompactForPrompt(
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     descriptionMaxChars > 0
-      ? "Use the read tool to load a skill's file when the task matches its name or description."
-      : "Use the read tool to load a skill's file when the task matches its name.",
+      ? "Read a skill's file at its listed location when the task matches its name or description."
+      : "Read a skill's file at its listed location when the task matches its name.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",

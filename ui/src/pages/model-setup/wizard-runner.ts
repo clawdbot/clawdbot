@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupActivateParams, WizardNextResult } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSetupAdmissionBusyError, isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -92,7 +93,7 @@ export class ModelSetupWizardRunner {
     }
     const session: WizardSession = {
       client,
-      sessionId: crypto.randomUUID(),
+      sessionId: generateUUID(),
       abortController: new AbortController(),
       startMethod,
       activationTargetId,

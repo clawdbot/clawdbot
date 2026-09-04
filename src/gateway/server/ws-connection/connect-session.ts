@@ -30,7 +30,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
-import { APPROVALS_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
@@ -375,20 +375,21 @@ export async function attachAuthenticatedGatewayConnect(
     close(1008, truncateCloseReason(message));
     return;
   }
-  const internal =
-    isLocalClient ||
-    isTrustedApprovalRuntime ||
-    trustedAgentRuntimeIdentity ||
-    sharedSecretOperatorOwner
-      ? {
-          ...(isLocalClient ? { isLocalClient: true as const } : {}),
-          ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
-          ...(trustedAgentRuntimeIdentity
-            ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
-            : {}),
-          ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
-        }
-      : undefined;
+  // Record the authenticated ingress after device and role scope restrictions.
+  // Later turns must not infer management authority from names or session routing.
+  const controlUiAdmin =
+    role === "operator" &&
+    authMethod !== undefined &&
+    authMethod !== "none" &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    scopes.includes(ADMIN_SCOPE);
+  const internal = {
+    ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
+    ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
+    ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
+  };
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
@@ -428,7 +429,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(context.browserOrigin ? { browserOrigin: context.browserOrigin } : {}),
-    ...(internal ? { internal } : {}),
+    ...(Object.keys(internal).length > 0 ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
       ? { pluginNodeCapabilitySurfaces }

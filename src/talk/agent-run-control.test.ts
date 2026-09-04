@@ -10,15 +10,21 @@ import {
 } from "./agent-run-control.js";
 import type { TalkEvent } from "./talk-events.js";
 
+vi.mock("../agents/embedded-agent-runner/runs.js", () => {
+  throw new Error("mutating run commands unavailable");
+});
+
 function createDeps(options: {
   activeSessionId?: string;
   queued?: boolean;
+  unconfirmed?: boolean;
   abortResult?: boolean;
   activity?: RealtimeVoiceAgentRunActivity;
   reason?: "no_active_run" | "not_streaming" | "compacting" | "runtime_rejected";
 }) {
   return {
     abortEmbeddedAgentRun: vi.fn(() => options.abortResult ?? true),
+    // Preserve the dependency callback contract exported in v2026.8.1.
     queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(
       async (
         sessionId: string,
@@ -42,6 +48,9 @@ function createDeps(options: {
               target: "embedded_run" as const,
               gatewayHealth: "live" as const,
               enqueuedAtMs: 123,
+              ...(options.unconfirmed
+                ? { transcriptCommit: "unconfirmed" as const, errorMessage: "receipt unavailable" }
+                : {}),
             },
     ),
     getDiagnosticSessionActivitySnapshot: vi.fn(() => options.activity ?? {}),
@@ -182,6 +191,29 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, null])(
+    "answers read-only status without mutating commands (target=%s)",
+    async (runTarget) => {
+      if (runTarget === null) {
+        vi.doMock("../agents/embedded-agent-runner/active-run-projections.js", () => {
+          throw new Error("session-key projections unavailable");
+        });
+      }
+      try {
+        await expect(
+          controlRealtimeVoiceAgentRun({
+            sessionKey: "agent:status-probe:main",
+            runTarget,
+            text: "status",
+            mode: "status",
+          }),
+        ).resolves.toMatchObject({ ok: true, mode: "status", active: false, speak: true });
+      } finally {
+        vi.doUnmock("../agents/embedded-agent-runner/active-run-projections.js");
+      }
+    },
+  );
+
   it("queues steering into the active embedded run", async () => {
     const deps = createDeps({ activeSessionId: "session-active" });
 
@@ -214,6 +246,61 @@ describe("controlRealtimeVoiceAgentRun", () => {
         taskSuggestionDeliveryMode: undefined,
       },
     );
+  });
+
+  it.each(["steer", "followup"] as const)(
+    "reports unconfirmed %s without claiming success or sending again",
+    async (mode) => {
+      const deps = createDeps({ activeSessionId: "session-active", unconfirmed: true });
+      const result = await controlRealtimeVoiceAgentRun(
+        { sessionKey: "agent:main:main", text: "continue", mode },
+        deps,
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        queued: true,
+        reason: "delivery_unconfirmed",
+        speak: true,
+        show: true,
+        suppress: false,
+      });
+      expect(result.message).toContain("could not confirm");
+      expect(result.message).toContain("not sent again");
+      expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledOnce();
+      expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a source-bound control with only the shipped narrow V1 callback", async () => {
+    const deps = createDeps({ activeSessionId: "owned-session" });
+    const result = await controlRealtimeVoiceAgentRun(
+      {
+        sessionKey: "global",
+        runTarget: {
+          runId: "owned-run",
+          signal: new AbortController().signal,
+          isCurrent: () => true,
+        },
+        mode: "steer",
+        text: "source-bound",
+      },
+      {
+        ...deps,
+        resolveActiveEmbeddedRunOwnerByRunId: () => ({
+          runId: "owned-run",
+          sessionId: "owned-session",
+          sessionKey: "global",
+          abort: () => true,
+        }),
+      },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      queued: false,
+      reason: "guarded_injection_unsupported",
+    });
+    expect(result.message).toContain("cannot safely accept scoped voice steering");
+    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
   it("wraps follow-up steering so the active run treats it as deferred context", async () => {

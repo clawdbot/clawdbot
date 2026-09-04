@@ -61,6 +61,7 @@ profile selected in the table above; it has no profile-file destination option.
 
 - Without `--install` or `--write-state`, the command prints the script to stdout.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
+- If invalid configuration prevents plugin discovery, generation warns and still includes core commands. Repair the configuration and regenerate to include plugin commands.
 - Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands.
 - `openclaw update` refreshes the completion cache automatically after a successful update; `openclaw doctor` can repair missing or stale completion setups.
 

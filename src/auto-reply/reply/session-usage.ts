@@ -20,7 +20,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 
 function applyCliSessionClearToSessionPatch(
   params: {
@@ -62,13 +62,15 @@ function estimateSessionRunCostUsd(params: {
   if (!hasBillableUsage(params.usage)) {
     return undefined;
   }
-  const cost = resolveModelCostConfig({
-    provider: params.providerUsed,
-    model: params.modelUsed,
-    config: params.cfg,
-    agentDir: params.agentDir,
-  });
-  return asNonNegativeFiniteNumber(estimateAggregateUsageCost({ usage: params.usage, cost }));
+  return asNonNegativeFiniteNumber(
+    estimateAggregateUsageCost({
+      usage: params.usage,
+      provider: params.providerUsed,
+      model: params.modelUsed,
+      config: params.cfg,
+      agentDir: params.agentDir,
+    }),
+  );
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */

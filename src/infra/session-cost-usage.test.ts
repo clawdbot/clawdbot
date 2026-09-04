@@ -887,6 +887,9 @@ describe("session cost usage", () => {
 
       const sessionSummary = await loadSessionCostSummary({ sessionFile });
       expect(sessionSummary?.missingCostByModel).toEqual(summary.totals.missingCostByModel);
+      expect(sessionSummary?.dailyBreakdown?.[0]?.missingCostByModel).toEqual(
+        summary.totals.missingCostByModel,
+      );
     });
   });
 
@@ -987,7 +990,9 @@ describe("session cost usage", () => {
     });
 
     expect(ranged?.totalTokens).toBe(20);
-    expect(ranged?.dailyBreakdown).toEqual([{ date: "2026-02-05", tokens: 20, cost: 0.02 }]);
+    expect(ranged?.dailyBreakdown).toMatchObject([
+      { date: "2026-02-05", tokens: 20, cost: 0.02, totalTokens: 20, totalCost: 0.02 },
+    ]);
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
     const upperBounded = await loadSessionCostSummary({ sessionFile, endMs: rangeEndMs });
@@ -2106,7 +2111,9 @@ describe("session cost usage", () => {
       const global = await loadCostUsageSummary({ agentId: "main", ...range });
 
       expect(direct?.totalTokens).toBe(20);
-      expect(direct?.dailyBreakdown).toEqual([{ date: "2026-02-01", tokens: 20, cost: 0.02 }]);
+      expect(direct?.dailyBreakdown).toMatchObject([
+        { date: "2026-02-01", tokens: 20, cost: 0.02, totalTokens: 20, totalCost: 0.02 },
+      ]);
       expect(global.totals.totalTokens).toBe(20);
     });
   });
@@ -2171,6 +2178,17 @@ describe("session cost usage", () => {
     const summary = await loadSessionCostSummary({ sessionFile });
     expect(summary?.totalTokens).toBe(99);
     expect(summary?.dailyBreakdown?.[0]?.tokens).toBe(99);
+    expect(summary?.dailyBreakdown?.[0]).toMatchObject({
+      input: 1,
+      output: 2,
+      totalTokens: 99,
+      totalCost: 0.099,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    });
     expect(summary?.dailyModelUsage?.[0]?.tokens).toBe(99);
     expect(summary?.utcQuarterHourTokenUsage?.[0]?.totalTokens).toBe(99);
   });

@@ -12,6 +12,7 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { modelCatalogEntryKey } from "./prepared-model-runtime.configured-catalog.js";
+import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   toStaticCatalogEntry,
   type PreparedRuntimeCapabilityModel,
@@ -61,8 +62,13 @@ export async function prepareFullCatalogFacts(
       ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     }));
+  const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    agentFacts,
+    pluginGeneration,
+    templateModelRegistry,
+  );
   const staticModels = [
-    ...agentFacts.configuredRuntimeModels.map((configured) => configured.model),
+    ...configuredRuntimeModels.map(({ model }) => model),
     ...providerStaticModels,
   ];
   const providerOutcomes = catalogSource?.providerOutcomes ?? [];
@@ -77,7 +83,7 @@ export async function prepareFullCatalogFacts(
   return {
     templateModelRegistry,
     modelCatalog: completeModelCatalog,
-    configuredRuntimeModels: agentFacts.configuredRuntimeModels,
+    configuredRuntimeModels,
     inlineProviderModels: pluginGeneration.inlineProviderModels,
   };
 }

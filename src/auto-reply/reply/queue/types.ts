@@ -37,6 +37,7 @@ import type { ReplyPayload } from "../../reply-payload.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
@@ -114,6 +115,8 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** @internal Source execution receipts retained across queued collect batches. */
+  replyOperationRunStates?: ReplyOperationRunState[];
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Keep delivery bound to the source that owned admission, not later runner defaults. */
@@ -330,7 +333,10 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
   }
 }
 
-export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+export function completeFollowupRunLifecycle(
+  run: FollowupLifecycleRun,
+  disposition?: "consumed",
+): void {
   run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
 
@@ -342,7 +348,7 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
     // Async onAbandoned work must contain its own rejections; core guarantees a
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
-      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
         // The queue is relinquishing an un-admitted message: free its dedupe
         // identity so the abandonment-triggered ingress retry can re-enqueue
         // instead of being rejected as a recent duplicate and falsely completed.

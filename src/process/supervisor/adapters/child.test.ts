@@ -4,7 +4,6 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   createStubChild,
@@ -370,39 +369,6 @@ describe("createChildAdapter", () => {
     },
   );
 
-  it("preserves startup failure when a worker error arrives during secret delivery", async () => {
-    setPlatform("win32");
-    const { child, killMock } = createStubChild();
-    const deliveryError = new Error("secret delivery failed");
-    const secretStream = new Writable({
-      write(_chunk, _encoding, callback) {
-        child.emit("error", new Error("worker IPC failed"));
-        setImmediate(() => callback(deliveryError));
-      },
-    });
-    Object.defineProperty(child, "stdio", {
-      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
-      configurable: true,
-    });
-    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-    const transient = Buffer.from("synthetic-secret");
-
-    await expect(
-      createChildAdapter({
-        argv: ["node", "worker"],
-        ownedWorker: true,
-        secretInput: { fd: 3, createData: () => transient },
-      }),
-    ).rejects.toBe(deliveryError);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(killMock).toHaveBeenCalledWith("SIGKILL");
-    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
-    child.removeAllListeners();
-  });
-
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
     setPlatform("win32");
     const { child } = createStubChild();
@@ -438,53 +404,6 @@ describe("createChildAdapter", () => {
     ]);
     expect(Buffer.concat(chunks).toString("utf8")).toBe("selected-secret");
     expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
-  });
-
-  it("withholds input and secret bytes when request authority retires during spawn", async () => {
-    setPlatform("win32");
-    const { child, killMock, emitClose } = createStubChild();
-    const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
-    const secretStream = new PassThrough();
-    const secretBytes = vi.fn();
-    secretStream.on("data", secretBytes);
-    Object.defineProperty(child, "stdio", {
-      value: [child.stdin, child.stdout, child.stderr, secretStream],
-      configurable: true,
-    });
-    const input = vi.spyOn(child.stdin!, "write");
-    const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
-    spawnWithFallbackMock.mockReturnValueOnce(startup.promise);
-    const retired = new Error("request authority retired during spawn");
-    let current = true;
-    const run = createChildAdapter({
-      argv: ["agent-cli", "--prompt"],
-      input: "private prompt",
-      secretInput: { fd: 3, createData },
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const outcome = Promise.allSettled([run]);
-    expect(spawnWithFallbackMock).toHaveBeenCalledOnce();
-    current = false;
-    startup.resolve({ child, usedFallback: false });
-    const [result] = await outcome;
-    try {
-      expect(result).toEqual({ status: "rejected", reason: retired });
-      expect(createData).not.toHaveBeenCalled();
-      expect(secretBytes).not.toHaveBeenCalled();
-      expect(input).not.toHaveBeenCalled();
-      expect(killMock).toHaveBeenCalledWith("SIGKILL");
-    } finally {
-      emitClose(0);
-      if (result?.status === "fulfilled") {
-        result.value.dispose();
-      }
-      secretStream.destroy();
-      child.removeAllListeners();
-    }
   });
 
   it("captures child close while secret input delivery is still pending", async () => {

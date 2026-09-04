@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parentPort, workerData } from "node:worker_threads";
@@ -30,6 +31,10 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import {
+  markSqliteReclamationSettled,
+  waitForSqliteReclamationCommit,
+} from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   reclaimSqliteSessionInTransaction,
   type SqliteSessionReclamationWorkerData,
@@ -411,11 +416,33 @@ async function runReclamationWorkerPort(
   data: SqliteSessionReclamationWorkerData,
 ): Promise<void> {
   let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
+  const commitGate = data.commitGate;
   try {
-    result = reclaimSqliteSessionInTransaction(data.plan);
+    let transactionDatabase: DatabaseSync | undefined;
+    try {
+      result = reclaimSqliteSessionInTransaction(data.plan, {
+        onCommit: commitGate
+          ? (database) => {
+              transactionDatabase = database.db;
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request" }),
+              );
+            }
+          : undefined,
+      });
+    } finally {
+      if (
+        transactionDatabase &&
+        (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+      ) {
+        markSqliteReclamationSettled(commitGate);
+      }
+    }
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
-    if (!cleanup.settled) {
+    if (cleanup.settled) {
+      markSqliteReclamationSettled(commitGate);
+    } else {
       throw new AggregateError(
         [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
         "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",

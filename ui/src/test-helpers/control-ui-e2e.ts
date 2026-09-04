@@ -598,7 +598,7 @@ export type MockGatewayControls = {
   deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
-  getRequests: (method?: string) => Promise<MockGatewayRequest[]>;
+  getRequests: (method?: string, match?: Record<string, unknown>) => Promise<MockGatewayRequest[]>;
   getSocketCount: () => Promise<number>;
   getSocketUrls: () => Promise<string[]>;
   rejectDeferred: (
@@ -622,10 +622,13 @@ export type MockGatewayControls = {
    * Resolves with a captured request for `method`. Without `after` this is
    * satisfied by ANY prior request of the method (and returns the latest), so
    * a second same-method wait can return a stale earlier request on slow
-   * runners; pass `after` = the pre-action count from `getRequests(method)`
-   * to wait for and return the next new request instead.
+   * runners; pass `after` = the pre-action count from `getRequests(method, match)`
+   * to wait for and return the next new request in that same parameter scope.
    */
-  waitForRequest: (method: string, options?: { after?: number }) => Promise<MockGatewayRequest>;
+  waitForRequest: (
+    method: string,
+    options?: { after?: number; match?: Record<string, unknown> },
+  ) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -1094,7 +1097,7 @@ export type ControlUiMockGateway = {
   deliverLatest: (frame: unknown) => void;
   deferNext: (method: string, match?: Record<string, unknown>) => void;
   emit: (event: string, payload?: unknown) => void;
-  findRequests: (method?: string) => MockGatewayRequest[];
+  findRequests: (method?: string, match?: Record<string, unknown>) => MockGatewayRequest[];
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
@@ -2553,8 +2556,11 @@ function installControlUiMockGateway(
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
-    findRequests(method) {
-      return method ? requests.filter((request) => request.method === method) : [...requests];
+    findRequests(method, match) {
+      // Capture and deferral must select the same RPC scope; child lists share the roster method.
+      return requests.filter(
+        (request) => (!method || request.method === method) && paramsMatch(request.params, match),
+      );
     },
     rejectDeferred(method, error) {
       for (const response of takeDeferredResponses(method)) {
@@ -2776,11 +2782,14 @@ function createMockGatewayControls(
     }, frame);
   };
 
-  const getRequests = async (method?: string) =>
-    page.evaluate((targetMethod) => {
-      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-      return gateway?.findRequests(targetMethod) ?? [];
-    }, method);
+  const getRequests = async (method?: string, match?: Record<string, unknown>) =>
+    page.evaluate(
+      ({ targetMethod, requestMatch }) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        return gateway?.findRequests(targetMethod, requestMatch) ?? [];
+      },
+      { targetMethod: method, requestMatch: match },
+    );
 
   return {
     async closeLatest(code, reason) {
@@ -2945,21 +2954,21 @@ function createMockGatewayControls(
     async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
       const after = options?.after;
+      const match = options?.match;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            ({ targetMethod, priorCount }) => {
+            ({ targetMethod, priorCount, requestMatch }) => {
               const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-              const matching =
-                gateway?.requests.filter((request) => request.method === targetMethod) ?? [];
+              const matching = gateway?.findRequests(targetMethod, requestMatch) ?? [];
               return matching.length > (priorCount ?? 0);
             },
-            { targetMethod: method, priorCount: after ?? 0 },
+            { targetMethod: method, priorCount: after ?? 0, requestMatch: match },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const matching = await getRequests(method);
+          const matching = await getRequests(method, match);
           // With an `after` cursor, return the first NEW request; otherwise keep
           // the historical latest-match behavior existing callers rely on.
           const request = after === undefined ? matching.at(-1) : matching.at(after);

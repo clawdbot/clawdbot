@@ -604,8 +604,16 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
+    dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
   },
 ) {
+  const dispatchAuthority = extra?.dispatchAuthority;
+  if (
+    dispatchAuthority &&
+    (dispatchAuthority.version !== 2 || typeof dispatchAuthority.assertCurrent !== "function")
+  ) {
+    throw new Error("Gateway dispatch authority requires version 2 and a synchronous assertion");
+  }
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
@@ -638,6 +646,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
     expectFinal: extra?.expectFinal,
+    assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

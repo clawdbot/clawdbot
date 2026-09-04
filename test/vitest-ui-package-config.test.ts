@@ -11,6 +11,7 @@ import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 type ExpectedTestConfig = {
+  clearMocks?: boolean;
   experimental?: ReturnType<typeof loadVitestExperimentalConfig>["experimental"];
   include?: string[];
   exclude?: string[];
@@ -138,6 +139,7 @@ describe("ui package vitest config", () => {
         (file) => `ui/${file.replaceAll("\\", "/")}`,
       );
     });
+    expect(new Set(selected).size).toBe(selected.length);
     expect(selected.toSorted()).toEqual(expected);
   });
 
@@ -148,9 +150,12 @@ describe("ui package vitest config", () => {
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.projects).toHaveLength(4);
     expect(testConfig.maxWorkers).toBeGreaterThan(0);
+    expect(testConfig.clearMocks).toBe(false);
 
     for (const project of testConfig.projects ?? []) {
       const projectTestConfig = requireTestConfig(project);
+      expect((project as { extends?: boolean }).extends).toBe(false);
+      expect(projectTestConfig.clearMocks).toBe(false);
       expect(projectTestConfig.pool).toBe("threads");
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
@@ -204,6 +209,7 @@ describe("ui package vitest config", () => {
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
+    expect(testConfig.clearMocks).toBe(false);
   });
 
   it("aliases the scope-upgrade workspace subpath for clean browser test checkouts", () => {

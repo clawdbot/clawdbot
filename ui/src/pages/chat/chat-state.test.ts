@@ -2561,6 +2561,7 @@ describe("ChatStateController render lifecycle", () => {
       createPageContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       {
+        dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
         querySelector: () => null,
       },
@@ -3210,6 +3211,7 @@ describe("ChatStateController render lifecycle", () => {
     controller.hostConnected();
     const renderLifecycle = controller.createRenderLifecycle();
     const state = createPageState(createPageContext(), renderLifecycle, {
+      dispatchEvent: () => true,
       querySelector: () => null,
     });
     const stop = vi.fn(() => {
@@ -3498,7 +3500,7 @@ describe("image lightbox lifecycle", () => {
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
 
     const source = "data:video/mp4;base64,AAAA";
@@ -3552,7 +3554,7 @@ describe("image lightbox lifecycle", () => {
         invalidate,
         afterCommit: () => () => {},
       },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     const release = vi.fn();
     state.imageLightbox = {
@@ -3613,7 +3615,7 @@ describe("loadPageAssistantIdentity", () => {
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     state.client = client;
     state.connected = true;
