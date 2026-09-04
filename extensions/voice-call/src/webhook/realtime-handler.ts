@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentErrorProviderResult,
   calculateMulawRms,
@@ -326,7 +327,7 @@ type RealtimeTelephonyBinding = {
   drainPlaybackBeforeEndCall: () => Promise<RealtimeAudioDrainResult>;
   endCall: () => void;
   noteMediaActivity: () => void;
-  resumeAfterEndCallFailure: () => void;
+  resumeAfterTerminalDrain: () => void;
   retire: () => void;
 };
 
@@ -1255,7 +1256,7 @@ export class RealtimeCallHandler {
         }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
         livenessTimer.unref?.();
       },
-      resumeAfterEndCallFailure: () => audioPacer.resumeAfterTerminalDrain(),
+      resumeAfterTerminalDrain: () => audioPacer.resumeAfterTerminalDrain(),
       retire: () => {
         void closeBinding(telephonyBinding);
       },
@@ -1795,6 +1796,27 @@ export class RealtimeCallHandler {
         `[voice-call] realtime end-call playback mark timed out callId=${params.callId}`,
       );
     }
+    if (drainResult === "interrupted") {
+      binding.resumeAfterTerminalDrain();
+      const toolResult = buildRealtimeVoiceAgentCancelProviderResult(
+        "The farewell was interrupted before playback completed. Keep the phone call connected and continue with the caller's latest request.",
+      );
+      await params.bridge.submitToolResult(
+        params.bridgeCallId,
+        toolResult,
+        params.bridge.bridge.supportsToolResultSuppression === false
+          ? undefined
+          : { suppressResponse: true },
+      );
+      params.harness.emit({
+        type: "tool.result",
+        turnId: params.turnId,
+        callId: params.bridgeCallId,
+        payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: toolResult },
+        final: true,
+      });
+      return;
+    }
 
     let result: { success: boolean; error?: string };
     try {
@@ -1810,7 +1832,7 @@ export class RealtimeCallHandler {
       return;
     }
     if (!result.success) {
-      binding.resumeAfterEndCallFailure();
+      binding.resumeAfterTerminalDrain();
       const detail = result.error?.trim() || "the telephony provider returned no reason";
       const toolResult = {
         error: `Could not end the current phone call: ${detail}. Tell the caller the call could not be ended and they can hang up or ask you to try again.`,
