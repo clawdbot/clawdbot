@@ -85,10 +85,14 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
   });
 
-  it("does not read managed hook policy when no enforcing native relay is installed", async () => {
+  it("checks native requirements without requiring managed-hook permission for observational hooks", async () => {
     const sessionFile = path.join(tempDir, "observational-hooks-only.jsonl");
     const workspaceDir = path.join(tempDir, "observational-hooks-only-workspace");
-    const harness = createStartedThreadHarness();
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "configRequirements/read"
+        ? { requirements: { allowManagedHooksOnly: true } }
+        : undefined,
+    );
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       nativeHookRelay: { enabled: true, events: ["post_tool_use"] },
@@ -97,9 +101,13 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(harness.requests.some((request) => request.method === "configRequirements/read")).toBe(
-      false,
-    );
+    expect(
+      harness.requests.filter((request) => request.method === "configRequirements/read"),
+    ).toHaveLength(1);
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const config = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(config?.["hooks.PreToolUse"]).toBeUndefined();
   });
 
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {

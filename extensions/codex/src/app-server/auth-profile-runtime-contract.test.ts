@@ -141,6 +141,9 @@ function createCodexAuthProfileHarness(params: {
   const seenClientOptions: CodexAppServerClientOptions[] = [];
   const harness = createAppServerHarness(
     async (method) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
       }

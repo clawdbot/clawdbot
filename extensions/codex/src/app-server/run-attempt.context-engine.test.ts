@@ -643,8 +643,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
 
     expect(firstHarness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "turn/start",
     ]);
     const secondInputText = getRequestInputTextAt(firstHarness, 1);
@@ -762,6 +764,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
@@ -846,6 +849,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -935,6 +939,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -983,6 +988,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1038,6 +1044,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1126,6 +1133,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1297,6 +1305,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1382,19 +1391,21 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const freshTurnStarted = createDeferred<void>();
       const harness = createStartedThreadHarness(
         async (method, requestParams) => {
-          const request = requireRecord(requestParams, `${method} params`);
           if (method === "thread/resume") {
             return threadStartResult("thread-old");
-          }
-          if (method === "turn/start" && request.threadId === "thread-old") {
-            throw new Error("Codex ran out of room in the model's context window");
           }
           if (method === "thread/start") {
             return threadStartResult("thread-fresh");
           }
-          if (method === "turn/start" && request.threadId === "thread-fresh") {
-            freshTurnStarted.resolve();
-            return turnStartResult("turn-fresh");
+          if (method === "turn/start") {
+            const request = requireRecord(requestParams, `${method} params`);
+            if (request.threadId === "thread-old") {
+              throw new Error("Codex ran out of room in the model's context window");
+            }
+            if (request.threadId === "thread-fresh") {
+              freshTurnStarted.resolve();
+              return turnStartResult("turn-fresh");
+            }
           }
           return undefined;
         },
@@ -1432,10 +1443,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           }),
         ]);
         expect(harness.requests.map((request) => request.method)).toEqual([
+          "configRequirements/read",
           "thread/read",
           "thread/resume",
           "thread/inject_items",
           "turn/start",
+          "configRequirements/read",
           "thread/start",
           "turn/start",
         ]);
@@ -1503,18 +1516,23 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const successorStart = vi.fn(() => threadStartResult("thread-fresh"));
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
-        const request = requireRecord(requestParams, `${method} params`);
         if (method === "thread/resume") {
           return threadStartResult("thread-old");
         }
-        if (method === "turn/start" && request.threadId === "thread-old") {
-          // Selection changes after the original turn writes; the successor is rejected locally.
-          harness.client.setThreadSessionRequestGuard(async () => {
-            throw Object.assign(new Error("managed executable selection changed during startup"), {
-              code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+        if (method === "turn/start") {
+          const request = requireRecord(requestParams, `${method} params`);
+          if (request.threadId === "thread-old") {
+            // Selection changes after the original turn writes; the successor is rejected locally.
+            harness.client.setThreadSessionRequestGuard(async () => {
+              throw Object.assign(
+                new Error("managed executable selection changed during startup"),
+                {
+                  code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+                },
+              );
             });
-          });
-          throw new Error("Codex ran out of room in the model's context window");
+            throw new Error("Codex ran out of room in the model's context window");
+          }
         }
         if (method === "thread/start") {
           return successorStart();
@@ -1537,10 +1555,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       replaySafe: true,
     });
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
       "turn/start",
+      "configRequirements/read",
       "thread/start",
       "thread/unsubscribe",
     ]);
@@ -1586,17 +1606,19 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine({ assemble, compact });
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
-        const request = requireRecord(requestParams, `${method} params`);
         if (method === "thread/resume") {
           return threadStartResult("thread-old");
         }
-        if (method === "turn/start" && request.threadId === "thread-old") {
-          await writeCodexAppServerBinding(sessionFile, {
-            threadId: "thread-new",
-            cwd: workspaceDir,
-            dynamicToolsFingerprint: "[]",
-          });
-          throw new Error("Codex ran out of room in the model's context window");
+        if (method === "turn/start") {
+          const request = requireRecord(requestParams, `${method} params`);
+          if (request.threadId === "thread-old") {
+            await writeCodexAppServerBinding(sessionFile, {
+              threadId: "thread-new",
+              cwd: workspaceDir,
+              dynamicToolsFingerprint: "[]",
+            });
+            throw new Error("Codex ran out of room in the model's context window");
+          }
         }
         if (method === "thread/start") {
           return threadStartResult("thread-fresh");
@@ -1615,6 +1637,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
@@ -1716,6 +1739,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       expect(compact).not.toHaveBeenCalled();
       expect(harness.requests.map((request) => request.method)).toEqual([
+        "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
@@ -1765,6 +1789,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
     ]);
@@ -1807,6 +1832,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
       "thread/unsubscribe",
@@ -1847,18 +1873,20 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine({ assemble, compact });
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
-        const request = requireRecord(requestParams, `${method} params`);
         if (method === "thread/resume") {
           return threadStartResult("thread-old");
-        }
-        if (method === "turn/start" && request.threadId === "thread-old") {
-          throw new Error("Codex ran out of room in the model's context window");
         }
         if (method === "thread/start") {
           return threadStartResult("thread-fresh");
         }
-        if (method === "turn/start" && request.threadId === "thread-fresh") {
-          return turnStartResult("turn-fresh");
+        if (method === "turn/start") {
+          const request = requireRecord(requestParams, `${method} params`);
+          if (request.threadId === "thread-old") {
+            throw new Error("Codex ran out of room in the model's context window");
+          }
+          if (request.threadId === "thread-fresh") {
+            return turnStartResult("turn-fresh");
+          }
         }
         return undefined;
       },
@@ -1872,10 +1900,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await vi.waitFor(
       () =>
         expect(harness.requests.map((request) => request.method)).toEqual([
+          "configRequirements/read",
           "thread/read",
           "thread/resume",
           "thread/inject_items",
           "turn/start",
+          "configRequirements/read",
           "thread/start",
           "turn/start",
         ]),

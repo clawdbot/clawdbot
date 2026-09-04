@@ -132,6 +132,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const workspaceDir = path.join(tempDir, "workspace");
     const serverPath = await writePolicyProbeServer(tempDir);
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -188,6 +191,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       },
     };
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-policy");
       }
@@ -219,6 +225,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     await run();
 
     expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
@@ -257,6 +264,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       },
     };
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-session-override");
       }
@@ -275,7 +285,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       appServer: createAppServerOptions(),
     });
 
-    const callParams = request.mock.calls[0]?.[1] as {
+    const callParams = request.mock.calls[1]?.[1] as {
       config?: { mcp_servers?: { docs?: { enabled_tools?: string[]; disabled_tools?: string[] } } };
     };
     expect(callParams.config?.mcp_servers?.docs).toMatchObject({
@@ -305,6 +315,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       },
     };
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-agent-scope");
       }
@@ -320,7 +333,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     await expect(fs.access(startedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    const callParams = request.mock.calls[0]?.[1] as {
+    const callParams = request.mock.calls[1]?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(callParams.config?.mcp_servers?.docs).toBeUndefined();
@@ -332,6 +345,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const workspaceDir = path.join(tempDir, "workspace");
     const serverPath = await writePolicyProbeServer(tempDir);
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -385,6 +401,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       } as unknown as EmbeddedRunAttemptParams["config"];
       const request = vi.fn(async (method: string, _params: unknown) => {
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "thread/start") {
           return threadStartResult("thread-beta5");
         }
@@ -431,7 +450,10 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
       request.mockClear();
       await run();
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "configRequirements/read",
+        "thread/start",
+      ]);
       const convergedBinding = await readCodexAppServerBinding(sessionFile);
       expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
@@ -448,8 +470,12 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       });
       request.mockClear();
       await run();
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "configRequirements/read",
+        "thread/resume",
+      ]);
       expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+        "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
@@ -463,6 +489,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const workspaceDir = path.join(tempDir, "workspace");
     const url = await startPolicyHttpServer();
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -519,6 +548,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -586,6 +618,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-restarted");
       }
@@ -725,6 +760,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       mcpServersFingerprint: "mcp-v1",
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-fallback");
       }
@@ -743,7 +781,10 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "configRequirements/read",
+      "thread/start",
+    ]);
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-native");
     expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
@@ -764,6 +805,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       },
     } as unknown as EmbeddedRunAttemptParams["config"];
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-started");
       }
@@ -821,6 +865,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       }) as unknown as EmbeddedRunAttemptParams["config"];
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-with-current-bearer");
       }
@@ -851,8 +898,11 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       appServer: createAppServerOptions(),
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    const startParams = request.mock.calls[1]?.[1] as {
       config?: { mcp_servers?: Record<string, { http_headers?: Record<string, string> }> };
     };
     expect(startParams?.config?.mcp_servers?.ducktape?.http_headers?.Authorization).toBe(
@@ -882,6 +932,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       throw new Error("expected loopback MCP server address");
     }
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-without-oauth-mcp");
       }
@@ -922,7 +975,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       });
     }
 
-    const startParams = request.mock.calls[0]?.[1] as {
+    const startParams = request.mock.calls[1]?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(startParams?.config?.mcp_servers).toBeUndefined();
@@ -945,6 +998,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       },
     } as unknown as EmbeddedRunAttemptParams["config"];
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-with-user-mcp");
       }
@@ -983,6 +1039,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",

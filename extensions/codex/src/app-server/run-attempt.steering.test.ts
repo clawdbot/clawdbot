@@ -905,6 +905,9 @@ describe("runCodexAppServerAttempt steering", () => {
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }

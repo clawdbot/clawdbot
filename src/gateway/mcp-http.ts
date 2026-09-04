@@ -333,6 +333,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
+          nativeCronCreatorToolAllowlist: requestContext.nativeCronCreatorToolAllowlist,
           delegationCapability: requestContext.delegationCapability,
           ...(skillWorkshop ? { skillWorkshop } : {}),
           scheduledToolPolicy: requestContext.scheduledToolPolicy,

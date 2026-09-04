@@ -56,6 +56,8 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  /** Canonical authority projected from native tools by the trusted CLI backend owner. */
+  nativeCronCreatorToolAllowlist?: string[];
   skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into

@@ -187,6 +187,12 @@ describe("Codex app-server main thread cleanup", () => {
           result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         });
       }
+      const requirements = await waitForHarnessRequest(
+        harness,
+        "configRequirements/read",
+        requestStart,
+      );
+      harness.send({ id: requirements.id, result: { requirements: null } });
       const threadId = `thread-${label}`;
       if (index < 2) {
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
@@ -207,11 +213,15 @@ describe("Codex app-server main thread cleanup", () => {
         .map((write) => (JSON.parse(write) as { method: string }).method)
         .filter((method) => method !== "initialize" && method !== "initialized");
     expect(userRequestMethods()).toEqual([
+      "configRequirements/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "turn/start",
+      "configRequirements/read",
       "turn/start",
     ]);
     await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
@@ -245,6 +255,12 @@ describe("Codex app-server main thread cleanup", () => {
     const siblingRun = runCodexAppServerAttempt(siblingParams, {
       bindingStore: testCodexAppServerBindingStore,
     });
+    const siblingRequirements = await waitForHarnessRequest(
+      harness,
+      "configRequirements/read",
+      siblingRequestStart,
+    );
+    harness.send({ id: siblingRequirements.id, result: { requirements: null } });
     const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
     harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
     harness.send({
@@ -256,7 +272,11 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-2)).toEqual(["thread/unsubscribe", "turn/start"]);
+    expect(userRequestMethods().slice(-3)).toEqual([
+      "thread/unsubscribe",
+      "configRequirements/read",
+      "turn/start",
+    ]);
   });
 
   it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
@@ -434,6 +454,8 @@ describe("Codex app-server main thread cleanup", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
+      const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
+      physical.send({ id: requirements.id, result: { requirements: null } });
       const thread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");

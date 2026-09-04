@@ -126,6 +126,7 @@ import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -1211,10 +1212,29 @@ export async function prepareCliRunContext(
   const restrictedLoopbackToolsAllow =
     params.cliToolAvailability?.openClaw ??
     (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
-  const mcpGrantContext =
-    mcpContextBase && restrictedLoopbackToolsAllow !== undefined
-      ? { ...mcpContextBase, toolsAllow: [...restrictedLoopbackToolsAllow] }
-      : mcpContextBase;
+  // Node-native tools cannot authorize Gateway-host jobs. Validate before minting
+  // the grant, then apply the run's web-search restriction to the native projection.
+  let nativeCronCreatorToolAllowlist =
+    !skipsTurnPreparation && params.disableTools !== true && !nodeClaudePlacement
+      ? backendResolved.projectNativeToolAuthority?.(params.cliToolAvailability?.native)
+      : undefined;
+  assertNativeCronCreatorCapabilities(nativeCronCreatorToolAllowlist ?? []);
+  if (params.toolOverrides?.webSearch === false) {
+    nativeCronCreatorToolAllowlist = nativeCronCreatorToolAllowlist?.filter(
+      (name) => name !== "web_search",
+    );
+  }
+  const mcpGrantContext = mcpContextBase
+    ? {
+        ...mcpContextBase,
+        ...(restrictedLoopbackToolsAllow !== undefined
+          ? { toolsAllow: [...restrictedLoopbackToolsAllow] }
+          : {}),
+        ...(nativeCronCreatorToolAllowlist?.length
+          ? { nativeCronCreatorToolAllowlist: [...nativeCronCreatorToolAllowlist] }
+          : {}),
+      }
+    : undefined;
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
     ? hashCliSessionText(
         JSON.stringify([

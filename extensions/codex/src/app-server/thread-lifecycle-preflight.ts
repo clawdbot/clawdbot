@@ -149,12 +149,13 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
       )
     : [];
-  if (restrictedToolSurface || imageGenerationDenied) {
+  if (restrictedToolSurface || imageGenerationDenied || params.nativeCodeModeEnabled !== false) {
     await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
       assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         params.client,
         {
           restrictedToolSurface,
+          requiredNativeShell: params.nativeCodeModeEnabled !== false,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
           allowedManagedRequirementsFingerprint:
             readScheduledCodexAppManagedRequirementsFingerprint(

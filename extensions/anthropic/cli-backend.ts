@@ -58,6 +58,37 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
 ] as const;
 
+// Claude Code native tool -> core capability. Each native tool maps only to the
+// capability it is actually equivalent to. Bash is foreground shell only: the
+// launch arguments disallow Bash(run_in_background:true), so no `process`.
+const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
+  read: "read",
+  grep: "read",
+  glob: "read",
+  write: "write",
+  edit: "edit",
+  multiedit: "edit",
+  notebookedit: "edit",
+  bash: "exec",
+  webfetch: "web_fetch",
+  websearch: "web_search",
+};
+
+function projectClaudeNativeToolAuthority(
+  nativeTools: readonly string[] | undefined,
+): readonly string[] {
+  const selected =
+    nativeTools && new Set(nativeTools.map((name) => name.trim().split("(", 1)[0]?.toLowerCase()));
+  // Mapping order keeps persisted caps deterministic; undefined selects the default surface.
+  return [
+    ...new Set(
+      Object.entries(CLAUDE_NATIVE_TOOL_CAPABILITIES)
+        .filter(([name]) => selected === undefined || selected.has(name))
+        .map(([, capability]) => capability),
+    ),
+  ];
+}
+
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
   value: string;
@@ -162,6 +193,7 @@ export function buildAnthropicCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
