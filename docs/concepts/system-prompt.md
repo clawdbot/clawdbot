@@ -57,6 +57,7 @@ Tooling also carries long-running-work guidance:
 - when automatic completion wake is enabled, start the command once and rely on the push-based wake path
 - use `process` for logs, status, input, or intervention on a running command
 - for larger tasks, prefer `sessions_spawn` and follow its accepted completion mode: announcing children return completion events; collectors require explicit result collection
+- treat a child completion as the end of that run, not proof that the delegated user goal is complete; continue persistent sessions when in-scope work remains
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for completion
 
 `agents.defaults.subagents.delegationMode` can strengthen this. With no explicit setting, OpenClaw uses `"prefer"` in each agent's main session and `"suggest"` elsewhere; an explicit default or per-agent override always wins. `"prefer"` adds a dedicated **Delegation** section telling the agent to stay responsive, use hidden sub-agents for internal legwork, and use visible sidebar sessions for work the user will follow or return to. This is prompt-only; tool policy still controls whether `sessions_spawn` is available.

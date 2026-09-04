@@ -562,10 +562,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Stats:");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "Review/verify the result above before deciding whether the original task is done.",
+      "This completion ends one child run, not necessarily the original user request.",
     );
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
@@ -804,7 +804,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("session_id: child-session-usage");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "This completion ends one child run, not necessarily the original user request.",
+    );
+    expect(msg).toContain(
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
