@@ -423,6 +423,20 @@ then drives obsolete declaration pruning. Missing or tampered outputs invalidate
 the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. A warm run validates the records without emitting declarations.
 
+Native declaration and package-boundary records accept only checkout-owned input
+realpaths, including compiler libraries, inherited config, dependency links, and
+package manifests. Local pnpm links remain supported when their targets stay
+inside the checkout. The tsgo wrapper does not create or reuse a shared external
+install; invocations from subdirectories still use the containing checkout as
+the ownership boundary. Declared checkout junctions and platform path aliases map
+to the same native root for validation and actual snapshot reads. Native resolution
+itself is not sandboxed: an ancestor install can still enter a successful compiler
+receipt. The owner then fails with `Declaration input escapes checkout`, without
+publishing a success record or pruning obsolete declarations. Warm records use
+the same input check. Use a standalone checkout outside ancestor installs with
+its own `pnpm install` when this occurs; do not remove the ancestor installation
+or weaken input checks.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
@@ -439,8 +453,8 @@ that escape through symlinks or bundler resolution fail the build. Each checkout
 needs its own installed declaration inputs, including compiler libraries. Local
 pnpm links are supported when their targets remain inside the checkout; shared
 external installs are not. Actual compiler receipts remain unfiltered, and input
-changes still prevent publication. Runtime module resolution and the separate
-native tsgo typecheck and package-boundary owners retain their existing contracts.
+changes still prevent publication. Runtime module resolution is unchanged;
+native tsgo uses the separate receipt-admission policy above.
 
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.

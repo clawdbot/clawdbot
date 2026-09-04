@@ -7,12 +7,13 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   applyLocalTsgoPolicy,
-  ensureRepoToolNodeModulesLink,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
+import { findRepoRoot } from "./lib/repo-root.mjs";
+import { createDeclarationInputBoundary } from "./lib/tsdown-declaration-boundary.mts";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
@@ -51,7 +52,6 @@ export function prepareTsgoCommand(
     hostResources,
   );
 
-  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd });
   const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
   if (tsBuildInfoFile) {
     fs.mkdirSync(path.dirname(path.resolve(cwd, tsBuildInfoFile)), { recursive: true });
@@ -66,7 +66,9 @@ export function prepareTsgoCommand(
     throw new Error(sparseGuardError);
   }
 
-  ensureRepoToolNodeModulesLink(tsgoPath, { cwd });
+  // Subdirectories share checkout ownership, but another checkout's install never does.
+  const inputs = createDeclarationInputBoundary(findRepoRoot(cwd) ?? cwd);
+  const tsgoPath = inputs.assert(resolveRepoToolBinPath("tsgo", { cwd }));
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);

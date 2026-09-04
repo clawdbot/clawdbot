@@ -25,6 +25,7 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempRoots = new Set<string>();
 
@@ -52,7 +53,7 @@ afterEach(() => {
 
 describe("check-extension-package-tsc-boundary", () => {
   it("reruns the real compiler after an inherited paths change in the CLI", () => {
-    const root = fs.realpathSync(createTempExtensionRoot().rootDir);
+    const root = fs.realpathSync.native(createTempExtensionRoot().rootDir);
     const write = (file: string, contents: string) => {
       const target = path.join(root, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -95,13 +96,17 @@ describe("check-extension-package-tsc-boundary", () => {
     ]) {
       write(`scripts/${file}`, fs.readFileSync(path.resolve("scripts", file), "utf8"));
     }
+    materializeNativeCompiler(root);
     for (const file of [
       "scripts/lib",
-      "packages/normalization-core",
-      ...["tsx", "typescript", "@typescript", "@openclaw/fs-safe", "p-map", ".bin/tsgo"].map(
-        (name) => `node_modules/${name}`,
-      ),
+      "packages/normalization-core/src",
+      "packages/normalization-core/package.json",
     ]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
+    }
+    for (const name of ["tsx", "@openclaw/fs-safe", "p-map"]) {
+      const file = `node_modules/${name}`;
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.symlinkSync(path.resolve(file), path.join(root, file));
     }
