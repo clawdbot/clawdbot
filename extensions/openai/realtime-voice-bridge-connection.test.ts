@@ -1,6 +1,9 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -89,137 +92,172 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(options?.maxPayload).toBe(16 * 1024 * 1024);
   });
 
-  it("sends one shared GA policy and waits for session.updated on an attached sideband", async () => {
-    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
-      session: { clientSecret: "gateway-token" },
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const bindBridge = vi.fn();
-    const onEvent = vi.fn();
-    const onReady = vi.fn();
-    const cfg = {} as never;
+  it.each(["modern", "v2026.8.1"] as const)(
+    "shares GA policy and sideband readiness with the %s host binding",
+    async (binding) => {
+      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
+        session: { clientSecret: "gateway-token" },
+      });
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: broker,
+      });
+      const bindBridge = vi.fn();
+      const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
+      const onEvent = vi.fn();
+      const onReady = vi.fn();
+      const cfg = {} as never;
 
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-        cfg,
-        providerConfig: { apiKey: "test-api-key-platform" },
-        model: "gpt-realtime-2.1",
-      }),
-    ).toMatchObject({ supportsGatewayControl: true });
-    await expect(
-      provider.createBrowserSession?.({
-        cfg,
-        providerConfig: { apiKey: "test-api-key-platform" },
+      expect(
+        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
+          cfg,
+          providerConfig: { apiKey: "test-api-key-platform" },
+          model: "gpt-realtime-2.1",
+        }),
+      ).toMatchObject({ supportsGatewayControl: true });
+      await expect(
+        provider.createBrowserSession?.({
+          cfg,
+          providerConfig: { apiKey: "test-api-key-platform" },
+          instructions: "Stay concise.",
+          model: "gpt-realtime-2.1",
+          prefixPaddingMs: 420,
+          reasoningEffort: "medium",
+          silenceDurationMs: 650,
+          tools: [createRealtimeTool("openclaw_agent_consult")],
+          vadThreshold: 0.7,
+          voice: "marin",
+          gatewayControl: {
+            bindBridge,
+            onEvent,
+            onReady,
+            ...(binding === "modern" ? { bindControl } : {}),
+          },
+        }),
+      ).resolves.toMatchObject({
+        clientSecret: "gateway-token",
+        offerUrl: "/plugins/openai/realtime/calls",
+      });
+      const brokerRequest = requireRecord(
+        createBrowserSession.mock.calls[0]?.[0],
+        "broker request",
+      );
+      expect(brokerRequest.clientControl).toEqual({ owner: "gateway" });
+      expect(createBrowserSession.mock.calls[0]?.[1]).toEqual({
+        type: "api-key",
+        token: "test-api-key-platform",
+      });
+      const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
+      const gaSession = requireRecord(brokerRequest.gaSession, "GA session policy");
+      expect(gaSession).toMatchObject({
+        type: "realtime",
         instructions: "Stay concise.",
         model: "gpt-realtime-2.1",
-        prefixPaddingMs: 420,
-        reasoningEffort: "medium",
-        silenceDurationMs: 650,
-        tools: [createRealtimeTool("openclaw_agent_consult")],
-        vadThreshold: 0.7,
-        voice: "marin",
-        gatewayControl: { bindBridge, onEvent, onReady },
-      }),
-    ).resolves.toMatchObject({
-      clientSecret: "gateway-token",
-      offerUrl: "/plugins/openai/realtime/calls",
-    });
-    const brokerRequest = requireRecord(createBrowserSession.mock.calls[0]?.[0], "broker request");
-    expect(createBrowserSession.mock.calls[0]?.[1]).toEqual({
-      type: "api-key",
-      token: "test-api-key-platform",
-    });
-    const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
-    const gaSession = requireRecord(brokerRequest.gaSession, "GA session policy");
-    expect(gaSession).toMatchObject({
-      type: "realtime",
-      instructions: "Stay concise.",
-      model: "gpt-realtime-2.1",
-      output_modalities: ["audio"],
-      reasoning: { effort: "medium" },
-      tool_choice: "auto",
-      audio: {
-        input: {
-          format: { type: "audio/pcm", rate: 24000 },
-          noise_reduction: { type: "near_field" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.7,
-            prefix_padding_ms: 420,
-            silence_duration_ms: 650,
-            create_response: true,
-            interrupt_response: true,
+        output_modalities: ["audio"],
+        reasoning: { effort: "medium" },
+        tool_choice: "auto",
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            noise_reduction: { type: "near_field" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.7,
+              prefix_padding_ms: 420,
+              silence_duration_ms: 650,
+              create_response: true,
+              interrupt_response: true,
+            },
           },
+          output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
         },
-        output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
-      },
-    });
-    const createBridge = gaSideband.createBridge as (params: {
-      apiKey: string;
-      callId: string;
-      onTerminal: () => void;
-    }) => RealtimeVoiceBridge;
-    const bridge = createBridge({
-      apiKey: "test-api-key-platform",
-      callId: "rtc_gateway",
-      onTerminal: vi.fn(),
-    });
-    expect(bindBridge).toHaveBeenCalledWith(bridge);
-    const { connecting, socket } = beginBridgeConnection(bridge);
-    let connectResolved = false;
-    void connecting.then(() => {
-      connectResolved = true;
-    });
-    expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
-    openSocket(socket);
-    await Promise.resolve();
-    const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
-    expect(sessionUpdates).toHaveLength(1);
-    expect(sessionUpdates[0]?.session).toEqual(gaSession);
-    emitServerEvent(socket, {
-      type: "session.created",
-      session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
-    });
-    await Promise.resolve();
-    expect(connectResolved).toBe(false);
-    expect(onReady).not.toHaveBeenCalled();
-    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
-    emitSessionUpdated(socket);
-    await connecting;
-    expect(connectResolved).toBe(true);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "session.created",
-      detail: "tools=1 toolChoice=auto",
-    });
+      });
+      const createBridge = gaSideband.createBridge as (params: {
+        apiKey: string;
+        callId: string;
+        onTerminal: () => void;
+      }) => RealtimeVoiceBridge;
+      const bridge = createBridge({
+        apiKey: "test-api-key-platform",
+        callId: "rtc_gateway",
+        onTerminal: vi.fn(),
+      });
+      if (binding === "modern") {
+        expect(bindControl).toHaveBeenCalledOnce();
+        expect(bindBridge).not.toHaveBeenCalled();
+      } else {
+        expect(bindBridge).toHaveBeenCalledWith(bridge);
+        expect(bindControl).not.toHaveBeenCalled();
+      }
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      let connectResolved = false;
+      void connecting.then(() => {
+        connectResolved = true;
+      });
+      expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
+      openSocket(socket);
+      await Promise.resolve();
+      const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
+      expect(sessionUpdates).toHaveLength(1);
+      expect(sessionUpdates[0]?.session).toEqual(gaSession);
+      emitServerEvent(socket, {
+        type: "session.created",
+        session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
+      });
+      await Promise.resolve();
+      expect(connectResolved).toBe(false);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
+      emitSessionUpdated(socket);
+      await connecting;
+      expect(connectResolved).toBe(true);
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "server",
+        type: "session.created",
+        detail: "tools=1 toolChoice=auto",
+      });
 
-    bridge.setMediaTimestamp(1_000);
-    emitServerEvent(socket, {
-      type: "response.output_audio.delta",
-      item_id: "item_pcm",
-      delta: Buffer.alloc(3_700 * 48).toString("base64"),
-    });
-    bridge.setMediaTimestamp(4_760);
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
-
-    expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "response.cancel",
-        event_id: expect.stringMatching(/^openclaw-response-cancel-/),
-      },
-      {
-        type: "conversation.item.truncate",
+      bridge.setMediaTimestamp(1_000);
+      emitServerEvent(socket, {
+        type: "response.output_audio.delta",
         item_id: "item_pcm",
-        content_index: 0,
-        audio_end_ms: 3_700,
-      },
-    ]);
-    bridge.close();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+        delta: Buffer.alloc(3_700 * 48).toString("base64"),
+      });
+      bridge.setMediaTimestamp(4_760);
+      bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+      expect(parseSent(socket).slice(-2)).toEqual([
+        {
+          type: "response.cancel",
+          event_id: expect.stringMatching(/^openclaw-response-cancel-/),
+        },
+        {
+          type: "conversation.item.truncate",
+          item_id: "item_pcm",
+          content_index: 0,
+          audio_end_ms: 3_700,
+        },
+      ]);
+      if (binding === "modern") {
+        const control = bindControl.mock.calls[0]?.[0];
+        if (!control?.sendUserMessage || !control.submitToolResult) {
+          throw new Error("Expected both GA control operations");
+        }
+        await control.submitToolResult("unknown-call", {});
+        control.sendUserMessage("Read the current status");
+        expect(parseSent(socket)).toContainEqual({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Read the current status" }],
+          },
+        });
+      }
+      bridge.close();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const onReady = vi.fn();

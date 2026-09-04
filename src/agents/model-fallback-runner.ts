@@ -173,11 +173,14 @@ async function runWithModelFallbackInternal<T>(
   await params.prepareCandidateChain?.(candidates);
   const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
-    !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+    !params.skipAuthProfileRuntime &&
+    params.cfg &&
+    (userLockedAuthProfileId || hasAnyAuthProfileStoreSource(params.agentDir))
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
     ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+        profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,
           allowKeychainPrompt: false,
@@ -608,10 +611,7 @@ async function runWithModelFallbackInternal<T>(
     // here prevents the fallback chain from consuming candidates retrying
     // the same local condition and surfacing a misleading "All models
     // failed" summary. See #83510.
-    if (isNonProviderRuntimeCoordinationError(err)) {
-      throw err;
-    }
-    if (isTranscriptNotContinuableError(err)) {
+    if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
       throw err;
     }
     if (transientProbeProviderForAttempt) {

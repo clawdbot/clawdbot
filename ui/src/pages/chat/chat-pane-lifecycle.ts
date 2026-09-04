@@ -221,9 +221,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       togglePanelSlot("terminal");
       return;
     }
-    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)) {
+    const sidebarShortcutSlot = matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+      ? "workspace"
+      : matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
+        ? "companion"
+        : null;
+    if (sidebarShortcutSlot) {
       event.preventDefault();
-      togglePanelSlot("workspace");
+      togglePanelSlot(sidebarShortcutSlot);
       return;
     }
 

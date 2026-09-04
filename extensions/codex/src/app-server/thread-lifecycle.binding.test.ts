@@ -976,72 +976,110 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it("persists the native rollout path across thread start and resume", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const threadId = "thread-native-rollout";
-    const rolloutPath = path.join(
-      tempDir,
-      "agent",
-      "codex-home",
-      "sessions",
-      `rollout-${threadId}.jsonl`,
-    );
-    const params = createParams(sessionFile, workspaceDir);
-    const respond = vi.fn(async (method: string) => {
-      if (method !== "thread/start" && method !== "thread/resume") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      const response = threadStartResult(threadId);
-      return {
-        ...response,
-        thread: { ...response.thread, path: rolloutPath },
+  it.each(["openai", "lmstudio"])(
+    "preserves %s native thread identity across start and resume",
+    async (modelProvider) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const threadId = "thread-native-rollout";
+      const rolloutPath = path.join(
+        tempDir,
+        "agent",
+        "codex-home",
+        "sessions",
+        `rollout-${threadId}.jsonl`,
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.provider = "codex";
+      params.modelId = "native-model";
+      params.agentDir = path.join(tempDir, "agent");
+      params.authProfileId = modelProvider === "openai" ? "openai:native" : undefined;
+      params.authProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:native": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
       };
-    });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-    });
-    const { client, request } = fixture;
-    const common = {
-      client,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
-    };
+      const respond = vi.fn(async (method: string) => {
+        if (method !== "thread/start" && method !== "thread/resume") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        const response = threadStartResult(threadId);
+        return {
+          ...response,
+          model: "native-model",
+          modelProvider,
+          thread: { ...response.thread, path: rolloutPath, modelProvider },
+        };
+      });
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond,
+      });
+      const { client, request } = fixture;
+      const common = {
+        client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+        nativeHookRelayGeneration: "generation-native",
+      };
 
-    const started = await startOrResumeThread(common);
-    expect(started).toMatchObject({
-      threadId,
-      rolloutPath,
-      lifecycle: { action: "started" },
-    });
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId,
-      rolloutPath,
-    });
+      const started = await startOrResumeThread(common);
+      expect(started).toMatchObject({
+        threadId,
+        rolloutPath,
+        cwd: workspaceDir,
+        model: "native-model",
+        modelProvider,
+        nativeHookRelayGeneration: "generation-native",
+        lifecycle: { action: "started" },
+      });
+      expect(started.clientId).toBe(client.getInstanceId());
+      expect(started.authProfileId).toBe(params.authProfileId);
+      expect(started).not.toHaveProperty("webSearchThreadConfigFingerprint");
+      expect(started).not.toHaveProperty("nativeToolPolicyRestricted");
+      const persisted = await readCodexAppServerBinding(sessionFile);
+      expect(persisted).toMatchObject({
+        threadId,
+        rolloutPath,
+        cwd: workspaceDir,
+        model: "native-model",
+        nativeHookRelayGeneration: "generation-native",
+        webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      });
+      expect(persisted?.clientId).toBe(client.getInstanceId());
+      expect(persisted?.authProfileId).toBe(params.authProfileId);
+      expect(persisted?.modelProvider).toBe(modelProvider === "openai" ? undefined : "lmstudio");
 
-    await fixture.endTurn("thread-native-rollout");
-    const resumed = await startOrResumeThread(common);
-    expect(resumed).toMatchObject({
-      threadId,
-      rolloutPath,
-      lifecycle: { action: "resumed" },
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/start",
-      "thread/unsubscribe",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId,
-      rolloutPath,
-    });
-  });
+      await fixture.endTurn("thread-native-rollout");
+      const resumed = await startOrResumeThread(common);
+      expect(resumed).toMatchObject({
+        threadId,
+        rolloutPath,
+        lifecycle: { action: "resumed" },
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/unsubscribe",
+        "thread/read",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+        threadId,
+        rolloutPath,
+      });
+    },
+  );
 
   it("reuses only an explicitly retained subscription on the original client", async () => {
     const sessionFile = path.join(tempDir, "warm-session.jsonl");
