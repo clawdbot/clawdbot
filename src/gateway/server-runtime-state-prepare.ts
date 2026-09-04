@@ -94,6 +94,7 @@ export async function prepareGatewayKernelState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
     pluginGatewayContext,
+    resolvePluginGatewayContext,
   } = bootstrap;
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
@@ -134,7 +135,7 @@ export async function prepareGatewayKernelState(params: {
         return await workerModule.createGatewayWorkerEnvironmentRuntime({
           getPluginRegistry: () => pluginRuntime.registry,
           getPortalRuntime: () => pluginGatewayContext.current,
-          resolveGatewayContext: () => pluginGatewayContext.current,
+          resolveGatewayContext: resolvePluginGatewayContext,
           desktopSessionRegistry,
           nodeDesktopStreamBroker,
           startup: workerEnvironmentStartup,
@@ -469,7 +470,7 @@ export async function prepareGatewayKernelState(params: {
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
-    getGatewayRequestContext: () => pluginGatewayContext.current,
+    getGatewayRequestContext: resolvePluginGatewayContext,
     deps,
     log,
     logHooks,
