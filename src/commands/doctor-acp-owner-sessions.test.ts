@@ -11,6 +11,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  applySessionEntryLifecycleMutation,
   ensureTranscriptGenerationsForCanonicalRepair,
   loadExactSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -24,6 +25,10 @@ import { migrateLegacyAcpOwnerSessions } from "./doctor-acp-owner-sessions.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
 
 const sessionAccessorTestHooks = vi.hoisted(() => ({
+  applyLifecycleMutation: vi.fn(),
+  applyLifecycleMutationDelegate: undefined as
+    | typeof applySessionEntryLifecycleMutation
+    | undefined,
   ensureTranscriptGenerations: vi.fn(),
   ensureTranscriptGenerationsDelegate: undefined as
     | typeof ensureTranscriptGenerationsForCanonicalRepair
@@ -32,6 +37,11 @@ const sessionAccessorTestHooks = vi.hoisted(() => ({
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  sessionAccessorTestHooks.applyLifecycleMutationDelegate =
+    actual.applySessionEntryLifecycleMutation;
+  sessionAccessorTestHooks.applyLifecycleMutation.mockImplementation((params) =>
+    actual.applySessionEntryLifecycleMutation(params),
+  );
   sessionAccessorTestHooks.ensureTranscriptGenerationsDelegate =
     actual.ensureTranscriptGenerationsForCanonicalRepair;
   sessionAccessorTestHooks.ensureTranscriptGenerations.mockImplementation((sources) =>
@@ -39,6 +49,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   );
   return {
     ...actual,
+    applySessionEntryLifecycleMutation: sessionAccessorTestHooks.applyLifecycleMutation,
     ensureTranscriptGenerationsForCanonicalRepair:
       sessionAccessorTestHooks.ensureTranscriptGenerations,
   };
@@ -94,6 +105,10 @@ function seedLegacySession(params: {
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  sessionAccessorTestHooks.applyLifecycleMutation.mockReset();
+  sessionAccessorTestHooks.applyLifecycleMutation.mockImplementation((params) =>
+    sessionAccessorTestHooks.applyLifecycleMutationDelegate!(params),
+  );
   sessionAccessorTestHooks.ensureTranscriptGenerations.mockReset();
   sessionAccessorTestHooks.ensureTranscriptGenerations.mockImplementation((sources) =>
     sessionAccessorTestHooks.ensureTranscriptGenerationsDelegate!(sources),
@@ -196,6 +211,29 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("fails closed when a configured default owner is also an alias harness", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-default-owner-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      cfg.acp = { defaultAgent: "codex" };
+      cfg.agents?.list?.push({ id: "codex" });
+      const sourceStorePath = seedLegacySession({ cfg, env });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ ambiguous: 1, eligible: 0, migrated: 0 });
+      expect(report.warnings.join("\n")).toContain("multiple owners (codex, reviewer)");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        }),
+      ).toBeDefined();
+    });
+  });
+
   it("cannot replay a consumed legacy peer through a later alias", async () => {
     await withStateDirEnv("openclaw-doctor-acp-consumed-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -278,9 +316,9 @@ describe("Doctor ACP owner migration", () => {
         sessionKey: targetKey,
       });
 
-      await expect(migrateLegacyAcpOwnerSessions({ apply: true, cfg, env })).resolves.toMatchObject(
-        { conflicts: 0, eligible: 1, migrated: 1 },
-      );
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+      expect(report.warnings).toEqual([]);
+      expect(report).toMatchObject({ conflicts: 0, eligible: 1, migrated: 1 });
       const rows = withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) => ({
           canonical: selectAcpSessionRow(db, buildAcpDatabaseSessionKey(targetKey, "reviewer")),
@@ -364,6 +402,65 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("removes a staged canonical copy when the legacy source changes before removal", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-source-race-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      const sourceStorePath = seedLegacySession({ cfg, env });
+      const targetStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "reviewer",
+        env,
+      });
+      const concurrentEntry = { ...entry, model: "newer", updatedAt: 20 };
+      let mutationCount = 0;
+      sessionAccessorTestHooks.applyLifecycleMutation.mockImplementation(async (params) => {
+        mutationCount += 1;
+        if (mutationCount === 2) {
+          replaceSessionEntrySync(
+            { agentId: "codex", env, sessionKey: sourceKey, storePath: sourceStorePath },
+            concurrentEntry,
+          );
+        }
+        return await sessionAccessorTestHooks.applyLifecycleMutationDelegate!(params);
+      });
+
+      await expect(migrateLegacyAcpOwnerSessions({ apply: true, cfg, env })).resolves.toMatchObject(
+        { conflicts: 1, eligible: 1, migrated: 0 },
+      );
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        })?.entry,
+      ).toMatchObject(concurrentEntry);
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: targetStorePath,
+        }),
+      ).toBeUndefined();
+
+      sessionAccessorTestHooks.applyLifecycleMutation.mockImplementation((params) =>
+        sessionAccessorTestHooks.applyLifecycleMutationDelegate!(params),
+      );
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+      expect(report.warnings).toEqual([]);
+      expect(report).toMatchObject({ conflicts: 0, eligible: 1, migrated: 1 });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: targetStorePath,
+        })?.entry,
+      ).toMatchObject(concurrentEntry);
+    });
+  });
+
   it("leaves a bare key in a shared owner and harness store ambiguous", async () => {
     await withStateDirEnv("openclaw-doctor-acp-shared-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -394,6 +491,36 @@ describe("Doctor ACP owner migration", () => {
       const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
       expect(report).toMatchObject({ ambiguous: 1, eligible: 0, migrated: 0 });
       expect(report.warnings.join("\n")).toContain("owner is ambiguous");
+    });
+  });
+
+  it("atomically moves scoped keys inside a shared owner and harness store", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-shared-scoped-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const sharedStore = path.join(stateDir, "sessions.json");
+      const cfg = createConfig(stateDir);
+      cfg.session = { store: sharedStore };
+      seedLegacySession({ cfg, env });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+      expect(report.warnings).toEqual([]);
+      expect(report).toMatchObject({ conflicts: 0, eligible: 1, migrated: 1 });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sharedStore,
+        }),
+      ).toBeUndefined();
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: sharedStore,
+        })?.entry,
+      ).toMatchObject(entry);
     });
   });
 

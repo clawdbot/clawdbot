@@ -37,7 +37,8 @@ function collectAcpOwnerMappings(cfg: OpenClawConfig): {
   mappings: AcpOwnerMapping[];
 } {
   const ownersByHarness = new Map<string, Set<string>>();
-  for (const agent of listAgentEntries(cfg)) {
+  const configuredAgents = listAgentEntries(cfg);
+  for (const agent of configuredAgents) {
     if (agent.runtime?.type !== "acp") {
       continue;
     }
@@ -49,6 +50,27 @@ function collectAcpOwnerMappings(cfg: OpenClawConfig): {
     const owners = ownersByHarness.get(harnessAgentId) ?? new Set<string>();
     owners.add(ownerAgentId);
     ownersByHarness.set(harnessAgentId, owners);
+  }
+  const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  const allowedAgentIds = new Set(
+    (cfg.acp?.allowedAgents ?? []).flatMap((entry) => {
+      const normalized = normalizeOptionalAgentId(entry);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  const allowsConfiguredAgents = cfg.acp?.allowedAgents?.some((entry) => entry.trim() === "*");
+  for (const agent of configuredAgents) {
+    const ownerAgentId = normalizeOptionalAgentId(agent.id);
+    if (
+      !ownerAgentId ||
+      agent.runtime?.type === "acp" ||
+      (ownerAgentId !== defaultAgentId &&
+        !allowsConfiguredAgents &&
+        !allowedAgentIds.has(ownerAgentId))
+    ) {
+      continue;
+    }
+    ownersByHarness.get(ownerAgentId)?.add(ownerAgentId);
   }
   const ambiguousHarnesses = new Map<string, string[]>();
   const mappings: AcpOwnerMapping[] = [];
@@ -108,10 +130,17 @@ async function moveSessionEntry(params: {
       },
     ]);
   }
-  let copyOwnedState = false;
-  let targetConflict = false;
-  try {
-    await applySessionEntryLifecycleMutation({
+  const sourceRemoval = {
+    archiveRemovedTranscript: true,
+    deleteOwnedWindows: true,
+    exactStoredKey: true,
+    expectedEntry: params.entry,
+    sessionKey: params.sourceKey,
+  } as const;
+  const applyTarget = async () => {
+    let copyOwnedState = false;
+    let targetConflict = false;
+    const result = await applySessionEntryLifecycleMutation({
       agentId: params.targetAgentId,
       allowCanonicalRepair: true,
       afterUpsertsInTransaction: (database) => {
@@ -127,6 +156,11 @@ async function moveSessionEntry(params: {
           sourceEntries: [params.entry],
           sourceKeys: [params.sourceKey],
         });
+      },
+      beforeCommitInTransaction: () => {
+        if (targetConflict) {
+          throw new SessionEntryLifecycleUpsertConflictError(params.targetKey);
+        }
       },
       skipMaintenance: true,
       storePath: params.targetStorePath,
@@ -144,6 +178,36 @@ async function moveSessionEntry(params: {
         },
       ],
     });
+    return { createdTarget: copyOwnedState, result };
+  };
+  try {
+    const { createdTarget } = await applyTarget();
+    let sourceRemovalCommitted = false;
+    try {
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: params.sourceAgentId,
+        allowCanonicalRepair: true,
+        onLifecycleCommitted: () => {
+          sourceRemovalCommitted = true;
+        },
+        removals: [sourceRemoval],
+        skipMaintenance: true,
+        storePath: params.sourceStorePath,
+      });
+      if (result.removedSessionKeys.includes(params.sourceKey)) {
+        return "moved";
+      }
+    } catch (error) {
+      if (sourceRemovalCommitted || !createdTarget) {
+        throw error;
+      }
+      await removeCreatedMigrationTarget(params);
+      throw error;
+    }
+    if (createdTarget) {
+      await removeCreatedMigrationTarget(params);
+    }
+    return "conflict";
   } catch (error) {
     if (
       error instanceof SessionEntryLifecycleUpsertConflictError &&
@@ -153,25 +217,29 @@ async function moveSessionEntry(params: {
     }
     throw error;
   }
-  if (targetConflict) {
-    return "conflict";
-  }
+}
+
+async function removeCreatedMigrationTarget(params: {
+  entry: SessionEntry;
+  env: NodeJS.ProcessEnv;
+  targetAgentId: string;
+  targetKey: string;
+  targetStorePath: string;
+}): Promise<void> {
   await applySessionEntryLifecycleMutation({
-    agentId: params.sourceAgentId,
+    agentId: params.targetAgentId,
     allowCanonicalRepair: true,
     removals: [
       {
-        archiveRemovedTranscript: true,
         deleteOwnedWindows: true,
         exactStoredKey: true,
         expectedEntry: params.entry,
-        sessionKey: params.sourceKey,
+        sessionKey: params.targetKey,
       },
     ],
     skipMaintenance: true,
-    storePath: params.sourceStorePath,
+    storePath: params.targetStorePath,
   });
-  return "moved";
 }
 
 /** Doctor-only ACP owner migration. Runtime never reads or promotes legacy harness rows. */
